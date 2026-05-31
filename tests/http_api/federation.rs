@@ -49,11 +49,17 @@ async fn federation_accepts_idempotent_replayed_operations() {
     );
     assert!(first["rejected"].as_array().unwrap().is_empty());
 
-    let unsigned = TestClient::post(push_url)
+    let mut unsigned = TestClient::post(push_url)
         .json(&first_body)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(unsigned.status_code.unwrap().as_u16(), 401);
+    let unsigned_status = unsigned.status_code.unwrap().as_u16();
+    let unsigned_body: Value = unsigned.take_json().await.unwrap();
+    assert_eq!(
+        unsigned_status, 400,
+        "unsigned federation push response: {unsigned_body}"
+    );
+    assert_eq!(unsigned_body["error"]["code"], "schema_violation");
 
     let pulled: Value = TestClient::get(
         "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",

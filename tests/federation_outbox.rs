@@ -208,6 +208,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         .persistence
         .federation_outbox()
         .get(&captured.row_id)
+        .await
         .expect("outbox lookup")
         .expect("row still present");
     assert!(
@@ -260,6 +261,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
     )
+    .await
     .expect("enqueue must succeed");
 
     FederationDispatcher::new(state.clone())
@@ -274,6 +276,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
         .persistence
         .federation_outbox()
         .get(&row.id)
+        .await
         .expect("outbox lookup")
         .expect("row still present");
     assert!(updated.delivered_at.is_some());
@@ -284,6 +287,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
         .persistence
         .federation_outbox()
         .dead_letters_snapshot()
+        .await
         .expect("dead-letter snapshot");
     assert_eq!(dead_letters.len(), 1);
     let dead = &dead_letters[0];
@@ -327,8 +331,8 @@ async fn outbound_signature_rejects_trust_domain_mismatch() {
     );
 }
 
-#[test]
-fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
+#[tokio::test]
+async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
     let state = AppState::new(outbox_test_config(), Db { pool: None });
 
     let first = enqueue_outbound(
@@ -339,6 +343,7 @@ fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
     )
+    .await
     .expect("first enqueue");
     let second = enqueue_outbound(
         &state,
@@ -348,6 +353,7 @@ fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
     )
+    .await
     .expect("second enqueue with same peer/key");
 
     assert_eq!(
@@ -358,6 +364,7 @@ fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         .persistence
         .federation_outbox()
         .snapshot_all()
+        .await
         .expect("outbox snapshot");
     assert_eq!(
         snapshot.len(),
@@ -398,6 +405,7 @@ async fn capture_signed_request() -> CapturedSignedRequest {
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
     )
+    .await
     .expect("enqueue must succeed");
     assert!(
         row.delivered_at.is_none(),

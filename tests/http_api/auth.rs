@@ -5,11 +5,10 @@
 #![allow(unused_imports)]
 use super::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn oauth_bearer_introspection_authenticates_directly() {
     let (introspection_url, request_handle) = spawn_oauth_introspection_server();
     let mut config = test_config();
-    config.development_mode = false;
     config.oauth_introspection_url = Some(introspection_url);
     config.oauth_introspection_bearer = Some("shared-secret".to_owned());
     let state = AppState::new(config, Db { pool: None });

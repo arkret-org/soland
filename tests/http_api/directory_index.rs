@@ -152,11 +152,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     config.seed_demo_data = true;
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let cases = [
-        (
-            "search-organizations",
-            serde_json::json!({"query": "contrix", "limit": 10}),
-        ),
+    let not_found_cases = [
         (
             "resolve-organization",
             serde_json::json!({"organization_id": "cx:org:demo"}),
@@ -170,7 +166,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         ),
     ];
 
-    for (path, body) in cases {
+    for (path, body) in not_found_cases {
         let response = TestClient::post(format!("http://server/api/v1/directory/{path}"))
             .json(&body)
             .send(&service)
@@ -180,6 +176,21 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
             StatusCode::NOT_FOUND,
             "{path} must not expose demo directory data outside development mode"
         );
+    }
+
+    let empty_search_cases = [(
+        "search-organizations",
+        serde_json::json!({"query": "contrix", "limit": 10}),
+    )];
+
+    for (path, body) in empty_search_cases {
+        let mut response = TestClient::post(format!("http://server/api/v1/directory/{path}"))
+            .json(&body)
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code.unwrap(), StatusCode::OK);
+        let body: Value = response.take_json().await.unwrap();
+        assert!(body["results"].as_array().unwrap().is_empty());
     }
 }
 

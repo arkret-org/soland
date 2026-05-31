@@ -142,11 +142,11 @@ async fn moderation_report(
 }
 
 #[endpoint(
-    operation_id = "cx.moderation.reports",
+    operation_id = "cx.extension.soland.moderation.reports",
     tags("moderation"),
     summary = "List moderation reports visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.moderation.reports"))]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.moderation.reports"))]
 async fn moderation_reports(
     aa: AuthArgs,
     depot: &mut Depot,

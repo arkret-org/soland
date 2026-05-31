@@ -27,11 +27,11 @@ pub fn well_known_contrix_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.well_known.contrix",
+    operation_id = "cx.extension.soland.well_known.contrix",
     tags("federation"),
     summary = "Server description for federation discovery"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.well_known.contrix"))]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.well_known.contrix"))]
 async fn well_known_contrix(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set

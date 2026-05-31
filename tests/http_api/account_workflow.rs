@@ -119,7 +119,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(visible_bob["results"][0]["did"], "did:web:bob.example");
+    assert_eq!(visible_bob["results"][0]["subject"], "did:web:bob.example");
 
     let created_space = seed_test_realm(
         &state,
@@ -419,14 +419,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "block message response: {block_message}"
     );
 
-    let thread: Value =
-        TestClient::get("http://server/api/v1/index/thread?thread_id=cx:flow:workflow")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let workflow_thread_id = expected_flow_id_for_scope(&space_id);
+    let thread: Value = TestClient::get(format!(
+        "http://server/api/v1/index/thread?thread_id={workflow_thread_id}"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(thread["events"][0]["content"]["body"], "hello workflow");
 
     let message_search: Value = TestClient::post("http://server/api/v1/index/search")
@@ -470,12 +472,12 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(
         synced_members
             .iter()
-            .any(|member| member["did"] == "did:web:alice.example")
+            .any(|member| member["actor_id"] == "did:web:alice.example")
     );
     assert!(
         synced_members
             .iter()
-            .any(|member| member["did"] == "did:web:bob.example")
+            .any(|member| member["actor_id"] == "did:web:bob.example")
     );
     assert_eq!(
         sync_with_message["realms"][&space_id]["summary"]["members"],

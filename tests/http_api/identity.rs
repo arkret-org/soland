@@ -5,7 +5,7 @@
 #![allow(unused_imports)]
 use super::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
     let state = AppState::new(test_config(), Db { pool: None });
     let describe: Value = TestClient::get("http://server/api/v1/identity/describe")

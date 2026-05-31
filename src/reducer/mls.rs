@@ -365,7 +365,11 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         Some(v) => v,
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
-    let Some(leader_actor_did) = payload.get("leader_actor_did").and_then(Value::as_str) else {
+    let Some(leader_actor_did) = payload
+        .get("leader_actor_did")
+        .or_else(|| payload.get("sender"))
+        .and_then(Value::as_str)
+    else {
         return reject("mls_commit_leader_missing");
     };
     // Body bytes are not validated at the reducer level beyond a
@@ -581,25 +585,23 @@ mod tests {
     }
 
     fn governance_binding(previous_epoch: u64) -> Value {
+        let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+        let frontier = format!("cx:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
         json!({
+            "binding_version": 1,
+            "encoding_profile": "cbor-deterministic-rfc8949-v1",
+            "realm_id": realm_id,
+            "effective_scope": {
+                "kind": "realm",
+                "realm_id": realm_id
+            },
+            "mls_group_id": "cx:mls_group:abc",
             "previous_epoch": previous_epoch,
             "next_epoch": previous_epoch + 1,
             "membership_frontier": [
-                format!("cx:event:frontier-{previous_epoch}")
+                frontier
             ],
-            "threshold": {
-                "k": 2,
-                "n": 3,
-                "signers": [
-                    "did:web:alice.example",
-                    "did:web:bob.example",
-                    "did:web:carol.example"
-                ]
-            },
-            "signatures": [
-                {"signer_did": "did:web:alice.example", "signature_b64": "alice-partial"},
-                {"signer_did": "did:web:bob.example", "signature_b64": "bob-partial"}
-            ]
+            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         })
     }
 
@@ -817,6 +819,7 @@ mod tests {
             json!({
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 0,
+                "next_epoch": 1,
                 "leader_actor_did": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
                 "governance_binding": governance_binding(0),
@@ -832,7 +835,10 @@ mod tests {
             }) => {
                 assert_eq!(previous_epoch, 0);
                 assert_eq!(new_epoch, 1);
-                assert_eq!(covered_frontier, &vec!["cx:event:frontier-0".to_owned()]);
+                assert_eq!(
+                    covered_frontier,
+                    &vec!["cx:event:0196419b-0000-7000-8000-000000000000".to_owned()]
+                );
             }
             other => panic!("expected CommitEpochAdvanced, got {other:?}"),
         }
@@ -844,6 +850,7 @@ mod tests {
             json!({
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 1,
+                "next_epoch": 2,
                 "leader_actor_did": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-2"),
                 "governance_binding": governance_binding(1),
@@ -861,8 +868,8 @@ mod tests {
                 epoch: 2,
                 leader_actor_did: "did:web:alice.example".to_owned(),
                 covered_frontier: vec![
-                    "cx:event:frontier-0".to_owned(),
-                    "cx:event:frontier-1".to_owned()
+                    "cx:event:0196419b-0000-7000-8000-000000000000".to_owned(),
+                    "cx:event:0196419b-0000-7000-8000-000000000001".to_owned()
                 ],
                 committed_at: 501,
             }
@@ -880,26 +887,28 @@ mod tests {
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
+                    "next_epoch": 1,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"opaque-commit-1"),
                     "governance_binding": {
+                        "binding_version": 1,
+                        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+                        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                        "effective_scope": {
+                            "kind": "realm",
+                            "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000"
+                        },
+                        "mls_group_id": "cx:mls_group:abc",
                         "previous_epoch": 0,
                         "next_epoch": 1,
-                        "threshold": {
-                            "k": 1,
-                            "n": 1,
-                            "signers": ["did:web:alice.example"]
-                        },
-                        "signatures": [
-                            {"signer_did": "did:web:alice.example", "signature_b64": "alice-partial"}
-                        ]
+                        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
                     },
                 }),
             ),
         );
         assert!(matches!(
             effect,
-            ProjectionEffect::Rejected { reason } if reason == REASON_COMMIT_COVERED_FRONTIER_MISSING
+            ProjectionEffect::Rejected { reason } if reason == "mls_governance_binding_membership_frontier_missing"
         ));
         assert!(state.mls_commit_epochs.is_empty());
     }
@@ -916,6 +925,7 @@ mod tests {
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
+                    "next_epoch": 1,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"first"),
                     "governance_binding": governance_binding(0),
@@ -932,6 +942,7 @@ mod tests {
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
+                    "next_epoch": 1,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"replay"),
                     "governance_binding": governance_binding(0),
@@ -963,6 +974,7 @@ mod tests {
                 json!({
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 5,
+                    "next_epoch": 6,
                     "leader_actor_did": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"leap"),
                     "governance_binding": governance_binding(5),

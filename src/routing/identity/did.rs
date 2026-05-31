@@ -477,11 +477,14 @@ pub(super) async fn identity_document(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.get_path_did_document",
+    operation_id = "cx.extension.soland.identity.get_path_did_document",
     tags("identity"),
     summary = "Fetch a DID document by DID path segment"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.get_path_did_document"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.identity.get_path_did_document")
+)]
 pub(super) async fn identity_did_document(
     req: &mut Request,
     depot: &mut Depot,

@@ -143,10 +143,8 @@ async fn send_plaintext_message(
 ) -> Value {
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
-        "thread_id": space_id,
         "track": "discussion",
-        "content": {"kind": "cx.content.text", "body": body},
-        "encrypted": false
+        "content": {"kind": "cx.content.text", "body": body}
     });
     let mut event = json!({
         "event_id": contrix_sdk::new_prefixed_uuid7("cx:event:"),

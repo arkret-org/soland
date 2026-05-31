@@ -236,25 +236,21 @@ async fn mls_lifecycle_end_to_end() {
     let bob_device = "cx:device:01904100-0000-7000-8000-b0b0e0000001";
     let realm_id = "cx:realm:01904100-0000-7000-8000-00000000e2ee";
     let group_id = "cx:mls_group:abc";
+    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let frontier_ref = "cx:event:01904100-0000-7000-8000-00000000f00d";
+    let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+    let welcome_ref =
+        "cx:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
     let governance_binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
         "realm_id": realm_id,
+        "effective_scope": effective_scope.clone(),
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 0,
         "membership_frontier": [frontier_ref],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "threshold": {
-            "k": 2,
-            "n": 3,
-            "signers": [alice_did, bob_did, "did:web:mls-auditor.example"]
-        },
-        "signatures": [
-            {"signer_did": alice_did, "signature_b64": b64(b"alice-genesis")},
-            {"signer_did": bob_did, "signature_b64": b64(b"bob-genesis")}
-        ]
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     });
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
@@ -308,10 +304,7 @@ async fn mls_lifecycle_end_to_end() {
         "cx.mls.genesis",
         json!({
             "mls_group_id": group_id,
-            "realm_key_scope": {
-                "realm_id": realm_id,
-                "policy_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-            },
+            "effective_scope": effective_scope.clone(),
             "epoch": 0,
             "creator_principal_id": alice_did,
             "creator_device_id": alice_device,
@@ -349,22 +342,21 @@ async fn mls_lifecycle_end_to_end() {
         realm_id,
         "cx.mls.welcome",
         json!({
-            "welcome_id": "cx:mls_welcome:w-01",
             "mls_group_id": group_id,
             "epoch": 1,
             "recipient_principal_id": bob_did,
             "recipient_device_id": bob_device,
-            "key_package_id": keypackage_id,
-            "keypackage_ref": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "keypackage_ref": keypackage_ref,
             "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
             "claim_id": "claim-01",
             "claim_ref": {
                 "claim_id": "claim-01",
-                "keypackage_ref": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "keypackage_ref": keypackage_ref,
                 "keypackage_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
                 "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
                 "ssk_generation": 1
             },
+            "welcome_ref": welcome_ref,
             "ciphertext": "opaque-mls-welcome",
             "expires_at": "2026-05-25T01:00:00Z",
             "commit_ref": "cx:event:01904100-0000-7000-8000-00000000e2e3",
@@ -393,20 +385,12 @@ async fn mls_lifecycle_end_to_end() {
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
         "realm_id": realm_id,
+        "effective_scope": effective_scope.clone(),
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 1,
         "membership_frontier": [frontier_ref],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "threshold": {
-            "k": 2,
-            "n": 3,
-            "signers": [alice_did, bob_did, "did:web:mls-auditor.example"]
-        },
-        "signatures": [
-            {"signer_did": alice_did, "signature_b64": b64(b"alice-commit")},
-            {"signer_did": bob_did, "signature_b64": b64(b"bob-commit")}
-        ]
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     });
     let commit = signed_event(
         "cx:event:01904100-0000-7000-8000-00000000e2e3",
@@ -416,15 +400,11 @@ async fn mls_lifecycle_end_to_end() {
         realm_id,
         "cx.mls.commit",
         json!({
-            "group_id": group_id,
             "mls_group_id": group_id,
-            "expected_prev_epoch": 0,
             "base_epoch": 0,
             "base_epoch_ref": "cx:event:01904100-0000-7000-8000-00000000e2e1",
             "proposal_refs": [],
             "next_epoch": 1,
-            "leader_actor_did": alice_did,
-            "commit_bytes_b64": b64(b"opaque-commit"),
             "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
             "governance_binding": commit_binding
         }),
@@ -458,9 +438,9 @@ async fn mls_lifecycle_end_to_end() {
     let drain_json: Value = drain_resp.take_json().await.unwrap();
     let welcomes = drain_json["welcomes"].as_array().expect("welcomes array");
     assert_eq!(welcomes.len(), 1);
-    assert_eq!(welcomes[0]["welcome_id"], json!("cx:mls_welcome:w-01"));
+    assert_eq!(welcomes[0]["welcome_id"], json!(welcome_ref));
     assert_eq!(welcomes[0]["group_id"], json!("cx:mls_group:abc"));
-    assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_id));
+    assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_ref));
     assert!(
         welcomes[0]["delivered_at"].is_i64(),
         "delivered_at must be set after drain"

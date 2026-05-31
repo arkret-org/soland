@@ -469,7 +469,13 @@ pub async fn space_discoverability(state: &AppState, space_id: &str) -> String {
         .ok()
         .flatten()
         .map(|record| record.discoverability)
-        .unwrap_or_else(|| "invite_only".to_owned())
+        .unwrap_or_else(|| {
+            if directory_realm_is_public(state, space_id) {
+                "public".to_owned()
+            } else {
+                "invite_only".to_owned()
+            }
+        })
 }
 
 pub async fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
@@ -672,7 +678,25 @@ pub async fn space_history_visibility(state: &AppState, space_id: &str) -> Strin
         .ok()
         .flatten()
         .map(|record| record.history_visibility.clone())
-        .unwrap_or_else(|| "joined".to_owned())
+        .unwrap_or_else(|| {
+            if directory_realm_is_public(state, space_id) {
+                "shared".to_owned()
+            } else {
+                "joined".to_owned()
+            }
+        })
+}
+
+fn directory_realm_is_public(state: &AppState, space_id: &str) -> bool {
+    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
+        return false;
+    };
+    state
+        .realms
+        .lock()
+        .expect("spaces lock")
+        .get(&realm_id)
+        .is_some_and(|entry| entry.public)
 }
 
 /// Best-effort joined-at timestamp for event history filtering.

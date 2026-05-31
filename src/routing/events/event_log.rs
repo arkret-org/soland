@@ -3568,6 +3568,33 @@ fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
+    if parsed.kind == kinds::CX_RELATION_CREATE {
+        normalize_relation_create_payload(payload_object, parsed);
+    }
+    if let Some(target_ref) = payload_object
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    {
+        if target_ref.starts_with("cx:flow:") {
+            payload_object
+                .entry("flow_id".to_owned())
+                .or_insert_with(|| Value::String(target_ref.clone()));
+        }
+        if target_ref.starts_with("cx:morph:") {
+            payload_object
+                .entry("morph_id".to_owned())
+                .or_insert_with(|| Value::String(target_ref));
+        }
+    }
+    if !payload_object.contains_key("thread_id")
+        && let Some(flow_id) = payload_object
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    {
+        payload_object.insert("thread_id".to_owned(), Value::String(flow_id));
+    }
     if matches!(
         parsed.kind.as_str(),
         "cx.consent.grant" | "cx.consent.revoke"
@@ -3611,6 +3638,53 @@ fn projection_operation_from_event(
     Some(operation)
 }
 
+fn normalize_relation_create_payload(
+    payload_object: &mut serde_json::Map<String, Value>,
+    parsed: &ValidatedEventEnvelope,
+) {
+    if let Some(relation) = payload_object
+        .get("relation")
+        .and_then(Value::as_object)
+        .cloned()
+    {
+        if let Some(id) = relation
+            .get("id")
+            .or_else(|| relation.get("relation_id"))
+            .and_then(Value::as_str)
+        {
+            payload_object
+                .entry("relation_id".to_owned())
+                .or_insert_with(|| Value::String(id.to_owned()));
+        }
+        if let Some(relation_kind) = relation
+            .get("relation_kind")
+            .or_else(|| relation.get("kind"))
+            .and_then(Value::as_str)
+        {
+            payload_object
+                .entry("relation_kind".to_owned())
+                .or_insert_with(|| Value::String(relation_kind.to_owned()));
+        }
+        for field in ["from_ref", "to_ref", "rank", "fields"] {
+            if let Some(value) = relation.get(field) {
+                payload_object
+                    .entry(field.to_owned())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+    }
+
+    if !payload_object.contains_key("relation_id")
+        && !payload_object.contains_key("id")
+        && let Some(suffix) = parsed.event_id.strip_prefix("cx:event:")
+    {
+        payload_object.insert(
+            "relation_id".to_owned(),
+            Value::String(format!("cx:relation:{suffix}")),
+        );
+    }
+}
+
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
     // (`cx:operation:<uuid v7>` per `contrix-rust-sdk/identifiers`).
@@ -3642,6 +3716,7 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
     // the envelope's top-level `effective_scope` or the payload-side
     // `scope_circle_id`, whichever the writer populated.
     let effective_scope = effective_scope_for_envelope(&record.envelope);
+    let mut event = record.envelope.clone();
     let mut metadata = json!({
         "event_id": record.event_id.clone(),
         "actor_id": record.actor_id.clone(),
@@ -3657,12 +3732,14 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
         metadata
             .as_object_mut()
             .expect("metadata is object")
-            .insert("effective_scope".to_owned(), Value::String(scope));
+            .insert("effective_scope".to_owned(), Value::String(scope.clone()));
+        if let Some(object) = event.as_object_mut() {
+            object
+                .entry("effective_scope".to_owned())
+                .or_insert_with(|| Value::String(scope));
+        }
     }
-    EventReadResponse {
-        event: record.envelope.clone(),
-        metadata,
-    }
+    EventReadResponse { event, metadata }
 }
 
 /// CXP-0007 — resolve the canonical `effective_scope` for an Event
@@ -3684,6 +3761,24 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
             .and_then(Value::as_str)
     {
         return Some(scope_circle_id.to_owned());
+    }
+    if let Some(content) = payload.get("content").and_then(Value::as_object)
+        && let Some(scope_circle_id) = content.get("scope_circle_id").and_then(Value::as_str)
+    {
+        return Some(scope_circle_id.to_owned());
+    }
+    if let Some(encrypted) = payload.get("encrypted_payload").and_then(Value::as_object) {
+        if let Some(scope_circle_id) = encrypted.get("scope_circle_id").and_then(Value::as_str) {
+            return Some(scope_circle_id.to_owned());
+        }
+        if let Some(scope_circle_id) = encrypted
+            .get("aad")
+            .and_then(Value::as_object)
+            .and_then(|aad| aad.get("scope_circle_id"))
+            .and_then(Value::as_str)
+        {
+            return Some(scope_circle_id.to_owned());
+        }
     }
     None
 }
@@ -4392,7 +4487,6 @@ mod proof_strictness_tests {
         let object_patch_kinds = [
             "cx.realm.update",
             "cx.flow.update",
-            "cx.flow.tracks.update",
             "cx.morph.update",
             "cx.profile.update",
             "cx.profile.space_override",
@@ -4438,6 +4532,35 @@ mod proof_strictness_tests {
                 "{event_kind} must reject patch ops outside cx.patch.v1"
             );
         }
+
+        catalog
+            .validate_payload(
+                "cx.flow.tracks.update",
+                &json!({
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                    "tracks": {
+                        "discussion": {
+                            "enabled": true,
+                            "is_primary": true
+                        }
+                    }
+                }),
+            )
+            .unwrap_or_else(|err| {
+                panic!("cx.flow.tracks.update must accept canonical tracks map payload: {err}");
+            });
+        assert!(
+            catalog
+                .validate_payload(
+                    "cx.flow.tracks.update",
+                    &json!({
+                        "type": "legacy_track_update",
+                        "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                    }),
+                )
+                .is_err(),
+            "cx.flow.tracks.update must still reject retired `type` discriminators"
+        );
     }
 
     #[test]

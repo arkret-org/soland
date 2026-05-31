@@ -874,6 +874,7 @@ fn reaction_target_event_id(operation: &Operation) -> Option<String> {
 }
 
 fn message_content_from_payload(payload: &Value) -> Value {
+    let scope_circle_id = message_payload_scope_circle_id(payload);
     let mut content = payload
         .get("content")
         .or_else(|| payload.get("encrypted_payload"))
@@ -894,12 +895,36 @@ fn message_content_from_payload(payload: &Value) -> Value {
             }
         }
         if !object.contains_key("scope_circle_id")
-            && let Some(value) = payload.get("scope_circle_id")
+            && let Some(value) = scope_circle_id
         {
-            object.insert("scope_circle_id".to_owned(), value.clone());
+            object.insert("scope_circle_id".to_owned(), Value::String(value));
         }
     }
     content
+}
+
+fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
+    payload
+        .get("scope_circle_id")
+        .or_else(|| {
+            payload
+                .get("content")
+                .and_then(|content| content.get("scope_circle_id"))
+        })
+        .or_else(|| {
+            payload
+                .get("encrypted_payload")
+                .and_then(|encrypted| encrypted.get("scope_circle_id"))
+        })
+        .or_else(|| {
+            payload
+                .get("encrypted_payload")
+                .and_then(|encrypted| encrypted.get("aad"))
+                .and_then(|aad| aad.get("scope_circle_id"))
+        })
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn content_kind(content: &Value) -> Option<&str> {
@@ -1353,6 +1378,7 @@ fn redaction_object_ref(operation: &Operation) -> Option<String> {
         .payload
         .get("object_ref")
         .or_else(|| operation.payload.get("target_object_ref"))
+        .or_else(|| operation.payload.get("target_ref"))
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
 }
@@ -3588,7 +3614,7 @@ impl ProjectionState {
             .payload
             .get("encrypted")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or_else(|| operation.payload.get("encrypted_payload").is_some());
 
         match content_kind(&content) {
             Some("cx.content.poll.response") => {

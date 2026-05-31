@@ -1721,6 +1721,7 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "cx.directory.describe",
     "cx.directory.search_realms",
     "cx.directory.resolve_realm",
+    "cx.directory.resolve_target",
     "cx.blob.upload",
     "cx.blob.head",
     "cx.blob.get",

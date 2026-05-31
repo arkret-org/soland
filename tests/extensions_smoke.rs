@@ -266,6 +266,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .persistence
         .messages()
         .list_for_space(&space_id, 10)
+        .await
         .unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].sender, ghost_actor_did);

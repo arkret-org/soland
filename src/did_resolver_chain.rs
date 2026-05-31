@@ -85,17 +85,10 @@ impl LocalIdentityResolver {
         if !self.method_allowed(did.method()) {
             return Err(Error::Protocol("DID method not allowed".to_owned()));
         }
-        // The SDK `DidResolver` trait is synchronous, but the persistence
-        // store is now async. Bridge by blocking the current multi-thread
-        // runtime worker on the store read; `block_in_place` keeps the rest
-        // of the runtime live while this thread parks. Same pattern as the
-        // OAuth-introspection bridge in `routing::identity::auth`.
         let persistence = self.persistence.clone();
         let did_str = did.as_str().to_owned();
-        let lookup = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move { persistence.webvh().get_document(&did_str).await })
-        });
+        let lookup = blocking_webvh_document_lookup(persistence, did_str)
+            .map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?;
         let Some(record) =
             lookup.map_err(|e| Error::Protocol(format!("local DID store read failed: {e}")))?
         else {
@@ -108,6 +101,27 @@ impl LocalIdentityResolver {
         }
         document.validate()?;
         Ok(document)
+    }
+}
+
+fn blocking_webvh_document_lookup(
+    persistence: Arc<dyn PersistenceStore>,
+    did: String,
+) -> Result<crate::persistence::PersistenceResult<Option<crate::state::WebvhDocumentRecord>>, String>
+{
+    let run_lookup = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        Ok(runtime.block_on(async move { persistence.webvh().get_document(&did).await }))
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::spawn(run_lookup)
+            .join()
+            .map_err(|_| "local DID lookup worker panicked".to_owned())?
+    } else {
+        run_lookup()
     }
 }
 

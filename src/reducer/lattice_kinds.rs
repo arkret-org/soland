@@ -23,12 +23,13 @@ pub use contrix_sdk::lattice_registry::{
     CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, CoveredFrontier,
     CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, FlowPosition,
     FlowStage, MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PlaceParent,
-    PolicyRule, ProfileCreate, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy, SpaceChild,
-    SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
-    SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule, SpaceMediaService,
-    SpaceModerationPolicy, SpaceOrganization, SpaceParent, SpacePlaintextVisibleServices,
-    SpacePolicy, SpacePolicyComponents, SpacePolicyServer, SpaceReadReceiptPolicyLattice,
-    SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate, ViewReconcile, ViewUpdate,
+    PolicyRule, ProfileCreate, RealmPreviewPolicy, SessionGrant, SpaceArchive,
+    SpaceAssetPrivacyPolicy, SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze,
+    SpaceHistorySharingPolicy, SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule,
+    SpaceMediaService, SpaceModerationPolicy, SpaceOrganization, SpaceParent,
+    SpacePlaintextVisibleServices, SpacePolicy, SpacePolicyComponents, SpacePolicyServer,
+    SpaceReadReceiptPolicyLattice, SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate,
+    ViewReconcile, ViewUpdate,
 };
 
 #[cfg(test)]
@@ -124,7 +125,7 @@ mod tests {
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 79);
+        assert_eq!(registry.len(), 80);
     }
 
     #[test]

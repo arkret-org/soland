@@ -71,7 +71,6 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     // Agent endpoint event.
     let agent_payload = serde_json::json!({
         "agent_id": agent_id,
-        "protocol": "mcp",
         "endpoints": [{
             "protocol": "mcp"
         }],
@@ -224,7 +223,6 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // Register the agent first so B4c's dispatch lookup succeeds.
     let endpoint_payload = serde_json::json!({
         "agent_id": agent_id,
-        "protocol": "echo",
         "endpoints": [{
             "protocol": "echo"
         }],
@@ -265,12 +263,10 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         "endpoint submit response: {endpoint_resp}"
     );
 
-    let echo_params = serde_json::json!({"op": "summarize", "doc": "b4-e2e"});
     let mut payload = serde_json::json!({
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({
@@ -340,8 +336,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         })
         .expect("synthetic agent result event missing from projection log");
     assert_eq!(result_event["payload"]["status"], "completed");
-    assert_eq!(result_event["payload"]["result"]["echo"]["op"], "summarize");
-    assert_eq!(result_event["payload"]["result"]["echo"]["doc"], "b4-e2e");
+    assert!(result_event["payload"]["result"]["echo"].is_null());
     assert_eq!(
         result_event["payload"]["result"]["agent_principal_id"],
         agent_id
@@ -388,12 +383,10 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
 
     // Intentionally skip the cx.agent.endpoint step — this is the
     // dispatch-failure path.
-    let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({
@@ -483,8 +476,6 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
 
     let endpoint_payload = serde_json::json!({
         "agent_id": agent_id,
-        "protocol": "echo",
-        "endpoint_url": endpoint_url,
         "endpoints": [{
             "protocol": "echo",
             "url": endpoint_url
@@ -526,12 +517,10 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         "endpoint submit response: {endpoint_resp}"
     );
 
-    let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
         "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
-        "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
     });
     let mut start_event = serde_json::json!({

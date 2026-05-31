@@ -478,6 +478,7 @@ fn mention_routing_hint_from_mentions(mentions: &serde_json::Value) -> Option<se
         .filter_map(|mention| {
             mention
                 .get("did")
+                .or_else(|| mention.get("subject_id"))
                 .or_else(|| mention.get("actor_id"))
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.is_empty())
@@ -1326,6 +1327,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             .payload
             .get("object_ref")
             .or_else(|| operation.payload.get("target_object_ref"))
+            .or_else(|| operation.payload.get("target_ref"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
 
@@ -1776,31 +1778,35 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
     let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
-    {
+    let payload_public = operation
+        .payload
+        .get("public")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let explicit_discoverability =
+        operation_realm_discoverability(operation).filter(|value| is_valid_discoverability(value));
+    let directory_public = {
         let mut spaces = state.realms.lock().expect("spaces lock");
-        if spaces.get(&space_id).is_none() {
+        if let Some(existing) = spaces.get(&space_id) {
+            existing.public
+        } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| space_id.as_str());
             let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
             entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
-            let discoverability = operation_realm_discoverability(operation).unwrap_or_else(|| {
-                if operation
-                    .payload
-                    .get("public")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-                {
-                    "public"
-                } else {
-                    "invite_only"
-                }
+            let discoverability = explicit_discoverability.unwrap_or(if payload_public {
+                "public"
+            } else {
+                "invite_only"
             });
             entry.public = discoverability == "public";
             if let Ok(origin) = Did::new(origin.to_owned()) {
                 entry.members.insert(origin);
             }
+            let entry_public = entry.public;
             spaces.upsert(entry);
+            entry_public
         }
-    }
+    };
     project_retention_policy_from_operation(state, origin, operation);
 
     let now = now();
@@ -1819,12 +1825,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                 discoverability: operation_realm_discoverability(operation)
                     .filter(|value| is_valid_discoverability(value))
                     .unwrap_or_else(|| {
-                        if operation
-                            .payload
-                            .get("public")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                        {
+                        if payload_public || directory_public {
                             "public"
                         } else {
                             "invite_only"
@@ -1982,7 +1983,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 invitee: Some(invitee.as_str().to_owned()),
                 invite_token,
                 status: "pending".to_owned(),
-                expires_at: Some(operation.created_at + chrono::Duration::days(7)),
+                expires_at: None,
                 created_at: operation.created_at,
             };
             match invites.put(record).await {
@@ -2435,6 +2436,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
 }
 
 fn message_content_from_payload(payload: &Value) -> Value {
+    let scope_circle_id = message_payload_scope_circle_id(payload);
     let mut content = payload
         .get("content")
         .or_else(|| payload.get("encrypted_payload"))
@@ -2455,12 +2457,36 @@ fn message_content_from_payload(payload: &Value) -> Value {
             }
         }
         if !object.contains_key("scope_circle_id")
-            && let Some(value) = payload.get("scope_circle_id")
+            && let Some(value) = scope_circle_id
         {
-            object.insert("scope_circle_id".to_owned(), value.clone());
+            object.insert("scope_circle_id".to_owned(), Value::String(value));
         }
     }
     content
+}
+
+fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
+    payload
+        .get("scope_circle_id")
+        .or_else(|| {
+            payload
+                .get("content")
+                .and_then(|content| content.get("scope_circle_id"))
+        })
+        .or_else(|| {
+            payload
+                .get("encrypted_payload")
+                .and_then(|encrypted| encrypted.get("scope_circle_id"))
+        })
+        .or_else(|| {
+            payload
+                .get("encrypted_payload")
+                .and_then(|encrypted| encrypted.get("aad"))
+                .and_then(|aad| aad.get("scope_circle_id"))
+        })
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {

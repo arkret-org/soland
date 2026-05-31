@@ -1035,14 +1035,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/api/v1/identity/recovery-policy",
         PathItemType::Post,
         "identity",
-        "cx.identity.recovery_policy.put",
+        "cx.extension.soland.identity.recovery_policy.put",
         "submit a cx.schema.recovery_policy.v1 policy",
     ),
     (
         "/api/v1/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
-        "cx.identity.recovery_receipt.put",
+        "cx.extension.soland.identity.recovery_receipt.put",
         "submit a cx.schema.recovery_receipt.v1 receipt",
     ),
 ];

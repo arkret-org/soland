@@ -80,11 +80,11 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
 }
 
 #[endpoint(
-    operation_id = "cx.system.readyz",
+    operation_id = "cx.extension.soland.system.readyz",
     tags("system"),
     summary = "Readiness probe for deploy orchestrators"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.system.readyz"))]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;

@@ -100,12 +100,15 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.identity.recovery_policy.put",
+    operation_id = "cx.extension.soland.identity.recovery_policy.put",
     tags("identity", "recovery"),
     summary = "Submit a cx.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.recovery_policy.put"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.identity.recovery_policy.put")
+)]
 async fn recovery_policy_put(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -175,7 +178,7 @@ async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.identity.recovery_policy.put",
+        "cx.extension.soland.identity.recovery_policy.put",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -197,12 +200,15 @@ async fn recovery_policy_put(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.recovery_receipt.put",
+    operation_id = "cx.extension.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
     summary = "Record a cx.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.recovery_receipt.put"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "cx.extension.soland.identity.recovery_receipt.put")
+)]
 async fn recovery_receipt_put(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -302,7 +308,7 @@ async fn recovery_receipt_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.identity.recovery_receipt.put",
+        "cx.extension.soland.identity.recovery_receipt.put",
         json!({
             "receipt_id": record.receipt_id.clone(),
             "principal_id": record.principal_id.clone(),

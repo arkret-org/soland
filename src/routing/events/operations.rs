@@ -2059,6 +2059,10 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
         let Some(mention) = mention.as_object() else {
             return Err("mention must be a DID string or reference object");
         };
+        if let Some(subject_id) = mention.get("subject_id").and_then(|value| value.as_str()) {
+            validate_did(subject_id).map_err(|_| "mention subject_id is invalid")?;
+            continue;
+        }
         match mention.get("type").and_then(|value| value.as_str()) {
             Some("actor") => {
                 let Some(did) = mention.get("did").and_then(|value| value.as_str()) else {

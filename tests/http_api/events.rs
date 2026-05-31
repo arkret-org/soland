@@ -302,7 +302,8 @@ async fn events_describe_and_single_event_submit_work() {
         4,
         Vec::new(),
     );
-    conflicting["payload"]["body"] = Value::String("different canonical body".to_owned());
+    conflicting["payload"]["content"]["body"] =
+        Value::String("different canonical body".to_owned());
     let payload_digest = sha256_json(&conflicting["payload"]);
     conflicting["proofs"][0]["payload_digest"] = Value::String(payload_digest);
     conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));

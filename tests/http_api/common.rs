@@ -502,7 +502,7 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
 pub(crate) fn signed_message_event_envelope(
     actor: &str,
     realm_id: &str,
-    thread_id: &str,
+    _thread_id: &str,
     content: Value,
     encrypted: bool,
 ) -> Value {
@@ -511,7 +511,6 @@ pub(crate) fn signed_message_event_envelope(
     let mut payload = serde_json::json!({
         "flow_id": expected_flow_id_for_scope(realm_id),
         "track": "discussion",
-        "thread_id": thread_id,
     });
     if encrypted {
         let mut encrypted_payload = content;
@@ -991,11 +990,27 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     if matches!(
         kind,
         "cx.flow.archive" | "cx.flow.restore" | "cx.flow.tombstone"
-    ) && !object.contains_key("target_ref")
-        && !object.contains_key("object_ref")
-        && let Some(flow_id) = object.get("flow_id").and_then(Value::as_str)
-    {
-        object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+    ) {
+        if !object.contains_key("target_ref") {
+            if let Some(flow_id) = object.get("flow_id").and_then(Value::as_str) {
+                object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+            } else if let Some(object_ref) = object.get("object_ref").and_then(Value::as_str) {
+                object.insert(
+                    "target_ref".to_owned(),
+                    Value::String(object_ref.to_owned()),
+                );
+            }
+        }
+        object.remove("flow_id");
+        object.remove("object_ref");
+    }
+    if kind == "cx.flow.update" {
+        if !object.contains_key("target_ref")
+            && let Some(flow_id) = object.get("flow_id").and_then(Value::as_str)
+        {
+            object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+        }
+        object.remove("flow_id");
     }
 }
 
@@ -1061,11 +1076,27 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     if matches!(
         kind,
         "cx.morph.archive" | "cx.morph.restore" | "cx.morph.tombstone"
-    ) && !object.contains_key("target_ref")
-        && !object.contains_key("object_ref")
-        && let Some(morph_id) = object.get("morph_id").and_then(Value::as_str)
-    {
-        object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
+    ) {
+        if !object.contains_key("target_ref") {
+            if let Some(morph_id) = object.get("morph_id").and_then(Value::as_str) {
+                object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
+            } else if let Some(object_ref) = object.get("object_ref").and_then(Value::as_str) {
+                object.insert(
+                    "target_ref".to_owned(),
+                    Value::String(object_ref.to_owned()),
+                );
+            }
+        }
+        object.remove("morph_id");
+        object.remove("object_ref");
+    }
+    if kind == "cx.morph.update" {
+        if !object.contains_key("target_ref")
+            && let Some(morph_id) = object.get("morph_id").and_then(Value::as_str)
+        {
+            object.insert("target_ref".to_owned(), Value::String(morph_id.to_owned()));
+        }
+        object.remove("morph_id");
     }
 }
 
@@ -1073,9 +1104,55 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 pub(crate) fn signed_relation_event(
     event_id: &str,
     actor_seq: u64,
-    payload: Value,
+    mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
+    let mut normalized_payload = None;
+    if let Some(object) = payload.as_object_mut() {
+        let relation_id = object.remove("relation_id").or_else(|| object.remove("id"));
+        let relation_kind = object
+            .remove("relation_kind")
+            .or_else(|| object.remove("kind"));
+        let from_ref = object.remove("from_ref").or_else(|| object.remove("from"));
+        let to_ref = object.remove("to_ref").or_else(|| object.remove("to"));
+        if let (Some(relation_id), Some(relation_kind), Some(from_ref), Some(to_ref)) =
+            (relation_id, relation_kind, from_ref, to_ref)
+        {
+            let mut relation = serde_json::Map::new();
+            relation.insert("id".to_owned(), relation_id);
+            relation.insert(
+                "schema".to_owned(),
+                Value::String("cx.schema.relation.v1".to_owned()),
+            );
+            relation.insert(
+                "realm_id".to_owned(),
+                Value::String(DEMO_REALM_ID.to_owned()),
+            );
+            relation.insert("relation_kind".to_owned(), relation_kind);
+            relation.insert("from_ref".to_owned(), from_ref);
+            relation.insert("to_ref".to_owned(), to_ref);
+            relation.insert(
+                "created_by".to_owned(),
+                Value::String("did:web:alice.example".to_owned()),
+            );
+            relation.insert(
+                "created_at".to_owned(),
+                Value::String("2026-05-17T00:00:00Z".to_owned()),
+            );
+            if let Some(fields) = object.remove("fields") {
+                relation.insert("fields".to_owned(), fields);
+            }
+            if let Some(rank) = object.remove("rank") {
+                relation.insert("rank".to_owned(), rank);
+            }
+            normalized_payload = Some(serde_json::json!({ "relation": Value::Object(relation) }));
+        } else {
+            object.remove("fields");
+        }
+    }
+    if let Some(next_payload) = normalized_payload {
+        payload = next_payload;
+    }
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": "cx.relation.create",
@@ -1124,6 +1201,10 @@ pub(crate) fn signed_redaction_event(
         && let Some(object_ref) = object.get("object_ref").cloned()
     {
         object.insert("target_ref".to_owned(), object_ref);
+    }
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("object_ref");
+        object.remove("by");
     }
     let mut event = serde_json::json!({
         "event_id": event_id,

@@ -608,7 +608,6 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
                 json!({
                     "body": "hello live",
                     "content": {"body": "hello live"},
-                    "thread_id": "cx:flow:t1",
                 }),
             ))
             .send(&app_writer)

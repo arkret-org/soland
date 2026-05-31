@@ -158,7 +158,6 @@ async fn admit_member(
     let payload = json!({
         "actor_id": new_member_did,
         "membership": "join",
-        "role": "member",
         "delivery_status": "unroutable",
     });
     let mut event = json!({
@@ -203,13 +202,11 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
         "track": "discussion",
-        "thread_id": space_id,
         "content": {
             "kind": "cx.content.text",
             "body": body,
             "format": "plain"
-        },
-        "encrypted": false,
+        }
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("cx:event:"),
@@ -298,8 +295,6 @@ async fn send_circle_scoped_encrypted_message(
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
         "track": "discussion",
-        "thread_id": space_id,
-        "scope_circle_id": circle_id,
         "encrypted_payload": {
             "scheme": "mls-rfc9420",
             "version": "1.0",
@@ -324,8 +319,7 @@ async fn send_circle_scoped_encrypted_message(
                 "aad": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
                 "payload": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
             }
-        },
-        "encrypted": true
+        }
     });
     let mut event = json!({
         "event_id": event_id,
@@ -676,7 +670,11 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await
         .unwrap();
     assert_eq!(bob_read["event"]["event_id"], event_id);
-    assert_eq!(bob_read["event"]["payload"]["scope_circle_id"], circle_id);
+    assert_eq!(bob_read["event"]["effective_scope"], circle_id);
+    assert_eq!(
+        bob_read["event"]["payload"]["encrypted_payload"]["aad"]["scope_circle_id"],
+        circle_id
+    );
 
     let mallory_read = TestClient::get(format!("http://server/api/v1/events/{event_id}"))
         .add_header("authorization", format!("Bearer {mallory}"), true)
@@ -715,20 +713,17 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track": "discussion",
-            "thread_id": "discussion",
             "content": {
                 "kind": "cx.content.text",
                 "body": "root mentions bob",
+                "mention_routing_hint": {
+                    "mentioned": [bob_did]
+                },
                 "mentions": [{
-                    "type": "actor",
-                    "did": bob_did,
-                    "handle": "@bob"
+                    "subject_id": bob_did,
+                    "mention_text_original": "@bob"
                 }]
-            },
-            "mention_routing_hint": {
-                "mentioned": [bob_did]
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -743,13 +738,11 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track": "discussion",
-            "thread_id": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
                 "kind": "cx.content.text",
                 "body": "reply to root"
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -762,7 +755,6 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         "cx.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
-            "actor": alice_did,
             "key": "+1"
         }),
     )
@@ -776,7 +768,6 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         "cx.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
-            "actor": bob_did,
             "key": "+1"
         }),
     )
@@ -790,7 +781,6 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         "cx.reaction.remove",
         json!({
             "target_ref": root_message_ref.clone(),
-            "actor": bob_did,
             "key": "+1"
         }),
     )
@@ -805,7 +795,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         .find(|event| event["event_id"] == root_event_id)
         .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
     assert_eq!(root["mention_routing_hint"]["mentioned"], json!([bob_did]));
-    assert_eq!(root["mentions"][0]["did"], bob_did);
+    assert_eq!(root["mentions"][0]["subject_id"], bob_did);
     assert_eq!(root["reaction_summary"]["+1"], json!([alice_did]));
     assert!(
         !root["reaction_summary"]["+1"]
@@ -895,8 +885,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                     {"id": "backup", "label": "After backup"}
                 ],
                 "max_selections": 1
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -915,8 +904,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "now"
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -935,8 +923,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "backup"
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -955,8 +942,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "backup"
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -990,8 +976,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 "kind": "cx.content.poll.close",
                 "body": "poll closed",
                 "poll_id": poll_id
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
@@ -1010,8 +995,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "now"
-            },
-            "encrypted": false
+            }
         }),
     )
     .await;
