@@ -1149,7 +1149,7 @@ pub(super) async fn admin_get_anchor_dag(
         let Ok(Some(anchor)) = anchor_store.get(leaf_id) else {
             continue;
         };
-        let signers: Vec<String> = match &anchor.anchorer_sig {
+        let signers: Vec<String> = match &anchor.anchorer_signature {
             contrix_sdk::AnchorerSig::Single(sig) => vec![sig.verification_method.clone()],
             contrix_sdk::AnchorerSig::Multi(multi) => multi
                 .signatures
@@ -1390,13 +1390,13 @@ pub(super) async fn admin_prune_anchor_dag(
             )
             .with_status(StatusCode::NOT_FOUND)
         })?;
-    if candidate.space_id.as_str() != space.as_str() {
+    if candidate.realm_id.as_str() != space.as_str() {
         return Err(AppError::new(
             ErrorCode::InvalidParam,
             format!(
                 "anchor `{}` belongs to space `{}`, not `{}`",
                 candidate_id,
-                candidate.space_id.as_str(),
+                candidate.realm_id.as_str(),
                 space_id_str
             ),
         )

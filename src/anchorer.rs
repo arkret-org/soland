@@ -189,10 +189,10 @@ impl AnchorerWorker {
         let hlc = Hlc::new(state.hlc.now())
             .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?;
 
-        // canonical_bytes_for_id excludes `id` + `anchorer_sig` (see
+        // canonical_bytes_for_id excludes `id` + `anchorer_signature` (see
         // `Anchor::canonical_bytes_for_id` in contrix-core/src/anchor.rs).
         // We therefore compute canonical bytes from an Anchor whose `id`
-        // is the well-known zero sentinel and whose `anchorer_sig` is a
+        // is the well-known zero sentinel and whose `anchorer_signature` is a
         // zero-byte-signature placeholder — both fields are EXCLUDED from
         // the canonical body so the sentinels never influence the signing
         // target. Then we derive the real id and sign over those same
@@ -202,11 +202,14 @@ impl AnchorerWorker {
         let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
             id: zero_anchor_id,
-            space_id: space_id.clone(),
+            realm_id: space_id.clone(),
             predecessor_refs: leaves,
             frontier,
             state_root: predicted_state_root.clone(),
-            anchorer_sig: AnchorerSig::Single(zero_sig),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            anchorer_signature: AnchorerSig::Single(zero_sig),
+            anchored_at: chrono::Utc::now(),
             hlc,
             // Normal frontier-advance anchor. Compaction anchors come
             // through `admin_compact_anchor_dag`, not the regular
@@ -218,7 +221,8 @@ impl AnchorerWorker {
             .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
         anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
             .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
-        anchor.anchorer_sig = AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
+        anchor.anchorer_signature =
+            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
 
         // Step 8: submit through apply_anchor — this re-runs steps 1-8 of
         // the SDK pipeline and writes Anchor + marks Moves anchored.
@@ -562,10 +566,10 @@ impl AnchorerWorker {
 }
 
 /// Build a 64-zero-byte signature placeholder used purely as a typed
-/// stand-in for `Anchor.anchorer_sig` while we compute
-/// `canonical_bytes_for_id` (which excludes `anchorer_sig` entirely).
+/// stand-in for `Anchor.anchorer_signature` while we compute
+/// `canonical_bytes_for_id` (which excludes `anchorer_signature` entirely).
 /// The value never reaches the wire — `sign_pending_for_space` overwrites
-/// `anchor.anchorer_sig` with the real signature after deriving the
+/// `anchor.anchorer_signature` with the real signature after deriving the
 /// canonical bytes and the id.
 fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))

@@ -121,7 +121,7 @@ fn flow_position_relation<'a>(
     projection
         .relations
         .values()
-        .filter(|relation| !relation.deleted)
+        .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "contains")
         .filter(|relation| relation.to_ref.as_deref() == Some(flow_id))
         .filter(|relation| relation_string_field(relation, "board_space_id").is_some())
@@ -289,7 +289,7 @@ fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<
     projection
         .relations
         .values()
-        .filter(|relation| !relation.deleted)
+        .filter(|relation| relation.is_active())
         .filter(|relation| {
             relation.from_ref.as_deref() == Some(morph_id)
                 || relation.to_ref.as_deref() == Some(morph_id)

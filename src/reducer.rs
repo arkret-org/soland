@@ -1039,9 +1039,15 @@ pub struct RelationState {
     pub from_ref: Option<String>,
     pub to_ref: Option<String>,
     pub fields: BTreeMap<String, Value>,
-    pub deleted: bool,
+    pub state: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RelationState {
+    pub fn is_active(&self) -> bool {
+        self.state == "active"
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3410,7 +3416,7 @@ impl ProjectionState {
                 from_ref: Some(list_space_id.to_owned()),
                 to_ref: Some(flow_id.to_owned()),
                 fields: BTreeMap::new(),
-                deleted: false,
+                state: "active".to_owned(),
                 created_at: now,
                 updated_at: now,
             });
@@ -3431,7 +3437,7 @@ impl ProjectionState {
                 .fields
                 .insert("rank".to_owned(), Value::String(rank.to_owned()));
         }
-        relation.deleted = false;
+        relation.state = "active".to_owned();
         relation.updated_at = now;
     }
 
@@ -4113,7 +4119,7 @@ impl ProjectionState {
             from_ref,
             to_ref,
             fields,
-            deleted: false,
+            state: "active".to_owned(),
             created_at: now,
             updated_at: now,
         };
@@ -4189,7 +4195,7 @@ impl ProjectionState {
             .to_owned();
 
         if let Some(relation) = self.relations.get_mut(&relation_id) {
-            relation.deleted = true;
+            relation.state = "tombstoned".to_owned();
             relation.updated_at = operation.created_at;
         }
         ProjectionEffect::RelationDeleted { relation_id }
@@ -4244,7 +4250,7 @@ impl ProjectionState {
                 from_ref: container_id.clone(),
                 to_ref: object_ref.clone(),
                 fields: BTreeMap::new(),
-                deleted: false,
+                state: "active".to_owned(),
                 created_at: now,
                 updated_at: now,
             });
@@ -4252,7 +4258,7 @@ impl ProjectionState {
         state.from_ref = container_id;
         state.to_ref = object_ref;
         state.fields.extend(fields);
-        state.deleted = false;
+        state.state = "active".to_owned();
         state.updated_at = now;
         ProjectionEffect::RelationCreated(state.clone())
     }
@@ -6170,7 +6176,7 @@ impl ProjectionState {
         let flow_relation_ids = self
             .relations
             .iter()
-            .filter(|(_, relation)| !relation.deleted)
+            .filter(|(_, relation)| relation.is_active())
             .filter(|(_, relation)| relation.relation_kind == "contains")
             .filter(|(_, relation)| {
                 relation
@@ -7694,7 +7700,7 @@ impl ProjectionState {
         self.relations
             .values()
             .filter(|r| {
-                r.space_id == space_id && !r.deleted && kind.is_none_or(|k| r.relation_kind == k)
+                r.space_id == space_id && r.is_active() && kind.is_none_or(|k| r.relation_kind == k)
             })
             .collect()
     }
@@ -7708,7 +7714,7 @@ impl ProjectionState {
         self.relations
             .values()
             .filter(|r| {
-                !r.deleted
+                r.is_active()
                     && r.relation_kind == crate::kinds::RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF
                     && r.to_ref.as_deref() == Some(flow_id)
             })

@@ -284,7 +284,10 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "joined"
     );
     assert_eq!(resolved["object_preview"]["flow_id"], flow_id);
-    assert!(resolved.get("join_candidates").is_none());
+    assert_eq!(
+        resolved["join_candidates"].as_array().map(Vec::len),
+        Some(0)
+    );
 }
 
 fn preview_token_for_address(
@@ -412,7 +415,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resolved["space_preview"]["realm_id"], DEMO_REALM_ID);
+    assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
         "http://server/api/v1/events?realms=cx:realm:0196419b-0000-7000-8000-000000000000",

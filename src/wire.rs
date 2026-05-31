@@ -394,7 +394,7 @@ pub struct ResolveRealmRequest {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ResolveRealmResponse {
-    pub space_preview: RealmDirectoryEntry,
+    pub realm_preview: RealmDirectoryEntry,
     pub stripped_state: Vec<Value>,
     pub join_rule: String,
     pub join_candidates: Vec<RealmJoinCandidate>,
@@ -2226,7 +2226,7 @@ pub struct RelationResponse {
     pub from: Option<String>,
     pub to: Option<String>,
     pub fields: BTreeMap<String, Value>,
-    pub deleted: bool,
+    pub state: String,
     pub created_at: String,
 }
 
@@ -2243,7 +2243,7 @@ pub struct ListRelationsResponse {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DeleteRelationResponse {
-    pub deleted: bool,
+    pub state: String,
     pub relation_id: String,
 }
 

@@ -161,11 +161,16 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
     };
     let mut a = Anchor {
         id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),
-        space_id: space_id(),
+        realm_id: space_id(),
         predecessor_refs: vec![],
         frontier: vec![frontier],
         state_root,
-        anchorer_sig: AnchorerSig::Single(sig),
+        previous_state_root: None,
+        previous_digest_algorithm: None,
+        anchorer_signature: AnchorerSig::Single(sig),
+        anchored_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
         hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: contrix_sdk::AnchorKind::Normal,
     };

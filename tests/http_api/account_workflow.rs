@@ -181,7 +181,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(invite_resolve["space_preview"]["realm_id"], invite_space_id);
+    assert_eq!(invite_resolve["realm_preview"]["realm_id"], invite_space_id);
 
     let listed_space = seed_test_realm(
         &state,
@@ -241,7 +241,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(
-        unlisted_resolve["space_preview"]["realm_id"],
+        unlisted_resolve["realm_preview"]["realm_id"],
         unlisted_space_id
     );
 
@@ -259,7 +259,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(owner_resolve["space_preview"]["realm_id"], space_id);
+    assert_eq!(owner_resolve["realm_preview"]["realm_id"], space_id);
 
     let locked_space = seed_test_realm(
         &state,

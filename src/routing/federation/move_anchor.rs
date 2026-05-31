@@ -306,7 +306,7 @@ async fn submit_anchor(
     let registry = state.cell_registry.as_ref();
 
     // Replay-window check on Anchor.hlc.
-    // anchor.hlc is part of canonical_bytes_for_id signed by anchorer_sig;
+    // anchor.hlc is part of canonical_bytes_for_id signed by anchorer_signature;
     // window=0 (test config) bypasses entirely.
     if let Err(reject) =
         crate::jws_verify::verify_replay_window(&anchor.hlc, state.config.jws_replay_window_seconds)
@@ -349,7 +349,7 @@ async fn submit_anchor(
     // shift after the reload writes the new value.
     let mls_epoch_cell = contrix_sdk::CellRef::new(format!(
         "cx:cell:cx.component.mls.epoch.v1:{}",
-        anchor.space_id.as_str()
+        anchor.realm_id.as_str()
     ))
     .ok();
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell.as_ref().and_then(|cell_id| {
@@ -360,7 +360,7 @@ async fn submit_anchor(
             .and_then(|proj| proj.cell_value(cell_id).cloned())
     });
     if let Ok(mut proj) = state.projection.lock() {
-        if let Err(error) = proj.reload_cells_from_store(&anchor.space_id, cell_store, registry) {
+        if let Err(error) = proj.reload_cells_from_store(&anchor.realm_id, cell_store, registry) {
             tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_anchor");
         }
     }
@@ -369,7 +369,7 @@ async fn submit_anchor(
     let _ = state
         .event_broadcast
         .send(crate::state::EventNotification::frontier(
-            anchor.space_id.as_str().to_owned(),
+            anchor.realm_id.as_str().to_owned(),
             effect.anchor.as_str().to_owned(),
             effect.post_state_root.as_str().to_owned(),
         ));
@@ -386,7 +386,7 @@ async fn submit_anchor(
             let _ = state
                 .event_broadcast
                 .send(crate::state::EventNotification::epoch_rotation(
-                    anchor.space_id.as_str().to_owned(),
+                    anchor.realm_id.as_str().to_owned(),
                     prev_epoch_value,
                     new_epoch,
                 ));

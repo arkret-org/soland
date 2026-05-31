@@ -211,7 +211,7 @@ async fn resolve_realm(
             let discoverability = space_discoverability(state, space.realm_id.as_str()).await;
             let searchable = space_search_discoverability(state, space.realm_id.as_str()).await;
             json_ok(ResolveRealmResponse {
-                space_preview: space.clone(),
+                realm_preview: space.clone(),
                 stripped_state: vec![json!({
                     // R1.2 (Realm/Space reversal): security-namespace
                     // event renamed from `cx.space.discovery` to
@@ -333,10 +333,6 @@ async fn resolve_target(
     response.insert("join_rule".to_owned(), json!(join_rule));
     response.insert("as_of".to_owned(), json!(now()));
     response.insert("source_refs".to_owned(), json!([]));
-    response.insert(
-        "via_services".to_owned(),
-        json!([state.config.service_did.clone()]),
-    );
     if parsed.link_type == LinkType::Preview
         && let Some(meta) = state
             .persistence
@@ -349,16 +345,12 @@ async fn resolve_target(
     {
         response.insert("policy_revision".to_owned(), json!(digest));
     }
-    if include_join_candidates {
-        response.insert(
-            "join_candidates".to_owned(),
-            json!(join_candidates_for_resolved_realm(
-                state,
-                space.realm_id.as_str(),
-                discoverability.as_str(),
-            )),
-        );
-    }
+    let join_candidates = if include_join_candidates {
+        join_candidates_for_resolved_realm(state, space.realm_id.as_str(), discoverability.as_str())
+    } else {
+        Vec::new()
+    };
+    response.insert("join_candidates".to_owned(), json!(join_candidates));
     json_ok(Value::Object(response))
 }
 

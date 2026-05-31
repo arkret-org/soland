@@ -105,7 +105,7 @@ async fn create_relation(
         from: r.from_ref,
         to: r.to_ref,
         fields: r.fields,
-        deleted: r.deleted,
+        state: r.state,
         created_at: r.created_at.to_rfc3339(),
     })
 }
@@ -141,7 +141,7 @@ async fn delete_relation(
         .await
         .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
     json_ok(DeleteRelationResponse {
-        deleted: true,
+        state: "tombstoned".to_owned(),
         relation_id,
     })
 }
@@ -174,7 +174,7 @@ async fn list_relations(
                 from: r.from_ref.clone(),
                 to: r.to_ref.clone(),
                 fields: r.fields.clone(),
-                deleted: r.deleted,
+                state: r.state.clone(),
                 created_at: r.created_at.to_rfc3339(),
             })
             .collect::<Vec<_>>()
