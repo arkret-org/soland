@@ -144,7 +144,11 @@ fn build_invited_to_join_move() -> Move {
     serde_json::from_value(Value::Object(full)).unwrap()
 }
 
-fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
+fn build_anchor(
+    predecessor_refs: Vec<AnchorId>,
+    frontier: Vec<MoveId>,
+    state_root: Hash,
+) -> Anchor {
     let sig = MoveSignature {
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:anchorer.example#k1".to_owned(),
@@ -162,8 +166,8 @@ fn build_genesis_anchor(frontier: MoveId, state_root: Hash) -> Anchor {
     let mut a = Anchor {
         id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),
         realm_id: space_id(),
-        predecessor_refs: vec![],
-        frontier: vec![frontier],
+        predecessor_refs,
+        frontier,
         state_root,
         previous_state_root: None,
         previous_digest_algorithm: None,
@@ -241,9 +245,31 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
     let expected_root = compute_state_root(&expected).unwrap();
 
     // 3. Submit Anchor — soland delegates to apply_anchor, which: structural OK → no predecessors
-    //    (genesis) → frontier monotonic → deterministic_order → verify_move → atomic apply effect →
-    //    recompute state_root → match A.state_root.
-    let anchor = build_genesis_anchor(move_obj.id.clone(), expected_root.clone());
+    //    (Genesis Anchor) → successor frontier monotonic → deterministic_order → verify_move →
+    //    atomic apply effect → recompute state_root → match A.state_root.
+    let genesis = build_anchor(
+        vec![],
+        vec![],
+        Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
+    );
+    let genesis_resp: Value = TestClient::post("http://server/api/v1/anchors")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&genesis)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        genesis_resp["anchor_id"].as_str().unwrap(),
+        genesis.id.as_str()
+    );
+
+    let anchor = build_anchor(
+        vec![genesis.id.clone()],
+        vec![move_obj.id.clone()],
+        expected_root.clone(),
+    );
     let resp: Value = TestClient::post("http://server/api/v1/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&anchor)
@@ -296,9 +322,7 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
     let expected_root = compute_state_root(&expected).unwrap();
 
     let bad_pred = AnchorId::new(format!("cx:anchor:sha256:{}", "ee".repeat(32))).unwrap();
-    let mut anchor = build_genesis_anchor(move_obj.id.clone(), expected_root);
-    anchor.predecessor_refs = vec![bad_pred];
-    anchor.id = anchor.derive_id().unwrap();
+    let anchor = build_anchor(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
 
     let mut resp = TestClient::post("http://server/api/v1/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -319,6 +343,41 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
 }
 
 #[tokio::test]
+async fn anchor_with_non_empty_frontier_without_genesis_predecessor_is_rejected() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+
+    let move_obj = build_invited_to_join_move();
+    let _: Value = TestClient::post("http://server/api/v1/moves")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&move_obj)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let mut expected = BTreeMap::new();
+    expected.insert(member_cell(), CellState::Value(json!("join")));
+    let expected_root = compute_state_root(&expected).unwrap();
+    let anchor = build_anchor(vec![], vec![move_obj.id], expected_root);
+
+    let mut resp = TestClient::post("http://server/api/v1/anchors")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&anchor)
+        .send(&app)
+        .await;
+    assert_eq!(resp.status_code, Some(StatusCode::CONFLICT));
+    let body: Value = resp.take_json().await.unwrap();
+    let stringified = body.to_string().to_ascii_lowercase();
+    assert!(
+        stringified.contains("genesis") || stringified.contains("frontier"),
+        "rejection reason should mention Genesis frontier shape (got {body})"
+    );
+}
+
+#[tokio::test]
 async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
@@ -334,10 +393,24 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
         .await
         .unwrap();
 
+    let genesis = build_anchor(
+        vec![],
+        vec![],
+        Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
+    );
+    let _: Value = TestClient::post("http://server/api/v1/anchors")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&genesis)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
     // Wrong state_root: claim the Move had no effect (empty state),
     // even though it transitions the member cell.
     let wrong_root = Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap();
-    let anchor = build_genesis_anchor(move_obj.id, wrong_root);
+    let anchor = build_anchor(vec![genesis.id], vec![move_obj.id], wrong_root);
 
     let mut resp = TestClient::post("http://server/api/v1/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)

@@ -614,6 +614,23 @@ fn evaluate_constraint(
             // Check delegation depth
             None // v1: always pass (depth enforced at chain-walk level)
         }
+        Constraint::RateLimiting {
+            max_operations,
+            period,
+        } => {
+            // The runtime grant shape carries the spec-required quota
+            // metadata (`max_operations` + `period`). Service-specific
+            // counters are enforced at the operation surface so this generic
+            // checker only rejects nonsensical quota declarations.
+            if *max_operations == 0 || period.trim().is_empty() {
+                Some(
+                    "rate_limiting constraint requires max_operations>0 and non-empty period"
+                        .to_owned(),
+                )
+            } else {
+                None
+            }
+        }
         Constraint::Decision { .. } => {
             // Decision constraints are evaluated separately via
             // `decision_from_constraint`; treat as satisfied here so they

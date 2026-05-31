@@ -37,6 +37,14 @@ const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_c
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
     contrix_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
+const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "cx.message.mention.broadcast";
+const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
+    "effective_scope_members",
+    "flow_participants",
+    "flow_watchers",
+    "flow_engaged",
+    "assigned_actors",
+];
 
 type OperationValidator = fn(&Operation) -> Result<(), &'static str>;
 
@@ -1226,6 +1234,7 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
     } else if let Some(content) = operation.payload.get("content") {
         validate_content_blocks(content)?;
         validate_mentions(content)?;
+        validate_audience_mentions(content)?;
     }
     Ok(())
 }
@@ -1560,6 +1569,7 @@ pub async fn validate_operation_policy(
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
+        validate_audience_mention_operation_policy(state, operation).await?;
     }
     Ok(())
 }
@@ -1767,6 +1777,268 @@ fn validate_poll_operation_policy(
     } else {
         Ok(())
     }
+}
+
+async fn validate_audience_mention_operation_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !matches!(
+        kinds::canonical_kind_for_operation(operation),
+        Some(kinds::CX_MESSAGE_CREATE | kinds::CX_MESSAGE_REVISE)
+    ) {
+        return Ok(());
+    }
+    let mentions = operation_audience_mentions(operation)?;
+    if mentions.is_empty() {
+        return Ok(());
+    }
+    let actor = operation_actor(operation).ok_or("audience_mention_actor_missing")?;
+    let realm_id = operation.realm_id.as_str();
+    let resource = operation
+        .payload
+        .get("flow_id")
+        .or_else(|| operation.payload.get("target_ref"))
+        .and_then(Value::as_str)
+        .unwrap_or(realm_id);
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    let authz = state.authz.check(
+        actor,
+        CAP_ACTION_MESSAGE_MENTION_BROADCAST,
+        resource,
+        realm_id,
+        owner.as_deref(),
+        &members,
+        &[],
+    );
+    if !authz.allowed {
+        return Err("cx.message.mention.broadcast required for audience_mention");
+    }
+    if !authz
+        .grants
+        .iter()
+        .any(grant_has_broadcast_safety_constraints)
+    {
+        return Err(
+            "cx.message.mention.broadcast grant requires temporal and rate_limiting constraints",
+        );
+    }
+
+    let Some(policy) = effective_audience_mention_policy_for_realm(state, realm_id).await else {
+        return Err("audience_mention_policy_missing");
+    };
+    for mention in mentions {
+        let count =
+            estimate_audience_recipient_count(&mention.audience, &members, operation, state);
+        audience_mention_policy_allows(&policy, &mention.audience, count)?;
+    }
+    Ok(())
+}
+
+fn operation_actor(operation: &Operation) -> Option<&str> {
+    operation
+        .payload
+        .get("sender")
+        .or_else(|| operation.payload.get("actor_id"))
+        .or_else(|| operation.payload.get("created_by"))
+        .and_then(Value::as_str)
+}
+
+async fn realm_owner_and_members(
+    state: &AppState,
+    realm_id: &str,
+) -> (Option<String>, Vec<String>) {
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten();
+    if meta.is_none()
+        && let Some(space_id) = realm_id
+            .strip_prefix("cx:realm:")
+            .map(|suffix| format!("cx:space:{suffix}"))
+    {
+        meta = state
+            .persistence
+            .realm_meta()
+            .get(&space_id)
+            .await
+            .ok()
+            .flatten();
+    }
+    let owner = meta.map(|meta| meta.owner);
+    let members = state
+        .realms
+        .lock()
+        .ok()
+        .map(|realms| {
+            if let Some(realm) = contrix_sdk::RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id))
+            {
+                return realm.members.iter().map(ToString::to_string).collect();
+            }
+            realm_id
+                .strip_prefix("cx:realm:")
+                .and_then(|suffix| contrix_sdk::RealmId::new(format!("cx:space:{suffix}")).ok())
+                .and_then(|id| realms.get(&id))
+                .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    (owner, members)
+}
+
+fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant) -> bool {
+    let has_temporal = grant.expires_at.is_some()
+        || grant.constraints.iter().any(|constraint| {
+            matches!(
+                constraint,
+                crate::authz::Constraint::Temporal {
+                    expires_at: Some(_)
+                }
+            )
+        });
+    let has_rate_limit = grant.constraints.iter().any(|constraint| {
+        matches!(
+            constraint,
+            crate::authz::Constraint::RateLimiting { max_operations, period }
+                if *max_operations > 0 && !period.trim().is_empty()
+        )
+    });
+    has_temporal && has_rate_limit
+}
+
+async fn effective_audience_mention_policy_for_realm(
+    state: &AppState,
+    realm_id: &str,
+) -> Option<Value> {
+    let mut candidates = vec![realm_id.to_owned()];
+    if let Some(suffix) = realm_id.strip_prefix("cx:realm:") {
+        candidates.push(format!("cx:space:{suffix}"));
+    }
+    let events = state.persistence.events().snapshot_all().await.ok()?;
+    events.into_iter().rev().find_map(|record| {
+        if !record
+            .space_id
+            .as_deref()
+            .is_some_and(|space_id| candidates.iter().any(|candidate| candidate == space_id))
+        {
+            return None;
+        }
+        record
+            .envelope
+            .pointer("/payload/object/audience_mention_policy")
+            .or_else(|| record.envelope.pointer("/payload/audience_mention_policy"))
+            .or_else(|| {
+                record
+                    .envelope
+                    .pointer("/payload/object/notification_policy/audience_mentions")
+            })
+            .or_else(|| {
+                record
+                    .envelope
+                    .pointer("/payload/notification_policy/audience_mentions")
+            })
+            .cloned()
+    })
+}
+
+fn estimate_audience_recipient_count(
+    audience: &str,
+    members: &[String],
+    operation: &Operation,
+    state: &AppState,
+) -> usize {
+    match audience {
+        "flow_participants" => operation
+            .payload
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .map(|flow_id| {
+                state
+                    .projection
+                    .lock()
+                    .ok()
+                    .map(|projection| {
+                        projection
+                            .messages_for_thread(flow_id)
+                            .into_iter()
+                            .map(|message| message.sender.as_str())
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len()
+                    })
+                    .unwrap_or(members.len())
+            })
+            .unwrap_or(members.len()),
+        // Conservative upper bound: when the dispatcher cannot cheaply derive
+        // watchers / assigned actors at policy time, use the readable member
+        // set size so max_recipients never underestimates fanout.
+        _ => members.len(),
+    }
+}
+
+fn audience_mention_policy_allows(
+    policy: &Value,
+    audience: &str,
+    recipient_count: usize,
+) -> Result<(), &'static str> {
+    if policy.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Err("audience_mention_policy_disabled");
+    }
+    let audience_policy = policy
+        .get("audiences")
+        .and_then(|audiences| audiences.get(audience));
+    let listed = policy
+        .get("allowed_audiences")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item == audience)
+        });
+    if audience_policy.is_none() && !listed {
+        return Err("audience_mention_audience_not_allowed");
+    }
+    if audience_policy
+        .and_then(|entry| entry.get("enabled"))
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return Err("audience_mention_audience_not_allowed");
+    }
+    let max_recipients = audience_policy
+        .and_then(|entry| entry.get("max_recipients"))
+        .or_else(|| policy.get("max_recipients"))
+        .and_then(Value::as_u64)
+        .ok_or("audience_mention_max_recipients_missing")?;
+    if recipient_count as u64 > max_recipients {
+        return Err("audience_mention_recipient_count_exceeds_limit");
+    }
+    if !policy_declares_audience_quota(policy, audience_policy) {
+        return Err("audience_mention_policy_quota_missing");
+    }
+    Ok(())
+}
+
+fn policy_declares_audience_quota(policy: &Value, audience_policy: Option<&Value>) -> bool {
+    [audience_policy, Some(policy)]
+        .into_iter()
+        .flatten()
+        .any(|entry| {
+            let quota = entry.get("quota").unwrap_or(entry);
+            quota
+                .get("max_operations")
+                .and_then(Value::as_u64)
+                .is_some_and(|value| value > 0)
+                && quota
+                    .get("period")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
 }
 
 fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(), &'static str> {
@@ -2059,6 +2331,10 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
         let Some(mention) = mention.as_object() else {
             return Err("mention must be a DID string or reference object");
         };
+        if mention.get("kind").and_then(Value::as_str) == Some("audience_mention") {
+            validate_audience_mention_object(mention)?;
+            continue;
+        }
         if let Some(subject_id) = mention.get("subject_id").and_then(|value| value.as_str()) {
             validate_did(subject_id).map_err(|_| "mention subject_id is invalid")?;
             continue;
@@ -2083,6 +2359,90 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AudienceMentionNode {
+    audience: String,
+}
+
+fn operation_audience_mentions(
+    operation: &Operation,
+) -> Result<Vec<AudienceMentionNode>, &'static str> {
+    let mut mentions = Vec::new();
+    if let Some(content) = operation.payload.get("content") {
+        collect_audience_mentions(content, &mut mentions)?;
+    }
+    if operation.payload.get("encrypted_payload").is_some()
+        && operation
+            .payload
+            .get("audience_mention_routing_hint")
+            .is_some()
+    {
+        return Err("audience_mention_routing_hint unsupported without explicit E2EE profile");
+    }
+    Ok(mentions)
+}
+
+pub fn validate_audience_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
+    let mut mentions = Vec::new();
+    collect_audience_mentions(content, &mut mentions)?;
+    Ok(())
+}
+
+fn collect_audience_mentions(
+    value: &serde_json::Value,
+    out: &mut Vec<AudienceMentionNode>,
+) -> Result<(), &'static str> {
+    match value {
+        Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("audience_mention") {
+                let node = validate_audience_mention_object(object)?;
+                out.push(node);
+                return Ok(());
+            }
+            for value in object.values() {
+                collect_audience_mentions(value, out)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_audience_mentions(value, out)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_audience_mention_object(
+    object: &serde_json::Map<String, Value>,
+) -> Result<AudienceMentionNode, &'static str> {
+    let audience = object
+        .get("audience")
+        .and_then(Value::as_str)
+        .ok_or("audience_mention requires audience")?;
+    if !AUDIENCE_MENTION_ALLOWED_AUDIENCES.contains(&audience) {
+        return Err("audience_mention audience is invalid");
+    }
+    if object
+        .get("mention_text_original")
+        .and_then(Value::as_str)
+        .is_some_and(|token| token.trim().eq_ignore_ascii_case("@online"))
+    {
+        return Err("presence-filtered audience mention requires an explicit profile");
+    }
+    if object
+        .get("mention_text_original")
+        .and_then(Value::as_str)
+        .is_some_and(|token| token.trim().eq_ignore_ascii_case("@here"))
+        && audience != "flow_engaged"
+    {
+        return Err("@here MUST map to audience flow_engaged");
+    }
+    Ok(AudienceMentionNode {
+        audience: audience.to_owned(),
+    })
 }
 
 pub fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'static str> {
@@ -2301,6 +2661,9 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             {
                 return Err("poll close content block requires poll_id");
             }
+        }
+        "audience_mention" => {
+            validate_audience_mention_object(block)?;
         }
         _ => return Err("unsupported content block type"),
     }
@@ -2819,6 +3182,60 @@ mod sdk_artifact_schema_tests {
         assert_eq!(
             validate_cross_signing_reset_payload(&stale),
             Err("cross_signing_reset_clock_skew_exceeded")
+        );
+    }
+}
+
+#[cfg(test)]
+mod audience_mention_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn audience_mention_accepts_here_as_flow_engaged() {
+        let content = json!({
+            "kind": "cx.content.composite",
+            "parts": [
+                {"kind": "cx.content.text", "body": "Team heads up"},
+                {
+                    "kind": "audience_mention",
+                    "audience": "flow_engaged",
+                    "mention_text_original": "@here"
+                }
+            ]
+        });
+
+        validate_content_blocks(&content).unwrap();
+        validate_audience_mentions(&content).unwrap();
+    }
+
+    #[test]
+    fn audience_mention_rejects_presence_online_without_profile() {
+        let content = json!({
+            "kind": "audience_mention",
+            "audience": "flow_engaged",
+            "mention_text_original": "@online"
+        });
+
+        assert_eq!(
+            validate_audience_mentions(&content),
+            Err("presence-filtered audience mention requires an explicit profile")
+        );
+    }
+
+    #[test]
+    fn audience_mention_policy_requires_finite_limits_and_quota() {
+        let policy = json!({
+            "enabled": true,
+            "allowed_audiences": ["flow_engaged"],
+            "max_recipients": 5,
+            "quota": {"max_operations": 2, "period": "PT1H"}
+        });
+
+        audience_mention_policy_allows(&policy, "flow_engaged", 5).unwrap();
+        assert_eq!(
+            audience_mention_policy_allows(&policy, "flow_engaged", 6),
+            Err("audience_mention_recipient_count_exceeds_limit")
         );
     }
 }

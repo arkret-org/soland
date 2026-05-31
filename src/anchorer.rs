@@ -122,7 +122,29 @@ impl AnchorerWorker {
         }
 
         // Step 3: current frontier (Anchor leaves) for predecessor refs.
-        let leaves = state.anchor_store.list_leaves(space_id)?;
+        // The v1 Genesis Anchor is an empty-frontier DAG root. If this is the
+        // first signed batch for the Realm, materialize that root before
+        // anchoring any Move so the successor never uses predecessor_refs=[].
+        let mut leaves = state.anchor_store.list_leaves(space_id)?;
+        if leaves.is_empty() {
+            let genesis = self.build_genesis_anchor(state, space_id)?;
+            let verifier = select_jws_verifier(state);
+            let effect = apply_anchor(
+                &genesis,
+                state.move_store.as_ref(),
+                state.anchor_store.as_ref(),
+                state.cell_store.as_ref(),
+                state.cell_registry.as_ref(),
+                verifier,
+            )
+            .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
+            tracing::info!(
+                space_id = %space_id,
+                anchor_id = %effect.anchor,
+                "materialized empty Genesis Anchor before signing pending Moves"
+            );
+            leaves = vec![genesis.id];
+        }
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
@@ -562,6 +584,39 @@ impl AnchorerWorker {
             created_at: chrono::Utc::now(),
             jws,
         })
+    }
+
+    fn build_genesis_anchor(
+        &self,
+        state: &AppState,
+        space_id: &SpaceId,
+    ) -> Result<Anchor, AnchorerError> {
+        let zero_anchor_id = AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
+            .expect("zero AnchorId is well-formed");
+        let zero_sig = zero_anchorer_sig_placeholder()?;
+        let mut anchor = Anchor {
+            id: zero_anchor_id,
+            realm_id: space_id.clone(),
+            predecessor_refs: Vec::new(),
+            frontier: Vec::new(),
+            state_root: Hash::new(contrix_sdk::EMPTY_STATE_ROOT.to_owned())
+                .map_err(|e| AnchorerError::Construction(format!("empty state_root: {e}")))?,
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            anchorer_signature: AnchorerSig::Single(zero_sig),
+            anchored_at: chrono::Utc::now(),
+            hlc: Hlc::new(state.hlc.now())
+                .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?,
+            kind: contrix_sdk::AnchorKind::Normal,
+        };
+        let canonical_bytes = anchor
+            .canonical_bytes_for_id()
+            .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
+        anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
+            .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
+        anchor.anchorer_signature =
+            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
+        Ok(anchor)
     }
 }
 

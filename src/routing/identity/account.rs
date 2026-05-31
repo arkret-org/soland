@@ -1240,22 +1240,21 @@ async fn list_notifications(
     };
     let mut items = Vec::new();
     for message in &candidate_messages {
-        let mentioned = !content_has_explicit_mention(&message.content)
-            || content_mentions_actor(
-                &message.content,
-                &message.space_id,
-                &session.actor,
-                &actor_handle,
-            );
+        let mentions_actor = content_mentions_actor(
+            &message.content,
+            &message.space_id,
+            &session.actor,
+            &actor_handle,
+        ) || content_audience_mentions_actor(state, message, &session.actor);
+        let mentioned = !content_has_explicit_mention(&message.content) || mentions_actor;
         if mentioned
             && realm_has_member(state, &message.space_id, &session.actor).await
             && !personal_blocklist_blocks_sender(state, &session.actor, &message.sender).await
         {
             items.push(notification_from_message(
                 message,
-                &session.actor,
-                &actor_handle,
                 last_read_at.as_ref(),
+                mentions_actor,
             ));
         }
     }
@@ -1354,12 +1353,9 @@ fn blocklist_value_is_sender(value: &Value, sender: &str) -> bool {
 
 fn notification_from_message(
     message: &crate::reducer::MessageState,
-    actor: &str,
-    actor_handle: &str,
     last_read_at: Option<&chrono::DateTime<chrono::Utc>>,
+    mentions_actor: bool,
 ) -> serde_json::Value {
-    let mentions_actor =
-        content_mentions_actor(&message.content, &message.space_id, actor, actor_handle);
     let priority = notification_priority(&message.content);
     let notification_kind = if mentions_actor { "mention" } else { "message" };
     let read = last_read_at.is_some_and(|marker| message.created_at <= *marker);
@@ -1497,6 +1493,109 @@ fn content_mentions_actor(
         })
 }
 
+fn content_audience_mentions_actor(
+    state: &AppState,
+    message: &crate::reducer::MessageState,
+    actor: &str,
+) -> bool {
+    let audiences = content_audience_mentions(&message.content);
+    if audiences.is_empty() {
+        return false;
+    }
+    audiences
+        .iter()
+        .any(|audience| audience_targets_actor(state, message, audience.as_str(), actor))
+}
+
+fn audience_targets_actor(
+    state: &AppState,
+    message: &crate::reducer::MessageState,
+    audience: &str,
+    actor: &str,
+) -> bool {
+    match audience {
+        "effective_scope_members" => true,
+        "flow_participants" => flow_participants_include_actor(state, &message.thread_id, actor),
+        "flow_watchers" => flow_watchers_include_actor(state, &message.thread_id, actor),
+        "flow_engaged" => {
+            flow_participants_include_actor(state, &message.thread_id, actor)
+                || flow_watchers_include_actor(state, &message.thread_id, actor)
+        }
+        "assigned_actors" => flow_assignees_include_actor(state, &message.thread_id, actor),
+        _ => false,
+    }
+}
+
+fn flow_participants_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
+    state.projection.lock().ok().is_some_and(|projection| {
+        projection
+            .messages_for_thread(flow_id)
+            .into_iter()
+            .any(|message| message.sender == actor)
+    })
+}
+
+fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
+    let cell_id = format!("cx:cell:cx.component.flow.watch.v1:{flow_id}:{actor}");
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            contrix_sdk::CellRef::new(cell_id)
+                .ok()
+                .and_then(|cell| projection.cell_value(&cell).cloned())
+        })
+        .is_some_and(|value| {
+            if value.is_null() {
+                return false;
+            }
+            value
+                .get("level")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|level| level != "muted")
+        })
+}
+
+fn flow_assignees_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
+    state.projection.lock().ok().is_some_and(|projection| {
+        projection.relations.values().any(|relation| {
+            relation.relation_kind == "assigned_to"
+                && relation.from_ref.as_deref() == Some(flow_id)
+                && relation.to_ref.as_deref() == Some(actor)
+                && relation.is_active()
+        })
+    })
+}
+
+fn content_audience_mentions(content: &serde_json::Value) -> Vec<String> {
+    let mut audiences = Vec::new();
+    collect_content_audience_mentions(content, &mut audiences);
+    audiences
+}
+
+fn collect_content_audience_mentions(content: &serde_json::Value, out: &mut Vec<String>) {
+    match content {
+        serde_json::Value::Object(object) => {
+            if object.get("kind").and_then(serde_json::Value::as_str) == Some("audience_mention") {
+                if let Some(audience) = object.get("audience").and_then(serde_json::Value::as_str) {
+                    out.push(audience.to_owned());
+                }
+                return;
+            }
+            for value in object.values() {
+                collect_content_audience_mentions(value, out);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_content_audience_mentions(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
     if content
         .get("mention_sidecar_hash")
@@ -1508,6 +1607,9 @@ fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
         .get("mentions")
         .is_some_and(|mentions| !mentions.as_array().is_some_and(Vec::is_empty))
     {
+        return true;
+    }
+    if !content_audience_mentions(content).is_empty() {
         return true;
     }
     notification_body(content)
