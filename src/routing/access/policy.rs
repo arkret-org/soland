@@ -316,7 +316,10 @@ async fn delete_policy_document(
             "policy is owned by another actor",
         ));
     }
-    let _ = store.delete(&policy_id);
+    store
+        .delete(&policy_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(OkResBody { ok: true })
 }
 
