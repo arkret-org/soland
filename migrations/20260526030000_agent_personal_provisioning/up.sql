@@ -15,7 +15,7 @@ CREATE TABLE agent_principal (
     agent_principal_id     TEXT PRIMARY KEY
         CHECK (agent_principal_id LIKE 'cx:agent_principal:%'),
     controller_did         TEXT NOT NULL,
-    agent_did              TEXT NOT NULL,
+    agent_id               TEXT NOT NULL,
     display_name           TEXT NOT NULL,
     state                  TEXT NOT NULL DEFAULT 'active'
         CHECK (state IN ('active', 'paused', 'deactivated')),

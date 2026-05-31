@@ -10,7 +10,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service_did = "did:web:applet.example";
-    let agent_did = "did:web:agent.example";
+    let agent_id = "did:web:agent.example";
 
     // Build an applet registration event. cx.applet.registration uses
     // cx.schema.event_payload.v1 since there's no dedicated applet
@@ -70,8 +70,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
 
     // Agent endpoint event.
     let agent_payload = serde_json::json!({
-        "agent_did": agent_did,
-        "agent_id": agent_did,
+        "agent_id": agent_id,
         "protocol": "mcp",
         "endpoints": [{
             "protocol": "mcp"
@@ -130,7 +129,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|a| a["agent_did"] == agent_did)
+        .find(|a| a["agent_id"] == agent_id)
         .expect("registered agent missing from admin/agents");
     assert_eq!(agent_row["protocol"], "mcp");
 }
@@ -220,12 +219,11 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     // `cx:realm:0196419b-0000-7000-8000-000000000000` so the events
     // surface accepts writes against it (mirror of the B3 test).
     let session_id = "cx:agent_session:01904100-0000-7000-8000-b4b4b4b4b4b4";
-    let agent_did = "did:web:agent.example";
+    let agent_id = "did:web:agent.example";
 
     // Register the agent first so B4c's dispatch lookup succeeds.
     let endpoint_payload = serde_json::json!({
-        "agent_did": agent_did,
-        "agent_id": agent_did,
+        "agent_id": agent_id,
         "protocol": "echo",
         "endpoints": [{
             "protocol": "echo"
@@ -269,16 +267,11 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
 
     let echo_params = serde_json::json!({"op": "summarize", "doc": "b4-e2e"});
     let mut payload = serde_json::json!({
-        "agent_did": agent_did,
-        "counterparty_agent": agent_did,
+        "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
         "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
-        "capability_proof": {
-            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
-            "note": "B4 e2e placeholder — reference echo runtime does not verify the proof",
-        },
     });
     let mut start_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
@@ -333,7 +326,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent status event missing from projection log");
-    assert_eq!(status_event["payload"]["status"], "running");
+    assert_eq!(status_event["payload"]["status"], "working");
     assert_eq!(
         status_event["payload"]["detail"]["bridge"],
         "soland.reference.agent_echo"
@@ -349,7 +342,10 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     assert_eq!(result_event["payload"]["status"], "completed");
     assert_eq!(result_event["payload"]["result"]["echo"]["op"], "summarize");
     assert_eq!(result_event["payload"]["result"]["echo"]["doc"], "b4-e2e");
-    assert_eq!(result_event["payload"]["result"]["agent_did"], agent_did);
+    assert_eq!(
+        result_event["payload"]["result"]["agent_principal_id"],
+        agent_id
+    );
     let binding = &result_event["payload"]["audit_binding"];
     assert_eq!(binding["binding_kind"], "ed25519_v1");
     assert_eq!(binding["actor_id"], "did:web:alice.example");
@@ -370,7 +366,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
         public_key_b64,
         session_id,
-        agent_did,
+        agent_id,
         &echo_value,
         "did:web:alice.example",
         sig_b64,
@@ -388,22 +384,17 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let session_id = "cx:agent_session:01904100-0000-7000-8000-deaddeaddead";
-    let agent_did = "did:web:unregistered-agent.example";
+    let agent_id = "did:web:unregistered-agent.example";
 
     // Intentionally skip the cx.agent.endpoint step — this is the
     // dispatch-failure path.
     let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
-        "agent_did": agent_did,
-        "counterparty_agent": agent_did,
+        "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
         "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
-        "capability_proof": {
-            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
-            "note": "B4c e2e placeholder",
-        },
     });
     let mut start_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-deadbeefdead",
@@ -451,13 +442,13 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     .unwrap();
     let list = events["events"].as_array().expect("events array");
 
-    // No status(running) event should be present.
+    // No status(working) event should be present.
     assert!(
         !list.iter().any(|e| {
             e["event_kind"] == "cx.agent.protocol_session.status"
                 && e["payload"]["session_id"] == session_id
         }),
-        "B4c failed-closed dispatch must skip the status(running) event"
+        "B4c failed-closed dispatch must skip the status(working) event"
     );
 
     let result_event = list
@@ -473,8 +464,8 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
         result_event["payload"]["error"]["message"]
             .as_str()
             .unwrap_or("")
-            .contains(agent_did),
-        "error message should mention the missing agent_did"
+            .contains(agent_id),
+        "error message should mention the missing counterparty_agent"
     );
     assert!(
         result_event["payload"].get("audit_binding").is_none(),
@@ -487,12 +478,11 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let session_id = "cx:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
-    let agent_did = "did:web:b4d-agent.example";
+    let agent_id = "did:web:b4d-agent.example";
     let endpoint_url = "https://b4d-agent.example/api/v1/agent";
 
     let endpoint_payload = serde_json::json!({
-        "agent_did": agent_did,
-        "agent_id": agent_did,
+        "agent_id": agent_id,
         "protocol": "echo",
         "endpoint_url": endpoint_url,
         "endpoints": [{
@@ -538,16 +528,11 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
 
     let echo_params = serde_json::json!({"op": "ping"});
     let mut payload = serde_json::json!({
-        "agent_did": agent_did,
-        "counterparty_agent": agent_did,
+        "counterparty_agent": agent_id,
         "session_id": session_id,
         "protocol": "http_custom",
         "params": echo_params,
         "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
-        "capability_proof": {
-            "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
-            "note": "B4d e2e placeholder",
-        },
     });
     let mut start_event = serde_json::json!({
         "event_id": "cx:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
@@ -675,7 +660,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         .expect("admin agents list shape");
     let entry = agents_list
         .iter()
-        .find(|a| a["agent_did"] == agent_did)
+        .find(|a| a["agent_id"] == agent_id)
         .expect("admin agents missing freshly-registered agent");
     assert_eq!(
         entry["endpoint_url"], endpoint_url,

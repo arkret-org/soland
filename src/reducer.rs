@@ -152,7 +152,7 @@ pub struct ProjectionState {
     /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
-    /// Server-side Agent registry projection, keyed by `agent_did`.
+    /// Server-side Agent registry projection, keyed by `agent_id`.
     /// Same shape as `applets`. Populated by `cx.agent.endpoint`.
     /// Protocol-session events for agents
     /// (`cx.agent.protocol_session.{start,status,result}`) are also not
@@ -694,8 +694,8 @@ pub struct AppletProjection {
 /// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentProjection {
-    /// `agent_did` — canonical agent identity per spec.
-    pub agent_did: String,
+    /// `agent_id` — canonical agent runtime DID per spec.
+    pub agent_id: String,
     /// Protocol the agent speaks (free-form string per spec event-kind-registry
     /// payload description; no enum enforcement at this layer).
     pub protocol: String,
@@ -1214,9 +1214,9 @@ pub enum ProjectionEffect {
         realm_id: String,
     },
     /// Agent registry projection updated (endpoint). Keyed by the
-    /// agent's `agent_did`.
+    /// agent's `agent_id`.
     AgentProjectionUpdated {
-        agent_did: String,
+        agent_id: String,
     },
     /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — agent
     /// lifecycle FSM transition projected. `agent_principal_id` is the
@@ -7468,7 +7468,7 @@ impl ProjectionState {
     }
 
     /// Apply `cx.agent.endpoint`. Upserts the AgentProjection keyed by
-    /// `agent_did`. If the payload carries an `endpoint_url` field it
+    /// `agent_id`. If the payload carries an endpoint URL field it
     /// is captured into the projection so the bridge can echo it back
     /// on `protocol_session.result`.
     fn apply_agent_endpoint(
@@ -7476,41 +7476,61 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(agent_did) = operation
+        let Some(agent_id) = operation
             .payload
-            .get("agent_did")
+            .get("agent_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "agent_endpoint_missing_agent_did".to_owned(),
+                reason: "agent_endpoint_missing_agent_id".to_owned(),
             };
         };
+        let first_endpoint = operation
+            .payload
+            .get("endpoints")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first());
         let protocol = operation
             .payload
             .get("protocol")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                first_endpoint
+                    .and_then(|v| v.get("protocol"))
+                    .and_then(|v| v.as_str())
+            })
             .unwrap_or("")
             .to_owned();
         let endpoint_url = operation
             .payload
             .get("endpoint_url")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                first_endpoint
+                    .and_then(|v| v.get("endpoint_url"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                first_endpoint
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+            })
             .map(ToOwned::to_owned);
         let registered_at = self
             .agents
-            .get(&agent_did)
+            .get(&agent_id)
             .map(|p| p.registered_at)
             .unwrap_or(now);
         let projection = AgentProjection {
-            agent_did: agent_did.clone(),
+            agent_id: agent_id.clone(),
             protocol,
             endpoint_url,
             registered_at,
             updated_at: now,
         };
-        self.agents.insert(agent_did.clone(), projection);
-        ProjectionEffect::AgentProjectionUpdated { agent_did }
+        self.agents.insert(agent_id.clone(), projection);
+        ProjectionEffect::AgentProjectionUpdated { agent_id }
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — apply

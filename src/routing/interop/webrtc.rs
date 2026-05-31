@@ -933,7 +933,7 @@ async fn handle_rtc_token(
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
     let participant_identity = format!(
-        "cx:rtcpart:{}",
+        "cx:rtc_participant:{}",
         &sha256_hex(
             format!(
                 "participant\0{}\0{}\0{}\0{}",

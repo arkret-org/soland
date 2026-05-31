@@ -316,7 +316,7 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
 }
 
 /// Snapshot of the in-memory agent registry maintained
-/// by `reducer::ProjectionState::agents`. One row per agent_did, with
+/// by `reducer::ProjectionState::agents`. One row per agent_id, with
 /// the latest `cx.agent.endpoint` metadata.
 fn admin_agent_items(state: &AppState) -> Vec<Value> {
     let proj = match state.projection.lock() {
@@ -327,7 +327,7 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
         .values()
         .map(|agent| {
             json!({
-                "agent_did": agent.agent_did,
+                "agent_id": agent.agent_id,
                 "protocol": agent.protocol,
                 "endpoint_url": agent.endpoint_url,
                 "registered_at": agent.registered_at.to_rfc3339(),

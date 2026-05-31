@@ -1553,7 +1553,7 @@ fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value,
 
 /// CURSOR-1 — is `cx.profile.stateless_cursor.v1` declared by this
 /// deployment? Toggled by the `SOLAND_PROFILE_STATELESS_CURSOR` env var
-/// (mirrors the gating pattern used by `accountable_to.strict_reject.v1`
+/// (mirrors the gating pattern used by `accountable_principals.strict_reject.v1`
 /// in `routing/events/operations.rs`). Default: stateful-only.
 fn is_stateless_cursor_profile_declared(_state: &AppState) -> bool {
     #[cfg(test)]

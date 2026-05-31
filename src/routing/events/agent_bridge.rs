@@ -4,21 +4,21 @@
 //! agent registered via `cx.agent.endpoint`, this module fans out the
 //! lifecycle as projection events:
 //!
-//! 1. `cx.agent.protocol_session.status` with `status="running"` once
+//! 1. `cx.agent.protocol_session.status` with `status="working"` once
 //!    the runtime acknowledges the invocation.
 //! 2. `cx.agent.protocol_session.result` carrying the terminal payload
 //!    plus an Ed25519-signed `audit_binding` block (signature is
 //!    computed by `contrix_sdk::agent_binding::sign_ed25519_audit_binding`
-//!    over the canonical subject `{session_id, agent_did, result.echo,
-//!    actor}`).
+//!    over the canonical subject `{session_id, agent_principal_id,
+//!    result.echo, actor}`).
 //!
 //! Dispatch rules:
 //!
-//! - The runtime first looks up `agent_did` in
+//! - The runtime first looks up `counterparty_agent` in
 //!   `state.projection.lock().agents`. When no AgentProjection is
 //!   present the bridge fails closed with a single
 //!   `cx.agent.protocol_session.result` (`status="failed"` +
-//!   `error.code="unknown_agent"`) and emits no status(running).
+//!   `error.code="unknown_agent"`) and emits no status(working).
 //! - When the registered agent carries an `endpoint_url`, the runtime
 //!   POSTs the invocation to it via reqwest on a tokio task and
 //!   emits the result event when the upstream replies. Failures
@@ -69,12 +69,12 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_e
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
 /// itself has been broadcast + persisted, so a subscriber sees them
-/// in causal order: start -> status(running) -> result(completed).
+/// in causal order: start -> status(working) -> result(completed).
 ///
-/// When `agent_did` does not resolve to a registered AgentProjection
+/// When `counterparty_agent` does not resolve to a registered AgentProjection
 /// the bridge fails closed with a single result
 /// (`status=failed`, `error.code=unknown_agent`) and emits no
-/// status(running) event.
+/// status(working) event.
 pub async fn maybe_emit_echo_result_for_session_start(
     state: &AppState,
     origin: &str,
@@ -92,14 +92,14 @@ pub async fn maybe_emit_echo_result_for_session_start(
         Some(s) => s.to_owned(),
         None => return,
     };
-    let agent_did = body
-        .get("agent_did")
+    let agent_principal_id = body
+        .get("counterparty_agent")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
 
-    // Dispatch by agent_did. Look up the AgentProjection; if absent
+    // Dispatch by counterparty_agent. Look up the AgentProjection; if absent
     // the runtime cannot route the invocation, so fail closed with
     // an error result. When present, capture the `endpoint_url` (if
     // any) so the result envelope can report it. We snapshot the
@@ -108,7 +108,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     let agent_snapshot: Option<(String, Option<String>)> =
         state.projection.lock().ok().and_then(|proj| {
             proj.agents
-                .get(&agent_did)
+                .get(&agent_principal_id)
                 .map(|p| (p.protocol.clone(), p.endpoint_url.clone()))
         });
     let Some((agent_protocol, agent_endpoint_url)) = agent_snapshot else {
@@ -119,11 +119,11 @@ pub async fn maybe_emit_echo_result_for_session_start(
             "error": {
                 "code": "unknown_agent",
                 "message": format!(
-                    "agent_did `{agent_did}` is not registered (no cx.agent.endpoint accepted)"
+                    "counterparty_agent `{agent_principal_id}` is not registered (no cx.agent.endpoint accepted)"
                 ),
             },
             "detail": {
-                "agent_did": agent_did,
+                "agent_principal_id": agent_principal_id,
                 "bridge": "soland.reference.agent_echo",
             },
         });
@@ -153,9 +153,9 @@ pub async fn maybe_emit_echo_result_for_session_start(
     // observers see which registered agent answered.
     let status_payload = json!({
         "session_id": session_id,
-        "status": "running",
-        "detail": {
-            "agent_did": agent_did,
+            "status": "working",
+            "detail": {
+            "agent_principal_id": agent_principal_id,
             "protocol": agent_protocol,
             "endpoint_url": agent_endpoint_url,
             "bridge": "soland.reference.agent_echo",
@@ -190,7 +190,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         // let `project_accepted_operations` return immediately.
         let state_clone = state.clone();
         let session_id_clone = session_id.clone();
-        let agent_did_clone = agent_did.clone();
+        let agent_principal_id_clone = agent_principal_id.clone();
         let origin_clone = origin.to_owned();
         let space_clone = space_id_str.clone();
         let agent_protocol_clone = agent_protocol.clone();
@@ -200,7 +200,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             let outcome = forward_to_agent_endpoint(
                 &endpoint_url,
                 &session_id_clone,
-                &agent_did_clone,
+                &agent_principal_id_clone,
                 &echo_value,
                 development_mode,
             )
@@ -209,7 +209,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
                 &state_clone,
                 &space_clone,
                 &session_id_clone,
-                &agent_did_clone,
+                &agent_principal_id_clone,
                 &agent_protocol_clone,
                 Some(&endpoint_url_for_detail),
                 &origin_clone,
@@ -225,7 +225,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         state,
         &space_id_str,
         &session_id,
-        &agent_did,
+        &agent_principal_id,
         &agent_protocol,
         None,
         origin,
@@ -254,7 +254,7 @@ enum AgentInvocationOutcome {
 /// ```jsonc
 /// {
 ///   "session_id": "cx:session:...",
-///   "agent_did": "did:web:...",
+///   "counterparty_agent": "did:web:...",
 ///   "params": <verbatim caller params>
 /// }
 /// ```
@@ -266,7 +266,7 @@ enum AgentInvocationOutcome {
 async fn forward_to_agent_endpoint(
     endpoint_url: &str,
     session_id: &str,
-    agent_did: &str,
+    agent_principal_id: &str,
     params: &Value,
     development_mode: bool,
 ) -> AgentInvocationOutcome {
@@ -296,7 +296,7 @@ async fn forward_to_agent_endpoint(
         };
     let body = json!({
         "session_id": session_id,
-        "agent_did": agent_did,
+        "counterparty_agent": agent_principal_id,
         "params": params,
     });
     let response = match client.post(endpoint_url.clone()).json(&body).send().await {
@@ -333,7 +333,7 @@ async fn emit_agent_result_envelope(
     state: &AppState,
     space_id: &str,
     session_id: &str,
-    agent_did: &str,
+    agent_principal_id: &str,
     agent_protocol: &str,
     agent_endpoint_url: Option<&str>,
     origin: &str,
@@ -364,7 +364,7 @@ async fn emit_agent_result_envelope(
             let signed = contrix_sdk::agent_binding::sign_ed25519_audit_binding(
                 signing_seed,
                 session_id,
-                agent_did,
+                agent_principal_id,
                 &echo_value,
                 origin,
             );
@@ -373,7 +373,7 @@ async fn emit_agent_result_envelope(
                 "status": status,
                 "result": {
                     "echo": echo_value,
-                    "agent_did": agent_did,
+                    "agent_principal_id": agent_principal_id,
                 },
                 "audit_binding": {
                     "binding_kind": "ed25519_v1",
@@ -384,7 +384,7 @@ async fn emit_agent_result_envelope(
                     "canonical_subject": signed.canonical_subject,
                 },
                 "detail": {
-                    "agent_did": agent_did,
+                    "agent_principal_id": agent_principal_id,
                     "protocol": agent_protocol,
                     "endpoint_url": agent_endpoint_url,
                     "bridge": match agent_endpoint_url {
@@ -403,7 +403,7 @@ async fn emit_agent_result_envelope(
                 "message": message,
             },
             "detail": {
-                "agent_did": agent_did,
+                "agent_principal_id": agent_principal_id,
                 "protocol": agent_protocol,
                 "endpoint_url": agent_endpoint_url,
                 "bridge": "soland.reference.agent_outbound",
@@ -498,20 +498,22 @@ mod tests {
         AppState::new(config, Db { pool: None })
     }
 
-    fn build_agent_session_start(session_id: &str, agent_did: &str, params: Value) -> Operation {
+    fn build_agent_session_start(
+        session_id: &str,
+        agent_principal_id: &str,
+        params: Value,
+    ) -> Operation {
         let mut op = Operation::create(
             OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
             RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({
-                "agent_did": agent_did,
                 "session_id": session_id,
+                "counterparty_agent": agent_principal_id,
+                "protocol": "http_custom",
                 "params": params,
-                "capability_proof": {
-                    "grant_ref": "cx:grant:01904100-0000-7000-8000-000000000099",
-                    "note": "unit-test placeholder",
-                },
+                "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
             }),
         );
         op.object_id = Some(session_id.to_owned());
@@ -522,16 +524,20 @@ mod tests {
     /// succeeds. Mirrors what `cx.agent.endpoint` would do via the
     /// reducer; the tests need it because they hand-build operations
     /// and bypass the full reducer pipeline.
-    fn register_agent(state: &AppState, agent_did: &str) {
-        register_agent_with_endpoint(state, agent_did, None);
+    fn register_agent(state: &AppState, agent_principal_id: &str) {
+        register_agent_with_endpoint(state, agent_principal_id, None);
     }
 
-    fn register_agent_with_endpoint(state: &AppState, agent_did: &str, endpoint_url: Option<&str>) {
+    fn register_agent_with_endpoint(
+        state: &AppState,
+        agent_principal_id: &str,
+        endpoint_url: Option<&str>,
+    ) {
         let mut proj = state.projection.lock().expect("projection lock");
         proj.agents.insert(
-            agent_did.to_owned(),
+            agent_principal_id.to_owned(),
             crate::reducer::AgentProjection {
-                agent_did: agent_did.to_owned(),
+                agent_id: agent_principal_id.to_owned(),
                 protocol: "echo".to_owned(),
                 endpoint_url: endpoint_url.map(ToOwned::to_owned),
                 registered_at: chrono::Utc::now(),
@@ -544,10 +550,10 @@ mod tests {
     async fn agent_echo_bridge_emits_status_and_result_for_session_start() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-cccccccccccc";
-        let agent_did = "did:web:agent.example";
-        register_agent(&state, agent_did);
+        let agent_id = "did:web:agent.example";
+        register_agent(&state, agent_id);
         let echo_params = json!({"op": "summarize", "doc": "hello"});
-        let op = build_agent_session_start(session, agent_did, echo_params.clone());
+        let op = build_agent_session_start(session, agent_id, echo_params.clone());
         let actor = "did:web:alice.example";
         maybe_emit_echo_result_for_session_start(&state, actor, &op).await;
         let projections = state
@@ -563,8 +569,11 @@ mod tests {
                     && e.payload["session_id"] == session
             })
             .expect("synthetic status event missing");
-        assert_eq!(status_entry.payload["status"], "running");
-        assert_eq!(status_entry.payload["detail"]["agent_did"], agent_did);
+        assert_eq!(status_entry.payload["status"], "working");
+        assert_eq!(
+            status_entry.payload["detail"]["agent_principal_id"],
+            agent_id
+        );
         assert_eq!(
             status_entry.payload["detail"]["bridge"],
             "soland.reference.agent_echo"
@@ -580,7 +589,10 @@ mod tests {
         assert_eq!(result_entry.payload["status"], "completed");
         assert_eq!(result_entry.payload["result"]["echo"]["op"], "summarize");
         assert_eq!(result_entry.payload["result"]["echo"]["doc"], "hello");
-        assert_eq!(result_entry.payload["result"]["agent_did"], agent_did);
+        assert_eq!(
+            result_entry.payload["result"]["agent_principal_id"],
+            agent_id
+        );
 
         // Verify the Ed25519 signature round-trips against the SDK
         // helper using the public key the envelope carries - the
@@ -597,7 +609,7 @@ mod tests {
         let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
             public_key_b64,
             session,
-            agent_did,
+            agent_id,
             &echo_params,
             actor,
             sig_b64,
@@ -610,7 +622,7 @@ mod tests {
         );
     }
 
-    /// When the agent_did is not registered (no `cx.agent.endpoint`
+    /// When the counterparty_agent is not registered (no `cx.agent.endpoint`
     /// accepted), the bridge MUST emit a single
     /// `cx.agent.protocol_session.result` with `status=failed` +
     /// `error.code=unknown_agent` instead of the status/result
@@ -619,10 +631,10 @@ mod tests {
     async fn agent_echo_bridge_fails_closed_for_unknown_agent() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-deadbeefdead";
-        let agent_did = "did:web:unregistered-agent.example";
+        let agent_id = "did:web:unregistered-agent.example";
         // Intentionally do NOT call register_agent — this is the
         // dispatch-failure path we want to exercise.
-        let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
+        let op = build_agent_session_start(session, agent_id, json!({"op": "ping"}));
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
@@ -630,14 +642,14 @@ mod tests {
             .snapshot_all()
             .await
             .expect("snapshot");
-        // No status(running) event should be present — the runtime
+        // No status(working) event should be present — the runtime
         // failed before acknowledging the invocation.
         assert!(
             !projections.iter().any(|e| {
                 e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
-            "failed-closed dispatch must skip the status(running) event"
+            "failed-closed dispatch must skip the status(working) event"
         );
         let result_entry = projections
             .iter()
@@ -652,8 +664,8 @@ mod tests {
             result_entry.payload["error"]["message"]
                 .as_str()
                 .unwrap_or("")
-                .contains(agent_did),
-            "error message should mention the missing agent_did"
+                .contains(agent_id),
+            "error message should mention the missing counterparty_agent"
         );
         // The audit_binding block is omitted on the failure path —
         // there's nothing meaningful to sign.
@@ -678,10 +690,10 @@ mod tests {
         // because the field is owned.
         state.config.agent_audit_binding_signing_seed = Some(deployment_seed);
         let session = "cx:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
-        let agent_did = "did:web:agent-deployment.example";
-        register_agent(&state, agent_did);
+        let agent_id = "did:web:agent-deployment.example";
+        register_agent(&state, agent_id);
         let echo = json!({"op": "ping"});
-        let op = build_agent_session_start(session, agent_did, echo.clone());
+        let op = build_agent_session_start(session, agent_id, echo.clone());
         let actor = "did:web:alice.example";
         maybe_emit_echo_result_for_session_start(&state, actor, &op).await;
         let projections = state
@@ -710,7 +722,7 @@ mod tests {
         let subject = binding["canonical_subject"].as_str().expect("subj");
         assert_eq!(
             contrix_sdk::agent_binding::verify_ed25519_audit_binding(
-                pk, session, agent_did, &echo, actor, sig, subject,
+                pk, session, agent_id, &echo, actor, sig, subject,
             ),
             contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
         );
@@ -740,13 +752,13 @@ mod tests {
     async fn agent_outbound_bridge_emits_upstream_unreachable_on_connection_failure() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-eeeeeeeeeeee";
-        let agent_did = "did:web:agent-with-endpoint.example";
+        let agent_id = "did:web:agent-with-endpoint.example";
         // 127.0.0.1:1 is reserved + nothing listens → fast ECONNREFUSED.
         let endpoint_url = "http://127.0.0.1:1/agent-runtime";
-        register_agent_with_endpoint(&state, agent_did, Some(endpoint_url));
-        let op = build_agent_session_start(session, agent_did, json!({"op": "ping"}));
+        register_agent_with_endpoint(&state, agent_id, Some(endpoint_url));
+        let op = build_agent_session_start(session, agent_id, json!({"op": "ping"}));
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
-        // The status(running) event fires synchronously, then the
+        // The status(working) event fires synchronously, then the
         // tokio task does the HTTP. Wait for the result event up
         // to ~3 s.
         let result_entry = {
@@ -781,7 +793,7 @@ mod tests {
         );
         // No audit_binding on failure path.
         assert!(result_entry.payload.get("audit_binding").is_none());
-        // status(running) must also have endpoint_url plumbed.
+        // status(working) must also have endpoint_url plumbed.
         let projections = state
             .persistence
             .projection_events()
@@ -794,7 +806,7 @@ mod tests {
                 e.event_kind == kinds::CX_AGENT_PROTOCOL_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
-            .expect("status(running) event missing");
+            .expect("status(working) event missing");
         assert_eq!(status_entry.payload["detail"]["endpoint_url"], endpoint_url);
     }
 
@@ -807,9 +819,9 @@ mod tests {
     async fn agent_echo_bridge_renders_null_endpoint_url_when_not_registered() {
         let state = test_state();
         let session = "cx:session:01904100-0000-7000-8000-ffffffffffff";
-        let agent_did = "did:web:agent-no-endpoint.example";
-        register_agent_with_endpoint(&state, agent_did, None);
-        let op = build_agent_session_start(session, agent_did, json!({}));
+        let agent_id = "did:web:agent-no-endpoint.example";
+        register_agent_with_endpoint(&state, agent_id, None);
+        let op = build_agent_session_start(session, agent_id, json!({}));
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;
         let projections = state
             .persistence
@@ -866,7 +878,7 @@ mod tests {
                 .unwrap(),
             RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
-            json!({"agent_did": "did:web:agent.example"}),
+            json!({"counterparty_agent": "did:web:agent.example"}),
         );
         op.object_id = None;
         maybe_emit_echo_result_for_session_start(&state, "did:web:alice.example", &op).await;

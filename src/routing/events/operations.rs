@@ -185,6 +185,7 @@ const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "patch",
     "cx.realm.update operation requires patch",
 )];
+const REALM_TERMINAL_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "value",
@@ -395,21 +396,22 @@ const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
 // `*.result` event that carries the audit-binding proof + signed agent
 // result.
 const AGENT_ENDPOINT_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("agent_did", "agent endpoint requires agent_did"),
-    PayloadRequirement::Required("protocol", "agent endpoint requires protocol"),
+    PayloadRequirement::Required("agent_id", "agent endpoint requires agent_id"),
+    PayloadRequirement::Required("endpoints", "agent endpoint requires endpoints"),
 ];
 const AGENT_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "agent_did",
-        "agent protocol_session.start requires agent_did",
-    ),
     PayloadRequirement::Required(
         "session_id",
         "agent protocol_session.start requires session_id",
     ),
     PayloadRequirement::Required(
-        "capability_proof",
-        "agent protocol_session.start requires capability_proof",
+        "counterparty_agent",
+        "agent protocol_session.start requires counterparty_agent",
+    ),
+    PayloadRequirement::Required("protocol", "agent protocol_session.start requires protocol"),
+    PayloadRequirement::Required(
+        "capability_grant",
+        "agent protocol_session.start requires capability_grant",
     ),
 ];
 const AGENT_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -832,25 +834,25 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             }
             Ok(())
         }
-        // REDU-6 — when `cx.profile.accountable_to.strict_reject.v1` is
-        // declared (env-gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT`),
-        // Actor Profile create/update with unverified `accountable_to[]`
+        // REDU-6 — when `cx.profile.accountable_principals.strict_reject.v1`
+        // is declared (env-gated by `SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT`),
+        // Actor Profile create/update with unverified `accountable_principal_ids[]`
         // MUST reject the whole event with `failed_precondition
         // reason=accountability_grant_missing`. Without the profile we
         // fall back to the default strip + audit behavior.
-        // TODO(R3.1): cross-check each accountable_to[] DID against the
+        // TODO(R3.1): cross-check each accountable_principal_ids[] DID against the
         // `cx.identity.accountability_grant` projection; for now we
         // only enforce the wire-shape contract (presence of the
-        // accountable_to[] field implies verification must happen).
+        // accountable_principal_ids[] field implies verification must happen).
         "cx.profile.create" | "cx.profile.update" => {
             let strict_reject = matches!(
-                std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
+                std::env::var("SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT").as_deref(),
                 Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
             );
             if strict_reject
                 && operation
                     .payload
-                    .get("accountable_to")
+                    .get("accountable_principal_ids")
                     .and_then(|v| v.as_array())
                     .is_some_and(|arr| !arr.is_empty())
                 && operation
@@ -861,7 +863,7 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             {
                 return Err(
                     "accountability_grant_missing: strict_reject profile requires \
-                     accountability_grant_refs[] when accountable_to[] is non-empty",
+                     accountability_grant_refs[] when accountable_principal_ids[] is non-empty",
                 );
             }
             Ok(())
@@ -981,6 +983,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_REALM_UPDATE => OperationPayloadSchema {
             requirements: REALM_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CX_REALM_DESTROY | kinds::CX_REALM_TOMBSTONE => OperationPayloadSchema {
+            requirements: REALM_TERMINAL_REQUIREMENTS,
             validate: None,
         },
         kinds::CX_REALM_MODERATION_POLICY => OperationPayloadSchema {

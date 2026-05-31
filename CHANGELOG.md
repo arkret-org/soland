@@ -4,6 +4,12 @@ All notable wire-affecting changes to the soland Principal Server are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project tracks Contrix v1 spec revisions.
 
+## R3.4 — Spec sync 2026-05-31 (contrix-spec @ c2848a4)
+
+- Synced protocol-facing names and fixtures to `c2848a4`: event envelope schema naming, `_ids` grant constraints, accountability principal vocabulary, `cx:rtc_participant:` media participants, agent session start fields, and key-backup signature algorithm naming where applicable.
+
+> No version tag, no crates.io / Docker Hub / npm publish — git commit only.
+
 ## R3.3 — Spec sync 2026-05-28 (contrix-spec @ cced4b8)
 
 - R3.3 spec sync — pin to contrix-spec @ cced4b8 (CXP-0011 shareable object addressing / `cx.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
@@ -23,7 +29,7 @@ and the project tracks Contrix v1 spec revisions.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: all 20 R3 reason codes (`pairing_request_expired`, `proof_invalid`, agent / media-binding / recovery / handle homograph families) exposed as `pub const` strings under `crate::error::reasons` and grouped in `R3_NEW_REASONS`; per-handler wiring deferred to R3.1.
-- PROF-1: `cx.profile.media_service_binding.v1` and `cx.profile.accountable_to.strict_reject.v1` advertised in `cx.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
+- PROF-1: `cx.profile.media_service_binding.v1` and `cx.profile.accountable_principals.strict_reject.v1` advertised in `cx.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 
@@ -70,7 +76,7 @@ reason codes registered in `contrix-spec` `9cb47c1..2b0d70d`.
   `projection_events`). Bidirectional migrations; `down` is provided for
   diesel symmetry only — see `DEPLOYMENT.md` §11 for the disk-sizing
   estimate.
-- Authz: `allowed_circle_refs` constraint type added to the local
+- Authz: `allowed_circle_ids` constraint type added to the local
   evaluator. Required by the six `cx.circle.*` capability actions per
   the spec's `required_constraints` declaration.
 - 6 CXP-0007 sub-reason codes re-exported via `crate::error::reasons::*`

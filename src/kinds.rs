@@ -194,9 +194,9 @@ pub const CX_AUDIT_EPOCH_DESTRUCTION_FAILSAFE: &str = "cx.audit.epoch_destructio
 // Round C45 (2026-05-18 main) — new event kinds.
 //
 // `cx.identity.accountability_grant` (identity / reducer_input): issuer-signed
-//   endorsement that a subject DID is accountable_to the issuer for a declared
-//   scope. Required to verify `Actor Profile.accountable_to[]` entries; reducer
-//   strips unverified DIDs from accountable_to (or rejects with
+//   endorsement that a subject DID is accountable to the issuer for a declared
+//   scope. Required to verify `Actor Profile.accountable_principal_ids[]`;
+//   reducer strips unverified DIDs from accountable_principal_ids (or rejects with
 //   `accountability_grant_missing`, per deployment policy). zh/models/actor.md §3.3.1.
 // `cx.morph.schema_migrate` (morph / reducer_input): one-shot Morph
 //   `schema_refs[]` evolution event with explicit compatibility class.
@@ -501,7 +501,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_AUDIT_EPOCH_KEY_DESTRUCTION => Some(CX_AUDIT_EPOCH_KEY_DESTRUCTION),
         CX_REALM_AUDIT_POLICY_DOWNGRADE => Some(CX_REALM_AUDIT_POLICY_DOWNGRADE),
         // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
-        // (accountability_grant strips unverified DIDs from accountable_to;
+        // (accountability_grant strips unverified DIDs from accountable_principal_ids;
         // morph.schema_migrate enforces capability + compatibility_class
         // gate; range_completeness is non-reducer audit-side evidence).
         CX_IDENTITY_ACCOUNTABILITY_GRANT => Some(CX_IDENTITY_ACCOUNTABILITY_GRANT),

@@ -322,7 +322,7 @@ fn signed_recovery_policy(
         "expires_at": "2026-06-30T00:00:00Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_alg": "EdDSA",
+            "signature_algorithm": "EdDSA",
             "signed_fields": signed_fields,
             "signature": ""
         }
@@ -365,7 +365,7 @@ fn signed_recovery_receipt(
         "completed_at": "2026-05-30T00:00:01Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_alg": "EdDSA",
+            "signature_algorithm": "EdDSA",
             "signed_fields": signed_fields,
             "signature": ""
         }

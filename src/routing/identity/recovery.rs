@@ -402,13 +402,13 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
         .get("verification_method")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
-    let signature_alg = auth_data
-        .get("signature_alg")
+    let signature_algorithm = auth_data
+        .get("signature_algorithm")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("auth_data.signature_alg is required"))?;
-    if !matches!(signature_alg, "EdDSA" | "Ed25519") {
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature_algorithm is required"))?;
+    if !matches!(signature_algorithm, "EdDSA" | "Ed25519") {
         return Err(AppError::invalid_param(format!(
-            "auth_data.signature_alg `{signature_alg}` not in {{EdDSA, Ed25519}}",
+            "auth_data.signature_algorithm `{signature_algorithm}` not in {{EdDSA, Ed25519}}",
         )));
     }
     auth_data
@@ -526,13 +526,13 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         .get("verification_method")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
-    let signature_alg = auth_data
-        .get("signature_alg")
+    let signature_algorithm = auth_data
+        .get("signature_algorithm")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("auth_data.signature_alg is required"))?;
-    if !matches!(signature_alg, "EdDSA" | "Ed25519") {
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature_algorithm is required"))?;
+    if !matches!(signature_algorithm, "EdDSA" | "Ed25519") {
         return Err(AppError::invalid_param(format!(
-            "auth_data.signature_alg `{signature_alg}` not in {{EdDSA, Ed25519}}",
+            "auth_data.signature_algorithm `{signature_algorithm}` not in {{EdDSA, Ed25519}}",
         )));
     }
     auth_data

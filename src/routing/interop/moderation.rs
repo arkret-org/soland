@@ -129,10 +129,10 @@ async fn moderation_report(
     )
     .await;
     let mut routed_to = vec![moderation_service];
-    if let Some(agent_did) =
+    if let Some(audit_agent_principal_id) =
         notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await
     {
-        routed_to.push(agent_did);
+        routed_to.push(audit_agent_principal_id);
     }
     json_ok(ModerationReportResBody {
         report_id,
@@ -285,10 +285,15 @@ async fn notify_audit_agent_for_report(
         }
         _ => Value::Null,
     };
-    let agent_did = identity
+    let audit_agent_principal_id = identity
         .get("did")
         .and_then(Value::as_str)
-        .or_else(|| policy.get("agent_did").and_then(Value::as_str))
+        .or_else(|| {
+            policy
+                .get("audit_agent_principal_id")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| policy.get("agent_id").and_then(Value::as_str))
         .unwrap_or("did:web:audit-agent.unknown")
         .to_owned();
     let realm_id = report_payload
@@ -316,8 +321,20 @@ async fn notify_audit_agent_for_report(
     match client.post(invite_url).json(&invite_body).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
-                append_audit_agent_invite_log(state, &agent_did, report_payload, &body).await;
-                append_agent_accessed_if_present(state, &agent_did, report_payload, &body).await;
+                append_audit_agent_invite_log(
+                    state,
+                    &audit_agent_principal_id,
+                    report_payload,
+                    &body,
+                )
+                .await;
+                append_agent_accessed_if_present(
+                    state,
+                    &audit_agent_principal_id,
+                    report_payload,
+                    &body,
+                )
+                .await;
             }
         }
         Ok(response) => {
@@ -328,7 +345,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "space_id": realm_id,
                     "report_id": report_id,
-                    "agent_did": agent_did,
+                    "audit_agent_principal_id": audit_agent_principal_id,
                     "status": response.status().as_u16(),
                 }),
                 "failed",
@@ -343,7 +360,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "space_id": realm_id,
                     "report_id": report_id,
-                    "agent_did": agent_did,
+                    "audit_agent_principal_id": audit_agent_principal_id,
                     "error": error.to_string(),
                 }),
                 "failed",
@@ -359,7 +376,13 @@ async fn notify_audit_agent_for_report(
     match client.post(events_url).json(&event_body).send().await {
         Ok(response) if response.status().is_success() => {
             if let Ok(body) = response.json::<Value>().await {
-                append_agent_accessed_if_present(state, &agent_did, report_payload, &body).await;
+                append_agent_accessed_if_present(
+                    state,
+                    &audit_agent_principal_id,
+                    report_payload,
+                    &body,
+                )
+                .await;
             }
         }
         Ok(response) => {
@@ -370,7 +393,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "space_id": realm_id,
                     "report_id": report_id,
-                    "agent_did": agent_did,
+                    "audit_agent_principal_id": audit_agent_principal_id,
                     "status": response.status().as_u16(),
                 }),
                 "failed",
@@ -385,7 +408,7 @@ async fn notify_audit_agent_for_report(
                 json!({
                     "space_id": realm_id,
                     "report_id": report_id,
-                    "agent_did": agent_did,
+                    "audit_agent_principal_id": audit_agent_principal_id,
                     "error": error.to_string(),
                 }),
                 "failed",
@@ -393,12 +416,12 @@ async fn notify_audit_agent_for_report(
             .await
         }
     }
-    Some(agent_did)
+    Some(audit_agent_principal_id)
 }
 
 async fn append_audit_agent_invite_log(
     state: &AppState,
-    agent_did: &str,
+    audit_agent_principal_id: &str,
     report_payload: &Value,
     response_body: &Value,
 ) {
@@ -411,7 +434,7 @@ async fn append_audit_agent_invite_log(
             "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "agent_did": agent_did,
+            "audit_agent_principal_id": audit_agent_principal_id,
             "mls_key_package": response_body.get("mls_key_package").cloned().unwrap_or(Value::Null),
         }),
         "accepted",
@@ -421,7 +444,7 @@ async fn append_audit_agent_invite_log(
 
 async fn append_agent_accessed_if_present(
     state: &AppState,
-    agent_did: &str,
+    audit_agent_principal_id: &str,
     report_payload: &Value,
     response_body: &Value,
 ) {
@@ -430,14 +453,14 @@ async fn append_agent_accessed_if_present(
     };
     append_audit_log(
         state,
-        Some(agent_did),
+        Some(audit_agent_principal_id),
         "cx.audit.accessed",
         json!({
             "kind": "cx.audit.accessed",
             "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
-            "audit_agent_did": agent_did,
+            "audit_agent_principal_id": audit_agent_principal_id,
             "access_kind": "e2ee_plaintext_release",
             "purpose": "moderation_report",
             "accessed_at": emitted.get("occurred_at").cloned().unwrap_or_else(|| json!(now())),

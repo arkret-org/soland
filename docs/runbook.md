@@ -307,10 +307,10 @@ Focus-binding troubleshooting matrix:
 | `legacy_single_endpoint_media_service` | Realm `cx.realm.media_service` still uses the v1.0 `sfu_endpoint` field. Run the migration (DEPLOYMENT.md §R3). |
 | `focus_unavailable_for_client` | Client profile set doesn't include the focus's backend profile. Negotiate down or update the client. |
 
-### Strict-reject profile toggle (`cx.profile.accountable_to.strict_reject.v1`)
+### Strict-reject profile toggle (`cx.profile.accountable_principals.strict_reject.v1`)
 
 The strict-reject profile inverts the default leniency around the
-`accountable_to` chain: instead of softly tolerating unknown / stale
+`accountable_principal_ids` chain: instead of softly tolerating unknown / stale
 accountability claims, the realm rejects them.
 
 When to enable:
@@ -324,9 +324,9 @@ When to enable:
 
 Fallout:
 
-- Clients that were previously connecting with stale `accountable_to`
+- Clients that were previously connecting with stale `accountable_principal_ids`
   claims will start to see hard rejects with the error from
-  `accountable_to_*` family. You will see a temporary spike in 4xx;
+  `accountable_principal_ids_*` family. You will see a temporary spike in 4xx;
   alerting that watches 4xx ratios must be informed.
 - Federation peers that haven't yet upgraded their accountability shape
   may have their federated events rejected. Coordinate the flip with
@@ -336,17 +336,17 @@ Fallout:
 
 Rollback: flip the profile back off; in-flight in-flight rejects will
 remain audited but no further reject decisions fire. Audit log entries
-under `projection_audit` kind=`profile.accountable_to.strict_reject.flip`
+under `projection_audit` kind=`profile.accountable_principals.strict_reject.flip`
 record both directions.
 
 Pre-flip checklist:
 
-1. Snapshot 24h of `accountable_to` claim arrivals; categorize stale vs
+1. Snapshot 24h of `accountable_principal_ids` claim arrivals; categorize stale vs
    fresh.
 2. Decide cutover instant; pre-notify federation peers.
 3. Enable the profile via the admin operation
    (`cx.realm.profile.update`).
-4. Watch `soland_accountable_to_reject_total{profile="strict"}` for 30
+4. Watch `soland_accountable_principals_reject_total{profile="strict"}` for 30
    minutes; alert if it exceeds the staleness baseline by >20%.
 5. If above threshold, rollback (toggle off), file a bug against the
    noisiest peer, retry later.

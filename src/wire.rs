@@ -1417,7 +1417,7 @@ pub struct AgentProvisionReqBody {
     #[serde(default)]
     pub controller_did: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub initial_grants: Vec<Value>,
 }
@@ -1426,7 +1426,7 @@ pub struct AgentProvisionReqBody {
 pub struct AgentResBody {
     pub agent_principal_id: String,
     pub controller_did: String,
-    pub agent_did: String,
+    pub agent_id: String,
     pub display_name: String,
     pub state: String,
     pub created_at: String,
@@ -1943,13 +1943,13 @@ pub fn describe(
             // `routing::interop::webrtc::contrix_router`), so the claim is
             // unconditional too.
             profiles.push("cx.profile.media_service_binding.v1".to_owned());
-            // PROF-1 — `cx.profile.accountable_to.strict_reject.v1` is
+            // PROF-1 — `cx.profile.accountable_principals.strict_reject.v1` is
             // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
             if matches!(
                 std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
                 Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
             ) {
-                profiles.push("cx.profile.accountable_to.strict_reject.v1".to_owned());
+                profiles.push("cx.profile.accountable_principals.strict_reject.v1".to_owned());
             }
             profiles
         },

@@ -1994,7 +1994,7 @@ async fn append_encrypted_message_franking(
         "event_canonical_digest": parsed.canonical_digest,
         "timestamp": now(),
         "audit_disclosure_policy": {
-            "agent_did": policy.get("agent_did").cloned().unwrap_or(Value::Null),
+            "agent_id": policy.get("agent_id").cloned().unwrap_or(Value::Null),
             "trigger": policy.get("trigger").cloned().unwrap_or(Value::Null),
         },
     });

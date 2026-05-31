@@ -179,11 +179,11 @@ async fn provision_agent(
             "controller_did must match the authenticated session actor",
         ));
     }
-    let agent_did = body
-        .agent_did
+    let agent_id = body
+        .agent_id
         .unwrap_or_else(|| format!("did:web:agent.{}", session.actor.replace([':', '/'], ".")));
-    if validate_did(&agent_did).is_err() {
-        return Err(AppError::invalid_param("agent_did must be a DID"));
+    if validate_did(&agent_id).is_err() {
+        return Err(AppError::invalid_param("agent_id must be a DID"));
     }
     let agent_principal_id = ids::generate("agent_principal");
     let timestamp = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -194,7 +194,7 @@ async fn provision_agent(
         json!({
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
-            "agent_did": agent_did,
+            "agent_id": agent_id,
             "display_name": body.display_name,
         }),
         "accepted",
@@ -204,7 +204,7 @@ async fn provision_agent(
     json_ok(AgentResBody {
         agent_principal_id,
         controller_did,
-        agent_did,
+        agent_id,
         display_name: body.display_name,
         state: "active".to_owned(),
         created_at: timestamp.clone(),
