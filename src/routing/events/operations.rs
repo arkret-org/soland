@@ -2225,10 +2225,32 @@ fn value_is_plaintext_content(value: &Value) -> bool {
 }
 
 fn encrypted_payload_value(value: &Value) -> bool {
-    value
-        .as_object()
-        .is_some_and(|object| object.contains_key("ciphertext"))
-        && validate_encrypted_payload_envelope(value).is_ok()
+    validate_encrypted_payload_envelope(value).is_ok() || sdk_encrypted_payload_value(value)
+}
+
+// Flow content-floor admission only needs to distinguish ciphertext-shaped
+// content from plaintext. Message/device validators still enforce the stricter
+// wire envelope shape through `validate_encrypted_payload_envelope`.
+fn sdk_encrypted_payload_value(value: &Value) -> bool {
+    let Some(envelope) = value.as_object() else {
+        return false;
+    };
+    for field in ["scheme", "group_id", "content_type", "ciphertext"] {
+        if envelope
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return false;
+        }
+    }
+    envelope
+        .get("epoch")
+        .is_some_and(|value| value.as_u64().is_some())
+        && envelope
+            .get("payload_digest")
+            .and_then(Value::as_str)
+            .is_some_and(is_valid_sha256_digest)
 }
 
 fn patch_operation_value_is_plaintext_content(value: &Value) -> bool {
@@ -2771,6 +2793,47 @@ mod flow_tracks_update_tests {
         );
         assert!(!flow_operation_carries_plaintext_private_content(
             &summary_update
+        ));
+
+        let sdk_encrypted_body_update = flow_position_op(
+            kinds::CX_FLOW_UPDATE,
+            json!({
+                "flow_id": flow_id,
+                "patch": {
+                    "body": {
+                        "$op": "set",
+                        "value": {
+                            "scheme": "mls-rfc9420",
+                            "group_id": "cx_space_01904100_0000_7000_8000_000000000001",
+                            "epoch": 1,
+                            "content_type": "application/vnd.contrix.flow.patch-value+json",
+                            "ciphertext": "T1BBUVVFX0NJUEhFUlRFWFQ",
+                            "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        }
+                    }
+                }
+            }),
+        );
+        assert!(!flow_operation_carries_plaintext_private_content(
+            &sdk_encrypted_body_update
+        ));
+
+        let ciphertext_label_body_update = flow_position_op(
+            kinds::CX_FLOW_UPDATE,
+            json!({
+                "flow_id": flow_id,
+                "patch": {
+                    "body": {
+                        "$op": "set",
+                        "value": {
+                            "ciphertext": "not enough envelope metadata"
+                        }
+                    }
+                }
+            }),
+        );
+        assert!(flow_operation_carries_plaintext_private_content(
+            &ciphertext_label_body_update
         ));
 
         let title_create = flow_position_op(
