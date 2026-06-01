@@ -61,7 +61,11 @@ async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
-#[endpoint]
+#[endpoint(
+    operation_id = "cx.mimi.provider_directory",
+    tags("mimi"),
+    summary = "Read the MIMI provider directory"
+)]
 #[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
 async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");

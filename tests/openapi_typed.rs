@@ -475,11 +475,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "missing operationId cx.events.query_post from canonical body-query endpoint"
     );
 
-    // Round 15ab — interop/mimi.rs typed batch (10 handlers; mimi_protocol_directory
-    // + mimi_provider_directory kept as-is — they return a static JSON Value with
-    // no error paths). All response shapes are `Value` so no schema names assert;
+    // Round 15ab — interop/mimi.rs typed batch. All response shapes are `Value`,
+    // so no schema names assert;
     // we lock the operation_ids instead.
     for operation_id in [
+        "cx.mimi.provider_directory",
         "cx.mimi.key_material",
         "cx.mimi.room_update",
         "cx.mimi.notify",
