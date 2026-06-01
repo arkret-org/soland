@@ -2175,15 +2175,25 @@ pub struct SetReadMarkerRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReadScopeWire {
     pub kind: String,
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub object_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "track_name", skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_scope: Option<ReadScopeTrackScopeWire>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadScopeTrackScopeWire {
+    All,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReadCursorPositionWire {
     pub event_id: String,
     pub hlc: String,

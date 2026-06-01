@@ -133,9 +133,9 @@ pub(super) async fn get_read_cursors(
 fn validate_read_scope(scope: &ReadScopeWire) -> Result<(), AppError> {
     match scope.kind.as_str() {
         "realm" => {
-            if scope.object_ref.is_some() {
+            if scope.object_ref.is_some() || scope.track.is_some() || scope.track_scope.is_some() {
                 return Err(AppError::invalid_param(
-                    "read_scope.ref must be omitted when kind is realm",
+                    "read_scope.ref/track_name/track_scope must be omitted when kind is realm",
                 ));
             }
         }
@@ -154,13 +154,29 @@ fn validate_read_scope(scope: &ReadScopeWire) -> Result<(), AppError> {
         _ => return Err(AppError::invalid_param("invalid read_scope.kind")),
     }
 
-    if let Some(track) = scope.track.as_deref() {
-        if scope.kind != "flow" {
+    match (
+        scope.kind.as_str(),
+        scope.track.as_deref(),
+        scope.track_scope.as_ref(),
+    ) {
+        ("flow", Some(track), None) => validate_track(track)?,
+        ("flow", None, Some(_)) => {}
+        ("flow", Some(_), Some(_)) => {
             return Err(AppError::invalid_param(
-                "read_scope.track is only valid when kind is flow",
+                "read_scope must carry exactly one of track_name or track_scope",
             ));
         }
-        validate_track(track)?;
+        ("flow", None, None) => {
+            return Err(AppError::invalid_param(
+                "read_scope requires track_name or track_scope when kind is flow",
+            ));
+        }
+        (_, Some(_), _) | (_, _, Some(_)) => {
+            return Err(AppError::invalid_param(
+                "read_scope.track_name/track_scope is only valid when kind is flow",
+            ));
+        }
+        _ => {}
     }
 
     Ok(())
@@ -170,14 +186,14 @@ fn validate_track(track: &str) -> Result<(), AppError> {
     let mut bytes = track.bytes();
     let Some(first) = bytes.next() else {
         return Err(AppError::invalid_param(
-            "read_scope.track must not be empty",
+            "read_scope.track_name must not be empty",
         ));
     };
     if !first.is_ascii_lowercase()
         || track.len() > 64
         || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(AppError::invalid_param("invalid read_scope.track"));
+        return Err(AppError::invalid_param("invalid read_scope.track_name"));
     }
     Ok(())
 }

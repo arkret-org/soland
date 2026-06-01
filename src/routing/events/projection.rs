@@ -92,7 +92,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
             object.insert("flow_id".to_owned(), json!(flow_id));
         }
         if let Some(track) = track {
-            object.insert("track".to_owned(), track);
+            object.insert("track_name".to_owned(), track);
         }
     }
     value
@@ -351,7 +351,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
         "message_id": message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
         "space_id": message.space_id,
-        "track": default_discussion_track(&flow_id, &track_id),
+        "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,
@@ -2420,7 +2420,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .payload
         .get("encrypted")
         .and_then(|value| value.as_bool())
-        .unwrap_or_else(|| operation.payload.get("encrypted_payload").is_some());
+        .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
     if let Err(error) = store
         .put(&MessageRecord {
             event_id,
@@ -2441,7 +2441,7 @@ fn message_content_from_payload(payload: &Value) -> Value {
     let scope_circle_id = message_payload_scope_circle_id(payload);
     let mut content = payload
         .get("content")
-        .or_else(|| payload.get("encrypted_payload"))
+        .or_else(|| payload.get("encrypted_content"))
         .cloned()
         .unwrap_or_else(|| payload.clone());
     if let Some(object) = content.as_object_mut() {
@@ -2477,12 +2477,12 @@ fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
         })
         .or_else(|| {
             payload
-                .get("encrypted_payload")
+                .get("encrypted_content")
                 .and_then(|encrypted| encrypted.get("scope_circle_id"))
         })
         .or_else(|| {
             payload
-                .get("encrypted_payload")
+                .get("encrypted_content")
                 .and_then(|encrypted| encrypted.get("aad"))
                 .and_then(|aad| aad.get("scope_circle_id"))
         })

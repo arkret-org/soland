@@ -1647,7 +1647,13 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "message create",
                 kind: kinds::CX_MESSAGE_CREATE,
-                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "content": {"kind": "cx.content.text", "body": "hello"}}),
+                payload: json!({
+                    "message_id": "cx:message:01904100-0000-7000-8000-79a90338768b",
+                    "flow_id": "cx:flow:01904100-0000-7000-8000-6c663fa0205f",
+                    "track_name": "discussion",
+                    "sender": "did:web:alice.example",
+                    "content": {"kind": "cx.content.text", "body": "hello"}
+                }),
                 valid: true,
             },
             OperationVector {

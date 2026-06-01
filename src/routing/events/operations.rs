@@ -61,9 +61,9 @@ pub enum PayloadRequirement {
     AnyKey(&'static [&'static str], &'static str),
 }
 
-const MESSAGE_CREATE_FIELDS: &[&str] = &["body", "content", "event_id"];
+const MESSAGE_CREATE_FIELDS: &[&str] = &["content", "encrypted_content"];
 const MESSAGE_TARGET_FIELDS: &[&str] = &["target_ref", "target_event_id", "event_id", "target"];
-const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "body"];
+const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "encrypted_content"];
 const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
 const REACTION_TARGET_FIELDS: &[&str] = &[
     "target_ref",
@@ -1221,16 +1221,43 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
     validate_sender_commitment_payload_binding(&operation.payload)?;
+    if operation.payload.get("track").is_some() {
+        return Err("message operation field 'track' is retired; use track_name");
+    }
+    if operation.payload.get("body").is_some() {
+        return Err("message operation field 'body' is retired; use content.body");
+    }
+    if operation.payload.get("encrypted_payload").is_some() {
+        return Err(
+            "message operation field 'encrypted_payload' is retired; use encrypted_content",
+        );
+    }
+    if crate::kinds::operation_is_message_create(operation) {
+        if operation
+            .payload
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("message create requires flow_id");
+        }
+        let track_name = operation
+            .payload
+            .get("track_name")
+            .and_then(Value::as_str)
+            .ok_or("message create requires track_name")?;
+        validate_read_scope_track(track_name)?;
+    }
     let encrypted = operation
         .payload
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
-        || operation.payload.get("encrypted_payload").is_some();
+        || operation.payload.get("encrypted_content").is_some();
     if encrypted {
         let Some(content) = operation
             .payload
-            .get("encrypted_payload")
+            .get("encrypted_content")
             .or_else(|| operation.payload.get("content"))
         else {
             return Err("encrypted message operation requires content envelope");
@@ -1250,6 +1277,11 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
         .get("read_scope")
         .and_then(|value| value.as_object())
         .ok_or("read marker read_scope must be an object")?;
+    for key in read_scope.keys() {
+        if !["kind", "ref", "track_name", "track_scope"].contains(&key.as_str()) {
+            return Err("read marker read_scope has unknown field");
+        }
+    }
     let kind = read_scope
         .get("kind")
         .and_then(|value| value.as_str())
@@ -1270,15 +1302,31 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
             }
         }
         "flow_discussion" | "flow_synthesis" => {
-            return Err("read marker read_scope.kind removed; use flow plus track");
+            return Err("read marker read_scope.kind removed; use flow plus track_name");
         }
         _ => return Err("read marker read_scope.kind is invalid"),
     }
-    if let Some(track) = read_scope.get("track").and_then(|value| value.as_str()) {
-        if kind != "flow" {
-            return Err("read marker read_scope.track requires kind flow");
+    match (
+        kind,
+        read_scope
+            .get("track_name")
+            .and_then(|value| value.as_str()),
+        read_scope
+            .get("track_scope")
+            .and_then(|value| value.as_str()),
+    ) {
+        ("flow", Some(track), None) => validate_read_scope_track(track)?,
+        ("flow", None, Some("all")) => {}
+        ("flow", Some(_), Some(_)) => {
+            return Err("read marker read_scope requires exactly one of track_name or track_scope");
         }
-        validate_read_scope_track(track)?;
+        ("flow", None, None) => {
+            return Err("read marker read_scope requires track_name or track_scope");
+        }
+        (_, Some(_), _) | (_, _, Some(_)) => {
+            return Err("read marker read_scope.track_name/track_scope requires kind flow");
+        }
+        _ => {}
     }
     let position = operation
         .payload
@@ -1377,13 +1425,13 @@ fn validate_conflict_repair_payload(operation: &Operation) -> Result<(), &'stati
 fn validate_read_scope_track(track: &str) -> Result<(), &'static str> {
     let mut bytes = track.bytes();
     let Some(first) = bytes.next() else {
-        return Err("read marker read_scope.track is invalid");
+        return Err("read marker read_scope.track_name is invalid");
     };
     if !first.is_ascii_lowercase()
         || track.len() > 64
         || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err("read marker read_scope.track is invalid");
+        return Err("read marker read_scope.track_name is invalid");
     }
     Ok(())
 }
@@ -2166,18 +2214,12 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
 fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
         Some(kinds::CX_FLOW_CREATE) => [
-            &["body"][..],
-            &["object", "body"][..],
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
             &["object", "content"][..],
             &["attachments"][..],
             &["object", "attachments"][..],
-            &["fields", "body"][..],
-            &["object", "fields", "body"][..],
-            &["fields", "synthesis"][..],
-            &["object", "fields", "synthesis"][..],
         ]
         .iter()
         .any(|path| {
@@ -2185,16 +2227,7 @@ fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bo
         }),
         Some(kinds::CX_FLOW_UPDATE) => patch_touches_plaintext_content_path(
             &operation.payload,
-            &[
-                "body",
-                "synthesis",
-                "content",
-                "attachments",
-                "fields.body",
-                "fields.synthesis",
-                "tracks.synthesis.body",
-                "tracks.discussion.body",
-            ],
+            &["synthesis", "content", "attachments"],
         ),
         _ => false,
     }
@@ -2300,7 +2333,7 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
         .get("encrypted")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
-        || operation.payload.get("encrypted_payload").is_some()
+        || operation.payload.get("encrypted_content").is_some()
 }
 
 pub async fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
@@ -2400,7 +2433,7 @@ fn operation_audience_mentions(
     if let Some(content) = operation.payload.get("content") {
         collect_audience_mentions(content, &mut mentions)?;
     }
-    if operation.payload.get("encrypted_payload").is_some()
+    if operation.payload.get("encrypted_content").is_some()
         && operation
             .payload
             .get("audience_mention_routing_hint")
@@ -2769,17 +2802,17 @@ mod flow_tracks_update_tests {
     #[test]
     fn encrypted_realm_flow_content_detector_matches_content_only_boundary() {
         let flow_id = "cx:flow:01904100-0000-7000-8000-000000000001";
-        let body_update = flow_position_op(
+        let content_update = flow_position_op(
             kinds::CX_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
-                    "body": {"$op": "set", "value": "private description"}
+                    "content": {"$op": "set", "value": {"kind": "cx.content.text", "body": "private description"}}
                 }
             }),
         );
         assert!(flow_operation_carries_plaintext_private_content(
-            &body_update
+            &content_update
         ));
 
         let summary_update = flow_position_op(
@@ -2787,7 +2820,7 @@ mod flow_tracks_update_tests {
             json!({
                 "flow_id": flow_id,
                 "patch": {
-                    "summary": {"$op": "set", "value": "wire metadata"}
+                    "metadata": {"$op": "set", "value": {"summary": "wire metadata"}}
                 }
             }),
         );
@@ -2795,12 +2828,12 @@ mod flow_tracks_update_tests {
             &summary_update
         ));
 
-        let sdk_encrypted_body_update = flow_position_op(
+        let sdk_encrypted_content_update = flow_position_op(
             kinds::CX_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
-                    "body": {
+                    "content": {
                         "$op": "set",
                         "value": {
                             "scheme": "mls-rfc9420",
@@ -2815,15 +2848,15 @@ mod flow_tracks_update_tests {
             }),
         );
         assert!(!flow_operation_carries_plaintext_private_content(
-            &sdk_encrypted_body_update
+            &sdk_encrypted_content_update
         ));
 
-        let ciphertext_label_body_update = flow_position_op(
+        let ciphertext_label_content_update = flow_position_op(
             kinds::CX_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
-                    "body": {
+                    "content": {
                         "$op": "set",
                         "value": {
                             "ciphertext": "not enough envelope metadata"
@@ -2833,7 +2866,7 @@ mod flow_tracks_update_tests {
             }),
         );
         assert!(flow_operation_carries_plaintext_private_content(
-            &ciphertext_label_body_update
+            &ciphertext_label_content_update
         ));
 
         let title_create = flow_position_op(
@@ -2841,7 +2874,7 @@ mod flow_tracks_update_tests {
             json!({
                 "object": {
                     "id": flow_id,
-                    "title": "wire metadata"
+                    "metadata": {"title": "wire metadata"}
                 }
             }),
         );
@@ -3082,7 +3115,9 @@ mod spec_sync_validator_tests {
         let valid = op(
             kinds::CX_MESSAGE_CREATE,
             json!({
-                "body": "hello",
+                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+                "track_name": "discussion",
+                "content": {"kind": "cx.content.text", "body": "hello"},
                 "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
                 "franking": {"sender_commitment_digest": digest},
                 "unsigned": {"franking": {"sender_commitment": commitment}}

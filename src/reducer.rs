@@ -877,7 +877,7 @@ fn message_content_from_payload(payload: &Value) -> Value {
     let scope_circle_id = message_payload_scope_circle_id(payload);
     let mut content = payload
         .get("content")
-        .or_else(|| payload.get("encrypted_payload"))
+        .or_else(|| payload.get("encrypted_content"))
         .cloned()
         .unwrap_or_else(|| payload.clone());
     if let Some(object) = content.as_object_mut() {
@@ -913,12 +913,12 @@ fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
         })
         .or_else(|| {
             payload
-                .get("encrypted_payload")
+                .get("encrypted_content")
                 .and_then(|encrypted| encrypted.get("scope_circle_id"))
         })
         .or_else(|| {
             payload
-                .get("encrypted_payload")
+                .get("encrypted_content")
                 .and_then(|encrypted| encrypted.get("aad"))
                 .and_then(|aad| aad.get("scope_circle_id"))
         })
@@ -1048,11 +1048,16 @@ pub struct ReadMarkerState {
 }
 
 fn read_scope_key(scope: &ReadScopeWire) -> String {
+    let track_selector = scope
+        .track
+        .as_deref()
+        .or_else(|| scope.track_scope.as_ref().map(|_| "all"))
+        .unwrap_or("");
     format!(
         "{}\u{1f}{}\u{1f}{}",
         scope.kind.as_str(),
         scope.object_ref.as_deref().unwrap_or(""),
-        scope.track.as_deref().unwrap_or("")
+        track_selector
     )
 }
 
@@ -2951,14 +2956,26 @@ fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static 
     let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
         return Ok(None);
     };
-    let value = patch.get("fields.status").or_else(|| {
-        patch
-            .get("fields")
-            .and_then(|fields_patch| match patch_action(fields_patch) {
-                PatchAction::Set(value) => value.get("status"),
-                PatchAction::Unset | PatchAction::Ignore => None,
-            })
-    });
+    let value = patch
+        .get("metadata.fields.status")
+        .or_else(|| {
+            patch
+                .get("metadata.fields")
+                .and_then(|fields_patch| match patch_action(fields_patch) {
+                    PatchAction::Set(value) => value.get("status"),
+                    PatchAction::Unset | PatchAction::Ignore => None,
+                })
+        })
+        .or_else(|| {
+            patch
+                .get("metadata")
+                .and_then(|metadata_patch| match patch_action(metadata_patch) {
+                    PatchAction::Set(value) => {
+                        value.get("fields").and_then(|fields| fields.get("status"))
+                    }
+                    PatchAction::Unset | PatchAction::Ignore => None,
+                })
+        });
     let Some(value) = value else {
         return Ok(None);
     };
@@ -2970,6 +2987,45 @@ fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static 
             .ok_or("flow_status_invalid"),
         PatchAction::Unset => Err("flow_status_invalid"),
         PatchAction::Ignore => Ok(None),
+    }
+}
+
+fn patch_metadata_string_value(
+    patch: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<Option<String>> {
+    let dotted = format!("metadata.{key}");
+    if let Some(value) = patch_string_value(patch, &dotted) {
+        return Some(value);
+    }
+    patch
+        .get("metadata")
+        .and_then(|metadata_patch| match patch_action(metadata_patch) {
+            PatchAction::Set(value) => value.get(key).and_then(|value| {
+                value
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| Some(value.to_owned()))
+            }),
+            PatchAction::Unset => Some(None),
+            PatchAction::Ignore => None,
+        })
+}
+
+fn flow_metadata_fields_value(value: &Value) -> Option<BTreeMap<String, Value>> {
+    value.as_object().map(|fields| {
+        fields
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>()
+    })
+}
+
+fn apply_metadata_fields_value(fields: &mut BTreeMap<String, Value>, value: &Value) {
+    if let Some(values) = flow_metadata_fields_value(value) {
+        for (field_name, field_value) in values {
+            fields.insert(field_name, field_value);
+        }
     }
 }
 
@@ -3017,21 +3073,27 @@ fn apply_flow_fields_patch(
     patch: &serde_json::Map<String, Value>,
 ) {
     for (path, value) in patch {
-        if path == "fields" {
+        if path == "metadata" {
             match patch_action(value) {
-                PatchAction::Set(Value::Object(values)) => {
-                    for (field_name, field_value) in values {
-                        fields.insert(field_name.clone(), field_value.clone());
+                PatchAction::Set(Value::Object(metadata)) => {
+                    if let Some(value) = metadata.get("fields") {
+                        apply_metadata_fields_value(fields, value);
                     }
                 }
-                PatchAction::Unset => {
-                    fields.clear();
-                }
+                PatchAction::Unset => fields.clear(),
                 PatchAction::Set(_) | PatchAction::Ignore => {}
             }
             continue;
         }
-        let Some(field_name) = path.strip_prefix("fields.") else {
+        if path == "metadata.fields" {
+            match patch_action(value) {
+                PatchAction::Set(value) => apply_metadata_fields_value(fields, value),
+                PatchAction::Unset => fields.clear(),
+                PatchAction::Ignore => {}
+            }
+            continue;
+        }
+        let Some(field_name) = path.strip_prefix("metadata.fields.") else {
             continue;
         };
         if field_name.is_empty() {
@@ -3614,7 +3676,7 @@ impl ProjectionState {
             .payload
             .get("encrypted")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| operation.payload.get("encrypted_payload").is_some());
+            .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
         match content_kind(&content) {
             Some("cx.content.poll.response") => {
@@ -6448,17 +6510,18 @@ impl ProjectionState {
                 reason: "flow_create_missing_id".to_owned(),
             };
         };
-        let title = object
-            .get("title")
+        let metadata = object.get("metadata").and_then(Value::as_object);
+        let title = metadata
+            .and_then(|metadata| metadata.get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let summary = object
-            .get("summary")
+        let summary = metadata
+            .and_then(|metadata| metadata.get("summary"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let fields = object
-            .get("fields")
+        let fields = metadata
+            .and_then(|metadata| metadata.get("fields"))
             .and_then(Value::as_object)
             .map(|fields| {
                 fields
@@ -6562,10 +6625,10 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if let Some(title) = patch_string_value(patch, "title") {
+            if let Some(title) = patch_metadata_string_value(patch, "title") {
                 flow.title = title.unwrap_or_default();
             }
-            if let Some(summary) = patch_string_value(patch, "summary") {
+            if let Some(summary) = patch_metadata_string_value(patch, "summary") {
                 flow.summary = summary;
             }
             apply_flow_fields_patch(&mut flow.fields, patch);

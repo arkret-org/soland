@@ -509,6 +509,11 @@ async fn events_frontier(
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
     let realm_selector = query_param(req, "realm_id");
+    if actor_id.is_none() && realm_selector.is_none() {
+        return Err(AppError::invalid_param(
+            "events.frontier requires at least one of realm_id or actor_id",
+        ));
+    }
     let internal_space_selector = match realm_selector.as_deref() {
         Some(value) if RealmId::new(value.to_owned()).is_ok() => Some(value.to_owned()),
         Some(_) => return Err(AppError::invalid_param("invalid realm_id")),

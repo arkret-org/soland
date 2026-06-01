@@ -43,7 +43,7 @@
 //!   `new == current + 1`. Cell_subject via
 //!   [`contrix_sdk::cross_signing_publish_cell_subject`].
 //! - **`cx.flow.update` / `cx.flow.tracks_patch` cell metadata** —
-//!   CAS-register, family `cx.component.flow.fields.v1`, bottom=reject;
+//!   CAS-register, family `cx.component.flow.metadata.v1`, bottom=reject;
 //!   subject is the flow_id, via SDK helpers.
 //! - **`cx.audit.policy_access access_kind=e2ee_late_recovery`** —
 //!   carries `late_recovery_original_event_id`. Validated via
@@ -916,7 +916,7 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
 // ════════════════════════════════════════════════════════════════════════
 
 /// Round 4 (B1.15) — cell_subject for `cx.flow.update`. The cell family
-/// is `cx.component.flow.fields.v1` with CAS-register semantics and
+/// is `cx.component.flow.metadata.v1` with CAS-register semantics and
 /// `bottom=reject`. The subject is the flow_id.
 pub fn flow_update_subject(flow_id: &contrix_sdk::FlowId) -> String {
     flow_update_cell_subject(flow_id)

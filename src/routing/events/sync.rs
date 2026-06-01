@@ -1358,7 +1358,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     // that flow, NOT the flow itself. The legacy top-level `branch` object
     // was removed in revision 0a5ab85 (see contrix-spec
     // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
-    // `track` field is the v1 replacement.
+    // `track_name` is the concrete v1 wire field.
     let flow_id = flow_id_from_space_id(&message.space_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
@@ -1367,7 +1367,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "message_id": super::message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
         "space_id": message.space_id,
-        "track": default_discussion_track(&flow_id, &track_id),
+        "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,
