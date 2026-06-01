@@ -1,19 +1,19 @@
 //! Stream H' admin surface — anchorer cell, Bottom diagnostics, Anchor DAG.
 //!
 //! Endpoints:
-//! - `GET  /api/admin/v1/spaces/{space_id}/anchorer` — typed anchorer cell value (`{kind,
+//! - `GET  /api/admin/v1/spaces/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
-//! - `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` — submit a reconfig Move that
+//! - `POST /api/admin/v1/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
 //!   writes the new anchorer cell value (cas-register on
-//!   `cx:cell:cx.component.anchorer.v1:<space_id>`). Server-side signs with admin's session-grant
+//!   `cx:cell:cx.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
-//! - `GET  /api/admin/v1/spaces/{space_id}/bottom` — list cells whose join produced a `Bottom`
+//! - `GET  /api/admin/v1/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /api/admin/v1/bottom` — global cross-space list.
-//! - `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
+//! - `POST /api/admin/v1/spaces/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
 //!   manual) repair Move.
-//! - `GET  /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves + frontier + state_root snapshot.
-//! - `POST /api/admin/v1/spaces/{space_id}/anchor-dag/compact` — trigger a signed compaction
+//! - `GET  /api/admin/v1/spaces/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
+//! - `POST /api/admin/v1/spaces/{realm_id}/anchor-dag/compact` — trigger a signed compaction
 //!   Anchor.
 //!
 //! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
@@ -55,7 +55,7 @@ use crate::{JsonResult, json_ok};
 
 // ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
 
-/// `GET /api/admin/v1/spaces/{space_id}/anchorer` response.
+/// `GET /api/admin/v1/spaces/{realm_id}/anchorer` response.
 ///
 /// Shape mirrors sodmin's `AnchorerValue`. `kind_raw` is one of
 /// `single_did|threshold|open_set|mixed`; only the fields relevant to
@@ -142,7 +142,7 @@ pub struct WinnerHeadResponse {
 /// |anchorer_split|schema_error`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct BottomEntryResponse {
-    pub space_id: String,
+    pub realm_id: String,
     pub cell_id: String,
     pub kind: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -188,7 +188,7 @@ pub struct AnchorLeafResponse {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AnchorDagSnapshotResponse {
-    pub space_id: String,
+    pub realm_id: String,
     pub leaves: Vec<AnchorLeafResponse>,
     pub frontier: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,8 +415,8 @@ fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value,
 /// the Space has at least one Anchor leaf, that's the issuer's view; if
 /// it's a true genesis Space, we use the spec-canonical zero AnchorId
 /// (matching SDK fixtures and `state-res::apply_anchor` genesis path).
-fn pick_admin_anchor_ref(state: &AppState, space_id: &SpaceId) -> AnchorId {
-    let leaves = state.anchor_store.list_leaves(space_id).unwrap_or_default();
+fn pick_admin_anchor_ref(state: &AppState, realm_id: &SpaceId) -> AnchorId {
+    let leaves = state.anchor_store.list_leaves(realm_id).unwrap_or_default();
     if let Some(first) = leaves.into_iter().next() {
         return first;
     }
@@ -431,9 +431,9 @@ fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 }
 
 /// Build the canonical anchorer cell ref for a Space.
-fn anchorer_cell_for(space_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("cx:cell:cx.component.anchorer.v1:{space_id}")).map_err(|e| {
-        app_error!(InvalidParam, "invalid space_id `{space_id}`: {e}")
+fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
+    CellRef::new(format!("cx:cell:cx.component.anchorer.v1:{realm_id}")).map_err(|e| {
+        app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })
 }
@@ -540,7 +540,7 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
 /// The SDK serializes `Bottom` as `{kind, ...}` where `kind` is one of
 /// `Conflict|InvalidTransition|...`. We snake-case it here so wire
 /// callers (sodmin) can pattern-match against `BottomKind::from_wire`.
-fn bottom_entry_from(space_id: &str, cell_id: &str, bottom: &Value) -> BottomEntryResponse {
+fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntryResponse {
     let raw_kind = bottom
         .get("kind")
         .and_then(Value::as_str)
@@ -591,7 +591,7 @@ fn bottom_entry_from(space_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
         Vec::new()
     };
     BottomEntryResponse {
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         cell_id: cell_id.to_owned(),
         kind,
         move_ids,
@@ -603,8 +603,8 @@ fn bottom_entry_from(space_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
 
 /// Walk the projection cell map for one Space, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
-fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<BottomEntryResponse> {
-    let Ok(space) = SpaceId::new(space_id.to_owned()) else {
+fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
+    let Ok(space) = SpaceId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
     let proj = match state.projection.lock() {
@@ -620,7 +620,7 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
     cells.extend(
         proj.cells
             .keys()
-            .filter(|cell| cell.as_str().contains(space_id))
+            .filter(|cell| cell.as_str().contains(realm_id))
             .cloned(),
     );
     let mut out = Vec::new();
@@ -630,7 +630,7 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
         };
         if let CellState::Bottom(bottom) = cell_state {
             let bottom_json = serde_json::to_value(bottom).unwrap_or(Value::Null);
-            out.push(bottom_entry_from(space_id, cell.as_str(), &bottom_json));
+            out.push(bottom_entry_from(realm_id, cell.as_str(), &bottom_json));
         }
     }
     out
@@ -638,7 +638,7 @@ fn collect_bottom_entries_for_space(state: &AppState, space_id: &str) -> Vec<Bot
 
 // ── Endpoints ────────────────────────────────────────────────────────────
 
-/// `GET /api/admin/v1/spaces/{space_id}/anchorer` — read current
+/// `GET /api/admin/v1/spaces/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.anchorer.get",
@@ -650,12 +650,12 @@ pub(super) async fn admin_get_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<AnchorerValueResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    let cell = anchorer_cell_for(&space_id)?;
+    let realm_id = realm_id.into_inner();
+    let cell = anchorer_cell_for(&realm_id)?;
     let value = state
         .projection
         .lock()
@@ -667,7 +667,7 @@ pub(super) async fn admin_get_anchorer(
     ))
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/anchorer/reconfigure` —
+/// `POST /api/admin/v1/spaces/{realm_id}/anchorer/reconfigure` —
 /// submit a reconfig Move that writes the new anchorer cell value.
 ///
 /// Builds a Move signed by the service admin signer
@@ -697,7 +697,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     body: JsonBody<AnchorerReconfigBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -710,9 +710,9 @@ pub(super) async fn admin_reconfigure_anchorer(
         contrix_sdk::admin_scopes::ANCHORER_RECONFIGURE,
     )
     .await?;
-    let space_id = space_id.into_inner();
-    let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
+    let realm_id = realm_id.into_inner();
+    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+        app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
 
@@ -753,7 +753,7 @@ pub(super) async fn admin_reconfigure_anchorer(
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    let cell_ref = anchorer_cell_for(&space_id)?;
+    let cell_ref = anchorer_cell_for(&realm_id)?;
 
     // Build the cas-register `set` Effect.
     let effect = Effect {
@@ -831,7 +831,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     }
 }
 
-/// `GET /api/admin/v1/spaces/{space_id}/bottom` — list bottom cells in
+/// `GET /api/admin/v1/spaces/{realm_id}/bottom` — list bottom cells in
 /// this Space.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.bottom.list",
@@ -843,15 +843,15 @@ pub(super) async fn admin_list_space_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<Vec<BottomEntryResponse>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    let _ = SpaceId::new(space_id.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
+    let realm_id = realm_id.into_inner();
+    let _ = SpaceId::new(realm_id.clone()).map_err(|e| {
+        app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
-    json_ok(collect_bottom_entries_for_space(state, &space_id))
+    json_ok(collect_bottom_entries_for_space(state, &realm_id))
 }
 
 /// `GET /api/admin/v1/bottom` — global cross-space bottom entries.
@@ -877,13 +877,13 @@ pub(super) async fn admin_list_bottom_global(
             .map(|s| s.realm_id.as_str().to_owned())
             .collect()
     };
-    for space_id in space_ids {
-        out.extend(collect_bottom_entries_for_space(state, &space_id));
+    for realm_id in space_ids {
+        out.extend(collect_bottom_entries_for_space(state, &realm_id));
     }
     json_ok(out)
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair` —
+/// `POST /api/admin/v1/spaces/{realm_id}/bottom/{cell_id}/repair` —
 /// submit a repair Move.
 ///
 /// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
@@ -907,7 +907,7 @@ pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     cell_id: PathParam<String>,
     body: JsonBody<BottomRepairStrategyBody>,
 ) -> JsonResult<AdminSubmitMoveResponse> {
@@ -921,10 +921,10 @@ pub(super) async fn admin_repair_bottom(
         contrix_sdk::admin_scopes::BOTTOM_REPAIR,
     )
     .await?;
-    let space_id = space_id.into_inner();
+    let realm_id = realm_id.into_inner();
     let cell_id_str = cell_id.into_inner();
-    let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid space_id: {e}").with_status(StatusCode::BAD_REQUEST)
+    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+        app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
@@ -1084,7 +1084,7 @@ pub(super) async fn admin_repair_bottom(
             // scoped-validated, even though the signing path lands later
             // (MAL-15).
             let canonical_request = serde_json::json!({
-                "space_id": space_id,
+                "space_id": realm_id,
                 "cell_id": cell_id_str,
                 "strategy": &body,
             });
@@ -1103,7 +1103,7 @@ pub(super) async fn admin_repair_bottom(
     }
 }
 
-/// `GET /api/admin/v1/spaces/{space_id}/anchor-dag` — leaves + frontier
+/// `GET /api/admin/v1/spaces/{realm_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.anchor_dag.get",
@@ -1118,13 +1118,13 @@ pub(super) async fn admin_get_anchor_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<AnchorDagSnapshotResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+    let realm_id = realm_id.into_inner();
+    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let anchor_store = state.anchor_store.as_ref();
@@ -1179,7 +1179,7 @@ pub(super) async fn admin_get_anchor_dag(
         });
     }
     json_ok(AnchorDagSnapshotResponse {
-        space_id,
+        realm_id,
         leaves,
         frontier: frontier_union.into_iter().collect(),
         state_root: latest_state_root,
@@ -1187,7 +1187,7 @@ pub(super) async fn admin_get_anchor_dag(
     })
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/anchor-dag/compact` — trigger
+/// `POST /api/admin/v1/spaces/{realm_id}/anchor-dag/compact` — trigger
 /// a signed compaction Anchor.
 ///
 /// v1 implementation: reuse the in-process anchorer worker to fold any
@@ -1208,7 +1208,7 @@ pub(super) async fn admin_compact_anchor_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     body: JsonBody<CompactionRequestBody>,
 ) -> JsonResult<CompactionResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1221,9 +1221,9 @@ pub(super) async fn admin_compact_anchor_dag(
         contrix_sdk::admin_scopes::ANCHOR_COMPACT,
     )
     .await?;
-    let space_id = space_id.into_inner();
-    let space = SpaceId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+    let realm_id = realm_id.into_inner();
+    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let max_pending = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
@@ -1320,7 +1320,7 @@ pub(super) async fn admin_compact_anchor_dag(
     })
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune` — evaluate a
+/// `POST /api/admin/v1/spaces/{realm_id}/anchor-dag/prune` — evaluate a
 /// historical Anchor for prune-eligibility against
 /// [`contrix_sdk::CompactionPolicy`] and, when eligible, remove it via
 /// [`AnchorStore::prune_predecessor`].
@@ -1342,7 +1342,7 @@ pub(super) async fn admin_prune_anchor_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     body: JsonBody<AnchorPruneRequestBody>,
 ) -> JsonResult<AnchorPruneResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1355,9 +1355,9 @@ pub(super) async fn admin_prune_anchor_dag(
         contrix_sdk::admin_scopes::ANCHOR_PRUNE,
     )
     .await?;
-    let space_id_str = space_id.into_inner();
+    let space_id_str = realm_id.into_inner();
     let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
@@ -1529,11 +1529,11 @@ pub(super) async fn admin_prune_anchor_dag(
 
 // ── Multi-sig coordinator ────────────────────────────────────────────────
 //
-// `POST /api/admin/v1/spaces/{space_id}/multisig/{anchor_id}/partial` accepts
+// `POST /api/admin/v1/spaces/{realm_id}/multisig/{anchor_id}/partial` accepts
 // partial Anchor signatures from peer anchorers; once the threshold is
 // reached, the aggregated `Anchor` is published.
 //
-// `GET /api/admin/v1/spaces/{space_id}/multisig/pending` lists the in-flight
+// `GET /api/admin/v1/spaces/{realm_id}/multisig/pending` lists the in-flight
 // anchors awaiting threshold so the admin UI can render them.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -1567,7 +1567,7 @@ pub struct MultisigPendingResponse {
     pub entries: Vec<MultisigPendingEntry>,
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/multisig/{anchor_id}/partial`.
+/// `POST /api/admin/v1/spaces/{realm_id}/multisig/{anchor_id}/partial`.
 ///
 /// MAL-11: persistent multisig buffer wire-in. Stores each partial in the
 /// `multisig_pending` Postgres table (or in-memory equivalent). When the
@@ -1583,16 +1583,16 @@ pub(super) async fn admin_submit_multisig_partial(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     anchor_id: PathParam<String>,
     body: JsonBody<PartialSignatureBody>,
 ) -> JsonResult<PartialSubmitResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _session = super::require_admin_principal(state, session)?;
-    let space_id_str = space_id.into_inner();
+    let space_id_str = realm_id.into_inner();
     let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let anchor_id_str = anchor_id.into_inner();
@@ -1624,7 +1624,7 @@ pub(super) async fn admin_submit_multisig_partial(
         Some(r) => r,
         None => crate::state::MultisigPendingRecord {
             anchor_id: anchor_id_str.clone(),
-            space_id: space_id_str.clone(),
+            realm_id: space_id_str.clone(),
             threshold_k: 1,
             threshold_n: 1,
             members: vec![body.signer_did.clone()],
@@ -1694,7 +1694,7 @@ pub(super) async fn admin_submit_multisig_partial(
     })
 }
 
-/// `GET /api/admin/v1/spaces/{space_id}/multisig/pending`.
+/// `GET /api/admin/v1/spaces/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
     operation_id = "cx.extension.soland.admin.multisig.pending",
     tags("admin", "multisig")
@@ -1703,13 +1703,13 @@ pub(super) async fn admin_list_multisig_pending(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<MultisigPendingResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id_str = space_id.into_inner();
+    let space_id_str = realm_id.into_inner();
     let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
 
@@ -1745,7 +1745,7 @@ pub(super) async fn admin_list_multisig_pending(
     json_ok(MultisigPendingResponse { entries })
 }
 
-/// `POST /api/admin/v1/spaces/{space_id}/anchorer/rotate-signing-key` —
+/// `POST /api/admin/v1/spaces/{realm_id}/anchorer/rotate-signing-key` —
 /// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
 /// `state.config.use_keystore` is true), hot-swap the AnchorerWorker key
 /// via `AppState::rotate_anchorer_signing_key`, return `{kid, did, rotated_at}`.
@@ -1762,7 +1762,7 @@ pub(super) async fn admin_list_multisig_pending(
 /// process restart. When `use_keystore=false`, the rotation lives only
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
-/// space_id path param is required for symmetry with the other
+/// realm_id path param is required for symmetry with the other
 /// per-space anchorer endpoints; the signing key itself is process-wide,
 /// not Space-scoped.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -1792,7 +1792,7 @@ pub(super) async fn admin_rotate_signing_key(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     _body: JsonBody<serde_json::Value>,
 ) -> JsonResult<RotateSigningKeyResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1805,11 +1805,11 @@ pub(super) async fn admin_rotate_signing_key(
         contrix_sdk::admin_scopes::ANCHORER_ROTATE_SIGNING_KEY,
     )
     .await?;
-    // Validate space_id shape so the endpoint surfaces a clean 400 on a
+    // Validate realm_id shape so the endpoint surfaces a clean 400 on a
     // bogus path; the rotation itself is process-wide.
-    let space_id_str = space_id.into_inner();
+    let space_id_str = realm_id.into_inner();
     let _ = SpaceId::new(space_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
 
@@ -1938,15 +1938,15 @@ fn sha256_hex_for(bytes: &[u8]) -> String {
 
 // ── MAL-13 GC candidates admin endpoint ──────────────────────────────────
 
-/// `GET /api/admin/v1/spaces/{space_id}/gc-candidates` response.
+/// `GET /api/admin/v1/spaces/{realm_id}/gc-candidates` response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidatesResponse {
-    pub space_id: String,
+    pub realm_id: String,
     pub candidates: Vec<crate::gc::GcCandidate>,
     pub total: usize,
 }
 
-/// `GET /api/admin/v1/spaces/{space_id}/gc-candidates` — list Moves that
+/// `GET /api/admin/v1/spaces/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
     operation_id = "cx.extension.soland.admin.spaces.gc_candidates",
@@ -1957,19 +1957,19 @@ pub(super) async fn admin_list_gc_candidates(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<GcCandidatesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id_str = space_id.into_inner();
+    let space_id_str = realm_id.into_inner();
     let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid space_id: {e}"))
+        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let candidates = crate::gc::scan_gc_candidates(state, &space);
     let total = candidates.len();
     json_ok(GcCandidatesResponse {
-        space_id: space_id_str,
+        realm_id: space_id_str,
         candidates,
         total,
     })

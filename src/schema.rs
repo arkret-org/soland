@@ -42,7 +42,7 @@ diesel::table! {
         source_service -> Text,
         txn_id -> Text,
         destination_service -> Text,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         status -> Text,
         content_digest -> Text,
         payload -> Jsonb,
@@ -72,7 +72,7 @@ diesel::table! {
 diesel::table! {
     multisig_pending (anchor_id) {
         anchor_id -> Text,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         threshold_k -> Int4,
         threshold_n -> Int4,
         members -> Array<Text>,
@@ -93,7 +93,7 @@ diesel::table! {
         request_id -> Nullable<Uuid>,
         action -> Text,
         outcome -> Text,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         operation_id -> Nullable<Uuid>,
         device_id -> Nullable<Text>,
         payload -> Jsonb,
@@ -120,7 +120,7 @@ diesel::table! {
         id -> Uuid,
         actor_id -> Text,
         actor_seq -> Int8,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         kind -> Text,
         schema_id -> Text,
         canonical_digest -> Text,
@@ -133,7 +133,7 @@ diesel::table! {
 diesel::table! {
     federation_operations (id) {
         id -> Uuid,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         object_type -> Text,
         object_id -> Nullable<Text>,
         operation_type -> Text,
@@ -148,7 +148,7 @@ diesel::table! {
         reporter -> Nullable<Text>,
         target_actor -> Nullable<Text>,
         target_event_id -> Nullable<Uuid>,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -160,7 +160,7 @@ diesel::table! {
         moderator -> Nullable<Text>,
         target_actor -> Nullable<Text>,
         action_kind -> Nullable<Text>,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -198,7 +198,7 @@ diesel::table! {
 diesel::table! {
     space_invites (id) {
         id -> Uuid,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         inviter -> Text,
         invitee -> Nullable<Text>,
         invite_token -> Text,
@@ -215,7 +215,7 @@ diesel::table! {
         media_type -> Text,
         filename -> Nullable<Text>,
         uploaded_by -> Text,
-        space_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Uuid>,
         size_bytes -> Int8,
         storage_backend -> Text,
         storage_key -> Text,
@@ -246,7 +246,7 @@ diesel::table! {
 diesel::table! {
     webrtc_sessions (id) {
         id -> Uuid,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         initiator_did -> Text,
         ice_config -> Jsonb,
         signaling_state -> Jsonb,
@@ -291,8 +291,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    space_members (space_id, actor) {
-        space_id -> Uuid,
+    space_members (realm_id, actor) {
+        realm_id -> Uuid,
         actor -> Text,
         membership -> Text,
         payload -> Jsonb,
@@ -305,7 +305,7 @@ diesel::table! {
 diesel::table! {
     events (id) {
         id -> Uuid,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         event_type -> Text,
         sender -> Nullable<Text>,
         thread_id -> Nullable<Text>,
@@ -318,7 +318,7 @@ diesel::table! {
 diesel::table! {
     space_state_events (id) {
         id -> Uuid,
-        space_id -> Uuid,
+        realm_id -> Uuid,
         event_type -> Text,
         subject -> Text,
         sender -> Nullable<Text>,
@@ -363,7 +363,7 @@ diesel::table! {
 diesel::table! {
     projection_flows (flow_id) {
         flow_id -> Text,
-        space_id -> Text,
+        realm_id -> Text,
         title -> Text,
         summary -> Nullable<Text>,
         state -> Text,
@@ -378,7 +378,7 @@ diesel::table! {
 diesel::table! {
     projection_morphs (morph_id) {
         morph_id -> Text,
-        space_id -> Text,
+        realm_id -> Text,
         morph_type -> Text,
         title -> Nullable<Text>,
         fields -> Jsonb,
@@ -405,7 +405,7 @@ diesel::table! {
     projection_events (ordinal) {
         ordinal -> BigInt,
         event_id -> Text,
-        space_id -> Text,
+        realm_id -> Text,
         event_kind -> Text,
         operation_type -> Text,
         operation_id -> Nullable<Text>,

@@ -1068,13 +1068,13 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
         .unwrap_or_default()
     {
         if projection_event_belongs_to_actor(&event, actor) {
-            realms.insert(event.space_id.replacen("cx:space:", "cx:realm:", 1));
+            realms.insert(event.realm_id.replacen("cx:space:", "cx:realm:", 1));
         }
     }
     if let Ok(projection) = state.projection.lock() {
         for message in projection.messages.values() {
             if message.sender == actor {
-                realms.insert(message.space_id.replacen("cx:space:", "cx:realm:", 1));
+                realms.insert(message.realm_id.replacen("cx:space:", "cx:realm:", 1));
             }
         }
     }
@@ -1242,13 +1242,13 @@ async fn list_notifications(
     for message in &candidate_messages {
         let mentions_actor = content_mentions_actor(
             &message.content,
-            &message.space_id,
+            &message.realm_id,
             &session.actor,
             &actor_handle,
         ) || content_audience_mentions_actor(state, message, &session.actor);
         let mentioned = !content_has_explicit_mention(&message.content) || mentions_actor;
         if mentioned
-            && realm_has_member(state, &message.space_id, &session.actor).await
+            && realm_has_member(state, &message.realm_id, &session.actor).await
             && !personal_blocklist_blocks_sender(state, &session.actor, &message.sender).await
         {
             items.push(notification_from_message(
@@ -1372,7 +1372,7 @@ fn notification_from_message(
         "kind": notification_kind,
         "title": if mentions_actor { "You were mentioned" } else { "New message" },
         "body": notification_body(&message.content),
-        "space_id": message.space_id,
+        "space_id": message.realm_id,
         "sender": message.sender,
         "sender_did": message.sender,
         "thread_id": message.thread_id,
@@ -1399,7 +1399,7 @@ fn encrypted_notification_from_message(
         "notification_type": "blind_wakeup",
         "notification_kind": notification_kind,
         "kind": "blind_wakeup",
-        "space_id": message.space_id,
+        "space_id": message.realm_id,
         "sender_did": message.sender,
         "thread_id": message.thread_id,
         "timestamp": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),

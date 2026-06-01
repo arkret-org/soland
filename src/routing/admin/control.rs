@@ -10,7 +10,7 @@
 //!
 //! Endpoints:
 //! - `POST /api/v1/admin/events/resync-required` — emit a `resync_required` frame to all
-//!   subscribers of one Space. Body: `{space_id, reason}`.
+//!   subscribers of one Space. Body: `{realm_id, reason}`.
 //! - `POST /api/v1/admin/events/unauthorized` — emit an `unauthorized` frame; clients MUST close
 //!   the stream and re-auth.
 //!
@@ -41,7 +41,7 @@ pub(super) fn router() -> Router {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminControlFrameRequest {
     /// The Space whose subscribers should receive the frame.
-    pub space_id: String,
+    pub realm_id: String,
     /// Free-form reason string. Surfaced verbatim in the NDJSON frame
     /// as the `reason` field for client-side telemetry / UX.
     #[serde(default)]
@@ -95,20 +95,20 @@ async fn admin_emit_resync_required(
     let _session = aa.authenticated_session(state, req).await?;
 
     let AdminControlFrameRequest {
-        space_id,
+        realm_id,
         reason,
         reconnect_after_ms,
     } = body.into_inner();
-    if space_id.is_empty() {
+    if realm_id.is_empty() {
         return Err(
-            AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
+            AppError::new(ErrorCode::InvalidParam, "realm_id is required".to_owned())
                 .with_status(StatusCode::BAD_REQUEST),
         );
     }
     let reason = reason.unwrap_or_else(|| "admin_triggered".to_owned());
 
     let notification = EventNotification {
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         kind: EventNotificationKind::ResyncRequired {
             reason,
             reconnect_after_ms,
@@ -146,18 +146,18 @@ async fn admin_emit_unauthorized(
     let _session = aa.authenticated_session(state, req).await?;
 
     let AdminControlFrameRequest {
-        space_id, reason, ..
+        realm_id, reason, ..
     } = body.into_inner();
-    if space_id.is_empty() {
+    if realm_id.is_empty() {
         return Err(
-            AppError::new(ErrorCode::InvalidParam, "space_id is required".to_owned())
+            AppError::new(ErrorCode::InvalidParam, "realm_id is required".to_owned())
                 .with_status(StatusCode::BAD_REQUEST),
         );
     }
     let reason = reason.unwrap_or_else(|| "session_revoked".to_owned());
 
     let notification = EventNotification {
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         kind: EventNotificationKind::Unauthorized { reason },
     };
     let receivers = state.event_broadcast.send(notification).unwrap_or(0);
@@ -179,7 +179,7 @@ mod tests {
     async fn resync_required_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            space_id: "cx:space:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "cx:space:01904100-0000-7000-8000-000000000001".to_owned(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "compaction".to_owned(),
                 reconnect_after_ms: Some(7_500),
@@ -188,7 +188,7 @@ mod tests {
         tx.send(n).expect("broadcast send");
         let received = rx.recv().await.expect("receive");
         assert_eq!(
-            received.space_id,
+            received.realm_id,
             "cx:space:01904100-0000-7000-8000-000000000001"
         );
         match received.kind {
@@ -207,7 +207,7 @@ mod tests {
     async fn unauthorized_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            space_id: "cx:space:01904100-0000-7000-8000-000000000002".to_owned(),
+            realm_id: "cx:space:01904100-0000-7000-8000-000000000002".to_owned(),
             kind: EventNotificationKind::Unauthorized {
                 reason: "session_revoked".to_owned(),
             },
@@ -215,7 +215,7 @@ mod tests {
         tx.send(n).expect("broadcast send");
         let received = rx.recv().await.expect("receive");
         assert_eq!(
-            received.space_id,
+            received.realm_id,
             "cx:space:01904100-0000-7000-8000-000000000002"
         );
         match received.kind {
@@ -229,16 +229,16 @@ mod tests {
     #[test]
     fn empty_space_id_request_is_caught_at_handler_level() {
         // We can't easily run the salvo handler in a unit test without
-        // spinning up a Service; the empty-space_id branch is a simple
+        // spinning up a Service; the empty-realm_id branch is a simple
         // string check exercised by integration tests. This test just
         // pins the request shape so we don't accidentally drop the
-        // `space_id` field.
+        // `realm_id` field.
         let req = AdminControlFrameRequest {
-            space_id: String::new(),
+            realm_id: String::new(),
             reason: Some("x".to_owned()),
             reconnect_after_ms: Some(10_000),
         };
-        assert!(req.space_id.is_empty());
+        assert!(req.realm_id.is_empty());
         assert_eq!(req.reason.as_deref(), Some("x"));
         assert_eq!(req.reconnect_after_ms, Some(10_000));
     }

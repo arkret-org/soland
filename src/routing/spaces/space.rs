@@ -128,7 +128,7 @@ async fn upsert_space_moderation_policy(
         organizations::persist_space_moderation_policy(state, &space_id, payload, &session.actor);
     json_ok(json!({
         "kind": "cx.realm.moderation_policy",
-        "space_id": policy.space_id,
+        "space_id": policy.realm_id,
         "policy": policy.payload,
         "updated_by": policy.updated_by,
         "updated_at": policy.updated_at.to_rfc3339(),
@@ -167,7 +167,7 @@ async fn get_space_cell(
         let realm_id = proj
             .space_containers
             .get(&space_id)
-            .map(|container| container.space_id.clone())
+            .map(|container| container.realm_id.clone())
             .unwrap_or_else(|| space_id.clone());
         let value = proj.child_order_cell_value(&space_id);
         (realm_id, value)
@@ -218,11 +218,11 @@ async fn export_space(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|event| event.space_id == space_id)
+        .filter(|event| event.realm_id == space_id)
         .map(|event| {
             json!({
                 "event_id": event.event_id,
-                "realm_id": event.space_id,
+                "realm_id": event.realm_id,
                 "event_kind": event.event_kind,
                 "operation_type": event.operation_type,
                 "operation_id": event.operation_id,
@@ -618,7 +618,7 @@ pub async fn invite_token_space_id(state: &AppState, token: &str) -> Option<Stri
                 && invite.invite_token == token
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
-        .map(|invite| invite.space_id)
+        .map(|invite| invite.realm_id)
 }
 
 pub async fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
@@ -902,7 +902,7 @@ pub async fn typing_ephemeral_for_space(
         let scope_id = record
             .scope_id
             .clone()
-            .unwrap_or_else(|| record.space_id.clone());
+            .unwrap_or_else(|| record.realm_id.clone());
         by_scope.entry(scope_id).or_default().push(json!({
             "actor": record.actor.clone(),
             "expires_at": record.expires_at,

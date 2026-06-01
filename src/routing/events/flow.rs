@@ -46,7 +46,7 @@ pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<Str
         .get("flow_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .or_else(|| Some(flow_id_from_space_id(&event.space_id)))
+        .or_else(|| Some(flow_id_from_space_id(&event.realm_id)))
 }
 
 pub fn discussion_track_for_projection_event(
@@ -58,7 +58,7 @@ pub fn discussion_track_for_projection_event(
         .payload
         .get("thread_id")
         .and_then(|value| value.as_str())
-        .unwrap_or(event.space_id.as_str());
+        .unwrap_or(event.realm_id.as_str());
     Some(default_discussion_track(flow_id, track_id))
 }
 

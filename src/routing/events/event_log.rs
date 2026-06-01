@@ -425,7 +425,7 @@ pub(super) async fn events_query_durable_scope_impl(
             }
             let actor_match = actors_set.contains(record.actor_id.as_str());
             let space_match = record
-                .space_id
+                .realm_id
                 .as_deref()
                 .is_some_and(|s| spaces_set.contains(s));
             actor_match || space_match
@@ -552,7 +552,7 @@ async fn events_frontier(
         {
             continue;
         }
-        if internal_space_selector.as_deref() != record.space_id.as_deref()
+        if internal_space_selector.as_deref() != record.realm_id.as_deref()
             && internal_space_selector.is_some()
         {
             continue;
@@ -564,7 +564,7 @@ async fn events_frontier(
             .entry(record.actor_id.clone())
             .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
             .or_insert(record.actor_seq);
-        if let Some(space_id) = record.space_id.as_deref() {
+        if let Some(space_id) = record.realm_id.as_deref() {
             if let Some(realm_id) = canonical_realm_id_for_record(record) {
                 let replace = frontier_entry_is_newer(&realm_latest, &realm_id, record);
                 if replace {
@@ -1309,7 +1309,7 @@ async fn submit_event_value(
             event_id: parsed.event_id.clone(),
             actor_id: parsed.actor_id.clone(),
             actor_seq: parsed.actor_seq,
-            space_id: parsed.space_id.clone(),
+            realm_id: parsed.space_id.clone(),
             kind: parsed.kind.clone(),
             schema_id: parsed.schema_id.clone(),
             canonical_digest: parsed.canonical_digest.clone(),
@@ -2067,7 +2067,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == kinds::CX_REALM_CREATE && record.space_id.as_deref() == Some(realm_id)
+            record.kind == kinds::CX_REALM_CREATE && record.realm_id.as_deref() == Some(realm_id)
         })
         .rev()
         .find_map(|record| {
@@ -3221,7 +3221,7 @@ async fn member_join_accepts_pending_invite(
     {
         return false;
     }
-    invite.space_id.replacen("cx:space:", "cx:realm:", 1)
+    invite.realm_id.replacen("cx:space:", "cx:realm:", 1)
         == space_id.replacen("cx:space:", "cx:realm:", 1)
 }
 
@@ -3761,7 +3761,7 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
         "actor_id": record.actor_id.clone(),
         "actor_seq": record.actor_seq,
         "realm_id": realm_id,
-        "space_id": record.space_id.clone(),
+        "space_id": record.realm_id.clone(),
         "kind": record.kind.clone(),
         "schema_id": record.schema_id.clone(),
         "canonical_digest": record.canonical_digest.clone(),
@@ -3868,7 +3868,7 @@ pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
                 realms.insert(realm_id, (record.received_at, record.event_id.clone()));
             }
         }
-        if let Some(space_id) = record.space_id.as_deref() {
+        if let Some(space_id) = record.realm_id.as_deref() {
             if frontier_entry_is_newer(&spaces, space_id, record) {
                 spaces.insert(
                     space_id.to_owned(),
@@ -3910,7 +3910,7 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
         .get("realm_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .or_else(|| record.space_id.clone())
+        .or_else(|| record.realm_id.clone())
 }
 
 pub(super) async fn event_visible_to_session(
@@ -3921,7 +3921,7 @@ pub(super) async fn event_visible_to_session(
     if record.actor_id == session.actor {
         return true;
     }
-    match record.space_id.as_deref() {
+    match record.realm_id.as_deref() {
         Some(space_id) => {
             realm_event_visible_to_session(
                 state,
@@ -4016,7 +4016,7 @@ pub async fn effective_read_receipt_policy_for_space(
         if record.kind != "cx.realm.read_receipt_policy" {
             continue;
         }
-        if record.space_id.as_deref() != Some(space_id) {
+        if record.realm_id.as_deref() != Some(space_id) {
             continue;
         }
         match latest {

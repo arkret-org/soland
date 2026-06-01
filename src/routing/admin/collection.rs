@@ -349,7 +349,7 @@ async fn admin_invite_items(state: &AppState) -> Vec<Value> {
             json!({
                 "kind": "invite_token",
                 "invite_id": invite.invite_id,
-                "space_id": invite.space_id,
+                "space_id": invite.realm_id,
                 "inviter": invite.inviter,
                 "invitee": invite.invitee,
                 "token_hash": format!("sha256:{}", sha256_hex(invite.invite_token.as_bytes())),
@@ -386,7 +386,7 @@ async fn admin_media_items(state: &AppState) -> Vec<Value> {
                 "kind": "media",
                 "media_type": blob.media_type,
                 "filename": blob.filename,
-                "space_id": blob.space_id,
+                "space_id": blob.realm_id,
                 "encrypted": blob.encryption.is_some(),
                 "uploaded_by": blob.uploaded_by,
                 "size": blob.size_bytes,

@@ -174,7 +174,7 @@ async fn issue_ice_config(
         ));
     }
     if let Some(record) = state.persistence.webrtc().get(call_id).await.ok().flatten() {
-        if record.space_id != realm_id {
+        if record.realm_id != realm_id {
             return Err(AppError::invalid_param(
                 "call_id does not belong to the requested realm",
             ));
@@ -348,7 +348,7 @@ async fn create_webrtc_session(
     let participant_list = participants.iter().cloned().collect::<Vec<_>>();
     let record = WebrtcSessionRecord {
         session_id: session_id.clone(),
-        space_id: body.space_id.clone(),
+        realm_id: body.space_id.clone(),
         created_by: session.actor,
         participants,
         mode: mode.clone(),
@@ -625,7 +625,7 @@ async fn start_recording(
     }
     let body = body.into_inner();
     if let Some(space_id) = body.get("space_id").and_then(Value::as_str)
-        && space_id != record.space_id
+        && space_id != record.realm_id
     {
         return Err(AppError::invalid_param(
             "space_id does not match the call session",
@@ -658,7 +658,7 @@ async fn start_recording(
     json_ok(json!({
         "ok": true,
         "call_id": call_id,
-        "space_id": record.space_id,
+        "space_id": record.realm_id,
         "recording_policy": record.recording_policy,
         "recording_id": recording_id,
         "recording_started_by": session.actor,
@@ -849,7 +849,7 @@ async fn handle_rtc_token(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
-    if webrtc.space_id != body.realm_id {
+    if webrtc.realm_id != body.realm_id {
         return Err(AppError::invalid_param(
             "call_id does not belong to the requested realm",
         ));
@@ -1039,7 +1039,7 @@ fn session_focus_for_call(
             .iter()
             .map(|actor| {
                 let joined_at = projection
-                    .member(&webrtc.space_id, actor)
+                    .member(&webrtc.realm_id, actor)
                     .map(|member| member.joined_at)
                     .unwrap_or_else(|| {
                         if actor == &webrtc.created_by {

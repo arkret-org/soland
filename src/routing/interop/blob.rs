@@ -8,7 +8,7 @@
 //! - `GET  /api/v1/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
-//! Blob metadata carries the spec `space_id` association; plaintext-visibility
+//! Blob metadata carries the spec `realm_id` association; plaintext-visibility
 //! is enforced at write time but not at GC.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -67,23 +67,23 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let space_id = match req
+    let realm_id = match req
         .headers()
         .get("x-contrix-space-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
     {
-        Some(space_id) => {
-            if validate_space_id(&space_id).is_err() {
+        Some(realm_id) => {
+            if validate_space_id(&realm_id).is_err() {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "invalid blob space_id",
+                    "invalid blob realm_id",
                 );
                 return;
             }
-            if !space_has_member(state, &space_id, &session.actor).await {
+            if !space_has_member(state, &realm_id, &session.actor).await {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,
@@ -92,7 +92,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 );
                 return;
             }
-            Some(space_id)
+            Some(realm_id)
         }
         None => None,
     };
@@ -106,7 +106,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    if let Err(message) = enforce_blob_quota(state, &session.actor, space_id.as_deref(), size).await
+    if let Err(message) = enforce_blob_quota(state, &session.actor, realm_id.as_deref(), size).await
     {
         render_error(
             res,
@@ -157,8 +157,8 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let filename = if encrypted { None } else { requested_filename };
     let plaintext_denied = if encrypted {
         false
-    } else if let Some(space_id) = space_id.as_deref() {
-        !space_allows_plaintext_service(state, space_id).await
+    } else if let Some(realm_id) = realm_id.as_deref() {
+        !space_allows_plaintext_service(state, realm_id).await
     } else {
         false
     };
@@ -224,7 +224,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         storage_key: storage_key.clone(),
         media_type: media_type.clone(),
         filename: filename.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         encryption: encryption.clone(),
         uploaded_by: session.actor,
         created_at: now(),
@@ -247,7 +247,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         "created_at": now(),
         "encrypted_attachment": encryption,
         "encrypted": encrypted,
-        "space_id": space_id,
+        "space_id": realm_id,
         "content_digest": content_digest.clone(),
     });
     if !encrypted && let Some(filename) = filename {
@@ -429,7 +429,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     "blob_ref": blob_ref.clone(),
                     "device_id": session.as_ref().map(|session| session.device_id.clone()),
                     "purpose": purpose,
-                    "space_id": blob.space_id.clone(),
+                    "space_id": blob.realm_id.clone(),
                     "presigned": session.is_none(),
                     "status": status.as_u16()
                 }),
@@ -817,7 +817,7 @@ fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
 async fn enforce_blob_quota(
     state: &AppState,
     actor: &str,
-    space_id: Option<&str>,
+    realm_id: Option<&str>,
     size: usize,
 ) -> Result<(), &'static str> {
     let blobs = state
@@ -834,10 +834,10 @@ async fn enforce_blob_quota(
     if actor_bytes.saturating_add(size) > MAX_BLOB_ACCOUNT_BYTES {
         return Err("account blob quota exceeded");
     }
-    if let Some(space_id) = space_id {
+    if let Some(realm_id) = realm_id {
         let space_bytes: usize = blobs
             .iter()
-            .filter(|blob| blob.space_id.as_deref() == Some(space_id))
+            .filter(|blob| blob.realm_id.as_deref() == Some(realm_id))
             .map(|blob| blob.size_bytes.max(0) as usize)
             .sum();
         if space_bytes.saturating_add(size) > MAX_BLOB_SPACE_BYTES {
@@ -863,18 +863,18 @@ async fn blob_visible_to_session(
     requested_space_id: Option<&str>,
 ) -> bool {
     if blob.uploaded_by == session.actor {
-        return blob.space_id.as_deref().is_none_or(|space_id| {
-            requested_space_id.is_none_or(|requested| requested == space_id)
+        return blob.realm_id.as_deref().is_none_or(|realm_id| {
+            requested_space_id.is_none_or(|requested| requested == realm_id)
         });
     }
 
-    let Some(space_id) = blob.space_id.as_deref() else {
+    let Some(realm_id) = blob.realm_id.as_deref() else {
         return false;
     };
-    if requested_space_id.is_some_and(|requested| requested != space_id) {
+    if requested_space_id.is_some_and(|requested| requested != realm_id) {
         return false;
     }
-    space_has_member(state, space_id, &session.actor).await
+    space_has_member(state, realm_id, &session.actor).await
 }
 
 #[cfg(test)]
@@ -889,7 +889,7 @@ mod tests {
             storage_key: "sha256/test".to_owned(),
             media_type: media_type.to_owned(),
             filename: filename.map(ToOwned::to_owned),
-            space_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             encryption: None,
             uploaded_by: "did:web:alice.example".to_owned(),
             created_at: now(),

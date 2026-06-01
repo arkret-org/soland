@@ -129,7 +129,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         });
         let error_record = ProjectionEventRecord {
             event_id: ids::generate("event"),
-            space_id: operation.realm_id.to_string(),
+            realm_id: operation.realm_id.to_string(),
             event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
             operation_type: "agent_echo_bridge_failed".to_owned(),
             operation_id: None,
@@ -138,7 +138,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             created_at: chrono::Utc::now(),
         };
         let _ = state.event_broadcast.send(EventNotification::event(
-            error_record.space_id.clone(),
+            error_record.realm_id.clone(),
             error_record.event_id.clone(),
             super::projection::projection_event_json(&error_record),
         ));
@@ -163,7 +163,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     });
     let status_record = ProjectionEventRecord {
         event_id: ids::generate("event"),
-        space_id: operation.realm_id.to_string(),
+        realm_id: operation.realm_id.to_string(),
         event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_STATUS.to_owned(),
         operation_type: "agent_echo_bridge_status".to_owned(),
         operation_id: None,
@@ -172,7 +172,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        status_record.space_id.clone(),
+        status_record.realm_id.clone(),
         status_record.event_id.clone(),
         super::projection::projection_event_json(&status_record),
     ));
@@ -331,7 +331,7 @@ async fn forward_to_agent_endpoint(
 #[allow(clippy::too_many_arguments)]
 async fn emit_agent_result_envelope(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     session_id: &str,
     agent_principal_id: &str,
     agent_protocol: &str,
@@ -418,7 +418,7 @@ async fn emit_agent_result_envelope(
     };
     let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         event_kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
         operation_type: operation_type.to_owned(),
         operation_id: None,
@@ -427,7 +427,7 @@ async fn emit_agent_result_envelope(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        record.space_id.clone(),
+        record.realm_id.clone(),
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));

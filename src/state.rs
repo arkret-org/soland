@@ -31,7 +31,7 @@ pub mod did_resolver_chain;
 
 /// broadcast payload for the
 /// [`AppState::event_broadcast`] channel. Subscribers filter by
-/// `space_id` first, then dispatch on `kind` to produce the right
+/// `realm_id` first, then dispatch on `kind` to produce the right
 /// NDJSON frame.
 ///
 /// added control-frame variants alongside the original `Event`
@@ -46,7 +46,7 @@ pub mod did_resolver_chain;
 ///     + re-auth
 #[derive(Clone, Debug)]
 pub struct EventNotification {
-    pub space_id: String,
+    pub realm_id: String,
     pub kind: EventNotificationKind,
 }
 
@@ -87,9 +87,9 @@ pub enum EventNotificationKind {
 }
 
 impl EventNotification {
-    pub fn event(space_id: String, cursor: String, event_payload: Value) -> Self {
+    pub fn event(realm_id: String, cursor: String, event_payload: Value) -> Self {
         Self {
-            space_id,
+            realm_id,
             kind: EventNotificationKind::Event {
                 cursor,
                 event_payload,
@@ -98,12 +98,12 @@ impl EventNotification {
     }
 
     pub fn epoch_rotation(
-        space_id: String,
+        realm_id: String,
         previous_epoch: Option<Value>,
         new_epoch: Value,
     ) -> Self {
         Self {
-            space_id,
+            realm_id,
             kind: EventNotificationKind::EpochRotation {
                 previous_epoch,
                 new_epoch,
@@ -111,9 +111,9 @@ impl EventNotification {
         }
     }
 
-    pub fn frontier(space_id: String, anchor_id: String, state_root: String) -> Self {
+    pub fn frontier(realm_id: String, anchor_id: String, state_root: String) -> Self {
         Self {
-            space_id,
+            realm_id,
             kind: EventNotificationKind::Frontier {
                 state_root,
                 anchor_id,
@@ -1179,7 +1179,7 @@ pub struct ConsentCellRecord {
 /// happens server-side; clients are responsible for canonical encoding.
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model) and §3.7
-/// (Space remarks, `cx.contacts.space.<space_id>`).
+/// (Space remarks, `cx.contacts.space.<realm_id>`).
 #[derive(Clone, Debug)]
 pub struct AccountDataRecord {
     pub actor: String,
@@ -1191,7 +1191,7 @@ pub struct AccountDataRecord {
 #[derive(Clone, Debug)]
 pub struct SpaceInviteRecord {
     pub invite_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub inviter: String,
     pub invitee: Option<String>,
     pub invite_token: String,
@@ -1230,7 +1230,7 @@ pub struct RealmMetaRecord {
 #[derive(Clone, Debug)]
 pub struct MessageRecord {
     pub event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub sender: String,
     pub thread_id: String,
     pub content: Value,
@@ -1243,7 +1243,7 @@ pub struct CanonicalEventRecord {
     pub event_id: String,
     pub actor_id: String,
     pub actor_seq: u64,
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     pub kind: String,
     pub schema_id: String,
     pub canonical_digest: String,
@@ -1255,7 +1255,7 @@ pub struct CanonicalEventRecord {
 #[derive(Clone, Debug)]
 pub struct ProjectionEventRecord {
     pub event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     /// Canonical Contrix event kind (e.g. `cx.message.create`).
     pub event_kind: String,
     pub operation_type: String,
@@ -1284,7 +1284,7 @@ pub struct BlobRecord {
     pub storage_key: String,
     pub media_type: String,
     pub filename: Option<String>,
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     pub encryption: Option<Value>,
     pub uploaded_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -1295,7 +1295,7 @@ pub struct FederationTransactionRecord {
     pub origin: String,
     pub txn_id: String,
     pub destination: String,
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     pub content_digest: String,
     pub status: String,
     pub response: Value,
@@ -1377,7 +1377,7 @@ pub struct PresenceRecord {
 #[derive(Clone, Debug)]
 pub struct TypingRecord {
     pub actor: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub scope_id: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -1420,7 +1420,7 @@ pub struct OutboundPushBridgeCacheRecord {
 #[derive(Clone, Debug)]
 pub struct WebrtcSessionRecord {
     pub session_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub created_by: String,
     pub participants: BTreeSet<String>,
     pub mode: String,
@@ -1454,7 +1454,7 @@ pub struct WebrtcSignalRecord {
 #[derive(Clone, Debug)]
 pub struct MultisigPendingRecord {
     pub anchor_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub threshold_k: u32,
     pub threshold_n: u32,
     pub members: Vec<String>,
@@ -1521,7 +1521,7 @@ pub struct OrganizationPolicyRecord {
 
 #[derive(Clone, Debug)]
 pub struct SpaceModerationPolicyRecord {
-    pub space_id: String,
+    pub realm_id: String,
     pub payload: Value,
     pub updated_by: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -1607,7 +1607,7 @@ pub struct SovereignStoreForwardRecord {
 
 #[derive(Clone, Debug)]
 pub struct RetentionPolicyRecord {
-    pub space_id: String,
+    pub realm_id: String,
     pub ttl_seconds: i64,
     pub updated_by: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -1616,7 +1616,7 @@ pub struct RetentionPolicyRecord {
 #[derive(Clone, Debug)]
 pub struct RetentionTombstoneRecord {
     pub event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub reason: String,
     pub policy_ttl_seconds: i64,
     pub expired_at: chrono::DateTime<chrono::Utc>,
@@ -2174,7 +2174,7 @@ async fn hydrate_projections_from_persistence(
                 record.container_space_id.clone(),
                 SpaceContainerProjection {
                     container_space_id: record.container_space_id,
-                    space_id: record.space_id,
+                    realm_id: record.realm_id,
                     kind: record.kind,
                     title: record.title,
                     parent_ref: record.parent_ref,
@@ -2319,7 +2319,7 @@ async fn hydrate_realm_create_event(
         .envelope
         .get("payload")
         .and_then(|payload| payload.get("object"));
-    let Some(space_id) = record
+    let Some(realm_id) = record
         .envelope
         .get("realm_id")
         .and_then(Value::as_str)
@@ -2329,13 +2329,13 @@ async fn hydrate_realm_create_event(
                 .and_then(Value::as_str)
         })
         .or_else(|| record.envelope.get("space_id").and_then(Value::as_str))
-        .or(record.space_id.as_deref())
+        .or(record.realm_id.as_deref())
         .map(normalize_persisted_realm_id)
     else {
         return;
     };
-    let Ok(realm_id) = RealmId::new(space_id.clone()) else {
-        tracing::warn!(space_id = %space_id, "skipping persisted realm.create with invalid realm_id");
+    let Ok(realm_id) = RealmId::new(realm_id.clone()) else {
+        tracing::warn!(realm_id = %realm_id, "skipping persisted realm.create with invalid realm_id");
         return;
     };
     let Ok(actor) = Did::new(record.actor_id.clone()) else {
@@ -2345,7 +2345,7 @@ async fn hydrate_realm_create_event(
     let title = payload_object
         .and_then(|object| object.get("title"))
         .and_then(Value::as_str)
-        .unwrap_or(space_id.as_str());
+        .unwrap_or(realm_id.as_str());
     let summary = payload_object
         .and_then(|object| object.get("summary"))
         .and_then(Value::as_str)
@@ -2388,7 +2388,7 @@ async fn hydrate_realm_create_event(
         })
         .unwrap_or_default();
 
-    let mut entry = RealmDirectoryEntry::new(realm_id, title);
+    let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
     entry.description = summary.clone();
     entry.public = discoverability == "public";
     entry.members.insert(actor);
@@ -2408,8 +2408,8 @@ async fn hydrate_realm_create_event(
         created_at: record.received_at,
         updated_at: record.received_at,
     };
-    if let Err(error) = persistence.realm_meta().put(&space_id, &meta).await {
-        tracing::warn!(%error, space_id = %space_id, "failed to hydrate persisted realm meta");
+    if let Err(error) = persistence.realm_meta().put(realm_id.as_str(), &meta).await {
+        tracing::warn!(%error, realm_id = %realm_id, "failed to hydrate persisted realm meta");
     }
 }
 
@@ -2457,7 +2457,7 @@ fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
         .envelope
         .get("realm_id")
         .and_then(Value::as_str)
-        .or(record.space_id.as_deref())
+        .or(record.realm_id.as_deref())
         .map(normalize_persisted_realm_id)
 }
 

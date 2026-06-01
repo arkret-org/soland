@@ -140,7 +140,7 @@ async fn ghost_endpoint(
     let body = body.into_inner();
     let (external_id, display_name) = external_user_from_body(&body)?;
     let payload = body.get("payload").cloned().unwrap_or(Value::Null);
-    let space_id = string_field(&body, "space_id").map(str::to_owned);
+    let realm_id = string_field(&body, "space_id").map(str::to_owned);
 
     let (record, ghost) = provision_ghost(&applet_id, &external_id, display_name)?;
     let mut response = json!({
@@ -150,10 +150,10 @@ async fn ghost_endpoint(
         "display_name": ghost.display_name,
         "accountability": accountability_chain(&record),
     });
-    if let Some(space_id) = space_id {
+    if let Some(realm_id) = realm_id {
         if let Some(message) = portal_message_payload(&payload)? {
             let message_result =
-                append_portal_message(state, &record, &ghost, &space_id, message).await?;
+                append_portal_message(state, &record, &ghost, &realm_id, message).await?;
             merge_object(&mut response, message_result);
         }
     }
@@ -183,8 +183,8 @@ async fn bot_message_endpoint(
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("bot_actor_revoked")
     })?;
-    let space_id = string_field(&body, "space_id")
-        .ok_or_else(|| AppError::missing_param("space_id is required"))?;
+    let realm_id = string_field(&body, "space_id")
+        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let payload = body.get("payload").cloned().unwrap_or_else(|| body.clone());
     let content = portal_message_payload(&payload)?.ok_or_else(|| {
         AppError::invalid_param("payload.kind must be \"message\" and payload.text is required")
@@ -197,7 +197,7 @@ async fn bot_message_endpoint(
         revoked_at: None,
     };
     let message_result =
-        append_portal_message(state, &record, &synthetic_ghost, space_id, content).await?;
+        append_portal_message(state, &record, &synthetic_ghost, realm_id, content).await?;
     json_ok(message_result)
 }
 
@@ -436,7 +436,7 @@ async fn append_portal_message(
     state: &AppState,
     applet: &AppletBridgeRecord,
     ghost: &GhostActorRecord,
-    space_id: &str,
+    realm_id: &str,
     content: Value,
 ) -> Result<Value, AppError> {
     if !applet.capabilities.iter().any(|cap| cap == "message:write") {
@@ -446,12 +446,12 @@ async fn append_portal_message(
     }
     let operation_id = ids::generate_operation_id();
     let event_id = ids::generate_event_id();
-    let thread_id = flow_id_from_space_id(space_id);
+    let thread_id = flow_id_from_space_id(realm_id);
     let created_at = chrono::Utc::now();
     let content_with_portal = enrich_content_with_portal_metadata(content, applet, ghost);
     let message_record = MessageRecord {
         event_id: event_id.clone(),
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         sender: ghost.ghost_actor_did.clone(),
         thread_id: thread_id.clone(),
         content: content_with_portal.clone(),
@@ -464,7 +464,7 @@ async fn append_portal_message(
     }
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
         operation_type: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
@@ -482,7 +482,7 @@ async fn append_portal_message(
         created_at,
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.space_id.clone(),
+        projection_record.realm_id.clone(),
         projection_record.event_id.clone(),
         projection_event_json(&projection_record),
     ));
@@ -499,7 +499,7 @@ async fn append_portal_message(
         "message_id": crate::routing::events::flow::message_id_from_event_id(&event_id),
         "event_id": event_id,
         "operation_id": operation_id,
-        "space_id": space_id,
+        "space_id": realm_id,
         "portal_realm_id": applet.portal_realm_id,
     }))
 }

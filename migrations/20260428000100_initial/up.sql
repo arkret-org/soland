@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS federation_transactions (
     source_service TEXT NOT NULL,
     txn_id TEXT NOT NULL,
     destination_service TEXT NOT NULL,
-    space_id UUID,
+    realm_id UUID,
     status TEXT NOT NULL,
     content_digest TEXT NOT NULL,
     payload JSONB NOT NULL,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS federation_transactions (
 );
 
 CREATE INDEX IF NOT EXISTS federation_transactions_space_received_idx
-    ON federation_transactions (space_id, received_at);
+    ON federation_transactions (realm_id, received_at);
 
 CREATE INDEX IF NOT EXISTS federation_transactions_destination_received_idx
     ON federation_transactions (destination_service, received_at);
@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS push_bridge_cache_trust_freshness_idx
 
 CREATE TABLE IF NOT EXISTS multisig_pending (
     anchor_id TEXT PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     threshold_k INTEGER NOT NULL,
     threshold_n INTEGER NOT NULL,
     members TEXT[] NOT NULL,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS multisig_pending (
 );
 
 CREATE INDEX IF NOT EXISTS multisig_pending_space_idx
-    ON multisig_pending (space_id);
+    ON multisig_pending (realm_id);
 
 CREATE INDEX IF NOT EXISTS multisig_pending_expires_idx
     ON multisig_pending (expires_at);
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     request_id UUID,
     action TEXT NOT NULL,
     outcome TEXT NOT NULL,
-    space_id UUID,
+    realm_id UUID,
     operation_id UUID,
     device_id TEXT,
     payload JSONB NOT NULL,
@@ -127,7 +127,7 @@ CREATE INDEX IF NOT EXISTS audit_logs_action_idx
     ON audit_logs (action);
 
 CREATE INDEX IF NOT EXISTS audit_logs_space_idx
-    ON audit_logs (space_id);
+    ON audit_logs (realm_id);
 
 CREATE TABLE IF NOT EXISTS push_devices (
     registration_id TEXT PRIMARY KEY,
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS canonical_events (
     id UUID PRIMARY KEY,
     actor_id TEXT NOT NULL,
     actor_seq BIGINT NOT NULL,
-    space_id UUID,
+    realm_id UUID,
     kind TEXT NOT NULL,
     schema_id TEXT NOT NULL,
     canonical_digest TEXT NOT NULL,
@@ -158,14 +158,14 @@ CREATE INDEX IF NOT EXISTS canonical_events_actor_idx
     ON canonical_events (actor_id, actor_seq DESC);
 
 CREATE INDEX IF NOT EXISTS canonical_events_space_idx
-    ON canonical_events (space_id);
+    ON canonical_events (realm_id);
 
 CREATE INDEX IF NOT EXISTS canonical_events_kind_idx
     ON canonical_events (kind);
 
 CREATE TABLE IF NOT EXISTS federation_operations (
     id UUID PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     object_type TEXT NOT NULL,
     object_id TEXT,
     operation_type TEXT NOT NULL,
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS federation_operations (
 );
 
 CREATE INDEX IF NOT EXISTS federation_operations_space_idx
-    ON federation_operations (space_id, created_at);
+    ON federation_operations (realm_id, created_at);
 
 CREATE INDEX IF NOT EXISTS federation_operations_object_type_idx
     ON federation_operations (object_type);
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS moderation_reports (
     reporter TEXT,
     target_actor TEXT,
     target_event_id UUID,
-    space_id UUID,
+    realm_id UUID,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -193,14 +193,14 @@ CREATE INDEX IF NOT EXISTS moderation_reports_target_idx
     ON moderation_reports (target_actor);
 
 CREATE INDEX IF NOT EXISTS moderation_reports_space_idx
-    ON moderation_reports (space_id);
+    ON moderation_reports (realm_id);
 
 CREATE TABLE IF NOT EXISTS moderation_actions (
     id UUID PRIMARY KEY,
     moderator TEXT,
     target_actor TEXT,
     action_kind TEXT,
-    space_id UUID,
+    realm_id UUID,
     payload JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -237,7 +237,7 @@ CREATE INDEX IF NOT EXISTS webvh_log_events_did_seq_idx
 
 CREATE TABLE IF NOT EXISTS space_invites (
     id UUID PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     inviter TEXT NOT NULL,
     invitee TEXT,
     invite_token TEXT NOT NULL,
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS space_invites (
 );
 
 CREATE INDEX IF NOT EXISTS space_invites_space_idx
-    ON space_invites (space_id);
+    ON space_invites (realm_id);
 
 CREATE INDEX IF NOT EXISTS space_invites_invitee_idx
     ON space_invites (invitee);
@@ -258,7 +258,7 @@ CREATE TABLE IF NOT EXISTS blobs (
     media_type TEXT NOT NULL,
     filename TEXT,
     uploaded_by TEXT NOT NULL,
-    space_id UUID,
+    realm_id UUID,
     size_bytes BIGINT NOT NULL,
     storage_backend TEXT NOT NULL,
     storage_key TEXT NOT NULL,
@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS blobs (
 );
 
 CREATE INDEX IF NOT EXISTS blobs_space_created_idx
-    ON blobs (space_id, created_at);
+    ON blobs (realm_id, created_at);
 
 CREATE INDEX IF NOT EXISTS blobs_sha256_idx
     ON blobs (sha256);
@@ -293,7 +293,7 @@ CREATE INDEX IF NOT EXISTS key_backups_device_idx
 
 CREATE TABLE IF NOT EXISTS webrtc_sessions (
     id UUID PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     initiator_did TEXT NOT NULL,
     ice_config JSONB NOT NULL DEFAULT '{}'::JSONB,
     signaling_state JSONB NOT NULL,
@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS webrtc_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS webrtc_sessions_space_idx
-    ON webrtc_sessions (space_id);
+    ON webrtc_sessions (realm_id);
 
 CREATE INDEX IF NOT EXISTS webrtc_sessions_expires_idx
     ON webrtc_sessions (expires_at);
@@ -341,22 +341,22 @@ CREATE INDEX IF NOT EXISTS spaces_discoverability_updated_idx
     ON spaces (discoverability, updated_at, id);
 
 CREATE TABLE IF NOT EXISTS space_members (
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     actor TEXT NOT NULL,
     membership TEXT NOT NULL,
     payload JSONB NOT NULL DEFAULT '{}'::JSONB,
     joined_at TIMESTAMPTZ,
     left_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (space_id, actor)
+    PRIMARY KEY (realm_id, actor)
 );
 
 CREATE INDEX IF NOT EXISTS space_members_actor_idx
-    ON space_members (actor, membership, space_id);
+    ON space_members (actor, membership, realm_id);
 
 CREATE TABLE IF NOT EXISTS events (
     id UUID PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     event_type TEXT NOT NULL,
     sender TEXT,
     thread_id TEXT,
@@ -366,7 +366,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS events_space_created_idx
-    ON events (space_id, created_at, id);
+    ON events (realm_id, created_at, id);
 
 CREATE INDEX IF NOT EXISTS events_thread_created_idx
     ON events (thread_id, created_at, id)
@@ -374,7 +374,7 @@ CREATE INDEX IF NOT EXISTS events_thread_created_idx
 
 CREATE TABLE IF NOT EXISTS space_state_events (
     id UUID PRIMARY KEY,
-    space_id UUID NOT NULL,
+    realm_id UUID NOT NULL,
     event_type TEXT NOT NULL,
     subject TEXT NOT NULL DEFAULT '',
     sender TEXT,
@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS space_state_events (
 );
 
 CREATE INDEX IF NOT EXISTS space_state_events_lookup_idx
-    ON space_state_events (space_id, event_type, subject, created_at);
+    ON space_state_events (realm_id, event_type, subject, created_at);
 
 CREATE TABLE IF NOT EXISTS account_datas (
     actor TEXT NOT NULL,

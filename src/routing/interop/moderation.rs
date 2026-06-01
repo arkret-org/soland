@@ -482,7 +482,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .into_iter()
         .filter(|record| {
             record.kind == crate::kinds::CX_REALM_CREATE
-                && record.space_id.as_deref() == Some(realm_id)
+                && record.realm_id.as_deref() == Some(realm_id)
         })
         .rev()
         .find_map(|record| {

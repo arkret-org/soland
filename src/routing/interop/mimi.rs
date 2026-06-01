@@ -125,7 +125,7 @@ async fn mimi_room_update(
     // `cx.mimi.room_binding` projection event so the Contrix
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
-    // omits both `binding_scope.space_id` and a top-level `space_id`
+    // omits both `binding_scope.realm_id` and a top-level `realm_id`
     // is rejected — we never implicitly route to a default Space.
     let binding_event_id = match body.get("room_binding") {
         Some(binding) if binding.is_object() => {
@@ -133,7 +133,7 @@ async fn mimi_room_update(
                 .await
                 .ok_or_else(|| {
                     AppError::invalid_param(
-                        "room_binding requires `binding_scope.space_id` or a top-level `space_id`",
+                        "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
                     )
                     .with_wire_code("missing_space_binding")
                 })?;
@@ -180,14 +180,14 @@ async fn mimi_room_notify(
     // notification. The notify event is an ephemeral signal in the
     // spec's wire_scope taxonomy - we broadcast but don't persist
     // into projection_events so it doesn't pollute durable history.
-    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
+    let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
         event_id: event_id.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         event_kind: "cx.mimi.notify".to_owned(),
         operation_type: "mimi_facade_notify".to_owned(),
         operation_id: None,
@@ -202,7 +202,7 @@ async fn mimi_room_notify(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        notify_record.space_id.clone(),
+        notify_record.realm_id.clone(),
         notify_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&notify_record),
     ));
@@ -270,11 +270,11 @@ async fn mimi_room_message(
 
     // Map the MIMI message into the canonical Contrix timeline.
     // Append a MessageRecord + a `cx.message.create` projection event so
-    // the message shows up in `GET /api/v1/events?space_id=...`. The
+    // the message shows up in `GET /api/v1/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
-    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
+    let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
@@ -295,7 +295,7 @@ async fn mimi_room_message(
         .get("thread_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| crate::routing::events::flow::flow_id_from_space_id(&space_id));
+        .unwrap_or_else(|| crate::routing::events::flow::flow_id_from_space_id(&realm_id));
     let created_at = chrono::Utc::now();
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",
@@ -309,7 +309,7 @@ async fn mimi_room_message(
     });
     let message_record = MessageRecord {
         event_id: event_id.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         sender: sender.clone(),
         thread_id: thread_id.clone(),
         content: mapped_content.content.clone(),
@@ -321,7 +321,7 @@ async fn mimi_room_message(
     }
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
@@ -337,7 +337,7 @@ async fn mimi_room_message(
         created_at,
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        projection_record.space_id.clone(),
+        projection_record.realm_id.clone(),
         projection_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&projection_record),
     ));
@@ -377,7 +377,7 @@ async fn mimi_room_message(
         "mimi.submit_message",
         json!({
             "room_id": room_id,
-            "space_id": space_id,
+            "space_id": realm_id,
             "operation_id": operation_id,
             "event_id": event_id,
             "source_format": source_format,
@@ -394,7 +394,7 @@ async fn mimi_room_message(
         "mimi_message_id": mimi_message_id,
         "mapped_operation_id": operation_id,
         "contrix_event_id": event_id,
-        "space_id": space_id,
+        "space_id": realm_id,
         "receipt": receipt
     }))
 }
@@ -411,16 +411,16 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    let space_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
+    let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Contrix Space")
             .with_wire_code("mimi_room_unbound")
     })?;
-    let projection = mimi_room_projection(state, &room_id, &space_id);
+    let projection = mimi_room_projection(state, &room_id, &realm_id);
     json_ok(json!({
         "room_id": room_id,
         "mimi_room_uri": projection["mimi_room_uri"].clone(),
         "group_info": projection,
-        "participants": mimi_room_participants(state, &space_id),
+        "participants": mimi_room_participants(state, &realm_id),
         "receipt": mimi_receipt(state, "cx.mimi.group_info", &json!({"room_id": room_id}), json!({
             "truth_source": "contrix_signed_event_reducer",
             "projection_only": true
@@ -572,20 +572,20 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         Some(id) => mimi_bound_space_id(state, id).await,
         None => None,
     };
-    let space_id = if let Some(s) = body.get("space_id").and_then(Value::as_str) {
+    let realm_id = if let Some(s) = body.get("space_id").and_then(Value::as_str) {
         s.to_owned()
     } else if let Some(bound) = bound_space {
         bound
     } else {
         return Err(AppError::invalid_param(
-            "mimi report requires `space_id` or a `mimi_room_uri` that resolves to a bound Contrix Space",
+            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Contrix Space",
         )
         .with_wire_code("missing_space_binding"));
     };
     let report_event_id = ids::generate_event_id();
     let report_record = ProjectionEventRecord {
         event_id: report_event_id.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         event_kind: "cx.moderation.report".to_owned(),
         operation_type: "mimi_facade_report".to_owned(),
         operation_id: None,
@@ -608,7 +608,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        report_record.space_id.clone(),
+        report_record.realm_id.clone(),
         report_record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&report_record),
     ));
@@ -1002,7 +1002,7 @@ fn mimi_plaintext_detected(value: &Value) -> bool {
     }
 }
 
-/// Look up which Contrix `space_id` (if any) the MIMI `room_id` is
+/// Look up which Contrix `realm_id` (if any) the MIMI `room_id` is
 /// bound to. Scans the persistence projection event log for the
 /// most recent `cx.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
@@ -1058,7 +1058,7 @@ async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> 
 /// efficiently.
 ///
 /// Returns `None` when the binding payload declares no Contrix
-/// `space_id` (neither under `binding_scope.space_id` nor at the top
+/// `realm_id` (neither under `binding_scope.realm_id` nor at the top
 /// level). The caller is expected to surface that to the client as a
 /// 400 rather than implicitly bind the room to some default Space.
 async fn emit_mimi_room_binding_event(
@@ -1067,7 +1067,7 @@ async fn emit_mimi_room_binding_event(
     binding: &Value,
 ) -> Option<String> {
     let event_id = ids::generate_event_id();
-    let space_id = binding
+    let realm_id = binding
         .get("binding_scope")
         .and_then(|s| s.get("space_id"))
         .and_then(Value::as_str)
@@ -1080,7 +1080,7 @@ async fn emit_mimi_room_binding_event(
         .unwrap_or_else(|| mimi_room_uri(state, room_id));
     let record = ProjectionEventRecord {
         event_id: event_id.clone(),
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         event_kind: "cx.mimi.room_binding".to_owned(),
         operation_type: "mimi_facade_room_binding".to_owned(),
         operation_id: None,
@@ -1090,7 +1090,7 @@ async fn emit_mimi_room_binding_event(
             "mimi_room_uri": mimi_room_uri_value,
             "mimi_room_id": room_id,
             "binding_scope": {
-                "space_id": space_id,
+                "space_id": realm_id,
                 "flow_id": binding
                     .get("binding_scope")
                     .and_then(|s| s.get("flow_id"))
@@ -1107,7 +1107,7 @@ async fn emit_mimi_room_binding_event(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        record.space_id.clone(),
+        record.realm_id.clone(),
         record.event_id.clone(),
         crate::routing::events::projection::projection_event_json(&record),
     ));
@@ -1117,33 +1117,33 @@ async fn emit_mimi_room_binding_event(
     Some(event_id)
 }
 
-fn mimi_room_projection(state: &AppState, room_id: &str, space_id: &str) -> Value {
+fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {
     json!({
         "kind": "cx.mimi.room_binding",
         "profile": "cx.profile.mimi_interop.v1",
         "mimi_room_uri": mimi_room_uri(state, room_id),
         "binding_scope": {
-            "space_id": space_id,
+            "space_id": realm_id,
             "channel_id": Value::Null
         },
         "hub_provider": state.config.service_did.clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
-        "policy_root": format!("sha256:{}", sha256_hex(format!("{space_id}:{room_id}:policy").as_bytes())),
+        "policy_root": format!("sha256:{}", sha256_hex(format!("{realm_id}:{room_id}:policy").as_bytes())),
         "status": "accepted",
         "canonical_truth": "contrix_signed_event_reducer"
     })
 }
 
-fn mimi_room_participants(state: &AppState, space_id: &str) -> Vec<Value> {
-    let Ok(space_id) = RealmId::new(space_id.to_owned()) else {
+fn mimi_room_participants(state: &AppState, realm_id: &str) -> Vec<Value> {
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
     state
         .realms
         .lock()
         .expect("spaces lock")
-        .get(&space_id)
+        .get(&realm_id)
         .map(|space| {
             space
                 .members

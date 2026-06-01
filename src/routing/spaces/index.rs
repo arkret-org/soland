@@ -143,7 +143,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
             json!({
                 "event_id": message.event_id,
                 "kind": "cx.message.create",
-                "space_id": message.space_id,
+                "space_id": message.realm_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
                 "content": message.content,
@@ -206,7 +206,7 @@ async fn index_notifications(
             notifications.push(json!({
                 "kind": "message",
                 "event_ref": message.event_id,
-                "space_id": message.space_id,
+                "space_id": message.realm_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
                 "encrypted": message.encrypted,
@@ -391,7 +391,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
                     "kind": "message",
                     "object_id": message.event_id.clone(),
                     "event_id": message.event_id.clone(),
-                    "space_id": message.space_id,
+                    "space_id": message.realm_id,
                     "thread_id": message.thread_id,
                     "sender": message.sender,
                     "content": message.content,

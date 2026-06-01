@@ -972,7 +972,7 @@ fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> Value {
         "event_id": &record.event_id,
         "actor_id": &record.actor_id,
         "actor_seq": record.actor_seq,
-        "space_id": &record.space_id,
+        "space_id": &record.realm_id,
         "kind": &record.kind,
         "canonical_digest": &record.canonical_digest,
         "received_at": record.received_at,
@@ -982,7 +982,7 @@ fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> Value {
 fn projection_event_diagnostic(record: &ProjectionEventRecord) -> Value {
     json!({
         "event_id": &record.event_id,
-        "space_id": &record.space_id,
+        "space_id": &record.realm_id,
         "event_kind": &record.event_kind,
         "operation_type": &record.operation_type,
         "operation_id": &record.operation_id,

@@ -45,11 +45,11 @@ async fn configure_retention_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let space_id = required_string(&body, "space_id")?;
+    let realm_id = required_string(&body, "space_id")?;
     let ttl_seconds = ttl_seconds_from_body(&body)?;
     let now = Utc::now();
     let record = RetentionPolicyRecord {
-        space_id: space_id.clone(),
+        realm_id: realm_id.clone(),
         ttl_seconds,
         updated_by: session.actor.clone(),
         updated_at: now,
@@ -58,13 +58,13 @@ async fn configure_retention_policy(
         .retention_policies
         .lock()
         .expect("retention policies lock")
-        .insert(space_id.clone(), record.clone());
+        .insert(realm_id.clone(), record.clone());
     append_audit_log(
         state,
         Some(&session.actor),
         "cx.audit.retention_policy.updated",
         json!({
-            "space_id": space_id,
+            "space_id": realm_id,
             "ttl_seconds": ttl_seconds,
         }),
         "accepted",
@@ -88,13 +88,13 @@ async fn sweep_retention_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let space_id = required_string(&body, "space_id")?;
+    let realm_id = required_string(&body, "space_id")?;
     let now = optional_now(&body)?.unwrap_or_else(Utc::now);
     let policy = state
         .retention_policies
         .lock()
         .expect("retention policies lock")
-        .get(&space_id)
+        .get(&realm_id)
         .cloned()
         .ok_or_else(|| AppError::not_found("retention policy not found"))?;
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
@@ -105,7 +105,7 @@ async fn sweep_retention_policy(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|event| event.space_id == space_id)
+        .filter(|event| event.realm_id == realm_id)
         .filter(|event| event.event_kind == kinds::CX_MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();
@@ -132,7 +132,7 @@ async fn sweep_retention_policy(
             .unwrap_or(false);
         let tombstone = RetentionTombstoneRecord {
             event_id: event.event_id.clone(),
-            space_id: event.space_id.clone(),
+            realm_id: event.realm_id.clone(),
             reason: "retention_policy.ttl".to_owned(),
             policy_ttl_seconds: policy.ttl_seconds,
             expired_at: event.created_at + Duration::seconds(policy.ttl_seconds),
@@ -153,7 +153,7 @@ async fn sweep_retention_policy(
     }
     if !created.is_empty() {
         let _ = state.event_broadcast.send(EventNotification {
-            space_id: space_id.clone(),
+            realm_id: realm_id.clone(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "retention_policy_ttl".to_owned(),
                 reconnect_after_ms: None,
@@ -165,7 +165,7 @@ async fn sweep_retention_policy(
         Some(&session.actor),
         "cx.audit.retention_sweep",
         json!({
-            "space_id": space_id,
+            "space_id": realm_id,
             "examined": examined,
             "tombstoned_count": created.len(),
             "physical_delete_count": 0,
@@ -174,7 +174,7 @@ async fn sweep_retention_policy(
     )
     .await;
     json_ok(json!({
-        "space_id": space_id,
+        "space_id": realm_id,
         "policy": policy_json(&policy),
         "examined": examined,
         "tombstoned_count": created.len(),
@@ -214,7 +214,7 @@ fn optional_now(body: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
 
 fn policy_json(record: &RetentionPolicyRecord) -> Value {
     json!({
-        "space_id": record.space_id.as_str(),
+        "space_id": record.realm_id.as_str(),
         "ttl_seconds": record.ttl_seconds,
         "updated_by": record.updated_by.as_str(),
         "updated_at": record.updated_at.to_rfc3339(),
@@ -224,7 +224,7 @@ fn policy_json(record: &RetentionPolicyRecord) -> Value {
 fn tombstone_json(record: &RetentionTombstoneRecord) -> Value {
     json!({
         "event_id": record.event_id.as_str(),
-        "space_id": record.space_id.as_str(),
+        "space_id": record.realm_id.as_str(),
         "retention_state": "tombstoned",
         "reason": record.reason.as_str(),
         "policy_ttl_seconds": record.policy_ttl_seconds,

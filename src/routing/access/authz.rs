@@ -518,7 +518,7 @@ async fn invites(
         .map(|invite| {
             json!({
                 "invite_id": invite.invite_id,
-                "space_id": invite.space_id,
+                "space_id": invite.realm_id,
                 "inviter": invite.inviter,
                 "invitee": invite.invitee,
                 "invite_token": invite.invite_token,

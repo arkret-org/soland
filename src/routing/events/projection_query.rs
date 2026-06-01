@@ -297,7 +297,7 @@ fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<
         .map(|relation| {
             json!({
                 "relation_id": relation.relation_id,
-                "realm_id": relation.space_id,
+                "realm_id": relation.realm_id,
                 "relation_kind": relation.relation_kind,
                 "from": relation.from_ref,
                 "to": relation.to_ref,
@@ -347,12 +347,12 @@ async fn list_space_container_projections(
     let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
         .values()
-        .filter(|p| p.space_id == realm_id)
+        .filter(|p| p.realm_id == realm_id)
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
         .map(|p| {
             Ok(ProjectionSpaceRow {
                 space_id: parse_projection_id::<SpaceId>(&p.container_space_id, "space_id")?,
-                realm_id: parse_projection_id::<RealmId>(&p.space_id, "realm_id")?,
+                realm_id: parse_projection_id::<RealmId>(&p.realm_id, "realm_id")?,
                 kind: p.kind.clone(),
                 title: p.title.clone(),
                 parent_space_id: p

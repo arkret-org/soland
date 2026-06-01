@@ -481,7 +481,7 @@ pub(crate) fn persist_space_moderation_policy(
     actor: &str,
 ) -> SpaceModerationPolicyRecord {
     let record = SpaceModerationPolicyRecord {
-        space_id: space_id.to_owned(),
+        realm_id: space_id.to_owned(),
         payload,
         updated_by: actor.to_owned(),
         updated_at: Utc::now(),
@@ -577,7 +577,7 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
 fn space_policy_record_json(record: &SpaceModerationPolicyRecord) -> Value {
     json!({
         "kind": "cx.realm.moderation_policy",
-        "space_id": record.space_id.clone(),
+        "space_id": record.realm_id.clone(),
         "policy": record.payload.clone(),
         "updated_by": record.updated_by.clone(),
         "updated_at": record.updated_at.to_rfc3339(),

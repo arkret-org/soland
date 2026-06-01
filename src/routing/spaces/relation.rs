@@ -100,7 +100,7 @@ async fn create_relation(
     let r = relation.ok_or_else(|| AppError::internal("relation not found after creation"))?;
     json_ok(RelationResponse {
         relation_id: r.relation_id,
-        space_id: r.space_id,
+        space_id: r.realm_id,
         relation_kind: r.relation_kind,
         from: r.from_ref,
         to: r.to_ref,
@@ -127,7 +127,7 @@ async fn delete_relation(
     let relation_id = relation_id.into_inner();
     let space_id = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.relations.get(&relation_id).map(|r| r.space_id.clone())
+        proj.relations.get(&relation_id).map(|r| r.realm_id.clone())
     };
     let space_id = space_id.ok_or_else(|| AppError::not_found("relation not found"))?;
     let operation_id = ids::generate_operation_id();
@@ -169,7 +169,7 @@ async fn list_relations(
             .into_iter()
             .map(|r| RelationResponse {
                 relation_id: r.relation_id.clone(),
-                space_id: r.space_id.clone(),
+                space_id: r.realm_id.clone(),
                 relation_kind: r.relation_kind.clone(),
                 from: r.from_ref.clone(),
                 to: r.to_ref.clone(),

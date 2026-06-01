@@ -119,7 +119,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
             "max_timeline_events": 100,
             "offline_flush_endpoint": "/api/v1/events",
             "backfill_endpoint": "/api/v1/sync/backfill/gap",
-            "bottom_repair_endpoint": "/api/admin/v1/spaces/{space_id}/bottom/{cell_id}/repair"
+            "bottom_repair_endpoint": "/api/admin/v1/spaces/{realm_id}/bottom/{cell_id}/repair"
         }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
     }));
@@ -249,7 +249,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                             // For non-event notifications (epoch/frontier/etc.)
                             // we still rebuild so the client picks up control
                             // state on its next delta if it surfaces there.
-                            if !realm_id_accessible(&state, &notification.space_id, session.as_ref()).await {
+                            if !realm_id_accessible(&state, &notification.realm_id, session.as_ref()).await {
                                 continue;
                             }
                             response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
@@ -509,15 +509,15 @@ async fn build_sync_snapshot(
     let cursor_issued_at = after_cursor
         .issued_at_ms
         .and_then(chrono::DateTime::<Utc>::from_timestamp_millis);
-    for (space_id, title, summary, tags, category, members) in visible_spaces {
-        let flow = flow_projection_for_space(state, &space_id, &title, summary.as_deref()).await;
+    for (realm_id, title, summary, tags, category, members) in visible_spaces {
+        let flow = flow_projection_for_space(state, &realm_id, &title, summary.as_deref()).await;
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
         let meta = state
             .persistence
             .realm_meta()
-            .get(&space_id)
+            .get(&realm_id)
             .await
             .ok()
             .flatten();
@@ -529,15 +529,15 @@ async fn build_sync_snapshot(
             .as_ref()
             .and_then(|record| record.encryption_profile.clone())
             .unwrap_or_else(|| "none".to_owned());
-        let known_to_cursor = after_cursor.positions.contains_key(&space_id);
+        let known_to_cursor = after_cursor.positions.contains_key(&realm_id);
         let after_position = after_cursor
             .positions
-            .get(&space_id)
+            .get(&realm_id)
             .copied()
             .unwrap_or_default();
         let (timeline_events, space_position) =
-            timeline_events_for_space(state, &projection, &space_id, after_position, session).await;
-        positions.insert(space_id.clone(), space_position);
+            timeline_events_for_space(state, &projection, &realm_id, after_position, session).await;
+        positions.insert(realm_id.clone(), space_position);
         // Incremental sync skips realms whose timeline position is
         // unchanged AND whose meta `updated_at` is at-or-before the
         // cursor's `issued_at`. This drops the always-full
@@ -563,11 +563,11 @@ async fn build_sync_snapshot(
                 continue;
             }
         }
-        let bottom_cells = bottom_cells_for_space(&projection, &space_id);
+        let bottom_cells = bottom_cells_for_space(&projection, &realm_id);
         let anchor_view = anchor_view_for_space(&bottom_cells);
-        let ephemeral = typing_ephemeral_for_space(state, &space_id, session).await;
+        let ephemeral = typing_ephemeral_for_space(state, &realm_id, session).await;
         sync_spaces.insert(
-            space_id.clone(),
+            realm_id.clone(),
             json!({
                 "summary": {
                     "flow": flow,
@@ -631,7 +631,7 @@ async fn build_sync_snapshot(
 
     // Actor-private account data: hydrate every `(actor, data_type)` row
     // owned by the authenticated session so the client can join e.g.
-    // `cx.contacts.space.<space_id>` Space remarks against the public
+    // `cx.contacts.space.<realm_id>` Space remarks against the public
     // Space `title` during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Space remarks).
     let account_data = if let Some(session) = session {
@@ -920,7 +920,7 @@ fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bo
 async fn timeline_events_for_space(
     state: &AppState,
     projection: &ProjectionState,
-    space_id: &str,
+    realm_id: &str,
     after_position: i64,
     session: Option<&SessionRecord>,
 ) -> (Vec<serde_json::Value>, i64) {
@@ -928,7 +928,7 @@ async fn timeline_events_for_space(
     let mut newest_position = after_position;
     let mut timeline_entries = Vec::new();
 
-    for message in projection.messages_for_space(space_id) {
+    for message in projection.messages_for_space(realm_id) {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
@@ -937,7 +937,7 @@ async fn timeline_events_for_space(
         if !realm_event_visible_to_session_with_projection(
             state,
             projection,
-            space_id,
+            realm_id,
             message.created_at,
             Some(&message.sender),
             session,
@@ -964,7 +964,7 @@ async fn timeline_events_for_space(
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 100)
+        .list_for_space(realm_id, 100)
         .await
         .unwrap_or_default()
     {
@@ -976,7 +976,7 @@ async fn timeline_events_for_space(
         if !realm_event_visible_to_session_with_projection(
             state,
             projection,
-            space_id,
+            realm_id,
             message.created_at,
             Some(&message.sender),
             session,
@@ -1043,7 +1043,7 @@ fn timeline_event_tie_breaker(event_id: &str) -> i64 {
 async fn realm_event_visible_to_session_with_projection(
     state: &AppState,
     projection: &ProjectionState,
-    space_id: &str,
+    realm_id: &str,
     event_created_at: DateTime<Utc>,
     sender: Option<&str>,
     session: Option<&SessionRecord>,
@@ -1054,14 +1054,14 @@ async fn realm_event_visible_to_session_with_projection(
     if personal_blocklist_blocks_sender_for_session(state, session, sender).await {
         return false;
     }
-    match realm_history_visibility(state, space_id).await.as_str() {
+    match realm_history_visibility(state, realm_id).await.as_str() {
         "world_readable" => true,
         "shared" => {
-            if realm_discoverability(state, space_id).await == "public" {
+            if realm_discoverability(state, realm_id).await == "public" {
                 return true;
             }
             match session {
-                Some(session) => realm_has_member(state, space_id, &session.actor).await,
+                Some(session) => realm_has_member(state, realm_id, &session.actor).await,
                 None => false,
             }
         }
@@ -1070,14 +1070,14 @@ async fn realm_event_visible_to_session_with_projection(
                 return false;
             };
             let mut joined_at = projection
-                .member(space_id, &session.actor)
+                .member(realm_id, &session.actor)
                 .filter(|member| member.state == "join")
                 .map(|member| member.joined_at);
             if joined_at.is_none() {
                 let meta = state
                     .persistence
                     .realm_meta()
-                    .get(space_id)
+                    .get(realm_id)
                     .await
                     .ok()
                     .flatten();
@@ -1093,7 +1093,7 @@ async fn realm_event_visible_to_session_with_projection(
     }
 }
 
-fn bottom_cells_for_space(projection: &ProjectionState, space_id: &str) -> Vec<Value> {
+fn bottom_cells_for_space(projection: &ProjectionState, realm_id: &str) -> Vec<Value> {
     projection
         .cells
         .iter()
@@ -1102,11 +1102,11 @@ fn bottom_cells_for_space(projection: &ProjectionState, space_id: &str) -> Vec<V
                 return None;
             };
             let cell_id = cell.as_str();
-            if !cell_id.contains(space_id) {
+            if !cell_id.contains(realm_id) {
                 return None;
             }
             Some(json!({
-                "space_id": space_id,
+                "space_id": realm_id,
                 "cell_id": cell_id,
                 "state": "bottom",
                 "bottom": bottom,
@@ -1186,7 +1186,7 @@ async fn projection_record_visible_to_session(
 ) -> bool {
     realm_event_visible_to_session(
         state,
-        &event.space_id,
+        &event.realm_id,
         event.created_at,
         event.sender.as_deref(),
         session,
@@ -1201,7 +1201,7 @@ async fn projection_event_value_visible_to_session(
     event: &Value,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Some(space_id) = event.get("space_id").and_then(Value::as_str) else {
+    let Some(realm_id) = event.get("space_id").and_then(Value::as_str) else {
         return false;
     };
     let Some(created_at) = event
@@ -1216,7 +1216,7 @@ async fn projection_event_value_visible_to_session(
         return false;
     };
     let sender = event.get("sender").and_then(Value::as_str);
-    realm_event_visible_to_session(state, space_id, created_at, sender, session).await
+    realm_event_visible_to_session(state, realm_id, created_at, sender, session).await
         && !personal_blocklist_blocks_sender_for_session(state, session, sender).await
 }
 
@@ -1353,20 +1353,20 @@ fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    // flow_id is always derived from space_id (one flow per space for
+    // flow_id is always derived from realm_id (one flow per space for
     // the message timeline) — thread_id is the discussion *track* within
     // that flow, NOT the flow itself. The legacy top-level `branch` object
     // was removed in revision 0a5ab85 (see contrix-spec
     // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
     // `track_name` is the concrete v1 wire field.
-    let flow_id = flow_id_from_space_id(&message.space_id);
+    let flow_id = flow_id_from_space_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "cx.message.create",
         "event_id": message.event_id,
         "message_id": super::message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
-        "space_id": message.space_id,
+        "space_id": message.realm_id,
         "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
@@ -1384,7 +1384,7 @@ fn sync_timeline_message_record_json_with_projection(
     projection: &ProjectionState,
 ) -> serde_json::Value {
     let mut event = sync_timeline_message_record_json(message);
-    if actor_erased_in_space(projection, &message.sender, &message.space_id) {
+    if actor_erased_in_space(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
     }
     augment_timeline_message_json(event, &message.event_id, &message.content, projection)
@@ -1778,10 +1778,10 @@ fn sync_cursor_from_stateless_value(
             "stateless cursor missing positions.spaces",
         ))?
         .iter()
-        .filter_map(|(space_id, position)| {
+        .filter_map(|(realm_id, position)| {
             position
                 .as_i64()
-                .map(|position| (space_id.clone(), position))
+                .map(|position| (realm_id.clone(), position))
         })
         .collect();
     let to_device_position = positions_value
@@ -1934,10 +1934,10 @@ pub fn parse_and_validate_sync_cursor(
             "cursor handle is missing positions.spaces",
         ))?
         .iter()
-        .filter_map(|(space_id, position)| {
+        .filter_map(|(realm_id, position)| {
             position
                 .as_i64()
-                .map(|position| (space_id.clone(), position))
+                .map(|position| (realm_id.clone(), position))
         })
         .collect();
     let to_device_position = positions_value
@@ -1971,7 +1971,7 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// - Plain string that does NOT start with `cx:cursor:` → pass through
 ///   unchanged; the caller already speaks the projection's `event_id` cursor.
 /// - `cx:cursor:...` → decode the structured cursor, look up
-///   the handle's stored position for `space_id` (a `timestamp_micros`
+///   the handle's stored position for `realm_id` (a `timestamp_micros`
 ///   checkpoint), then walk
 ///   the space's projected events and persisted messages to find the most
 ///   recent event at-or-before that checkpoint and return its
@@ -1979,7 +1979,7 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 ///   `None` so backfill streams from the start of the space.
 pub async fn resolve_sync_cursor_to_event_id(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     cursor: Option<String>,
 ) -> Result<Option<String>, &'static str> {
     let Some(cursor) = cursor else {
@@ -2004,13 +2004,13 @@ pub async fn resolve_sync_cursor_to_event_id(
         stored
             .get("positions")
             .and_then(|positions| positions.get("spaces"))
-            .and_then(|spaces| spaces.get(space_id))
+            .and_then(|spaces| spaces.get(realm_id))
             .and_then(|position| position.as_i64())
     } else if has_stateless_marker {
         value
             .get("positions")
             .and_then(|positions| positions.get("spaces"))
-            .and_then(|spaces| spaces.get(space_id))
+            .and_then(|spaces| spaces.get(realm_id))
             .and_then(|position| position.as_i64())
     } else {
         return Err("sync cursor is missing stateful handle");
@@ -2025,7 +2025,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     let projected_messages: Vec<(String, DateTime<Utc>)> = {
         let projection = state.projection.lock().expect("projection lock");
         projection
-            .messages_for_space(space_id)
+            .messages_for_space(realm_id)
             .into_iter()
             .map(|message| (message.event_id.clone(), message.created_at))
             .collect()
@@ -2042,7 +2042,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     for message in state
         .persistence
         .messages()
-        .list_for_space(space_id, 1000)
+        .list_for_space(realm_id, 1000)
         .await
         .unwrap_or_default()
     {
@@ -2174,7 +2174,7 @@ async fn persist_ephemeral_typing(
             .typing()
             .put(TypingRecord {
                 actor: actor.to_owned(),
-                space_id: realm_id.to_owned(),
+                realm_id: realm_id.to_owned(),
                 scope_id,
                 expires_at: envelope.expires_at,
                 updated_at: chrono::Utc::now(),
@@ -2343,8 +2343,8 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     let mut last_cursor: Option<String> = None;
 
     if include_history {
-        for space_id in &accessible_spaces {
-            match projected_event_page(&state, space_id, cursor.as_deref(), limit).await {
+        for realm_id in &accessible_spaces {
+            match projected_event_page(&state, realm_id, cursor.as_deref(), limit).await {
                 Ok(Some(page)) => {
                     for event in page.items {
                         if !projection_record_visible_to_session(&state, &event, session.as_ref())
@@ -2424,7 +2424,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 recv = rx.recv() => {
                     match recv {
                         Ok(notification) => {
-                            if !space_filter.contains(&notification.space_id) {
+                            if !space_filter.contains(&notification.realm_id) {
                                 continue;
                             }
                             // Dispatch on notification.kind to
@@ -2451,7 +2451,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
                                     json!({
                                         "kind": "epoch_rotation",
-                                        "space_id": notification.space_id,
+                                        "space_id": notification.realm_id,
                                         "previous_epoch": previous_epoch,
                                         "new_epoch": new_epoch,
                                     })
@@ -2459,7 +2459,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::Frontier { state_root, anchor_id } => {
                                     json!({
                                         "kind": "frontier",
-                                        "space_id": notification.space_id,
+                                        "space_id": notification.realm_id,
                                         "state_root": state_root,
                                         "anchor_id": anchor_id,
                                     })
@@ -2477,7 +2477,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     terminal = true;
                                     json!({
                                         "kind": "resync_required",
-                                        "space_id": notification.space_id,
+                                        "space_id": notification.realm_id,
                                         "reason": reason,
                                         "reconnect_after_ms": reconnect_after_ms,
                                     })
@@ -2485,7 +2485,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::Unauthorized { reason } => {
                                     json!({
                                         "kind": "unauthorized",
-                                        "space_id": notification.space_id,
+                                        "space_id": notification.realm_id,
                                         "reason": reason,
                                     })
                                 }
@@ -2801,8 +2801,8 @@ async fn events_query_impl(
     // Single-space fast path preserves the original `BackfillResBody` shape
     // for soland's existing test surface (cx.sync.backfill behavior).
     if accessible_spaces.len() == 1 {
-        let space_id = &accessible_spaces[0];
-        match projected_event_page(state, space_id, cursor.as_deref(), limit).await {
+        let realm_id = &accessible_spaces[0];
+        match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 let mut events: Vec<Value> = Vec::new();
                 for event in &page.items {
@@ -2850,8 +2850,8 @@ async fn events_query_impl(
     // by `received_at`, then paginate.
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
-    for space_id in &accessible_spaces {
-        match projected_event_page(state, space_id, cursor.as_deref(), limit).await {
+    for realm_id in &accessible_spaces {
+        match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 if page.has_more {
                     any_has_more = true;
@@ -2924,7 +2924,7 @@ async fn durable_events_query_from_parts(
     for record in all_records {
         let actor_match = actors_set.contains(record.actor_id.as_str());
         let space_match = record
-            .space_id
+            .realm_id
             .as_deref()
             .is_some_and(|s| spaces_set.contains(s));
         if !(actor_match || space_match) {
@@ -3063,13 +3063,13 @@ async fn snapshot_head(
 ) -> crate::result::JsonResult<SnapshotHeadResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec-canonical query param is `realm_id`.
-    let space_id = query_param(req, "realm_id")
+    let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
-    let space_id = scope_selector_to_realm_id(&space_id)?;
-    if is_realm_deleted(state, &space_id).await {
+    let realm_id = scope_selector_to_realm_id(&realm_id)?;
+    if is_realm_deleted(state, &realm_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let space_id_value = RealmId::new(space_id.clone())
+    let space_id_value = RealmId::new(realm_id.clone())
         .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
     {
         let spaces = state.realms.lock().expect("spaces lock");
@@ -3077,7 +3077,7 @@ async fn snapshot_head(
             return Err(crate::error::AppError::not_found("not found"));
         }
     }
-    let bundle = snapshot_bundle_for_space(state, &space_id)
+    let bundle = snapshot_bundle_for_space(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     // Snapshot v2: the manifest already lists per-chunk digests, so
@@ -3136,12 +3136,12 @@ async fn snapshot_chunk(
     let state = depot.obtain::<AppState>().expect("state injected");
     let snapshot_ref = snapshot_ref.into_inner();
     let chunk_id = chunk_id.into_inner().unwrap_or(0);
-    let (space_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
+    let (realm_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
         .ok_or_else(|| crate::error::AppError::invalid_param("invalid snapshot_ref"))?;
-    if is_realm_deleted(state, &space_id).await {
+    if is_realm_deleted(state, &realm_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let bundle = snapshot_bundle_for_space(state, &space_id)
+    let bundle = snapshot_bundle_for_space(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {

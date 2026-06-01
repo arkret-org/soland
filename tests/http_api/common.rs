@@ -318,7 +318,7 @@ pub(crate) async fn seed_test_realm(
             .space_invites()
             .put(SpaceInviteRecord {
                 invite_id,
-                space_id: realm_id.clone(),
+                realm_id: realm_id.clone(),
                 inviter: owner.to_owned(),
                 invitee: Some((*invitee).to_owned()),
                 invite_token,
@@ -1260,7 +1260,7 @@ pub(crate) async fn persist_test_message(
     let event_id = new_prefixed_uuid7("cx:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
-        space_id: space_id.to_owned(),
+        realm_id: space_id.to_owned(),
         sender: sender.to_owned(),
         thread_id: format!("cx:flow:test-{}", event_id),
         content: serde_json::json!({"body": body}),

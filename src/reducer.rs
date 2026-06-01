@@ -491,7 +491,7 @@ pub struct MlsCommitEpoch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceContainerProjection {
     pub container_space_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub kind: String,
     pub title: String,
     pub parent_ref: Option<String>,
@@ -810,7 +810,7 @@ pub struct ProjectedMessageView {
 #[derive(Clone, Debug)]
 pub struct MessageState {
     pub event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub sender: String,
     pub thread_id: String,
     pub content: Value,
@@ -1050,7 +1050,7 @@ fn read_scope_key(scope: &ReadScopeWire) -> String {
 #[derive(Clone, Debug)]
 pub struct RelationState {
     pub relation_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub relation_kind: String,
     pub from_ref: Option<String>,
     pub to_ref: Option<String>,
@@ -3494,7 +3494,7 @@ impl ProjectionState {
                 serde_json::json!({
                     "index": index,
                     "space_id": container.container_space_id,
-                    "realm_id": container.space_id,
+                    "realm_id": container.realm_id,
                     "kind": container.kind,
                     "title": container.title,
                     "rank": container.rank,
@@ -3525,7 +3525,7 @@ impl ProjectionState {
             .entry(relation_id.clone())
             .or_insert_with(|| RelationState {
                 relation_id: relation_id.clone(),
-                space_id: realm_id.to_owned(),
+                realm_id: realm_id.to_owned(),
                 relation_kind: "contains".to_owned(),
                 from_ref: Some(list_space_id.to_owned()),
                 to_ref: Some(flow_id.to_owned()),
@@ -3534,7 +3534,7 @@ impl ProjectionState {
                 created_at: now,
                 updated_at: now,
             });
-        relation.space_id = realm_id.to_owned();
+        relation.realm_id = realm_id.to_owned();
         relation.relation_kind = "contains".to_owned();
         relation.from_ref = Some(list_space_id.to_owned());
         relation.to_ref = Some(flow_id.to_owned());
@@ -3724,7 +3724,7 @@ impl ProjectionState {
         let is_poll_create = content_kind(&content) == Some("cx.content.poll");
         let state = MessageState {
             event_id: event_id.clone(),
-            space_id: operation.realm_id.to_string(),
+            realm_id: operation.realm_id.to_string(),
             sender,
             thread_id,
             content,
@@ -3757,7 +3757,7 @@ impl ProjectionState {
             PollState {
                 poll_id,
                 message_event_id: message.event_id.clone(),
-                space_id: message.space_id.clone(),
+                space_id: message.realm_id.clone(),
                 question,
                 options,
                 votes: BTreeMap::new(),
@@ -4237,7 +4237,7 @@ impl ProjectionState {
 
         let state = RelationState {
             relation_id: relation_id.clone(),
-            space_id: operation.realm_id.to_string(),
+            realm_id: operation.realm_id.to_string(),
             relation_kind,
             from_ref,
             to_ref,
@@ -4368,7 +4368,7 @@ impl ProjectionState {
             .entry(relation_id.clone())
             .or_insert_with(|| RelationState {
                 relation_id: relation_id.clone(),
-                space_id: operation.realm_id.to_string(),
+                realm_id: operation.realm_id.to_string(),
                 relation_kind: relation_kind.clone(),
                 from_ref: container_id.clone(),
                 to_ref: object_ref.clone(),
@@ -5711,7 +5711,7 @@ impl ProjectionState {
         // ¶6 same-Realm child Space-container cascade.
         let mut orphaned_count = 0_usize;
         for container in self.space_containers.values_mut() {
-            if container.space_id == destroyed_realm_id && !container.orphaned {
+            if container.realm_id == destroyed_realm_id && !container.orphaned {
                 container.orphaned = true;
                 orphaned_count += 1;
             }
@@ -5733,7 +5733,7 @@ impl ProjectionState {
         let parent_home_realms: std::collections::BTreeMap<String, String> = self
             .space_containers
             .iter()
-            .map(|(id, c)| (id.clone(), c.space_id.clone()))
+            .map(|(id, c)| (id.clone(), c.realm_id.clone()))
             .collect();
         let mut parent_lock_count = 0_usize;
         for container in self.space_containers.values_mut() {
@@ -5744,7 +5744,7 @@ impl ProjectionState {
             // children of the destroyed Realm are already marked
             // orphaned above; their parent_ref_locked status is
             // implied by the orphaned flag).
-            if container.space_id == destroyed_realm_id {
+            if container.realm_id == destroyed_realm_id {
                 continue;
             }
             let Some(parent_id) = container.parent_ref.as_ref() else {
@@ -6054,7 +6054,7 @@ impl ProjectionState {
 
         let projection = SpaceContainerProjection {
             container_space_id: container_space_id.clone(),
-            space_id,
+            realm_id: space_id,
             kind,
             title,
             parent_ref,
@@ -7749,7 +7749,7 @@ impl ProjectionState {
             .messages
             .values()
             .filter(|m| {
-                m.space_id == space_id
+                m.realm_id == space_id
                     && self
                         .redaction_cells
                         .get(&m.event_id)
@@ -7810,7 +7810,7 @@ impl ProjectionState {
         };
         Some(ProjectedMessageView {
             event_id: msg.event_id.clone(),
-            space_id: msg.space_id.clone(),
+            space_id: msg.realm_id.clone(),
             sender: msg.sender.clone(),
             thread_id: msg.thread_id.clone(),
             created_at: msg.created_at,
@@ -7841,7 +7841,7 @@ impl ProjectionState {
         self.relations
             .values()
             .filter(|r| {
-                r.space_id == space_id && r.is_active() && kind.is_none_or(|k| r.relation_kind == k)
+                r.realm_id == space_id && r.is_active() && kind.is_none_or(|k| r.relation_kind == k)
             })
             .collect()
     }

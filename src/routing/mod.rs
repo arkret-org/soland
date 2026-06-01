@@ -1536,7 +1536,7 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
     json!({
         "kind": "message",
         "event_id": message.event_id,
-        "space_id": message.space_id,
+        "space_id": message.realm_id,
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,

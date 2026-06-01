@@ -15,7 +15,7 @@ CREATE TABLE projection_events (
     -- one with the `(actor_id, actor_seq)` uniqueness invariant.
     ordinal       BIGSERIAL PRIMARY KEY,
     event_id      TEXT NOT NULL,
-    space_id      TEXT NOT NULL,
+    realm_id      TEXT NOT NULL,
     event_kind    TEXT NOT NULL,
     operation_type TEXT NOT NULL,
     operation_id  TEXT,
@@ -24,5 +24,5 @@ CREATE TABLE projection_events (
     created_at    TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX projection_events_space_idx ON projection_events(space_id);
+CREATE INDEX projection_events_space_idx ON projection_events(realm_id);
 CREATE INDEX projection_events_created_at_idx ON projection_events(created_at);

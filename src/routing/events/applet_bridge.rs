@@ -136,7 +136,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     });
     let record = ProjectionEventRecord {
         event_id: synthetic_event_id,
-        space_id: space_id_str,
+        realm_id: space_id_str,
         event_kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS.to_owned(),
         operation_type: "echo_bridge_response".to_owned(),
         operation_id: None,
@@ -145,7 +145,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        record.space_id.clone(),
+        record.realm_id.clone(),
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));
@@ -237,7 +237,7 @@ async fn forward_to_applet_bridge(
 /// `cx.applet.bridge_error` (failure) based on the outcome.
 async fn emit_applet_outcome_event(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     session_id: &str,
     applet_id: &str,
     bridge_url: &str,
@@ -275,7 +275,7 @@ async fn emit_applet_outcome_event(
     };
     let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         event_kind: event_kind.to_owned(),
         operation_type: op_type.to_owned(),
         operation_id: None,
@@ -284,7 +284,7 @@ async fn emit_applet_outcome_event(
         created_at: chrono::Utc::now(),
     };
     let _ = state.event_broadcast.send(EventNotification::event(
-        record.space_id.clone(),
+        record.realm_id.clone(),
         record.event_id.clone(),
         super::projection::projection_event_json(&record),
     ));

@@ -1990,7 +1990,7 @@ async fn effective_audience_mention_policy_for_realm(
     let events = state.persistence.events().snapshot_all().await.ok()?;
     events.into_iter().rev().find_map(|record| {
         if !record
-            .space_id
+            .realm_id
             .as_deref()
             .is_some_and(|space_id| candidates.iter().any(|candidate| candidate == space_id))
         {

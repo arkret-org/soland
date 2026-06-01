@@ -55,7 +55,7 @@ struct ProjectionEventRow {
     #[diesel(sql_type = SqlUuid)]
     event_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
-    space_id: Uuid,
+    realm_id: Uuid,
     /// DB column is still `event_type` (a rename to `event_kind` is a
     /// future schema migration); SQL queries alias it as `event_kind` so
     /// the in-memory struct uses the canonical name.
@@ -79,7 +79,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
     let mut value = json!({
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
-        "space_id": event.space_id,
+        "space_id": event.realm_id,
         "event_kind": event.event_kind,
         "operation_type": event.operation_type,
         "operation_id": event.operation_id,
@@ -324,7 +324,7 @@ pub fn project_retention_policy_from_operation(
         return;
     };
     let record = RetentionPolicyRecord {
-        space_id: operation.realm_id.to_string(),
+        realm_id: operation.realm_id.to_string(),
         ttl_seconds,
         updated_by: origin.to_owned(),
         updated_at: operation.created_at,
@@ -333,24 +333,24 @@ pub fn project_retention_policy_from_operation(
         .retention_policies
         .lock()
         .expect("retention policies lock")
-        .insert(record.space_id.clone(), record);
+        .insert(record.realm_id.clone(), record);
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
-    // flow_id is always derived from space_id; thread_id is a discussion
+    // flow_id is always derived from realm_id; thread_id is a discussion
     // track within the flow, not the flow itself. See
     // `sync_timeline_message_record_json` for the matching MessageRecord
     // path. The legacy top-level `branch` object was removed in revision
     // 0a5ab85 (forbidden-wire-fields entry "branch") — only `track` is
     // emitted on v1 wire.
-    let flow_id = flow_id_from_space_id(&message.space_id);
+    let flow_id = flow_id_from_space_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "cx.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
-        "space_id": message.space_id,
+        "space_id": message.realm_id,
         "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
@@ -368,7 +368,7 @@ pub fn sync_timeline_message_json_with_projection(
     projection: &crate::reducer::ProjectionState,
 ) -> serde_json::Value {
     let mut event = sync_timeline_message_json(message);
-    if actor_erased_in_space(projection, &message.sender, &message.space_id) {
+    if actor_erased_in_space(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
     }
     augment_timeline_message_json(event, &message.event_id, &message.content, projection)
@@ -557,7 +557,7 @@ pub fn projection_event_from_operation(
     let event_id = operation_event_id(operation);
     ProjectionEventRecord {
         event_id,
-        space_id: operation.realm_id.to_string(),
+        realm_id: operation.realm_id.to_string(),
         event_kind: kinds::canonical_kind_string(operation),
         operation_type: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
@@ -600,9 +600,9 @@ pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String
 pub fn actor_erased_in_space(
     projection: &crate::reducer::ProjectionState,
     actor: &str,
-    space_id: &str,
+    realm_id: &str,
 ) -> bool {
-    let space_id = normalize_realm_scope(space_id);
+    let realm_id = normalize_realm_scope(realm_id);
     projection.erasure_receipts.iter().any(|receipt| {
         receipt.outcome == "completed"
             && receipt.subject_kind.as_deref() == Some("principal")
@@ -610,7 +610,7 @@ pub fn actor_erased_in_space(
             && receipt
                 .scope_realm_id
                 .as_deref()
-                .is_some_and(|scope| normalize_realm_scope(scope) == space_id)
+                .is_some_and(|scope| normalize_realm_scope(scope) == realm_id)
     })
 }
 
@@ -643,7 +643,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     let Some(actor) = projection_event_actor(event) else {
         return;
     };
-    if !actor_erased_in_space(projection, actor, &event.space_id) {
+    if !actor_erased_in_space(projection, actor, &event.realm_id) {
         return;
     }
     event.sender = Some(ERASED_USER_PLACEHOLDER.to_owned());
@@ -822,7 +822,7 @@ pub async fn append_projection_event(state: &AppState, event: ProjectionEventRec
 
 pub async fn projected_event_page(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     cursor: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Option<ProjectedEventPage>> {
@@ -833,10 +833,10 @@ pub async fn projected_event_page(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|event| event.space_id == space_id)
+        .filter(|event| event.realm_id == realm_id)
         .collect::<Vec<_>>();
     if events.is_empty() {
-        events = load_projected_events_from_pg(state, space_id).await?;
+        events = load_projected_events_from_pg(state, realm_id).await?;
     }
     if events.is_empty() {
         return Ok(None);
@@ -889,11 +889,11 @@ pub async fn projected_event_page(
 
 pub async fn backfill_gap_events(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     from_cursor: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<(Vec<Value>, Option<String>, bool)> {
-    if let Some(page) = projected_event_page(state, space_id, from_cursor, limit).await? {
+    if let Some(page) = projected_event_page(state, realm_id, from_cursor, limit).await? {
         let events = page
             .items
             .iter()
@@ -902,7 +902,7 @@ pub async fn backfill_gap_events(
         return Ok((events, page.next_cursor, page.has_more));
     }
 
-    let _ = (space_id, from_cursor);
+    let _ = (realm_id, from_cursor);
     Ok((Vec::new(), None, false))
 }
 
@@ -922,19 +922,19 @@ pub fn truncate_gap_events(mut events: Vec<Value>, to_cursor: Option<&str>) -> (
 
 pub async fn load_projected_events_from_pg(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
 ) -> anyhow::Result<Vec<ProjectionEventRecord>> {
     let Some(pool) = state.db.pool.as_ref() else {
         return Ok(Vec::new());
     };
     let mut conn = pool.get().await?;
-    let space_id_uuid = ids::typed_uuid_part_or_panic(space_id);
+    let space_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
     let rows = sql_query(
-        "SELECT id AS event_id, space_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
-         FROM events WHERE space_id = $1 \
+        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
+         FROM events WHERE realm_id = $1 \
          UNION ALL \
-         SELECT id AS event_id, space_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
-         FROM space_state_events WHERE space_id = $1 \
+         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
+         FROM space_state_events WHERE realm_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
     .bind::<SqlUuid, _>(space_id_uuid)
@@ -943,7 +943,7 @@ pub async fn load_projected_events_from_pg(
         .into_iter()
         .map(|row| ProjectionEventRecord {
             event_id: ids::format_typed_uuid("event", &row.event_id),
-            space_id: ids::format_typed_uuid("space", &row.space_id),
+            realm_id: ids::format_typed_uuid("space", &row.realm_id),
             event_kind: row.event_kind,
             operation_type: row.operation_type,
             operation_id: row
@@ -1372,7 +1372,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     ) -> Option<Snapshot> {
         Some(Snapshot::SpaceContainer(SpaceContainerProjectionRecord {
             container_space_id: p.container_space_id.clone(),
-            space_id: p.space_id.clone(),
+            realm_id: p.realm_id.clone(),
             kind: p.kind.clone(),
             title: p.title.clone(),
             parent_ref: p.parent_ref.clone(),
@@ -1464,7 +1464,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
     for operation in operations {
         tracing::debug!(
             kind = ?crate::kinds::canonical_kind_for_operation(operation),
-            space_id = %operation.realm_id,
+            realm_id = %operation.realm_id,
             origin = %origin,
             "project_accepted_operations"
         );
@@ -1534,13 +1534,13 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
         // event to live subscribers on cx.events.subscribe. Subscribers
-        // filter by `space_id`. `send` returns Err only if there are no
+        // filter by `realm_id`. `send` returns Err only if there are no
         // active receivers — that's not an error path, it's the steady
         // state when no one's subscribed.
         let _ = state
             .event_broadcast
             .send(crate::state::EventNotification::event(
-                projected.space_id.clone(),
+                projected.realm_id.clone(),
                 projected.event_id.clone(),
                 projection_event_json(&projected),
             ));
@@ -1607,7 +1607,7 @@ pub async fn persist_projected_operation(
         let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
-                "INSERT INTO events (id, space_id, event_type, sender, thread_id, operation_id, payload, created_at) \
+                "INSERT INTO events (id, realm_id, event_type, sender, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (id) DO NOTHING",
             )
@@ -1681,9 +1681,9 @@ pub async fn persist_projected_operation(
                 .and_then(|value| value.as_str())
                 .unwrap_or("join");
             sql_query(
-                    "INSERT INTO space_members (space_id, actor, membership, payload, joined_at, left_at, updated_at) \
+                    "INSERT INTO space_members (realm_id, actor, membership, payload, joined_at, left_at, updated_at) \
                      VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
-                     ON CONFLICT (space_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
+                     ON CONFLICT (realm_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
                 )
                 .bind::<SqlUuid, _>(space_id_uuid)
                 .bind::<Text, _>(member)
@@ -1694,11 +1694,11 @@ pub async fn persist_projected_operation(
         }
 
         // The DB column matches the canonical projection-cell key
-        // model: `(space_id, event_type, subject)` identifies the cell.
+        // model: `(realm_id, event_type, subject)` identifies the cell.
         // The space_state_events row reuses the operation_id as its primary
         // key — same UUID, different typed wire form (operation vs event).
         sql_query(
-                "INSERT INTO space_state_events (id, space_id, event_type, subject, sender, operation_id, payload, created_at) \
+                "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
                  ON CONFLICT (id) DO NOTHING",
             )
@@ -1724,7 +1724,7 @@ pub async fn persist_projected_operation(
 /// `cx.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
-/// `cx:cell:cx.component.realm.read_receipt_policy.v1:<space_id>`.
+/// `cx:cell:cx.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
 /// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_space`
@@ -1734,7 +1734,7 @@ pub async fn persist_projected_operation(
 /// (we don't have HLC ordering on synthesized values yet); for full
 /// cas-register conflict semantics writes should go through Move/Anchor.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
-    let space_id = operation.realm_id.clone();
+    let realm_id = operation.realm_id.clone();
     let payload = match operation.payload.as_object() {
         Some(payload) => payload,
         None => return,
@@ -1759,7 +1759,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // Event store on every fanout.
     let cell_id = match contrix_sdk::CellRef::new(format!(
         "cx:cell:cx.component.realm.read_receipt_policy.v1:{}",
-        space_id.as_str()
+        realm_id.as_str()
     )) {
         Ok(c) => c,
         Err(_) => return,
@@ -1776,7 +1776,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
 }
 
 pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
-    let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
+    let Ok(realm_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
     let payload_public = operation
@@ -1788,11 +1788,11 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
         operation_realm_discoverability(operation).filter(|value| is_valid_discoverability(value));
     let directory_public = {
         let mut spaces = state.realms.lock().expect("spaces lock");
-        if let Some(existing) = spaces.get(&space_id) {
+        if let Some(existing) = spaces.get(&realm_id) {
             existing.public
         } else {
-            let title = operation_realm_title(operation).unwrap_or_else(|| space_id.as_str());
-            let mut entry = RealmDirectoryEntry::new(space_id.clone(), title);
+            let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
+            let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
             entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
             let discoverability = explicit_discoverability.unwrap_or(if payload_public {
                 "public"
@@ -1812,7 +1812,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
 
     let now = now();
     let store = state.persistence.realm_meta();
-    match store.get(space_id.as_str()).await {
+    match store.get(realm_id.as_str()).await {
         Ok(None) => {
             let history_sharing_policy = operation_realm_history_sharing_policy(operation);
             let history_sharing_policy_digest = history_sharing_policy
@@ -1857,7 +1857,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                 created_at: now,
                 updated_at: now,
             };
-            if let Err(error) = store.put(space_id.as_str(), &record).await {
+            if let Err(error) = store.put(realm_id.as_str(), &record).await {
                 tracing::warn!(%error, "failed to persist projected space meta");
             }
         }
@@ -1908,7 +1908,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
             }
             if changed {
                 record.updated_at = now;
-                if let Err(error) = store.put(space_id.as_str(), &record).await {
+                if let Err(error) = store.put(realm_id.as_str(), &record).await {
                     tracing::warn!(%error, "failed to update projected space meta");
                 }
             }
@@ -1952,7 +1952,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     tracing::debug!(
         membership = ?membership,
         member = %member,
-        space_id = %operation.realm_id,
+        realm_id = %operation.realm_id,
         origin = %origin,
         "project_membership_operation"
     );
@@ -1966,7 +1966,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             .unwrap_or_default()
             .into_iter()
             .any(|existing| {
-                existing.space_id == operation.realm_id.as_str()
+                existing.realm_id == operation.realm_id.as_str()
                     && existing.invitee.as_deref() == Some(invitee.as_str())
                     && existing.status == "pending"
             });
@@ -1979,7 +1979,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             );
             let record = SpaceInviteRecord {
                 invite_id: invite_id.clone(),
-                space_id: operation.realm_id.to_string(),
+                realm_id: operation.realm_id.to_string(),
                 inviter: origin.to_owned(),
                 invitee: Some(invitee.as_str().to_owned()),
                 invite_token,
@@ -1991,7 +1991,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 Ok(()) => tracing::info!(
                     %invite_id,
                     invitee = %invitee.as_str(),
-                    space_id = %operation.realm_id,
+                    realm_id = %operation.realm_id,
                     "projected seed-member invite via cx.member.state event"
                 ),
                 Err(error) => tracing::warn!(%error, "failed to project space invite"),
@@ -1999,7 +1999,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         } else {
             tracing::debug!(
                 invitee = %invitee.as_str(),
-                space_id = %operation.realm_id,
+                realm_id = %operation.realm_id,
                 "seed-invite skipped: already pending"
             );
         }
@@ -2215,7 +2215,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
     let Some(invitee) = invitee_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            space_id = %operation.realm_id,
+            realm_id = %operation.realm_id,
             "cx.invite.create missing valid invitee DID"
         );
         return;
@@ -2223,7 +2223,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
     let Some(invite_id) = invite_id_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            space_id = %operation.realm_id,
+            realm_id = %operation.realm_id,
             "cx.invite.create missing valid invite id"
         );
         return;
@@ -2268,7 +2268,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
     );
     let record = SpaceInviteRecord {
         invite_id: invite_id.clone(),
-        space_id: operation.realm_id.to_string(),
+        realm_id: operation.realm_id.to_string(),
         inviter: inviter.to_owned(),
         invitee: Some(invitee.as_str().to_owned()),
         invite_token,
@@ -2281,7 +2281,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
             tracing::info!(
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
-                space_id = %operation.realm_id,
+                realm_id = %operation.realm_id,
                 "projected invite via cx.invite.create event"
             );
             touch_realm(state, operation.realm_id.as_str()).await;
@@ -2438,7 +2438,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if let Err(error) = store
         .put(&MessageRecord {
             event_id,
-            space_id: operation.realm_id.to_string(),
+            realm_id: operation.realm_id.to_string(),
             sender,
             thread_id,
             content,
