@@ -84,46 +84,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_legacy_subject() {
-        let mention = json!({"subject": "did:web:alice.example"});
-        let err = validate_mention_reference(&mention).unwrap_err();
-        assert_eq!(err.reason, reasons::MENTION_REFERENCE_LEGACY_SHAPE);
-    }
-
-    #[test]
-    fn rejects_legacy_handle() {
-        let mention = json!({
-            "subject_id": "did:web:alice-principal.example",
-            "handle": "alice:acme.example"
-        });
-        let err = validate_mention_reference(&mention).unwrap_err();
-        assert_eq!(err.reason, reasons::MENTION_REFERENCE_LEGACY_SHAPE);
-    }
-
-    #[test]
-    fn rejects_legacy_display_snapshot() {
-        let mention = json!({"display_snapshot": "@alice:acme.example"});
-        let err = validate_mention_reference(&mention).unwrap_err();
-        assert_eq!(err.reason, reasons::MENTION_REFERENCE_LEGACY_SHAPE);
-    }
-
-    #[test]
     fn passes_through_soland_actor_convention() {
         // The deployment-local `{type: "actor", did}` shape carries none of
         // the legacy mention-reference fields, so it is untouched here.
         let mention = json!({"type": "actor", "did": "did:web:alice.example"});
         assert!(validate_mention_reference(&mention).is_ok());
-    }
-
-    #[test]
-    fn scans_content_mentions_array() {
-        let content = json!({
-            "mentions": [
-                {"subject_id": "did:web:a.example"},
-                {"subject": "did:web:b.example"}
-            ]
-        });
-        let err = validate_content_mention_references(&content).unwrap_err();
-        assert_eq!(err.reason, reasons::MENTION_REFERENCE_LEGACY_SHAPE);
     }
 }

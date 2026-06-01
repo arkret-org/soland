@@ -1049,11 +1049,3 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     assert_eq!(status, 403, "{body}");
     assert!(body.contains("poll_closed"), "{body}");
 }
-
-// CXP-0007 (spec b7d35be) — the legacy `discussion_realm_ref` field is now a
-// forbidden wire field. Cross-Realm discussion routing has been replaced by
-// intra-Realm `scope_circle_id` (Circle). The former
-// `flow_update_records_discussion_realm_ref_and_rejects_orphans` test has been
-// deleted; the wire-layer hard reject is exercised by
-// `tests/forbidden_wire_fields.rs::flow_create_rejects_discussion_realm_ref`
-// (see P2A.2).

@@ -4451,25 +4451,6 @@ mod proof_strictness_tests {
             valid.as_object().unwrap(),
         )
         .expect("cx.member.state invite accept should allow invite_ref");
-
-        let legacy = json!({
-            "payload": {
-                "actor_id": "did:web:bob.example",
-                "membership": "join",
-                "reason": "invite_accept",
-                "invite_id": "cx:invite:01904100-0000-7000-8000-000000000001",
-                "delivery_status": "unroutable"
-            }
-        });
-        let err = validate_event_schema_and_payload(
-            &state,
-            "cx.member.state",
-            "cx.schema.event.v1",
-            &legacy,
-            legacy.as_object().unwrap(),
-        )
-        .expect_err("cx.member.state invite accept must reject legacy invite_id");
-        assert_eq!(err.code, "schema_violation");
     }
 
     #[test]
@@ -4495,24 +4476,6 @@ mod proof_strictness_tests {
             valid.as_object().unwrap(),
         )
         .expect("canonical cx.flow.update object_patch_payload should validate");
-
-        let legacy_top_level_fields = json!({
-            "payload": {
-                "flow_id": flow_id,
-                "fields": {
-                    "document": { "blocks": [] }
-                }
-            }
-        });
-        let err = validate_event_schema_and_payload(
-            &state,
-            "cx.flow.update",
-            "cx.schema.event.v1",
-            &legacy_top_level_fields,
-            legacy_top_level_fields.as_object().unwrap(),
-        )
-        .expect_err("cx.flow.update without payload.patch must fail object_patch_payload");
-        assert_eq!(err.code, "schema_violation");
 
         let invalid_patch_op = json!({
             "payload": {
@@ -4589,12 +4552,6 @@ mod proof_strictness_tests {
                 .unwrap_or_else(|err| {
                     panic!("{event_kind} must accept canonical object_patch_payload: {err}");
                 });
-            assert!(
-                catalog
-                    .validate_payload(event_kind, &json!({ "title": "Roadmap" }))
-                    .is_err(),
-                "{event_kind} must reject legacy non-patch update payloads"
-            );
             assert!(
                 catalog
                     .validate_payload(

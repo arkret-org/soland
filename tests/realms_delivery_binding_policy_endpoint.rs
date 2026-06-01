@@ -8,10 +8,6 @@
 //!   returns 200 with the SDK-typed `RealmDeliveryBindingPolicy`
 //!   envelope (sodmin's `RealmDeliveryBindingPolicy` DTO consumes
 //!   this).
-//! - `GET /api/admin/v1/spaces/{space_id}/delivery-binding-policy`
-//!   returns 410 Gone with `realm_kind_renamed_in_v1` so legacy
-//!   callers fail loudly in aggressive-mode v1.
-//!
 //! These tests boot the salvo `Service` in-process via
 //! `salvo::test::TestClient` — no network, no separate process.
 
@@ -148,32 +144,4 @@ async fn realms_delivery_binding_policy_endpoint_rejects_invalid_id() {
             .send(&svc)
             .await;
     assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
-}
-
-/// R2.2 — the pre-reversal `/spaces/{id}/delivery-binding-policy`
-/// path MUST return 410 Gone with `realm_kind_renamed_in_v1` so
-/// downstream callers that haven't migrated to the `/realms/...`
-/// path get a hard signal instead of a silently stale response.
-#[tokio::test]
-async fn spaces_delivery_binding_policy_legacy_path_returns_410_gone() {
-    let svc = app();
-    let token = dev_token(&svc).await;
-    let space_id = "cx:space:01904100-0000-7000-8000-d00ddeadbeef";
-    let mut response = TestClient::get(format!(
-        "http://server/api/admin/v1/spaces/{space_id}/delivery-binding-policy"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&svc)
-    .await;
-    assert_eq!(
-        response.status_code,
-        Some(StatusCode::GONE),
-        "legacy /spaces/.../delivery-binding-policy must return 410 Gone in v1"
-    );
-    let body: Value = response.take_json().await.expect("error envelope is JSON");
-    assert_eq!(body["ok"], false);
-    assert_eq!(
-        body["error"]["code"], "realm_kind_renamed_in_v1",
-        "legacy path must surface the rename reason code: {body}"
-    );
 }

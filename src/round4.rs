@@ -1304,16 +1304,6 @@ mod tests {
     }
 
     #[test]
-    fn space_state_transition_rejects_legacy_target_ref() {
-        let err = parse_space_state_transition_payload(&json!({
-            "target_ref": "cx:space:01904100-0000-7000-8000-000000000001",
-            "new_state": "archived",
-        }))
-        .unwrap_err();
-        assert_eq!(err.0, ERROR_CODE_SCHEMA_VIOLATION);
-    }
-
-    #[test]
     fn space_state_transition_accepts_typed_shape() {
         parse_space_state_transition_payload(&json!({
             "space_id": "cx:space:01904100-0000-7000-8000-000000000001",

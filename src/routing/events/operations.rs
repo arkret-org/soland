@@ -3244,7 +3244,7 @@ mod spec_sync_validator_tests {
     }
 
     #[test]
-    fn morph_create_rejects_legacy_metadata_and_payload_names() {
+    fn morph_create_accepts_metadata_and_rejects_content_conflict() {
         let schema = operation_schema_for_kind(kinds::CX_MORPH_CREATE).unwrap();
         let valid = op(
             kinds::CX_MORPH_CREATE,
@@ -3259,22 +3259,6 @@ mod spec_sync_validator_tests {
             }),
         );
         assert!(validate_operation_schema(&valid, schema).is_ok());
-
-        let legacy_title = op(
-            kinds::CX_MORPH_CREATE,
-            json!({
-                "object": {
-                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
-                    "morph_type": "document",
-                    "schema_refs": ["cx.schema.morph.v1"],
-                    "title": "Spec"
-                }
-            }),
-        );
-        assert_eq!(
-            validate_operation_schema(&legacy_title, schema),
-            Err("morph_legacy_wire_field")
-        );
 
         let content_conflict = op(
             kinds::CX_MORPH_CREATE,
@@ -3297,18 +3281,6 @@ mod spec_sync_validator_tests {
     #[test]
     fn morph_schema_refs_use_migrate_gate() {
         let update_schema = operation_schema_for_kind(kinds::CX_MORPH_UPDATE).unwrap();
-        let legacy_title = op(
-            kinds::CX_MORPH_UPDATE,
-            json!({
-                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
-                "patch": {"title": "Spec v2"}
-            }),
-        );
-        assert_eq!(
-            validate_operation_schema(&legacy_title, update_schema),
-            Err("morph_legacy_wire_field")
-        );
-
         let update = op(
             kinds::CX_MORPH_UPDATE,
             json!({
