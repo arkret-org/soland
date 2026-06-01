@@ -2212,7 +2212,7 @@ async fn hydrate_projections_from_persistence(
                 record.flow_id.clone(),
                 FlowProjection {
                     flow_id: record.flow_id,
-                    space_id: record.space_id,
+                    realm_id: record.realm_id,
                     title: record.title,
                     summary: record.summary,
                     fields: Default::default(),
@@ -2241,7 +2241,7 @@ async fn hydrate_projections_from_persistence(
                 record.morph_id.clone(),
                 MorphProjection {
                     morph_id: record.morph_id,
-                    space_id: record.space_id,
+                    realm_id: record.realm_id,
                     morph_type: record.morph_type,
                     title: record.title,
                     fields: record

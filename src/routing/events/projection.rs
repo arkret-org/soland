@@ -1394,7 +1394,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     fn return_snapshot_flow(f: &crate::reducer::FlowProjection) -> Snapshot {
         Snapshot::Flow(FlowProjectionRecord {
             flow_id: f.flow_id.clone(),
-            space_id: f.space_id.clone(),
+            realm_id: f.realm_id.clone(),
             title: f.title.clone(),
             summary: f.summary.clone(),
             state: object_state_str(f.state).to_owned(),
@@ -1410,7 +1410,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     fn return_snapshot_morph(m: &crate::reducer::MorphProjection) -> Snapshot {
         Snapshot::Morph(MorphProjectionRecord {
             morph_id: m.morph_id.clone(),
-            space_id: m.space_id.clone(),
+            realm_id: m.realm_id.clone(),
             morph_type: m.morph_type.clone(),
             title: m.title.clone(),
             fields: serde_json::Value::Object(

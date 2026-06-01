@@ -182,7 +182,7 @@ pub struct SpaceContainerProjectionRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlowProjectionRecord {
     pub flow_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub title: String,
     pub summary: Option<String>,
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
@@ -200,7 +200,7 @@ pub struct FlowProjectionRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MorphProjectionRecord {
     pub morph_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub morph_type: String,
     pub title: Option<String>,
     pub fields: serde_json::Value,
@@ -1722,7 +1722,7 @@ impl FlowProjectionStore for MemoryFlowProjectionStore {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
-            .filter(|r| r.space_id == space_id)
+            .filter(|r| r.realm_id == space_id)
             .cloned()
             .collect())
     }
@@ -1771,7 +1771,7 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
-            .filter(|r| r.space_id == space_id)
+            .filter(|r| r.realm_id == space_id)
             .cloned()
             .collect())
     }
@@ -7628,7 +7628,7 @@ struct FlowProjectionRow {
     #[diesel(sql_type = Text)]
     flow_id: String,
     #[diesel(sql_type = Text)]
-    space_id: String,
+    realm_id: String,
     #[diesel(sql_type = Text)]
     title: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -7653,7 +7653,7 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
     fn from(row: FlowProjectionRow) -> Self {
         Self {
             flow_id: row.flow_id,
-            space_id: row.space_id,
+            realm_id: row.realm_id,
             title: row.title,
             summary: row.summary,
             state: row.state,
@@ -7667,7 +7667,7 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
     }
 }
 
-const FLOW_PROJECTION_COLUMNS: &str = "flow_id, space_id, title, summary, state, \
+const FLOW_PROJECTION_COLUMNS: &str = "flow_id, realm_id, title, summary, state, \
      state_changed_at, created_by, created_at, updated_by, updated_at, scope_circle_id";
 
 #[async_trait]
@@ -7689,11 +7689,11 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_flows \
-             (flow_id, space_id, title, summary, state, state_changed_at, \
+             (flow_id, realm_id, title, summary, state, state_changed_at, \
               created_by, created_at, updated_by, updated_at, scope_circle_id) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (flow_id) DO UPDATE SET \
-                space_id = EXCLUDED.space_id, \
+                realm_id = EXCLUDED.realm_id, \
                 title = EXCLUDED.title, \
                 summary = EXCLUDED.summary, \
                 state = EXCLUDED.state, \
@@ -7703,7 +7703,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
                 scope_circle_id = EXCLUDED.scope_circle_id",
         )
         .bind::<Text, _>(&record.flow_id)
-        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.summary)
         .bind::<Text, _>(&record.state)
@@ -7723,7 +7723,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
-             WHERE space_id = $1 ORDER BY flow_id"
+             WHERE realm_id = $1 ORDER BY flow_id"
         ))
         .bind::<Text, _>(space_id)
         .load::<FlowProjectionRow>(&mut *conn)
@@ -7763,7 +7763,7 @@ struct MorphProjectionRow {
     #[diesel(sql_type = Text)]
     morph_id: String,
     #[diesel(sql_type = Text)]
-    space_id: String,
+    realm_id: String,
     #[diesel(sql_type = Text)]
     morph_type: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -7794,7 +7794,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     fn from(row: MorphProjectionRow) -> Self {
         Self {
             morph_id: row.morph_id,
-            space_id: row.space_id,
+            realm_id: row.realm_id,
             morph_type: row.morph_type,
             title: row.title,
             fields: row.fields,
@@ -7811,7 +7811,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 
-const MORPH_PROJECTION_COLUMNS: &str = "morph_id, space_id, morph_type, title, fields, \
+const MORPH_PROJECTION_COLUMNS: &str = "morph_id, realm_id, morph_type, title, fields, \
      schema_refs, facets, versions, state, state_changed_at, created_by, created_at, updated_by, \
      updated_at";
 
@@ -7834,11 +7834,11 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (morph_id, space_id, morph_type, title, fields, schema_refs, facets, versions, \
+             (morph_id, realm_id, morph_type, title, fields, schema_refs, facets, versions, \
               state, state_changed_at, created_by, created_at, updated_by, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (morph_id) DO UPDATE SET \
-                space_id = EXCLUDED.space_id, \
+                realm_id = EXCLUDED.realm_id, \
                 morph_type = EXCLUDED.morph_type, \
                 title = EXCLUDED.title, \
                 fields = EXCLUDED.fields, \
@@ -7851,7 +7851,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(&record.morph_id)
-        .bind::<Text, _>(&record.space_id)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.morph_type)
         .bind::<Nullable<Text>, _>(&record.title)
         .bind::<Jsonb, _>(&record.fields)
@@ -7877,7 +7877,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
-             WHERE space_id = $1 ORDER BY morph_id"
+             WHERE realm_id = $1 ORDER BY morph_id"
         ))
         .bind::<Text, _>(space_id)
         .load::<MorphProjectionRow>(&mut *conn)

@@ -66,7 +66,7 @@ async fn create_relation(
             };
             if ref_id.starts_with("cx:flow:")
                 && let Some(flow) = proj.flows.get(ref_id)
-                && flow.space_id != body.space_id
+                && flow.realm_id != body.space_id
             {
                 return Err(AppError::invalid_param(
                     "structural relation refs MUST belong to the same Space as the relation",

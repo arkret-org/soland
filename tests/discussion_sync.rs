@@ -305,7 +305,7 @@ fn install_projected_flow_scope(
             flow_id.to_owned(),
             FlowProjection {
                 flow_id: flow_id.to_owned(),
-                space_id: realm_id.to_owned(),
+                realm_id: realm_id.to_owned(),
                 title: "Confidential discussion".to_owned(),
                 summary: None,
                 fields: Default::default(),

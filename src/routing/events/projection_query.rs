@@ -420,13 +420,13 @@ async fn list_flow_projections(
     let flows: Vec<ProjectionFlowRow> = proj
         .flows
         .values()
-        .filter(|f| f.space_id == realm_id)
+        .filter(|f| f.realm_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
             let (board_space_id, list_space_id, rank) = flow_position_fields(&proj, &f.flow_id)?;
             Ok(ProjectionFlowRow {
                 flow_id: parse_projection_id::<FlowId>(&f.flow_id, "flow_id")?,
-                realm_id: parse_projection_id::<RealmId>(&f.space_id, "realm_id")?,
+                realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
                 state: projection_object_state(f.state),
                 title: Some(f.title.clone()),
                 summary: f.summary.clone(),
@@ -485,12 +485,12 @@ async fn list_morph_projections(
     let morphs: Vec<ProjectionMorphRow> = proj
         .morphs
         .values()
-        .filter(|m| m.space_id == realm_id)
+        .filter(|m| m.realm_id == realm_id)
         .filter(|m| include_terminal || !is_object_terminal(m.state))
         .map(|m| {
             Ok(ProjectionMorphRow {
                 morph_id: parse_projection_id::<MorphId>(&m.morph_id, "morph_id")?,
-                realm_id: parse_projection_id::<RealmId>(&m.space_id, "realm_id")?,
+                realm_id: parse_projection_id::<RealmId>(&m.realm_id, "realm_id")?,
                 morph_type: m.morph_type.clone(),
                 state: projection_object_state(m.state),
                 title: m.title.clone(),
@@ -548,7 +548,7 @@ async fn read_document_projection(
         let relations = document_relations_json(&proj, &morph_id);
         (morph, body, comments, relations)
     };
-    if !realm_id_accessible(state, &morph.space_id, Some(&session)).await {
+    if !realm_id_accessible(state, &morph.realm_id, Some(&session)).await {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Document not visible to this actor",
@@ -572,7 +572,7 @@ async fn read_document_projection(
     let response = json!({
         "document": {
             "morph_id": morph.morph_id,
-            "realm_id": morph.space_id,
+            "realm_id": morph.realm_id,
             "morph_type": morph.morph_type,
             "title": morph.title,
             "state": morph.state.as_str(),

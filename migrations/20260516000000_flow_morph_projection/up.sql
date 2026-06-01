@@ -15,7 +15,7 @@
 
 CREATE TABLE projection_flows (
     flow_id           TEXT PRIMARY KEY,
-    space_id          TEXT NOT NULL,
+    realm_id          TEXT NOT NULL,
     title             TEXT NOT NULL,
     summary           TEXT,
     state             TEXT NOT NULL DEFAULT 'active'
@@ -33,12 +33,12 @@ CREATE TABLE projection_flows (
     scope_circle_id   TEXT
 );
 
-CREATE INDEX projection_flows_space_idx ON projection_flows(space_id);
+CREATE INDEX projection_flows_realm_idx ON projection_flows(realm_id);
 CREATE INDEX projection_flows_state_idx ON projection_flows(state);
 
 CREATE TABLE projection_morphs (
     morph_id          TEXT PRIMARY KEY,
-    space_id          TEXT NOT NULL,
+    realm_id          TEXT NOT NULL,
     morph_type        TEXT NOT NULL,
     title             TEXT,
     state             TEXT NOT NULL DEFAULT 'active'
@@ -50,6 +50,6 @@ CREATE TABLE projection_morphs (
     updated_at        TIMESTAMPTZ
 );
 
-CREATE INDEX projection_morphs_space_idx ON projection_morphs(space_id);
+CREATE INDEX projection_morphs_realm_idx ON projection_morphs(realm_id);
 CREATE INDEX projection_morphs_state_idx ON projection_morphs(state);
 CREATE INDEX projection_morphs_type_idx ON projection_morphs(morph_type);

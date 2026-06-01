@@ -551,7 +551,7 @@ impl SpaceContainerLifecycleState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlowProjection {
     pub flow_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub title: String,
     pub summary: Option<String>,
     pub fields: BTreeMap<String, Value>,
@@ -635,7 +635,7 @@ impl CircleLifecycleState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MorphProjection {
     pub morph_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub morph_type: String,
     pub title: Option<String>,
     pub fields: BTreeMap<String, Value>,
@@ -6448,7 +6448,7 @@ impl ProjectionState {
             "actor": actor_id,
             "flow_id": flow_id,
             "incident_id": flow_id,
-            "space_id": flow.space_id,
+            "space_id": flow.realm_id,
             "from": current_status,
             "to": next_status,
             "timestamp": operation.created_at.to_rfc3339(),
@@ -6595,7 +6595,7 @@ impl ProjectionState {
 
         let projection = FlowProjection {
             flow_id: flow_id.clone(),
-            space_id,
+            realm_id: space_id,
             title,
             summary,
             fields,
@@ -6990,7 +6990,7 @@ impl ProjectionState {
 
         let projection = MorphProjection {
             morph_id: morph_id.clone(),
-            space_id,
+            realm_id: space_id,
             morph_type,
             title,
             fields,
