@@ -8,4 +8,3 @@ ALTER TABLE projection_space_containers DROP COLUMN IF EXISTS child_scope_policy
 ALTER TABLE projection_space_containers DROP COLUMN IF EXISTS default_scope_circle_id;
 ALTER TABLE projection_space_containers DROP COLUMN IF EXISTS scope_circle_id;
 ALTER TABLE projection_morphs DROP COLUMN IF EXISTS scope_circle_id;
-ALTER TABLE projection_flows DROP COLUMN IF EXISTS scope_circle_id;

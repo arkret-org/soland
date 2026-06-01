@@ -5,6 +5,11 @@
 -- `scope_circle_id.realm_id == row.realm_id`
 -- (reducer reason `circle_realm_mismatch`).
 --
+-- `projection_flows.scope_circle_id` is present in the current
+-- `20260516000000_flow_morph_projection` baseline, but older local databases
+-- may still need this migration to add it. Keep the column changes
+-- idempotent so both paths converge.
+--
 -- Space additionally carries `default_scope_circle_id` (default for new
 -- children) and `child_scope_policy` (free/required/locked) per
 -- `spec/v1/artifacts/schemas/space.schema.json`.
@@ -13,14 +18,14 @@
 -- field; for soland this is recorded directly on `projection_events`
 -- without requiring a separate side-band table.
 
-ALTER TABLE projection_flows ADD COLUMN scope_circle_id TEXT;
-ALTER TABLE projection_morphs ADD COLUMN scope_circle_id TEXT;
-ALTER TABLE projection_space_containers ADD COLUMN scope_circle_id TEXT;
-ALTER TABLE projection_space_containers ADD COLUMN default_scope_circle_id TEXT;
-ALTER TABLE projection_space_containers ADD COLUMN child_scope_policy TEXT
+ALTER TABLE projection_flows ADD COLUMN IF NOT EXISTS scope_circle_id TEXT;
+ALTER TABLE projection_morphs ADD COLUMN IF NOT EXISTS scope_circle_id TEXT;
+ALTER TABLE projection_space_containers ADD COLUMN IF NOT EXISTS scope_circle_id TEXT;
+ALTER TABLE projection_space_containers ADD COLUMN IF NOT EXISTS default_scope_circle_id TEXT;
+ALTER TABLE projection_space_containers ADD COLUMN IF NOT EXISTS child_scope_policy TEXT
     CHECK (child_scope_policy IN ('free', 'require_scope_circle_id', 'locked'));
 
-ALTER TABLE projection_events ADD COLUMN effective_scope TEXT;
+ALTER TABLE projection_events ADD COLUMN IF NOT EXISTS effective_scope TEXT;
 
 CREATE INDEX IF NOT EXISTS projection_flows_scope_circle_id_idx
     ON projection_flows(scope_circle_id);
