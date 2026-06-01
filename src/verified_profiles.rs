@@ -21,7 +21,7 @@
 //!         "artifact_ref": "file:///.../verified-profiles.json",
 //!         "cotest_issuer_did": "did:...",
 //!         "signature": "<detached signature>",
-//!         "valid_until": "<RFC3339>"
+//!         "expires_at": "<RFC3339>"
 //!       }
 //!     ]
 //!   }
@@ -95,7 +95,7 @@ struct RawVerifiedEntry {
     #[serde(default)]
     signature: Option<String>,
     #[serde(default)]
-    valid_until: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
 }
 
 /// In-memory representation of a loaded verified-profile entry, owned by
@@ -111,7 +111,7 @@ pub struct VerifiedProfileDescriptor {
     pub cotest_issuer_did: contrix_sdk::Did,
     pub signature: String,
     pub timestamp: DateTime<Utc>,
-    pub valid_until: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub test_count: u64,
     pub spec_file: Option<String>,
 }
@@ -235,7 +235,7 @@ pub fn load_from_path(path: impl AsRef<Path>) -> Vec<VerifiedProfileDescriptor> 
             cotest_issuer_did,
             signature,
             timestamp: generated_at,
-            valid_until: entry.valid_until,
+            expires_at: entry.expires_at,
             test_count: entry.test_count.unwrap_or(0),
             spec_file: entry.spec_file,
         });
@@ -337,7 +337,7 @@ mod tests {
                      "artifact_ref": "file:///tmp/verified-profiles.json",
                      "cotest_issuer_did": "did:web:cotest.example",
                      "signature": "eddsa-jcs-b64url:test-principal-signature",
-                     "valid_until": "2026-06-20T00:00:00Z"
+                     "expires_at": "2026-06-20T00:00:00Z"
                  },
                  {
                      "profile_id": "cx.profile.auth_server.v1",
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(v[0].cotest_issuer_did.as_str(), "did:web:cotest.example");
         assert_eq!(v[0].signature, "eddsa-jcs-b64url:test-principal-signature");
         assert_eq!(
-            v[0].valid_until.unwrap().to_rfc3339(),
+            v[0].expires_at.unwrap().to_rfc3339(),
             "2026-06-20T00:00:00+00:00"
         );
     }

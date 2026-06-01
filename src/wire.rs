@@ -82,7 +82,7 @@ pub struct AuthBridgeAuthDescriptor {
     pub dev_login_path: String,
     pub session_grant_exchange_path: String,
     pub bearer_auth_scheme: String,
-    pub principal_did_body_field: String,
+    pub principal_id_body_field: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -90,7 +90,7 @@ pub struct AuthBridgePushDescriptor {
     pub register_device_path: String,
     pub unregister_device_path: String,
     pub session_grant_header: String,
-    pub principal_did_body_field: String,
+    pub principal_id_body_field: String,
     pub register_device_mode: String,
 }
 
@@ -843,7 +843,7 @@ pub struct InvitesResponse {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PushRegisterRequest {
     pub operation_id: Option<String>,
-    pub principal_did: Option<String>,
+    pub principal_id: Option<String>,
     pub device_id: String,
     pub push_gateway: String,
     pub push_key: String,
@@ -1030,7 +1030,7 @@ pub struct DevLoginRequest {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SessionGrantExchangeRequest {
     pub grant_jwt: String,
-    pub principal_did: String,
+    pub principal_id: String,
     pub device_id: String,
     pub display_name: Option<String>,
     #[serde(default)]

@@ -6773,9 +6773,9 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .and_then(Value::as_i64)
             .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
             .unwrap_or(0);
-        let signed_by: Option<String> = record
+        let verification_method: Option<String> = record
             .payload
-            .get("signed_by")
+            .get("verification_method")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         sql_query(
@@ -6800,7 +6800,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         .bind::<Text, _>(&record.policy_type)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Integer, _>(version)
-        .bind::<Nullable<Text>, _>(&signed_by)
+        .bind::<Nullable<Text>, _>(&verification_method)
         .bind::<Bool, _>(record.active)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn).await
@@ -8852,7 +8852,7 @@ mod tests {
             policy_type: "rbac".to_owned(),
             payload: serde_json::json!({
                 "version": 5,
-                "signed_by": "did:web:alice.example",
+                "verification_method": "did:web:alice.example",
                 "rules": []
             }),
             active: true,
@@ -8864,7 +8864,7 @@ mod tests {
             scope: "space".to_owned(),
             subject_ref: "cx:space:0196419b-0000-7000-8000-000000000002".to_owned(),
             policy_type: "rbac".to_owned(),
-            payload: serde_json::json!({"version": 1, "signed_by": "did:web:bob.example"}),
+            payload: serde_json::json!({"version": 1, "verification_method": "did:web:bob.example"}),
             active: true,
             updated_at: now,
         };

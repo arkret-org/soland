@@ -372,7 +372,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "add or change a Circle member",
     ),
     (
-        "/api/v1/circles/{circle_id}/members/{actor_did}",
+        "/api/v1/circles/{circle_id}/members/{actor_id}",
         PathItemType::Delete,
         "circles",
         "cx.circles.members.remove",
@@ -1488,7 +1488,7 @@ pub(crate) async fn snapshot_bundle_for_space(
         "chunk_count": chunk_count,
         "merkle_root": merkle_root.as_str(),
         "state_digest": state_digest,
-        "signed_by": state.config.service_did,
+        "verification_method": state.config.service_did,
         "generator": {
             "name": "soland-dev-snapshot",
             "version": env!("CARGO_PKG_VERSION")

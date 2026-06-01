@@ -2042,8 +2042,8 @@ async fn append_encrypted_message_franking(
 
 fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
     for pointer in [
-        "/payload/encrypted_payload/digests/ciphertext",
-        "/payload/encrypted_payload/ciphertext_digest",
+        "/payload/encrypted_content/digests/ciphertext",
+        "/payload/encrypted_content/ciphertext_digest",
         "/payload/ciphertext_digest",
     ] {
         if let Some(digest) = envelope.pointer(pointer).and_then(Value::as_str)
@@ -2053,7 +2053,7 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
         }
     }
     envelope
-        .pointer("/payload/encrypted_payload/ciphertext")
+        .pointer("/payload/encrypted_content/ciphertext")
         .and_then(Value::as_str)
         .map(|ciphertext| format!("sha256:{}", sha256_hex(ciphertext.as_bytes())))
 }
@@ -2178,7 +2178,7 @@ fn validate_audit_accessed_payload(
         "paired_event_id",
         "purpose",
         "ryw_required",
-        "target_actor_did",
+        "target_actor_id",
         "target_cell_id",
         "target_ref",
         "writer_did",
@@ -2285,12 +2285,12 @@ fn validate_audit_accessed_payload(
 fn validate_watch_audit_payload_fields(
     payload: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    let target_actor = required_payload_string(payload, "target_actor_did")?;
+    let target_actor = required_payload_string(payload, "target_actor_id")?;
     validate_did(&target_actor).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed target_actor_did must be a DID",
+            "cx.audit.accessed target_actor_id must be a DID",
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
@@ -2399,7 +2399,7 @@ async fn validate_flow_watch_audit_pair(
     let checks = [
         ("access_kind", "watch_set_others"),
         ("writer_did", actor_id),
-        ("target_actor_did", target_actor),
+        ("target_actor_id", target_actor),
         ("target_ref", flow_id),
         ("paired_event_id", event_id),
         ("paired_event_digest", canonical_digest),

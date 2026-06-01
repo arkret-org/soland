@@ -93,17 +93,17 @@ async fn upload_keypackage(
 
     let body = body.into_inner();
     let keypackage_id = require_str(&body, "keypackage_id")?;
-    let actor_did = body
-        .get("actor_did")
+    let actor_id = body
+        .get("actor_id")
         .and_then(Value::as_str)
         .unwrap_or(session.actor.as_str());
     let device_id = body
         .get("device_id")
         .and_then(Value::as_str)
         .unwrap_or(session.device_id.as_str());
-    if actor_did != session.actor {
+    if actor_id != session.actor {
         return Err(AppError::capability_denied(
-            "actor_did must match the calling session",
+            "actor_id must match the calling session",
         ));
     }
     if device_id != session.device_id {
@@ -159,7 +159,7 @@ async fn upload_keypackage(
 
     json_ok(json!({
         "keypackage_id": snapshot.id,
-        "actor_did": snapshot.actor_did,
+        "actor_id": snapshot.actor_did,
         "device_id": snapshot.device_id,
         "lifetime": {
             "not_before": snapshot.lifetime.not_before,
@@ -433,7 +433,7 @@ async fn pending_welcomes(
             json!({
                 "welcome_id": row.id,
                 "group_id": row.group_id,
-                "recipient_actor_did": row.recipient_actor_did,
+                "recipient_actor_id": row.recipient_actor_did,
                 "recipient_device_id": row.recipient_device_id,
                 "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&row.welcome_bytes),
                 "key_package_id": row.key_package_id,

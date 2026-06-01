@@ -12,7 +12,7 @@
 //!   payloads MUST pass.
 //! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
 //!   shape.
-//! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_payload.v1` envelope shape (MLS
+//! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
 //! - `validate_rfc3339_utc_z` — UTC-Z timestamp shape.
@@ -94,7 +94,7 @@ const MLS_GENESIS_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::An
     "cx.mls.genesis requires mls_group_id for reducer projection",
 )];
 const MLS_WELCOME_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
-const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] = &["recipient_actor_did", "recipient_principal_id"];
+const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] = &["recipient_actor_id", "recipient_principal_id"];
 const MLS_WELCOME_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         MLS_WELCOME_GROUP_FIELDS,
@@ -2265,7 +2265,7 @@ fn value_is_plaintext_content(value: &Value) -> bool {
             !object.is_empty()
                 && !encrypted_payload_value(value)
                 && !object
-                    .get("encrypted_payload")
+                    .get("encrypted_content")
                     .is_some_and(encrypted_payload_value)
         }
         Value::Bool(_) | Value::Number(_) => true,

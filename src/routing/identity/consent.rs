@@ -36,7 +36,7 @@ pub struct ConsentCellResponse {
     pub peer_did: String,
     pub scope: String,
     pub state: String,
-    pub valid_until: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub requested_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub active_grant_dots: Vec<String>,
@@ -65,7 +65,7 @@ pub struct ConsentUpdateBody {
     #[serde(default)]
     pub scope: Option<String>,
     #[serde(default)]
-    pub valid_until: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
@@ -94,7 +94,7 @@ async fn project_consent_grant_operation(
     validate_holder_update(&holder, &holder, &peer)?;
     let scope = consent_scope(&operation.payload)?;
     let consent_id = consent_id(&operation.payload)?;
-    let valid_until = consent_valid_until(&operation.payload)?;
+    let expires_at = consent_expires_at(&operation.payload)?;
     let dot = consent_grant_dot(operation, &consent_id);
     let updated = grant_cell_with_dot(
         state,
@@ -103,7 +103,7 @@ async fn project_consent_grant_operation(
         &scope,
         dot,
         Some(consent_cell_id_for_consent_id(&consent_id)),
-        valid_until,
+        expires_at,
         operation.created_at,
     );
     let contact_status = if effective_state(&updated, operation.created_at) == "granted" {
@@ -233,7 +233,7 @@ async fn grant_consent_cell(
         &holder,
         &body.peer_did,
         &scope,
-        body.valid_until,
+        body.expires_at,
         now(),
     );
     let contact_status = if effective_state(&updated, now()) == "granted" {
@@ -250,7 +250,7 @@ async fn grant_consent_cell(
             "holder_did": holder,
             "peer_did": body.peer_did,
             "scope": scope,
-            "valid_until": body.valid_until,
+            "expires_at": body.expires_at,
         }),
         "accepted",
     )
@@ -394,7 +394,7 @@ fn grant_cell(
     holder: &str,
     peer: &str,
     scope: &str,
-    valid_until: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
     granted_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
     grant_cell_with_dot(
@@ -404,7 +404,7 @@ fn grant_cell(
         scope,
         ids::generate("consent"),
         None,
-        valid_until,
+        expires_at,
         granted_at,
     )
 }
@@ -417,7 +417,7 @@ fn grant_cell_with_dot(
     scope: &str,
     dot: String,
     cell_id: Option<String>,
-    valid_until: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
     granted_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
     let key = consent_key(holder, peer, scope);
@@ -432,7 +432,7 @@ fn grant_cell_with_dot(
         dot.clone(),
         ConsentGrantDot {
             dot,
-            valid_until,
+            expires_at,
             granted_at,
         },
     );
@@ -671,8 +671,8 @@ fn consent_revoke_target(
         })
 }
 
-fn consent_valid_until(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
-    optional_timestamp(payload, &["valid_until", "expires_at"])
+fn consent_expires_at(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
+    optional_timestamp(payload, &["expires_at"])
 }
 
 fn consent_revoked_at(payload: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
@@ -759,7 +759,7 @@ fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellR
         peer_did: cell.peer.clone(),
         scope: cell.scope.clone(),
         state: effective_state(cell, at).to_owned(),
-        valid_until: response_valid_until(cell),
+        expires_at: response_expires_at(cell),
         requested_at: cell.requested_at,
         updated_at: cell.updated_at,
         active_grant_dots,
@@ -777,17 +777,17 @@ fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String>
         .iter()
         .filter(|(dot, grant)| {
             !cell.revoked_dots.contains(*dot)
-                && grant.valid_until.is_none_or(|valid_until| valid_until > at)
+                && grant.expires_at.is_none_or(|expires_at| expires_at > at)
         })
         .map(|(_, grant)| grant.dot.clone())
         .collect()
 }
 
-fn response_valid_until(cell: &ConsentCellRecord) -> Option<DateTime<Utc>> {
+fn response_expires_at(cell: &ConsentCellRecord) -> Option<DateTime<Utc>> {
     cell.grant_dots
         .values()
         .max_by_key(|grant| grant.granted_at)
-        .and_then(|grant| grant.valid_until)
+        .and_then(|grant| grant.expires_at)
 }
 
 fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str {
@@ -798,10 +798,7 @@ fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str 
             continue;
         }
         has_unrevoked = true;
-        if grant
-            .valid_until
-            .is_some_and(|valid_until| valid_until <= at)
-        {
+        if grant.expires_at.is_some_and(|expires_at| expires_at <= at) {
             has_expired_unrevoked = true;
         } else {
             return "granted";

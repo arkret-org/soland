@@ -1153,7 +1153,7 @@ pub struct ConsentCellKey {
 #[derive(Clone, Debug)]
 pub struct ConsentGrantDot {
     pub dot: String,
-    pub valid_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub granted_at: chrono::DateTime<chrono::Utc>,
 }
 

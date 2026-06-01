@@ -2,7 +2,7 @@
 //! [`contrix_sdk::SessionGrantIntrospection`].
 //!
 //! The SDK provides a typed view of an OAuth-style introspection
-//! response carrying `(principal_did, admin_scopes, expires_at,
+//! response carrying `(principal_id, admin_scopes, expires_at,
 //! device_id)`. This module wires that into soland:
 //!
 //! 1. [`introspect_admin_scopes`] talks to the configured
@@ -87,7 +87,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_did = contrix_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
+    let principal_id = contrix_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
         // Fallback: synthesize a stable did:key when the actor isn't
         // a valid DID. This only kicks in for dev-login tokens whose
         // actor field is a handle, not a DID — production sessions
@@ -97,7 +97,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     });
     SessionGrantIntrospection {
         active: true,
-        principal_did,
+        principal_id,
         admin_scopes: scopes,
         expires_at_unix: Some(session.expires_at.timestamp()),
         device_id: Some(session.device_id.clone()),
@@ -226,7 +226,7 @@ pub(crate) async fn require_admin_scope(
             ErrorCode::CapabilityDenied,
             format!(
                 "admin scope `{scope}` not granted to {}",
-                grant.principal_did
+                grant.principal_id
             ),
         )
         .with_status(StatusCode::FORBIDDEN));

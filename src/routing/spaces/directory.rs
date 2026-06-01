@@ -1290,7 +1290,7 @@ async fn directory_announce(
         "resource_kind": resource_kind,
         "resource_id": resource_id,
         "announced_by": session.actor,
-        "valid_until": (now() + chrono::Duration::hours(24)).to_rfc3339(),
+        "expires_at": (now() + chrono::Duration::hours(24)).to_rfc3339(),
     }))
 }
 

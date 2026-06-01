@@ -654,13 +654,13 @@ fn blocklist_hint_target_value(value: &Value) -> Option<&str> {
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.actor_events"))]
 pub(super) async fn federation_actor_events(
-    actor_did: PathParam<String>,
+    actor_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let actor = actor_did.into_inner();
+    let actor = actor_id.into_inner();
     if Did::new(actor.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid actor_did"));
+        return Err(AppError::invalid_param("invalid actor_id"));
     }
     let mut events = state
         .persistence

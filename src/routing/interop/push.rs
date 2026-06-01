@@ -86,7 +86,7 @@ pub(super) async fn push_register(
         return Err(AppError::invalid_param("invalid device_id"));
     }
     let registration_id = format!("cx:push:{}", body.device_id);
-    let principal_did = body.principal_did.clone();
+    let principal_id = body.principal_id.clone();
     let device_id = body.device_id.clone();
     let platform = body.platform.clone();
     let app_id = body.app_id.clone();
@@ -106,7 +106,7 @@ pub(super) async fn push_register(
         .register(json!({
             "registration_id": registration_id,
             "actor": session.actor,
-            "principal_did": principal_did,
+            "principal_id": principal_id,
             "device_id": device_id,
             "platform": platform,
             "app_id": app_id,
@@ -454,8 +454,8 @@ async fn push_register_session_grant_bridge(
             "X-Contrix-Session-Grant must not be empty",
         ));
     }
-    let Some(principal_did) = body
-        .principal_did
+    let Some(principal_id) = body
+        .principal_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -463,14 +463,14 @@ async fn push_register_session_grant_bridge(
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_did is required when using X-Contrix-Session-Grant",
+            "principal_id is required when using X-Contrix-Session-Grant",
         ));
     };
-    if !principal_did.starts_with("did:") {
+    if !principal_id.starts_with("did:") {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_did must use the did: prefix when using X-Contrix-Session-Grant",
+            "principal_id must use the did: prefix when using X-Contrix-Session-Grant",
         ));
     }
     let challenge = optional_ascii_header(
@@ -501,7 +501,7 @@ async fn push_register_session_grant_bridge(
         state,
         SessionGrantValidationInput {
             grant_jwt: grant,
-            principal_did,
+            principal_id,
             device_id: body.device_id.as_str(),
             proof: proof.as_ref(),
         },
@@ -521,7 +521,7 @@ async fn push_register_session_grant_bridge(
 
     Ok(Some(SessionRecord {
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
-        actor: principal_did.to_owned(),
+        actor: principal_id.to_owned(),
         device_id: body.device_id.clone(),
         audience: state.config.service_did.clone(),
         expires_at,
@@ -570,6 +570,7 @@ fn push_notification_leaks_private_payload(
                     | "flow_id"
                     | "thread_id"
                     | "sender"
+                    | "sender_actor_display_name"
                     | "sender_did"
                     | "sender_display_name"
                     | "space_name"

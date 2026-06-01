@@ -10,7 +10,7 @@
 //!    which the routing layer maps to HTTP 409 `cas_conflict`.
 //!
 //! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`.
-//!    Each accepted Welcome is appended to a per-`(recipient_actor_did,
+//!    Each accepted Welcome is appended to a per-`(recipient_actor_id,
 //!    recipient_device_id)` queue inside `ProjectionState::mls_welcomes`.
 //!    The recipient device drains its queue via the
 //!    `GET /api/v1/mls/welcomes/pending` route, which marks delivered
@@ -66,7 +66,7 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// ```json
 /// {
 ///   "keypackage_id": "cx:mls_keypackage:<uuid>",
-///   "actor_did": "did:web:alice.example",
+///   "actor_id": "did:web:alice.example",
 ///   "device_id": "cx:device:<uuid>",
 ///   "lifetime": { "not_before": <unix_secs>, "not_after": <unix_secs> },
 ///   "key_package_bytes_b64": "<base64url(opaque MLS KeyPackage)>"
@@ -80,7 +80,7 @@ pub fn apply_keypackage_publish(
     let Some(id) = payload.get("keypackage_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_id_missing");
     };
-    let Some(actor_did) = payload.get("actor_did").and_then(Value::as_str) else {
+    let Some(actor_id) = payload.get("actor_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_actor_missing");
     };
     let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
@@ -107,7 +107,7 @@ pub fn apply_keypackage_publish(
     let created_at = op.created_at.timestamp();
     let row = MlsKeyPackage {
         id: id.to_owned(),
-        actor_did: actor_did.to_owned(),
+        actor_did: actor_id.to_owned(),
         device_id: device_id.to_owned(),
         lifetime,
         key_package_bytes,
@@ -125,7 +125,7 @@ pub fn apply_keypackage_publish(
 
     ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: id.to_owned(),
-        actor_did: actor_did.to_owned(),
+        actor_did: actor_id.to_owned(),
         device_id: device_id.to_owned(),
     })
 }
@@ -182,7 +182,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// {
 ///   "welcome_id":             "cx:mls_welcome:<uuid>",
 ///   "group_id":               "cx:mls_group:<uuid>",
-///   "recipient_actor_did":    "did:web:bob.example",
+///   "recipient_actor_id":     "did:web:bob.example",
 ///   "recipient_device_id":    "cx:device:<uuid>",
 ///   "welcome_bytes_b64":      "<base64url(opaque MLS Welcome)>",
 ///   "key_package_id":         "cx:mls_keypackage:<uuid>"
@@ -216,7 +216,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
         return reject("mls_welcome_group_missing");
     };
     let Some(recipient_actor_did) = payload
-        .get("recipient_actor_did")
+        .get("recipient_actor_id")
         .or_else(|| payload.get("recipient_principal_id"))
         .and_then(Value::as_str)
     else {
@@ -293,7 +293,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         return reject("mls_genesis_epoch_invalid");
     }
     let Some(creator_actor_did) = payload
-        .get("creator_actor_did")
+        .get("creator_actor_id")
         .or_else(|| payload.get("creator_principal_id"))
         .and_then(Value::as_str)
     else {
@@ -336,7 +336,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// {
 ///   "group_id":            "cx:mls_group:<uuid>",
 ///   "expected_prev_epoch": <u64>,
-///   "leader_actor_did":    "did:web:alice.example",
+///   "leader_actor_id":     "did:web:alice.example",
 ///   "commit_bytes_b64":    "<base64url(opaque MLS Commit)>"
 /// }
 /// ```
@@ -366,7 +366,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
     let Some(leader_actor_did) = payload
-        .get("leader_actor_did")
+        .get("leader_actor_id")
         .or_else(|| payload.get("sender"))
         .and_then(Value::as_str)
     else {
@@ -462,6 +462,8 @@ const WELCOME_FORBIDDEN_METADATA_KEYS: &[&str] = &[
     "principal_did",
     "principal_id",
     "sender_actor_did",
+    "sender_actor_id",
+    "sender_actor_display_name",
     "sender_device_id",
     "sender_display_name",
     "sender_handle",
@@ -609,7 +611,7 @@ mod tests {
         json!({
             "action": "publish",
             "keypackage_id": id,
-            "actor_did": actor,
+            "actor_id": actor,
             "device_id": device,
             "lifetime": {"not_before": 1, "not_after": not_after},
             "key_package_bytes_b64": b64(b"opaque-keypackage-bytes"),
@@ -734,7 +736,7 @@ mod tests {
             json!({
                 "welcome_id": "cx:mls_welcome:w1",
                 "group_id": "cx:mls_group:abc",
-                "recipient_actor_did": "did:web:bob.example",
+                "recipient_actor_id": "did:web:bob.example",
                 "recipient_device_id": "cx:device:bob-phone",
                 "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
                 "key_package_id": "cx:mls_keypackage:01",
@@ -791,7 +793,7 @@ mod tests {
             json!({
                 "welcome_id": "cx:mls_welcome:w-leaky",
                 "group_id": "cx:mls_group:abc",
-                "recipient_actor_did": "did:web:bob.example",
+                "recipient_actor_id": "did:web:bob.example",
                 "recipient_device_id": "cx:device:bob-phone",
                 "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
                 "key_package_id": "cx:mls_keypackage:01",
@@ -820,7 +822,7 @@ mod tests {
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_did": "did:web:alice.example",
+                "leader_actor_id": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
                 "governance_binding": governance_binding(0),
             }),
@@ -851,7 +853,7 @@ mod tests {
                 "group_id": "cx:mls_group:abc",
                 "expected_prev_epoch": 1,
                 "next_epoch": 2,
-                "leader_actor_did": "did:web:alice.example",
+                "leader_actor_id": "did:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-2"),
                 "governance_binding": governance_binding(1),
             }),
@@ -888,7 +890,7 @@ mod tests {
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
-                    "leader_actor_did": "did:web:alice.example",
+                    "leader_actor_id": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"opaque-commit-1"),
                     "governance_binding": {
                         "binding_version": 1,
@@ -926,7 +928,7 @@ mod tests {
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
-                    "leader_actor_did": "did:web:alice.example",
+                    "leader_actor_id": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"first"),
                     "governance_binding": governance_binding(0),
                 }),
@@ -943,7 +945,7 @@ mod tests {
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
-                    "leader_actor_did": "did:web:alice.example",
+                    "leader_actor_id": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"replay"),
                     "governance_binding": governance_binding(0),
                 }),
@@ -975,7 +977,7 @@ mod tests {
                     "group_id": "cx:mls_group:abc",
                     "expected_prev_epoch": 5,
                     "next_epoch": 6,
-                    "leader_actor_did": "did:web:alice.example",
+                    "leader_actor_id": "did:web:alice.example",
                     "commit_bytes_b64": b64(b"leap"),
                     "governance_binding": governance_binding(5),
                 }),

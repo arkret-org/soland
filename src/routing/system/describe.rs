@@ -377,7 +377,7 @@ pub(crate) fn apply_claim_level_partition(
                     cotest_issuer_did: entry.cotest_issuer_did.clone(),
                     signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
-                    expires_at: entry.valid_until,
+                    expires_at: entry.expires_at,
                     extra: Default::default(),
                 })
             })
@@ -417,20 +417,20 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             bearer_auth_scheme:
                 "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
                     .to_owned(),
-            principal_did_body_field: "principal_did".to_owned(),
+            principal_id_body_field: "principal_id".to_owned(),
         },
         push: AuthBridgePushDescriptor {
             register_device_path: "/api/v1/push/register-device".to_owned(),
             unregister_device_path: "/api/v1/push/unregister-device".to_owned(),
             session_grant_header: "X-Contrix-Session-Grant".to_owned(),
-            principal_did_body_field: "principal_did".to_owned(),
+            principal_id_body_field: "principal_id".to_owned(),
             register_device_mode: "bearer_session_or_oauth_bearer_introspection".to_owned(),
         },
         examples: AuthBridgeExamples {
             session_grant_exchange_request: json!({
                 "legacy": true,
                 "grant_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6Y29hdXRoLmV4YW1wbGUjMSJ9.eyJpc3MiOiJkaWQ6d2ViOmNvYXV0aC5leGFtcGxlIiwic3ViIjoiZGlkOndlYjphbGljZS5leGFtcGxlIiwiYXVkIjoiZGlkOndlYjpzb2xhbmQubG9jYWwifQ.example",
-                "principal_did": "did:web:alice.example",
+                "principal_id": "did:web:alice.example",
                 "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
                 "introspection_proof": {
                     "challenge": "challenge-01js0000000000000000000000",
@@ -438,14 +438,14 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                 }
             }),
             register_device_request: json!({
-                "principal_did": "did:web:alice.example",
+                "principal_id": "did:web:alice.example",
                 "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
                 "push_gateway": "https://floria.example/api/v1/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
             unregister_device_request: json!({
-                "principal_did": "did:web:alice.example",
+                "principal_id": "did:web:alice.example",
                 "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
                 "registration_id": "cx:device:01904100-0000-7000-8000-000000000001#webpush"
             }),

@@ -305,26 +305,26 @@ async fn exchange_session_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.grant_jwt.trim().is_empty()
-        || validate_did(&body.principal_did).is_err()
+        || validate_did(&body.principal_id).is_err()
         || validate_device_id(&body.device_id).is_err()
     {
         return Err(AppError::invalid_param(
-            "grant_jwt, principal_did, and device_id are required",
+            "grant_jwt, principal_id, and device_id are required",
         ));
     }
-    if let Some(error) = account_lockout_error(state, &body.principal_did) {
+    if let Some(error) = account_lockout_error(state, &body.principal_id) {
         return Err(error);
     }
     let account = state
         .persistence
         .accounts()
-        .get(&body.principal_did)
+        .get(&body.principal_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(AppError::not_found("account is not registered"));
     }
-    if let Some(error) = account_new_session_error(state, &body.principal_did) {
+    if let Some(error) = account_new_session_error(state, &body.principal_id) {
         return Err(error);
     }
 
@@ -332,7 +332,7 @@ async fn exchange_session_grant(
         state,
         SessionGrantValidationInput {
             grant_jwt: body.grant_jwt.as_str(),
-            principal_did: body.principal_did.as_str(),
+            principal_id: body.principal_id.as_str(),
             device_id: body.device_id.as_str(),
             proof: body.introspection_proof.as_ref(),
         },
@@ -345,7 +345,7 @@ async fn exchange_session_grant(
             // the rolling lockout window. Account is locked after 5
             // failures in 15 min; clearing happens on the success
             // path below.
-            record_failed_login_attempt(state, &body.principal_did, "session_grant_exchange").await;
+            record_failed_login_attempt(state, &body.principal_id, "session_grant_exchange").await;
             return Err(error);
         }
     };
@@ -354,14 +354,14 @@ async fn exchange_session_grant(
         .map(|grant| grant.expires_at)
         .unwrap_or_else(|| now() + Duration::hours(12));
     let token = token_for(
-        &body.principal_did,
+        &body.principal_id,
         &body.device_id,
         expires_at.timestamp_millis(),
     );
     let token_hash = session_token_hash(&token, &state.config.service_did);
     let session = SessionRecord {
         token_hash,
-        actor: body.principal_did.clone(),
+        actor: body.principal_id.clone(),
         device_id: body.device_id.clone(),
         audience: state.config.service_did.clone(),
         expires_at,
@@ -383,7 +383,7 @@ async fn exchange_session_grant(
         "session_grant_bridge": true,
     });
     let device = DeviceInventoryRecord {
-        actor: body.principal_did.clone(),
+        actor: body.principal_id.clone(),
         device_id: body.device_id.clone(),
         display_name: body.display_name.clone(),
         verification_state: "unverified".to_owned(),
@@ -400,7 +400,7 @@ async fn exchange_session_grant(
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
-        Some(&body.principal_did),
+        Some(&body.principal_id),
         "auth.session_grant_exchange",
         json!({
             "device_id": body.device_id.clone(),
@@ -411,12 +411,12 @@ async fn exchange_session_grant(
         "accepted",
     )
     .await;
-    state.clear_failed_login(&body.principal_did);
+    state.clear_failed_login(&body.principal_id);
 
     json_ok(DevLoginResponse {
         access_token: token,
         token_type: "Bearer".to_owned(),
-        actor: body.principal_did,
+        actor: body.principal_id,
         device_id: body.device_id,
         expires_at,
     })
@@ -465,7 +465,7 @@ struct OAuthIntrospectionSession {
 #[derive(Debug)]
 pub(crate) struct SessionGrantValidationInput<'a> {
     pub grant_jwt: &'a str,
-    pub principal_did: &'a str,
+    pub principal_id: &'a str,
     pub device_id: &'a str,
     pub proof: Option<&'a SessionGrantIntrospectionProof>,
 }
@@ -557,9 +557,9 @@ pub(crate) async fn validate_session_grant_binding(
             "session grant audience does not match this principal server",
         ));
     }
-    if grant.subject != input.principal_did {
+    if grant.subject != input.principal_id {
         return Err(AppError::capability_denied(
-            "session grant subject does not match principal_did",
+            "session grant subject does not match principal_id",
         ));
     }
     if let Some(device_id) = grant.device_id.as_deref()

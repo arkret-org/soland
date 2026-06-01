@@ -47,7 +47,7 @@ pub(crate) fn router() -> Router {
         .push(
             Router::with_path("{circle_id}/members")
                 .post(post_circle_member)
-                .push(Router::with_path("{actor_did}").delete(delete_circle_member)),
+                .push(Router::with_path("{actor_id}").delete(delete_circle_member)),
         )
         .push(Router::with_path("{circle_id}/scope-rotate").post(post_scope_rotate))
         .push(Router::with_path("{circle_id}/archive").post(post_circle_archive))
@@ -107,7 +107,7 @@ pub struct CreateCircleRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct CircleMemberRequest {
-    pub actor_did: String,
+    pub actor_id: String,
     /// Optional explicit member state. Defaults to `"active"`. Spec
     /// `cx.circle.member.state` enum: invited / active / removed / banned / left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,7 +117,7 @@ pub struct CircleMemberRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct CircleMembershipResponse {
     pub circle_id: String,
-    pub actor_did: String,
+    pub actor_id: String,
     pub state: String,
 }
 
@@ -266,7 +266,7 @@ async fn post_circle_member(
     let target_state = body.state.clone().unwrap_or_else(|| "active".to_owned());
     let payload = json!({
         "circle_id": circle_id,
-        "actor": body.actor_did,
+        "actor": body.actor_id,
         "state": target_state,
         "sender": session.actor.clone(),
     });
@@ -278,7 +278,7 @@ async fn post_circle_member(
         .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
-        actor_did: body.actor_did,
+        actor_id: body.actor_id,
         state: target_state,
     })
 }
@@ -292,18 +292,18 @@ async fn post_circle_member(
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
-    actor_did: PathParam<String>,
+    actor_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleMembershipResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
-    let actor_did = actor_did.into_inner();
+    let actor_id = actor_id.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     let payload = json!({
         "circle_id": circle_id,
-        "actor": actor_did,
+        "actor": actor_id,
         "state": "removed",
         "sender": session.actor.clone(),
     });
@@ -315,7 +315,7 @@ async fn delete_circle_member(
         .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipResponse {
         circle_id,
-        actor_did,
+        actor_id,
         state: "removed".to_owned(),
     })
 }

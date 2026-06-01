@@ -22,14 +22,13 @@ pub use contrix_sdk::lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, AnchorerCell, CapabilityDelegate, CapabilityDerived,
     CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, CoveredFrontier,
     CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, FlowPosition,
-    FlowStage, MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PlaceParent,
-    PolicyRule, ProfileCreate, RealmPreviewPolicy, SessionGrant, SpaceArchive,
-    SpaceAssetPrivacyPolicy, SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze,
-    SpaceHistorySharingPolicy, SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule,
-    SpaceMediaService, SpaceModerationPolicy, SpaceOrganization, SpaceParent,
-    SpacePlaintextVisibleServices, SpacePolicy, SpacePolicyComponents, SpacePolicyServer,
-    SpaceReadReceiptPolicyLattice, SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate,
-    ViewReconcile, ViewUpdate,
+    FlowStage, MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PolicyRule,
+    ProfileCreate, RealmPreviewPolicy, SessionGrant, SpaceArchive, SpaceAssetPrivacyPolicy,
+    SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze, SpaceHistorySharingPolicy,
+    SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule, SpaceMediaService,
+    SpaceModerationPolicy, SpaceOrganization, SpaceParent, SpacePlaintextVisibleServices,
+    SpacePolicy, SpacePolicyComponents, SpacePolicyServer, SpaceReadReceiptPolicyLattice,
+    SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate, ViewReconcile, ViewUpdate,
 };
 
 #[cfg(test)]
