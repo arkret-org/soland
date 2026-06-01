@@ -62,7 +62,7 @@ pub enum PayloadRequirement {
 }
 
 const MESSAGE_CREATE_FIELDS: &[&str] = &["body", "content", "event_id"];
-const MESSAGE_TARGET_FIELDS: &[&str] = &["target_event_id", "event_id", "target"];
+const MESSAGE_TARGET_FIELDS: &[&str] = &["target_ref", "target_event_id", "event_id", "target"];
 const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "body"];
 const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
 const REACTION_TARGET_FIELDS: &[&str] = &[
@@ -2928,6 +2928,54 @@ mod flow_tracks_update_tests {
             validate_operation_schema(&missing_expected, schema),
             Err("space parent operation requires expected_parent_space_id")
         );
+    }
+}
+
+#[cfg(test)]
+mod message_projection_schema_tests {
+    use super::*;
+    use contrix_sdk::Operation;
+    use serde_json::json;
+
+    fn op(kind: &str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn message_revise_accepts_spec_canonical_target_ref() {
+        let operation = op(
+            kinds::CX_MESSAGE_REVISE,
+            json!({
+                "target_ref": "cx:event:01904100-0000-7000-8000-000000000001",
+                "content": {"kind": "cx.content.text", "body": "edited"}
+            }),
+        );
+        let schema = operation_schema_for_kind(kinds::CX_MESSAGE_REVISE).unwrap();
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn reaction_accepts_spec_target_ref_without_event_alias() {
+        let operation = op(
+            kinds::CX_REACTION_ADD,
+            json!({
+                "target_ref": "cx:event:01904100-0000-7000-8000-000000000001",
+                "sender": "did:web:alice.example",
+                "key": "+1"
+            }),
+        );
+        let schema = operation_schema_for_kind(kinds::CX_REACTION_ADD).unwrap();
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+        assert!(operation.payload.get("event_id").is_none());
+        assert!(operation.payload.get("actor").is_none());
     }
 }
 

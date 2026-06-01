@@ -3752,6 +3752,8 @@ impl ProjectionState {
         let original_id = operation
             .payload
             .get("target_event_id")
+            .or_else(|| operation.payload.get("target_ref"))
+            .or_else(|| operation.payload.get("revision_of"))
             .or_else(|| operation.payload.get("event_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -8423,7 +8425,7 @@ mod tests {
                 crate::kinds::CX_MESSAGE_REVISE,
                 "cx:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "target_ref": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "new_event_id": "cx:event:01904100-0000-7000-8000-c4daaba541fc",
                     "content": {"kind": "cx.content.text", "body": "revised"}
                 }),
