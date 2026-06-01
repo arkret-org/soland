@@ -24,7 +24,13 @@ CREATE TABLE projection_flows (
     created_by        TEXT NOT NULL,
     created_at        TIMESTAMPTZ NOT NULL,
     updated_by        TEXT,
-    updated_at        TIMESTAMPTZ
+    updated_at        TIMESTAMPTZ,
+    -- CXP-0007: the Circle this Flow is scoped to (`cx:circle:…`), if any.
+    -- A message's effective circle-scope is derived from its Flow's
+    -- scope_circle_id (spec: scope_circle_id is a Flow field, not a message
+    -- field), so it MUST survive restart to keep circle-scoped messages
+    -- hidden from realm members outside the Circle.
+    scope_circle_id   TEXT
 );
 
 CREATE INDEX projection_flows_space_idx ON projection_flows(space_id);

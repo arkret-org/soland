@@ -998,6 +998,18 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_UPDATE_REQUIREMENTS,
             validate: None,
         },
+        // Circle lifecycle. Structure is owned by the registered
+        // `cx.schema.circle.v1` payload schema (applied via validate_payload);
+        // registering here only builds the projection Operation so the
+        // submit-time invariant gate runs — notably the encryption_profile
+        // create-lock and circle-below-realm-floor checks in
+        // `validate_content_encryption_floor` (previously dead for circles
+        // because no Operation was built, so the lock was only caught at
+        // projection and the client saw a misleading 200).
+        kinds::CX_CIRCLE_CREATE | kinds::CX_CIRCLE_UPDATE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
         kinds::CX_REALM_DESTROY | kinds::CX_REALM_TOMBSTONE => OperationPayloadSchema {
             requirements: REALM_TERMINAL_REQUIREMENTS,
             validate: None,

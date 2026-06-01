@@ -160,11 +160,13 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
             "object": {
                 "id": flow_id,
                 "space_id": space_id,
-                "title": "Hydration flow",
-                "fields": {
-                    "board_space_id": board_space_id,
-                    "list_space_id": list_space_id,
-                    "rank": "r007",
+                "metadata": {
+                    "title": "Hydration flow",
+                    "fields": {
+                        "board_space_id": board_space_id,
+                        "list_space_id": list_space_id,
+                        "rank": "r007",
+                    },
                 },
                 "created_by": "did:web:alice.example",
             }
@@ -678,7 +680,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
             "object": {
                 "id": flow_id,
                 "space_id": space_id,
-                "title": "Doomed Flow",
+                "metadata": { "title": "Doomed Flow" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -846,7 +848,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
             "object": {
                 "id": flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Persistent Flow",
+                "metadata": { "title": "Persistent Flow" },
                 "created_by": "did:web:alice.example",
             }
         }),

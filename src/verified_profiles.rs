@@ -380,10 +380,18 @@ mod tests {
     }
 
     fn uniq() -> u128 {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
+        // A process-wide counter guarantees a unique temp dir even when two
+        // tests running in parallel observe the same coarse SystemTime tick
+        // (Windows clock resolution is coarse, so nanos alone can collide and
+        // make the tests race on the same `verified-profiles.json`).
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = u128::from(COUNTER.fetch_add(1, Ordering::Relaxed));
+        let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .unwrap_or(0);
+        nanos.wrapping_shl(20).wrapping_add(seq)
     }
 }

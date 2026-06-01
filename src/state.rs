@@ -2222,6 +2222,7 @@ async fn hydrate_projections_from_persistence(
                     created_at: record.created_at,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
+                    scope_circle_id: record.scope_circle_id,
                 },
             );
         }

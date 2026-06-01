@@ -174,7 +174,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
             "object": {
                 "id": flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Launch flow",
+                "metadata": { "title": "Launch flow" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -250,7 +250,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "target_ref": flow_id,
             "flow_id": flow_id,
-            "patch": { "title": "Edit while archived" }
+            "patch": { "metadata": { "title": "Edit while archived" } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
     );
@@ -402,7 +402,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
             "object": {
                 "id": flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Encrypted realm metadata title",
+                "metadata": { "title": "Encrypted realm metadata title" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -426,7 +426,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
             "target_ref": flow_id,
             "flow_id": flow_id,
             "patch": {
-                "body": {
+                "content": {
                     "$op": "set",
                     "value": "private body must be encrypted"
                 }
@@ -469,8 +469,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "object": {
                 "id": task_flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Implement login",
-                "fields": { "status": "todo" },
+                "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -493,7 +492,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "target_ref": task_flow_id,
             "flow_id": task_flow_id,
-            "patch": { "fields": { "status": "done" } }
+            "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
     );
@@ -513,7 +512,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "target_ref": task_flow_id,
             "flow_id": task_flow_id,
-            "patch": { "fields": { "status": "in_progress" } }
+            "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
     );
@@ -534,7 +533,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "target_ref": task_flow_id,
             "flow_id": task_flow_id,
-            "patch": { "fields": { "status": "done" } }
+            "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-f51ec0000003"],
     );
@@ -556,8 +555,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "object": {
                 "id": incident_flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "SEV-2 checkout outage",
-                "fields": { "status": "investigating" },
+                "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -580,7 +578,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "target_ref": incident_flow_id,
             "flow_id": incident_flow_id,
-            "patch": { "fields": { "status": "resolved" } }
+            "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-f51ec0000005"],
     );
@@ -651,7 +649,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
             "object": {
                 "id": flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Sensitive flow",
+                "metadata": { "title": "Sensitive flow" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -804,7 +802,7 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
             "object": {
                 "id": flow_id,
                 "space_id": DEMO_REALM_ID,
-                "title": "Launch flow",
+                "metadata": { "title": "Launch flow" },
                 "created_by": "did:web:alice.example",
             }
         }),

@@ -466,7 +466,7 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
         "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
-        "track": "discussion",
+        "track_name": "discussion",
         "content": {
             "kind": "cx.content.text",
             "body": format!("event body {actor_seq}"),
@@ -510,7 +510,7 @@ pub(crate) fn signed_message_event_envelope(
     let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut payload = serde_json::json!({
         "flow_id": expected_flow_id_for_scope(realm_id),
-        "track": "discussion",
+        "track_name": "discussion",
     });
     if encrypted {
         let mut encrypted_payload = content;
@@ -555,8 +555,12 @@ pub(crate) fn signed_message_event_envelope(
                         .to_owned(),
                 ),
             );
+            // `encrypted_envelope` carries a legacy `digests` blob that is not
+            // a field of cx.schema.encrypted_envelope.v1 (additionalProperties
+            // is false); drop it so the conforming envelope validates.
+            object.remove("digests");
         }
-        payload["encrypted_payload"] = encrypted_payload;
+        payload["encrypted_content"] = encrypted_payload;
     } else {
         let mut content = content;
         if let Some(object) = content.as_object_mut()

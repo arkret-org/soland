@@ -376,14 +376,37 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         );
     }
 
+    // CXP-0007: a Message's Circle scope is derived from its Flow, never from
+    // the message payload (spec: scope_circle_id is a Flow field). Bind a Flow
+    // to the Circle, then post a message to that Flow WITHOUT any scope field.
+    let flow_created = state.apply(
+        &op(
+            CX_FLOW_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": FLOW_X,
+                    "space_id": REALM_A,
+                    "title": "Circle-scoped Flow",
+                    "scope_circle_id": CIRCLE_A,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        !matches!(flow_created, ProjectionEffect::Rejected { .. }),
+        "circle-scoped Flow create must succeed, got {flow_created:?}"
+    );
+
     let effect = state.apply(
         &op(
             CX_MESSAGE_CREATE,
             REALM_A,
             json!({
                 "event_id": "cx:event:01904100-0000-7000-8000-c1c1eeee0001",
+                "flow_id": FLOW_X,
                 "sender": ALICE,
-                "scope_circle_id": CIRCLE_A,
                 "content": {
                     "body": "circle-only ciphertext placeholder",
                     "encrypted": true
@@ -398,7 +421,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     };
     assert_eq!(
         message.content["scope_circle_id"], CIRCLE_A,
-        "projection must retain Circle scope so sync/event readers can filter"
+        "projection must derive Circle scope from the Flow so sync/event readers can filter"
     );
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, ALICE));
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, BOB));

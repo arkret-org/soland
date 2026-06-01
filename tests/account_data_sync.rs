@@ -143,7 +143,7 @@ async fn send_plaintext_message(
 ) -> Value {
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
-        "track": "discussion",
+        "track_name": "discussion",
         "content": {"kind": "cx.content.text", "body": body}
     });
     let mut event = json!({
@@ -393,7 +393,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
             "read_scope": {
                 "kind": "flow",
                 "ref": format!("cx:flow:{}", realm_a.trim_start_matches("cx:realm:")),
-                "track": "discussion"
+                "track_name": "discussion"
             },
             "position": {
                 "event_id": event_a,
@@ -410,7 +410,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "marker_a response: {marker_a}"
     );
     assert_eq!(
-        marker_a["read_scope"]["track"], "discussion",
+        marker_a["read_scope"]["track_name"], "discussion",
         "marker_a response: {marker_a}"
     );
 
@@ -421,7 +421,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
             "read_scope": {
                 "kind": "flow",
                 "ref": format!("cx:flow:{}", realm_b.trim_start_matches("cx:realm:")),
-                "track": "discussion"
+                "track_name": "discussion"
             },
             "position": {
                 "event_id": event_b,

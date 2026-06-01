@@ -16,8 +16,9 @@ async fn federation_accepts_idempotent_replayed_operations() {
         serde_json::json!({
             "event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e",
             "sender": "did:web:remote.example",
-            "thread_id": "cx:flow:federation",
-            "body": "from federation"
+            "flow_id": "cx:flow:01904100-0000-7000-8000-fede00000001",
+            "track_name": "discussion",
+            "content": {"kind": "cx.content.text", "body": "from federation"}
         }),
     );
 
@@ -364,8 +365,9 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         serde_json::json!({
             "event_id": "cx:event:01904100-0000-7000-8000-f10d061a12a7",
             "sender": "did:web:remote.example",
-            "thread_id": "cx:flow:federation-txn",
-            "body": "transaction body"
+            "flow_id": "cx:flow:01904100-0000-7000-8000-fede00000002",
+            "track_name": "discussion",
+            "content": {"kind": "cx.content.text", "body": "transaction body"}
         }),
     );
 

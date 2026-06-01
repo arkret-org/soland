@@ -1403,6 +1403,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             created_at: f.created_at,
             updated_by: f.updated_by.clone(),
             updated_at: f.updated_at,
+            scope_circle_id: f.scope_circle_id.clone(),
         })
     }
 
@@ -2397,7 +2398,20 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }
-    let content = message_content_from_payload(&operation.payload);
+    // CXP-0007: derive the message's circle scope from its Flow, never from
+    // the message payload (spec: scope_circle_id is a Flow field).
+    let flow_scope = operation
+        .payload
+        .get("flow_id")
+        .and_then(Value::as_str)
+        .and_then(|flow_id| {
+            state
+                .projection
+                .lock()
+                .ok()
+                .and_then(|proj| proj.flow_scope_circle_id(flow_id))
+        });
+    let content = message_content_from_payload(&operation.payload, flow_scope);
     if matches!(
         content.get("kind").and_then(Value::as_str),
         Some("cx.content.poll.response" | "cx.content.poll.close")
@@ -2437,8 +2451,11 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     }
 }
 
-fn message_content_from_payload(payload: &Value) -> Value {
-    let scope_circle_id = message_payload_scope_circle_id(payload);
+/// Build the stored message content. `scope_circle_id` is the Flow-derived
+/// circle scope (resolved from the message's Flow by the caller — messages
+/// never carry their own scope per spec). Any client-supplied
+/// `scope_circle_id` on the message is dropped and replaced by the Flow scope.
+fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>) -> Value {
     let mut content = payload
         .get("content")
         .or_else(|| payload.get("encrypted_content"))
@@ -2458,37 +2475,12 @@ fn message_content_from_payload(payload: &Value) -> Value {
                 object.insert(key.to_owned(), value.clone());
             }
         }
-        if !object.contains_key("scope_circle_id")
-            && let Some(value) = scope_circle_id
-        {
+        object.remove("scope_circle_id");
+        if let Some(value) = scope_circle_id {
             object.insert("scope_circle_id".to_owned(), Value::String(value));
         }
     }
     content
-}
-
-fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
-    payload
-        .get("scope_circle_id")
-        .or_else(|| {
-            payload
-                .get("content")
-                .and_then(|content| content.get("scope_circle_id"))
-        })
-        .or_else(|| {
-            payload
-                .get("encrypted_content")
-                .and_then(|encrypted| encrypted.get("scope_circle_id"))
-        })
-        .or_else(|| {
-            payload
-                .get("encrypted_content")
-                .and_then(|encrypted| encrypted.get("aad"))
-                .and_then(|aad| aad.get("scope_circle_id"))
-        })
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json::Value) {

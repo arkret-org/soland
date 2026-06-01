@@ -561,6 +561,11 @@ pub struct FlowProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// CXP-0007 — the Circle this Flow is scoped to, if any (`cx:circle:…`).
+    /// A message's effective circle-scope is derived from its Flow's
+    /// `scope_circle_id` (spec: `scope_circle_id` is a Flow field, not a
+    /// message field); messages never carry their own scope.
+    pub scope_circle_id: Option<String>,
 }
 
 /// CXP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
@@ -873,8 +878,13 @@ fn reaction_target_event_id(operation: &Operation) -> Option<String> {
     })
 }
 
-fn message_content_from_payload(payload: &Value) -> Value {
-    let scope_circle_id = message_payload_scope_circle_id(payload);
+/// Build the stored message content. `scope_circle_id` is the Flow-derived
+/// circle scope (spec: messages never carry their own scope — it is resolved
+/// from the message's Flow by the caller via
+/// [`ProjectionState::flow_scope_circle_id`]). Any client-supplied
+/// `scope_circle_id` on the message is dropped and replaced by the authoritative
+/// Flow scope.
+fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>) -> Value {
     let mut content = payload
         .get("content")
         .or_else(|| payload.get("encrypted_content"))
@@ -894,37 +904,13 @@ fn message_content_from_payload(payload: &Value) -> Value {
                 object.insert(key.to_owned(), value.clone());
             }
         }
-        if !object.contains_key("scope_circle_id")
-            && let Some(value) = scope_circle_id
-        {
+        // Never trust a client-supplied scope; stamp the Flow-derived one.
+        object.remove("scope_circle_id");
+        if let Some(value) = scope_circle_id {
             object.insert("scope_circle_id".to_owned(), Value::String(value));
         }
     }
     content
-}
-
-fn message_payload_scope_circle_id(payload: &Value) -> Option<String> {
-    payload
-        .get("scope_circle_id")
-        .or_else(|| {
-            payload
-                .get("content")
-                .and_then(|content| content.get("scope_circle_id"))
-        })
-        .or_else(|| {
-            payload
-                .get("encrypted_content")
-                .and_then(|encrypted| encrypted.get("scope_circle_id"))
-        })
-        .or_else(|| {
-            payload
-                .get("encrypted_content")
-                .and_then(|encrypted| encrypted.get("aad"))
-                .and_then(|aad| aad.get("scope_circle_id"))
-        })
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn content_kind(content: &Value) -> Option<&str> {
@@ -2850,8 +2836,13 @@ fn object_field_string(
     object: &serde_json::Map<String, Value>,
     field_name: &str,
 ) -> Option<String> {
+    // spec 9dabf26: Flow profile fields live under `metadata.fields`, not at
+    // the object root. The Flow-position component (board_space_id /
+    // list_space_id / rank) is read from there.
     object
-        .get("fields")
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("fields"))
         .and_then(Value::as_object)
         .and_then(|fields| fields.get(field_name))
         .and_then(Value::as_str)
@@ -3094,6 +3085,41 @@ fn apply_flow_fields_patch(
             continue;
         }
         let Some(field_name) = path.strip_prefix("metadata.fields.") else {
+            continue;
+        };
+        if field_name.is_empty() {
+            continue;
+        }
+        match patch_action(value) {
+            PatchAction::Set(value) => {
+                fields.insert(field_name.to_owned(), value.clone());
+            }
+            PatchAction::Unset => {
+                fields.remove(field_name);
+            }
+            PatchAction::Ignore => {}
+        }
+    }
+}
+
+/// Apply a `cx.flow.update`-style patch to a Morph's `fields` map. Unlike Flow
+/// (whose profile fields moved under `metadata.fields` in spec 9dabf26), the
+/// Morph object keeps `fields` at the object root (morph.schema.json), so its
+/// patch paths are root-level `fields` / `fields.<name>`.
+fn apply_morph_fields_patch(
+    fields: &mut BTreeMap<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (path, value) in patch {
+        if path == "fields" {
+            match patch_action(value) {
+                PatchAction::Set(value) => apply_metadata_fields_value(fields, value),
+                PatchAction::Unset => fields.clear(),
+                PatchAction::Ignore => {}
+            }
+            continue;
+        }
+        let Some(field_name) = path.strip_prefix("fields.") else {
             continue;
         };
         if field_name.is_empty() {
@@ -3671,7 +3697,14 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        let content = message_content_from_payload(&operation.payload);
+        // CXP-0007: derive the message's circle scope from its Flow, never
+        // from the message payload (spec: scope_circle_id is a Flow field).
+        let flow_scope = operation
+            .payload
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .and_then(|flow_id| self.flow_scope_circle_id(flow_id));
+        let content = message_content_from_payload(&operation.payload, flow_scope);
         let encrypted = operation
             .payload
             .get("encrypted")
@@ -6572,6 +6605,11 @@ impl ProjectionState {
             created_at: now,
             updated_by: None,
             updated_at: None,
+            scope_circle_id: object
+                .get("scope_circle_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
         };
         self.flows.insert(flow_id.clone(), projection);
         if let Some((board_space_id, list_space_id, rank)) =
@@ -7006,7 +7044,7 @@ impl ProjectionState {
             if let Some(morph_type) = patch_string_value(patch, "morph_type").flatten() {
                 morph.morph_type = morph_type;
             }
-            apply_flow_fields_patch(&mut morph.fields, patch);
+            apply_morph_fields_patch(&mut morph.fields, patch);
         }
         morph.updated_by = operation
             .payload
@@ -7477,6 +7515,18 @@ impl ProjectionState {
         self.circles.get(circle_id).is_some_and(|circle| {
             circle.state != CircleLifecycleState::Tombstoned && circle.members.contains(actor)
         })
+    }
+
+    /// CXP-0007 — resolve the Circle (`cx:circle:…`) a Flow is scoped to, if
+    /// any. A message's effective circle-scope is derived from its Flow via
+    /// this lookup — never from the message payload (spec: `scope_circle_id`
+    /// is a Flow field). Returns `None` for unknown Flows or Realm-default
+    /// scope.
+    pub fn flow_scope_circle_id(&self, flow_id: &str) -> Option<String> {
+        self.flows
+            .get(flow_id)
+            .and_then(|flow| flow.scope_circle_id.clone())
+            .filter(|scope| scope.starts_with("cx:circle:"))
     }
 
     /// Apply `cx.applet.registration`. Upserts the
@@ -9515,11 +9565,13 @@ mod tests {
                     "object": {
                         "id": flow_id,
                         "space_id": realm_id,
-                        "title": "Review PR",
-                        "fields": {
-                            "board_space_id": board_id,
-                            "list_space_id": list_id,
-                            "rank": "r007"
+                        "metadata": {
+                            "title": "Review PR",
+                            "fields": {
+                                "board_space_id": board_id,
+                                "list_space_id": list_id,
+                                "rank": "r007"
+                            }
                         },
                         "created_by": "did:web:alice.example"
                     }
@@ -9626,11 +9678,13 @@ mod tests {
                     "object": {
                         "id": flow_id,
                         "space_id": realm_id,
-                        "title": "Review PR",
-                        "fields": {
-                            "board_space_id": board_id,
-                            "list_space_id": list_id,
-                            "rank": "r007"
+                        "metadata": {
+                            "title": "Review PR",
+                            "fields": {
+                                "board_space_id": board_id,
+                                "list_space_id": list_id,
+                                "rank": "r007"
+                            }
                         },
                         "created_by": "did:web:alice.example"
                     }

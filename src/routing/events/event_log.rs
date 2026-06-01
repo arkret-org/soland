@@ -1089,7 +1089,7 @@ fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
 async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
-    envelope: Value,
+    mut envelope: Value,
 ) -> Result<EventSubmitResponse, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -1275,6 +1275,31 @@ async fn submit_event_value(
                     reason,
                 ));
             }
+        }
+    }
+
+    // CXP-0007: a message's effective circle-scope is derived from its Flow
+    // (spec: `scope_circle_id` is a Flow field, never carried on the message).
+    // Stamp the authoritative top-level `effective_scope` onto the stored
+    // envelope so read-path visibility gating hides circle-scoped messages
+    // from realm members outside the Circle. The Flow scope is durable
+    // (projection_flows.scope_circle_id), so this survives restart.
+    if parsed.kind == kinds::CX_MESSAGE_CREATE
+        && let Some(flow_id) = envelope
+            .get("payload")
+            .and_then(|payload| payload.get("flow_id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    {
+        let scope = state
+            .projection
+            .lock()
+            .ok()
+            .and_then(|proj| proj.flow_scope_circle_id(&flow_id));
+        if let Some(scope) = scope
+            && let Some(object) = envelope.as_object_mut()
+        {
+            object.insert("effective_scope".to_owned(), Value::String(scope));
         }
     }
 
@@ -3762,9 +3787,21 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
 /// scope is the Realm default, or `None` when neither can be derived.
 fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     let object = envelope.as_object()?;
+    // Server-stamped authoritative scope. For messages this is set at ingest
+    // from the message's Flow (see submit_event_value); it always wins.
     if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
         return Some(scope.to_owned());
     }
+    // Messages NEVER carry their own scope (spec: `scope_circle_id` is a Flow
+    // field, not a message field). A message's effective circle-scope is the
+    // server-stamped `effective_scope` above, derived from its Flow at ingest.
+    // There is deliberately no client-supplied fallback, so a message cannot
+    // spoof its own visibility scope.
+    if object.get("kind").and_then(Value::as_str) == Some(kinds::CX_MESSAGE_CREATE) {
+        return None;
+    }
+    // Non-message events (e.g. cx.flow.create / cx.flow.update) legitimately
+    // carry the object's own `scope_circle_id`.
     let payload = object.get("payload").and_then(Value::as_object)?;
     if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
         return Some(scope_circle_id.to_owned());
@@ -3775,24 +3812,6 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
             .and_then(Value::as_str)
     {
         return Some(scope_circle_id.to_owned());
-    }
-    if let Some(content) = payload.get("content").and_then(Value::as_object)
-        && let Some(scope_circle_id) = content.get("scope_circle_id").and_then(Value::as_str)
-    {
-        return Some(scope_circle_id.to_owned());
-    }
-    if let Some(encrypted) = payload.get("encrypted_payload").and_then(Value::as_object) {
-        if let Some(scope_circle_id) = encrypted.get("scope_circle_id").and_then(Value::as_str) {
-            return Some(scope_circle_id.to_owned());
-        }
-        if let Some(scope_circle_id) = encrypted
-            .get("aad")
-            .and_then(Value::as_object)
-            .and_then(|aad| aad.get("scope_circle_id"))
-            .and_then(Value::as_str)
-        {
-            return Some(scope_circle_id.to_owned());
-        }
     }
     None
 }

@@ -508,7 +508,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     // Message v1 exposes the timeline track as the const string `discussion`.
     assert_eq!(
-        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["track"],
+        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["track_name"],
         "discussion"
     );
     assert_eq!(

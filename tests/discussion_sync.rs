@@ -4,7 +4,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
-use soland::reducer::{CircleLifecycleState, CircleProjection};
+use soland::reducer::{
+    CircleLifecycleState, CircleProjection, FlowProjection, ObjectLifecycleState,
+};
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
 use std::collections::BTreeSet;
@@ -201,7 +203,7 @@ async fn admit_member(
 async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) {
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
-        "track": "discussion",
+        "track_name": "discussion",
         "content": {
             "kind": "cx.content.text",
             "body": body,
@@ -283,42 +285,74 @@ fn install_projected_circle_scope(
         );
 }
 
+/// CXP-0007 — bind a Flow to a Circle scope in the projection. A message
+/// posted to this Flow inherits the Circle scope server-side (spec:
+/// `scope_circle_id` is a Flow field, never carried on the message).
+fn install_projected_flow_scope(
+    state: &AppState,
+    realm_id: &str,
+    flow_id: &str,
+    circle_id: &str,
+    created_by: &str,
+) {
+    let now = chrono::Utc::now();
+    state
+        .projection
+        .lock()
+        .expect("projection mutex")
+        .flows
+        .insert(
+            flow_id.to_owned(),
+            FlowProjection {
+                flow_id: flow_id.to_owned(),
+                space_id: realm_id.to_owned(),
+                title: "Confidential discussion".to_owned(),
+                summary: None,
+                fields: Default::default(),
+                state: ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: created_by.to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: Some(circle_id.to_owned()),
+            },
+        );
+}
+
 async fn send_circle_scoped_encrypted_message(
     state: AppState,
     token: &str,
     actor_did: &str,
     device_id: &str,
     space_id: &str,
-    circle_id: &str,
 ) -> String {
     let event_id = new_prefixed_uuid7("cx:event:");
+    // Spec-conforming encrypted message: `encrypted_content` (not the retired
+    // `encrypted_payload`), `track_name`, and an aad carrying ONLY realm_id +
+    // event_kind. The message does NOT carry scope_circle_id — its circle
+    // scope is derived server-side from the Flow (install_projected_flow_scope).
     let payload = json!({
         "flow_id": flow_id_for_realm(space_id),
-        "track": "discussion",
-        "encrypted_payload": {
+        "track_name": "discussion",
+        "encrypted_content": {
             "scheme": "mls-rfc9420",
             "version": "1.0",
             "group_id": "circleGroup123",
             "epoch": 1,
             "content_type": "application/json",
             "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",
-            "authentication_tag": "Q2lyY2xlVGFn",
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": space_id,
-                "event_kind": "cx.message.create",
-                "scope_circle_id": circle_id
+                "event_kind": "cx.message.create"
             },
             "key_ref": {
                 "algorithm": "MLS",
                 "group_state_ref": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             },
             "aad_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "digests": {
-                "aad": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-                "payload": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-            }
+            "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         }
     });
     let mut event = json!({
@@ -629,13 +663,21 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         alice_did,
         &[alice_did, bob_did],
     );
+    // Bind the discussion Flow to the Circle. The message posted below carries
+    // NO scope_circle_id — soland derives its effective scope from this Flow.
+    install_projected_flow_scope(
+        &state,
+        &space_id,
+        &flow_id_for_realm(&space_id),
+        &circle_id,
+        alice_did,
+    );
     let event_id = send_circle_scoped_encrypted_message(
         state.clone(),
         &alice,
         alice_did,
         alice_device_id,
         &space_id,
-        &circle_id,
     )
     .await;
 
@@ -670,10 +712,15 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await
         .unwrap();
     assert_eq!(bob_read["event"]["event_id"], event_id);
+    // The Circle scope is server-derived from the Flow and surfaced as the
+    // authoritative `effective_scope` — NOT carried inside the encrypted
+    // envelope's aad (spec: messages don't carry scope_circle_id).
     assert_eq!(bob_read["event"]["effective_scope"], circle_id);
-    assert_eq!(
-        bob_read["event"]["payload"]["encrypted_payload"]["aad"]["scope_circle_id"],
-        circle_id
+    assert!(
+        bob_read["event"]["payload"]["encrypted_content"]["aad"]
+            .get("scope_circle_id")
+            .is_none(),
+        "encrypted message aad MUST NOT carry scope_circle_id (spec): {bob_read:?}"
     );
 
     let mallory_read = TestClient::get(format!("http://server/api/v1/events/{event_id}"))
@@ -712,7 +759,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.text",
                 "body": "root mentions bob",
@@ -737,7 +784,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
                 "kind": "cx.content.text",
@@ -874,7 +921,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll",
                 "body": "Which window?",
@@ -898,7 +945,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll.response",
                 "body": "poll response",
@@ -917,7 +964,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll.response",
                 "body": "poll response",
@@ -936,7 +983,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll.response",
                 "body": "poll response",
@@ -971,7 +1018,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll.close",
                 "body": "poll closed",
@@ -989,7 +1036,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         "cx.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
-            "track": "discussion",
+            "track_name": "discussion",
             "content": {
                 "kind": "cx.content.poll.response",
                 "body": "poll response",

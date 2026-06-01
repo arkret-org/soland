@@ -159,7 +159,7 @@ async fn events_describe_and_single_event_submit_work() {
             "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
             "schema": "cx.schema.flow.v1",
             "realm_id": DEMO_REALM_ID,
-            "title": "Onboarding flow",
+            "metadata": { "title": "Onboarding flow" },
             "stage": "draft",
             "tracks": {
                 "discussion": {

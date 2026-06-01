@@ -192,6 +192,9 @@ pub struct FlowProjectionRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// CXP-0007 — the Circle (`cx:circle:…`) this Flow is scoped to, if any.
+    /// Durable so circle-scoped message visibility survives restart.
+    pub scope_circle_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -7642,6 +7645,8 @@ struct FlowProjectionRow {
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    scope_circle_id: Option<String>,
 }
 
 impl From<FlowProjectionRow> for FlowProjectionRecord {
@@ -7657,12 +7662,13 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
             created_at: row.created_at,
             updated_by: row.updated_by,
             updated_at: row.updated_at,
+            scope_circle_id: row.scope_circle_id,
         }
     }
 }
 
 const FLOW_PROJECTION_COLUMNS: &str = "flow_id, space_id, title, summary, state, \
-     state_changed_at, created_by, created_at, updated_by, updated_at";
+     state_changed_at, created_by, created_at, updated_by, updated_at, scope_circle_id";
 
 #[async_trait]
 impl FlowProjectionStore for PgFlowProjectionStore {
@@ -7684,8 +7690,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         sql_query(
             "INSERT INTO projection_flows \
              (flow_id, space_id, title, summary, state, state_changed_at, \
-              created_by, created_at, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+              created_by, created_at, updated_by, updated_at, scope_circle_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (flow_id) DO UPDATE SET \
                 space_id = EXCLUDED.space_id, \
                 title = EXCLUDED.title, \
@@ -7693,7 +7699,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by = EXCLUDED.updated_by, \
-                updated_at = EXCLUDED.updated_at",
+                updated_at = EXCLUDED.updated_at, \
+                scope_circle_id = EXCLUDED.scope_circle_id",
         )
         .bind::<Text, _>(&record.flow_id)
         .bind::<Text, _>(&record.space_id)
@@ -7705,6 +7712,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
+        .bind::<Nullable<Text>, _>(&record.scope_circle_id)
         .execute(&mut *conn)
         .await
         .map(|_| ())
