@@ -317,7 +317,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
                 "id": morph_id,
                 "space_id": space_id,
                 "morph_type": "task",
-                "title": "Hydration morph",
+                "metadata": { "title": "Hydration morph" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -422,7 +422,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
                 "id": morph_id,
                 "space_id": realm_id,
                 "morph_type": "document",
-                "title": "Postmortem draft",
+                "metadata": { "title": "Postmortem draft" },
                 "schema_refs": ["cx.schema.morph.v1"],
                 "facets": {
                     "documentable": {}
@@ -913,7 +913,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
                 "id": morph_id,
                 "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
-                "title": "Persistent Morph",
+                "metadata": { "title": "Persistent Morph" },
                 "created_by": "did:web:alice.example",
             }
         }),

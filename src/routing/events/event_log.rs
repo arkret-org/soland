@@ -4573,14 +4573,17 @@ mod proof_strictness_tests {
         );
 
         for event_kind in object_patch_kinds {
+            let patch = if matches!(event_kind, "cx.flow.update" | "cx.morph.update") {
+                json!({ "metadata.title": { "$op": "set", "value": "Roadmap" } })
+            } else {
+                json!({ "title": { "$op": "set", "value": "Roadmap" } })
+            };
             catalog
                 .validate_payload(
                     event_kind,
                     &json!({
                             "target_ref": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
-                            "patch": {
-                                "title": { "$op": "set", "value": "Roadmap" }
-                            }
+                            "patch": patch
                     }),
                 )
                 .unwrap_or_else(|err| {

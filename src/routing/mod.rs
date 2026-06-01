@@ -1890,13 +1890,13 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
-                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "title": "Backfill", "schema_refs": ["cx.schema.morph.v1"]}}),
+                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["cx.schema.morph.v1"]}}),
                 valid: true,
             },
             OperationVector {
                 name: "morph update",
                 kind: kinds::CX_MORPH_UPDATE,
-                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"title": "Backfill v2"}}),
+                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
                 valid: true,
             },
             OperationVector {

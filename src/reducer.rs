@@ -6961,7 +6961,9 @@ impl ProjectionState {
             .unwrap_or("")
             .to_owned();
         let title = object
-            .get("title")
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("title"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         let fields = object_map_to_fields(object.get("fields"));
@@ -7038,7 +7040,7 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
-            if let Some(title) = patch_string_value(patch, "title") {
+            if let Some(title) = patch_metadata_string_value(patch, "title") {
                 morph.title = title;
             }
             if let Some(morph_type) = patch_string_value(patch, "morph_type").flatten() {
@@ -9909,7 +9911,7 @@ mod tests {
                         "id": morph_id,
                         "space_id": space_id,
                         "morph_type": "task",
-                        "title": "Backfill",
+                        "metadata": { "title": "Backfill" },
                         "created_by": "did:web:alice.example",
                     }
                 }),
@@ -9962,7 +9964,7 @@ mod tests {
                         "id": morph_id,
                         "space_id": space_id,
                         "morph_type": "task",
-                        "title": "Backfill",
+                        "metadata": { "title": "Backfill" },
                         "created_by": "did:web:alice.example",
                     }
                 }),
@@ -10005,7 +10007,7 @@ mod tests {
             space_id,
             serde_json::json!({
                 "morph_id": morph_id,
-                "patch": { "title": "Edit blocked" }
+                "patch": { "metadata.title": "Edit blocked" }
             }),
         );
         assert_eq!(
@@ -10213,7 +10215,7 @@ mod tests {
                         "id": morph_id,
                         "space_id": space_id,
                         "morph_type": "task",
-                        "title": "Sensitive task",
+                        "metadata": { "title": "Sensitive task" },
                         "created_by": "did:web:alice.example",
                     }
                 }),
@@ -10305,7 +10307,7 @@ mod tests {
                         "id": morph_id,
                         "space_id": space_id,
                         "morph_type": "task",
-                        "title": "Task",
+                        "metadata": { "title": "Task" },
                         "created_by": "did:web:alice.example",
                     }
                 }),

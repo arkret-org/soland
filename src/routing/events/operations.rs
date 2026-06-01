@@ -1090,7 +1090,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CX_MORPH_CREATE => OperationPayloadSchema {
             requirements: MORPH_CREATE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_morph_create_payload),
         },
         kinds::CX_MORPH_UPDATE => OperationPayloadSchema {
             requirements: MORPH_UPDATE_REQUIREMENTS,
@@ -1505,13 +1505,88 @@ fn validate_sender_commitment_payload_binding(
 }
 
 fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
-    if operation
-        .payload
-        .get("patch")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|patch| patch.contains_key("schema_refs"))
-    {
+    let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    reject_legacy_morph_patch_fields(patch)?;
+    if patch.contains_key("content") && patch.contains_key("encrypted_content") {
+        return Err("morph_content_carrier_conflict");
+    }
+    if patch.contains_key("metadata") && patch.contains_key("encrypted_metadata") {
+        return Err("morph_metadata_carrier_conflict");
+    }
+    if patch.contains_key("schema_refs") {
         return Err("morph_schema_refs_evolution_unauthorized");
+    }
+    Ok(())
+}
+
+fn validate_morph_create_payload(operation: &Operation) -> Result<(), &'static str> {
+    let Some(object) = operation.payload.get("object").and_then(Value::as_object) else {
+        return Err("morph_create_object_invalid");
+    };
+    reject_legacy_morph_object_fields(object)?;
+    if object.contains_key("content") && object.contains_key("encrypted_content") {
+        return Err("morph_content_carrier_conflict");
+    }
+    if object.contains_key("metadata") && object.contains_key("encrypted_metadata") {
+        return Err("morph_metadata_carrier_conflict");
+    }
+    if let Some(metadata) = object.get("metadata").and_then(Value::as_object) {
+        reject_morph_metadata_business_fields(metadata)?;
+    }
+    Ok(())
+}
+
+fn reject_legacy_morph_object_fields(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for field in ["title", "summary", "encrypted_payload"] {
+        if object.contains_key(field) {
+            return Err("morph_legacy_wire_field");
+        }
+    }
+    Ok(())
+}
+
+fn reject_legacy_morph_patch_fields(
+    patch: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for field in ["title", "summary", "encrypted_payload"] {
+        if patch.contains_key(field) {
+            return Err("morph_legacy_wire_field");
+        }
+    }
+    Ok(())
+}
+
+fn reject_morph_metadata_business_fields(
+    metadata: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for field in [
+        "id",
+        "schema",
+        "realm_id",
+        "scope_circle_id",
+        "schema_refs",
+        "morph_type",
+        "facets",
+        "fields",
+        "stage",
+        "stage_changed_at",
+        "state",
+        "state_changed_at",
+        "created_by",
+        "created_at",
+        "updated_by",
+        "updated_at",
+        "content",
+        "encrypted_content",
+        "encrypted_payload",
+    ] {
+        if metadata.contains_key(field) {
+            return Err("morph_metadata_business_field");
+        }
     }
     Ok(())
 }
@@ -3169,7 +3244,71 @@ mod spec_sync_validator_tests {
     }
 
     #[test]
+    fn morph_create_rejects_legacy_metadata_and_payload_names() {
+        let schema = operation_schema_for_kind(kinds::CX_MORPH_CREATE).unwrap();
+        let valid = op(
+            kinds::CX_MORPH_CREATE,
+            json!({
+                "object": {
+                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                    "morph_type": "document",
+                    "schema_refs": ["cx.schema.morph.v1"],
+                    "metadata": {"title": "Spec"},
+                    "encrypted_content": {"version": 1}
+                }
+            }),
+        );
+        assert!(validate_operation_schema(&valid, schema).is_ok());
+
+        let legacy_title = op(
+            kinds::CX_MORPH_CREATE,
+            json!({
+                "object": {
+                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                    "morph_type": "document",
+                    "schema_refs": ["cx.schema.morph.v1"],
+                    "title": "Spec"
+                }
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&legacy_title, schema),
+            Err("morph_legacy_wire_field")
+        );
+
+        let content_conflict = op(
+            kinds::CX_MORPH_CREATE,
+            json!({
+                "object": {
+                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                    "morph_type": "document",
+                    "schema_refs": ["cx.schema.morph.v1"],
+                    "content": {},
+                    "encrypted_content": {}
+                }
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&content_conflict, schema),
+            Err("morph_content_carrier_conflict")
+        );
+    }
+
+    #[test]
     fn morph_schema_refs_use_migrate_gate() {
+        let update_schema = operation_schema_for_kind(kinds::CX_MORPH_UPDATE).unwrap();
+        let legacy_title = op(
+            kinds::CX_MORPH_UPDATE,
+            json!({
+                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "patch": {"title": "Spec v2"}
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&legacy_title, update_schema),
+            Err("morph_legacy_wire_field")
+        );
+
         let update = op(
             kinds::CX_MORPH_UPDATE,
             json!({
@@ -3177,7 +3316,6 @@ mod spec_sync_validator_tests {
                 "patch": {"schema_refs": ["cx.schema.new"]}
             }),
         );
-        let update_schema = operation_schema_for_kind(kinds::CX_MORPH_UPDATE).unwrap();
         assert_eq!(
             validate_operation_schema(&update, update_schema),
             Err("morph_schema_refs_evolution_unauthorized")

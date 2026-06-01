@@ -292,7 +292,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
                 "id": morph_id,
                 "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
-                "title": "Backfill",
+                "metadata": { "title": "Backfill" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -351,7 +351,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "target_ref": morph_id,
             "morph_id": morph_id,
-            "patch": { "title": "Renamed" }
+            "patch": { "metadata": { "title": "Renamed" } }
         }),
         vec!["cx:event:01904100-0000-7000-8000-e20ec0000003"],
     );
@@ -728,7 +728,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
                 "id": morph_id,
                 "space_id": DEMO_REALM_ID,
                 "morph_type": "task",
-                "title": "Sensitive task",
+                "metadata": { "title": "Sensitive task" },
                 "created_by": "did:web:alice.example",
             }
         }),
