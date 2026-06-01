@@ -1228,14 +1228,17 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         .unwrap_or(false)
         || operation.payload.get("encrypted_payload").is_some();
     if encrypted {
-        let Some(content) = operation
-            .payload
-            .get("encrypted_payload")
-            .or_else(|| operation.payload.get("content"))
-        else {
+        // The encrypted payload SHAPE is owned by the registered spec schema
+        // `cx.schema.encrypted_envelope.v1` (referenced from
+        // `message_create_payload` and enforced via
+        // `event_payload_validator_catalog().validate_payload`). The spec
+        // schema is the single source of truth — we only assert presence here
+        // and never re-derive a divergent hand-written envelope shape.
+        if operation.payload.get("encrypted_payload").is_none()
+            && operation.payload.get("content").is_none()
+        {
             return Err("encrypted message operation requires content envelope");
-        };
-        validate_encrypted_payload_envelope(content)?;
+        }
     } else if let Some(content) = operation.payload.get("content") {
         validate_content_blocks(content)?;
         validate_mentions(content)?;
