@@ -3169,7 +3169,11 @@ async fn member_join_accepts_pending_invite(
     if target_actor != actor {
         return false;
     }
-    let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
+    let Some(invite_id) = payload
+        .get("invite_ref")
+        .or_else(|| payload.get("invite_id"))
+        .and_then(Value::as_str)
+    else {
         return false;
     };
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
@@ -3579,6 +3583,11 @@ fn projection_operation_from_event(
         if target_ref.starts_with("cx:flow:") {
             payload_object
                 .entry("flow_id".to_owned())
+                .or_insert_with(|| Value::String(target_ref.clone()));
+        }
+        if target_ref.starts_with("cx:space:") {
+            payload_object
+                .entry("space_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
         if target_ref.starts_with("cx:morph:") {
@@ -4399,6 +4408,47 @@ mod proof_strictness_tests {
     }
 
     #[test]
+    fn member_state_invite_accept_uses_canonical_invite_ref() {
+        let state = make_state(true);
+        let valid = json!({
+            "payload": {
+                "actor_id": "did:web:bob.example",
+                "membership": "join",
+                "reason": "invite_accept",
+                "invite_ref": "cx:invite:01904100-0000-7000-8000-000000000001",
+                "delivery_status": "unroutable"
+            }
+        });
+        validate_event_schema_and_payload(
+            &state,
+            "cx.member.state",
+            "cx.schema.event.v1",
+            &valid,
+            valid.as_object().unwrap(),
+        )
+        .expect("cx.member.state invite accept should allow invite_ref");
+
+        let legacy = json!({
+            "payload": {
+                "actor_id": "did:web:bob.example",
+                "membership": "join",
+                "reason": "invite_accept",
+                "invite_id": "cx:invite:01904100-0000-7000-8000-000000000001",
+                "delivery_status": "unroutable"
+            }
+        });
+        let err = validate_event_schema_and_payload(
+            &state,
+            "cx.member.state",
+            "cx.schema.event.v1",
+            &legacy,
+            legacy.as_object().unwrap(),
+        )
+        .expect_err("cx.member.state invite accept must reject legacy invite_id");
+        assert_eq!(err.code, "schema_violation");
+    }
+
+    #[test]
     fn event_payload_validator_enforces_flow_update_object_patch_schema() {
         let state = make_state(true);
         let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
@@ -4488,6 +4538,7 @@ mod proof_strictness_tests {
             "cx.realm.update",
             "cx.flow.update",
             "cx.morph.update",
+            "cx.space.update",
             "cx.profile.update",
             "cx.profile.space_override",
         ];

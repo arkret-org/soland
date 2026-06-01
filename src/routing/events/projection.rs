@@ -2177,20 +2177,11 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
-    let Some(invite_id) = operation
-        .payload
-        .get("invite_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
         return;
     };
-    if ids::parse_typed_uuid(invite_id, "invite").is_none() {
-        return;
-    }
     let invites = state.persistence.space_invites();
-    let Ok(Some(mut record)) = invites.get(invite_id).await else {
+    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         return;
     };
     if record.invitee.as_deref() != Some(member) {
@@ -2203,6 +2194,17 @@ async fn project_invite_acceptance(state: &AppState, member: &str, operation: &O
     if let Err(error) = invites.put(record).await {
         tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
     }
+}
+
+fn invite_acceptance_ref_for_operation(operation: &Operation) -> Option<String> {
+    operation
+        .payload
+        .get("invite_ref")
+        .or_else(|| operation.payload.get("invite_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| ids::parse_typed_uuid(value, "invite").is_some())
+        .map(str::to_owned)
 }
 
 async fn project_invite_create_operation(state: &AppState, origin: &str, operation: &Operation) {
@@ -2583,6 +2585,26 @@ mod tests {
 
         assert_eq!(operation_realm_title(&operation), None);
         assert_eq!(operation_realm_summary(&operation), None);
+    }
+
+    #[test]
+    fn invite_acceptance_ref_reads_canonical_invite_ref() {
+        let invite_id = "cx:invite:01904100-0000-7000-8000-000000000003";
+        let operation = op(
+            kinds::CX_MEMBER_STATE,
+            json!({
+                "actor_id": "did:web:bob.example",
+                "membership": "join",
+                "reason": "invite_accept",
+                "invite_ref": invite_id,
+                "delivery_status": "unroutable"
+            }),
+        );
+
+        assert_eq!(
+            invite_acceptance_ref_for_operation(&operation).as_deref(),
+            Some(invite_id)
+        );
     }
 
     #[test]
