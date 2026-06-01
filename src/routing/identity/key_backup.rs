@@ -401,12 +401,11 @@ fn validate_mls_history_opaque_only(backup: &Value) -> Result<(), AppError> {
 /// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
 /// for `PUT /api/v1/keys/backups/{backup_id}`. Returns one of the three
 /// canonical 409 reasons:
-/// - `series_chain_broken`     — supersedes_digest is missing/empty when
-///   `series_seq > 0`
-/// - `series_seq_not_monotonic`— the new envelope's `series_seq` does not
-///   immediately follow the latest persisted seq for the series
-/// - `series_predecessor_not_found` — the envelope claims a predecessor
-///   (`supersedes`) that is not persisted
+/// - `series_chain_broken`     — supersedes_digest is missing/empty when `series_seq > 0`
+/// - `series_seq_not_monotonic`— the new envelope's `series_seq` does not immediately follow the
+///   latest persisted seq for the series
+/// - `series_predecessor_not_found` — the envelope claims a predecessor (`supersedes`) that is not
+///   persisted
 async fn enforce_key_backup_series_chain(
     state: &AppState,
     actor_id: &str,
@@ -800,8 +799,9 @@ async fn delete_key_backup(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
     const BACKUP_ID: &str = "cx:backup:01964137-0000-7000-8000-000000000001";

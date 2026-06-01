@@ -15,7 +15,8 @@ use super::{now, sha256_hex, space_has_member};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::system::{extract::AuthArgs, util::query_param};
+use crate::routing::system::extract::AuthArgs;
+use crate::routing::system::util::query_param;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {

@@ -11,7 +11,8 @@
 //! Blob metadata carries the spec `realm_id` association; plaintext-visibility
 //! is enforced at write time but not at GC.
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;

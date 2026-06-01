@@ -271,27 +271,20 @@ pub const CX_ORGANIZATION_MODERATION_POLICY: &str = "cx.organization.moderation_
 //
 // Canonical kinds per
 // `contrix-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `cx.mls.keypackage`    — KeyPackage publication. The publish/claim
-//                              distinction lives at the HTTP operation_id
-//                              layer (`cx.keys.keypackages.upload` /
-//                              `cx.keys.keypackages.claim`); the event log
-//                              stores only the canonical kind. The reducer
-//                              dispatches publish-vs-claim on the
-//                              `payload.action == "publish" | "claim"` field.
-//   - `cx.mls.welcome`       — Welcome envelope reference. Per-(recipient,
-//                              device) queue semantics are conveyed via
-//                              payload shape; no separate `.enqueue` suffix.
-//   - `cx.mls.commit`        — MLS commit (bumps the group's stored epoch
-//                              by +1 from `payload.expected_prev_epoch`).
-//                              The "epoch" semantics live in the payload,
-//                              not in the kind suffix.
-//   - `cx.mls.proposal`      — MLS proposal (wire-only; no reducer projection
-//                              yet).
-//   - `cx.mls.genesis`       — MLS group genesis (initializes epoch 0
-//                              and the covered-frontier accumulator).
-//   - `cx.mls.commit_failed` — diagnostic of a failed commit / Welcome
-//                              processing path (wire-only; no reducer
-//                              projection yet).
+//   - `cx.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
+//     HTTP operation_id layer (`cx.keys.keypackages.upload` / `cx.keys.keypackages.claim`); the
+//     event log stores only the canonical kind. The reducer dispatches publish-vs-claim on the
+//     `payload.action == "publish" | "claim"` field.
+//   - `cx.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
+//     are conveyed via payload shape; no separate `.enqueue` suffix.
+//   - `cx.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
+//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
+//     suffix.
+//   - `cx.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
+//   - `cx.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered-frontier
+//     accumulator).
+//   - `cx.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
+//     no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
@@ -658,10 +651,8 @@ pub fn is_flow_tracks_kind(kind: &str) -> bool {
 // here so the reducer registry can dispatch.
 //
 // Spec anchors:
-//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor
-//     accountability model)
-//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route,
-//     audit chain)
+//   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
+//   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
 pub const CX_EXTENSIONS_BOT_REGISTER: &str = "cx.extensions.bot_actor.register";
 pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
 pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
@@ -670,8 +661,9 @@ pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn mls_governance_binding_requires_current_wire_shape() {

@@ -6,10 +6,8 @@
 
 #![allow(dead_code)]
 
-pub(crate) use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
+pub(crate) use std::time::Duration;
 
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

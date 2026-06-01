@@ -2,10 +2,9 @@
 //!
 //! Projects the per-Realm `cx.realm.policy_server` declaration into:
 //!
-//! 1. the canonical `cx.component.realm.policy_server.v1` cas-register
-//!    cell (per SDK `lattice_registry::RealmPolicyServer`); and
-//! 2. the structured side-band cache
-//!    [`crate::reducer::ProjectionState::realm_policy_servers`].
+//! 1. the canonical `cx.component.realm.policy_server.v1` cas-register cell (per SDK
+//!    `lattice_registry::RealmPolicyServer`); and
+//! 2. the structured side-band cache [`crate::reducer::ProjectionState::realm_policy_servers`].
 //!
 //! Org-level fallback (when a child Realm has no declaration of its
 //! own) is resolved at *query time* in
@@ -150,10 +149,11 @@ pub fn apply_realm_policy_server(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::reducer::RealmLinkState;
     use contrix_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
+
+    use super::*;
+    use crate::reducer::RealmLinkState;
 
     const REALM_CHILD: &str = "cx:realm:01904100-0000-7000-8000-cccccccccccc";
     const REALM_ORG: &str = "cx:realm:01904100-0000-7000-8000-000000000000";

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use contrix_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
@@ -7,7 +9,6 @@ use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(2_000);
 

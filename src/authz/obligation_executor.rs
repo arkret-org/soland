@@ -5,19 +5,14 @@
 //! kinds explicitly listed in `contrix-spec/spec/v1/zh/authz/policy-server.md`
 //! §4 `obligations`:
 //!
-//! - `require_mfa` — flag the [`RequestContext`] as needing MFA before
-//!   the request may mutate state. If the caller has not already
-//!   completed MFA, the executor returns
-//!   [`ObligationError::MfaRequired`] which the integration layer maps
-//!   to an authorization deny.
-//! - `log_to_audit` — emit a tracing record on the structured
-//!   `policy_audit_obligation` target carrying the full obligation
-//!   payload.
-//! - `rate_limit` — consult the realm's request_rate_counter in
-//!   [`RequestContext`]; if the counter exceeds the obligation's
-//!   declared `limit`, the executor returns
-//!   [`ObligationError::RateLimited`] which the integration layer maps
-//!   to HTTP 429.
+//! - `require_mfa` — flag the [`RequestContext`] as needing MFA before the request may mutate
+//!   state. If the caller has not already completed MFA, the executor returns
+//!   [`ObligationError::MfaRequired`] which the integration layer maps to an authorization deny.
+//! - `log_to_audit` — emit a tracing record on the structured `policy_audit_obligation` target
+//!   carrying the full obligation payload.
+//! - `rate_limit` — consult the realm's request_rate_counter in [`RequestContext`]; if the counter
+//!   exceeds the obligation's declared `limit`, the executor returns
+//!   [`ObligationError::RateLimited`] which the integration layer maps to HTTP 429.
 //!
 //! Unknown obligation `kind` values are logged at warn level and
 //! produce [`ObligationError::UnknownKind`] — fail-closed per the
@@ -162,8 +157,9 @@ fn execute_rate_limit(obligation: &Value, ctx: &RequestContext) -> Result<(), Ob
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn ctx() -> RequestContext {
         RequestContext {

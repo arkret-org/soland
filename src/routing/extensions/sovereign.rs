@@ -8,8 +8,8 @@
 //! The enclave profile MUST disable:
 //!   - outbound federation (`federation_outbound_enabled == false`)
 //!   - public discovery
-//!   - public DID resolution (the resolver only accepts DIDs whose
-//!     method appears in `allowed_did_methods`)
+//!   - public DID resolution (the resolver only accepts DIDs whose method appears in
+//!     `allowed_did_methods`)
 //!
 //! Every outbound HTTP call from the enclave logs through
 //! [`audit_outbound_call`] with `target = "sovereign_boundary_audit"`.
@@ -35,12 +35,11 @@ use serde_json::{Value, json};
 
 use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::ids;
 use crate::state::{
     AppState, SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
     SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
 };
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, ids, json_ok};
 
 /// Result of [`assert_enclave_invariants`]. The enclave profile is
 /// considered satisfied only when every invariant holds.

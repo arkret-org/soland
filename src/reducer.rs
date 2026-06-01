@@ -112,10 +112,9 @@ pub struct ProjectionState {
     ///     (ordered-log, append) / `cx.component.realm.organization.v1` (cas-register, latest
     ///     metadata) / `cx.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
-    ///     directly.
-    ///     Durable-event-only fields (`messages` / `reactions` / `read_cursors`
-    ///     / `relations` / `redactions`) stay structured per spec
-    ///     (those event kinds have no `cell_family` declaration).
+    ///     directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
+    ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
+    ///     `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
@@ -1103,8 +1102,8 @@ pub struct SpaceState {
     /// `apply_realm_lifecycle` when a `cx.realm.tombstone` or
     /// `cx.realm.destroy` event is projected. Possible values:
     ///   - `None` — Realm is live.
-    ///   - `Some("tombstoned")` — `cx.realm.tombstone` accepted; the
-    ///     `successor_realm_id` field carries the migration target.
+    ///   - `Some("tombstoned")` — `cx.realm.tombstone` accepted; the `successor_realm_id` field
+    ///     carries the migration target.
     ///   - `Some("destroyed")` — `cx.realm.destroy` accepted; no successor.
     ///
     /// Both terminal states block non-audit writes via
@@ -4411,13 +4410,11 @@ impl ProjectionState {
     /// `/api/v1/realms/{id}/links` query API.
     ///
     /// Schema-level validation:
-    /// - `link_kind` MUST be one of the eight canonical values declared
-    ///   on `contrix_sdk::RealmLinkKind`.
+    /// - `link_kind` MUST be one of the eight canonical values declared on
+    ///   `contrix_sdk::RealmLinkKind`.
     /// - `target_realm_id` is required and MUST be a Realm-shaped id.
-    /// - `status` defaults to `active`; valid values are
-    ///   `active|rejected|tombstoned`.
-    /// - Self-referential links (target == source) are rejected with
-    ///   `realm_link_self_reference`.
+    /// - `status` defaults to `active`; valid values are `active|rejected|tombstoned`.
+    /// - Self-referential links (target == source) are rejected with `realm_link_self_reference`.
     fn apply_realm_link(
         &mut self,
         operation: &Operation,
@@ -5287,11 +5284,10 @@ impl ProjectionState {
     /// before this rename, so no extraction was needed.
     ///
     /// Spec anchors:
-    ///   - `realm-and-space.md` §2.5 (terminal state distinction:
-    ///     tombstone vs destroy)
+    ///   - `realm-and-space.md` §2.5 (terminal state distinction: tombstone vs destroy)
     ///   - `realm-and-space.md` §2.5.1 (destroy cascade rules)
-    ///   - `realm-and-space.md` §2.5.2 (erasure receipt fanout —
-    ///     reducer leg only; the actual federation push lives outside)
+    ///   - `realm-and-space.md` §2.5.2 (erasure receipt fanout — reducer leg only; the actual
+    ///     federation push lives outside)
     fn apply_realm_lifecycle(
         &mut self,
         operation: &Operation,

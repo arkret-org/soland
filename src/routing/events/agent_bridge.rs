@@ -4,30 +4,25 @@
 //! agent registered via `cx.agent.endpoint`, this module fans out the
 //! lifecycle as projection events:
 //!
-//! 1. `cx.agent.protocol_session.status` with `status="working"` once
-//!    the runtime acknowledges the invocation.
-//! 2. `cx.agent.protocol_session.result` carrying the terminal payload
-//!    plus an Ed25519-signed `audit_binding` block (signature is
-//!    computed by `contrix_sdk::agent_binding::sign_ed25519_audit_binding`
-//!    over the canonical subject `{session_id, agent_principal_id,
-//!    result.echo, actor}`).
+//! 1. `cx.agent.protocol_session.status` with `status="working"` once the runtime acknowledges the
+//!    invocation.
+//! 2. `cx.agent.protocol_session.result` carrying the terminal payload plus an Ed25519-signed
+//!    `audit_binding` block (signature is computed by
+//!    `contrix_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
+//!    `{session_id, agent_principal_id, result.echo, actor}`).
 //!
 //! Dispatch rules:
 //!
-//! - The runtime first looks up `counterparty_agent` in
-//!   `state.projection.lock().agents`. When no AgentProjection is
-//!   present the bridge fails closed with a single
-//!   `cx.agent.protocol_session.result` (`status="failed"` +
-//!   `error.code="unknown_agent"`) and emits no status(working).
-//! - When the registered agent carries an `endpoint_url`, the runtime
-//!   POSTs the invocation to it via reqwest on a tokio task and
-//!   emits the result event when the upstream replies. Failures
-//!   (timeout, non-2xx, connection refused) surface as
-//!   `status="failed"` + `error.code="upstream_unreachable"`.
-//! - When no `endpoint_url` is registered the runtime emits an
-//!   in-process echo result that mirrors `params` back into
-//!   `result.echo` so the wire path is exercised without a real
-//!   agent service.
+//! - The runtime first looks up `counterparty_agent` in `state.projection.lock().agents`. When no
+//!   AgentProjection is present the bridge fails closed with a single
+//!   `cx.agent.protocol_session.result` (`status="failed"` + `error.code="unknown_agent"`) and
+//!   emits no status(working).
+//! - When the registered agent carries an `endpoint_url`, the runtime POSTs the invocation to it
+//!   via reqwest on a tokio task and emits the result event when the upstream replies. Failures
+//!   (timeout, non-2xx, connection refused) surface as `status="failed"` +
+//!   `error.code="upstream_unreachable"`.
+//! - When no `endpoint_url` is registered the runtime emits an in-process echo result that mirrors
+//!   `params` back into `result.echo` so the wire path is exercised without a real agent service.
 //!
 //! Distinct from the applet echo bridge (`applet_bridge.rs`) in two
 //! ways: (a) two events fan out instead of one, and (b) the terminal
@@ -36,11 +31,9 @@
 
 use serde_json::{Value, json};
 
-use crate::ids;
-use crate::kinds;
-use crate::state::{AppState, EventNotification, ProjectionEventRecord};
-
 use super::projection::append_projection_event;
+use crate::state::{AppState, EventNotification, ProjectionEventRecord};
+use crate::{ids, kinds};
 
 /// Reference Ed25519 signing seed used by the in-process echo
 /// runtime to sign `audit_binding` blocks. The 32-byte seed produces
@@ -436,13 +429,15 @@ async fn emit_agent_result_envelope(
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
+    use contrix_sdk::{Operation, OperationId, RealmId};
+
     use super::*;
     use crate::config::AppConfig;
     use crate::db::Db;
     use crate::state::AppState;
-    use contrix_sdk::{Operation, OperationId, RealmId};
-    use std::net::SocketAddr;
-    use std::str::FromStr;
 
     fn test_state() -> AppState {
         let config = AppConfig {

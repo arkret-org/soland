@@ -10,7 +10,8 @@
 //! Routes (mirror of `/api/v1/realms` / `/api/v1/spaces` style):
 //!
 //! - `POST   /api/v1/circles`                              create Circle
-//! - `GET    /api/v1/circles`                              list Circles (filtered by `realm_id` query)
+//! - `GET    /api/v1/circles`                              list Circles (filtered by `realm_id`
+//!   query)
 //! - `GET    /api/v1/circles/{circle_id}`                  read Circle
 //! - `POST   /api/v1/circles/{circle_id}/members`          add member
 //! - `DELETE /api/v1/circles/{circle_id}/members/{actor}`  remove member

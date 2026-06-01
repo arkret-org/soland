@@ -8,12 +8,14 @@
 //!
 //! Wire shapes mirror `cotest/e2e/scenarios/conformance/encoding-vectors.md`
 //! Pre-conditions §:
-//!   POST /api/v1/conformance/encode    { vector_id, input }                              → { canonical_json, digest }
-//!   POST /api/v1/conformance/sign      { vector_id, event, signing_key_ref }             → { canonical_bytes, digest, signature, public_key }
-//!   POST /api/v1/conformance/hlc-merge { vector_id, clocks: [{actor, hlc, payload_hint}] } → { ordered: [...] }
-//!   POST /api/v1/conformance/cursor    { vector_id, events, reduce_round }               → { cursor }
-//!   POST /api/v1/conformance/envelope  { vector_id, envelope }                           → { canonical_bytes, digest }
-//!   POST /api/v1/conformance/redact    { vector_id, event, redaction, viewer_did }       → { projected_event }
+//!   POST /api/v1/conformance/encode    { vector_id, input }                              → {
+//! canonical_json, digest }   POST /api/v1/conformance/sign      { vector_id, event,
+//! signing_key_ref }             → { canonical_bytes, digest, signature, public_key }   POST /api/
+//! v1/conformance/hlc-merge { vector_id, clocks: [{actor, hlc, payload_hint}] } → { ordered: [...]
+//! }   POST /api/v1/conformance/cursor    { vector_id, events, reduce_round }               → {
+//! cursor }   POST /api/v1/conformance/envelope  { vector_id, envelope }
+//! → { canonical_bytes, digest }   POST /api/v1/conformance/redact    { vector_id, event,
+//! redaction, viewer_did }       → { projected_event }
 //!
 //! Reject paths (`vector_id` starts with `reject_`) return HTTP 4xx with
 //! `error.code` in the documented set:
@@ -775,7 +777,7 @@ fn row_matches_query(row: &Value, query_value: &Value) -> bool {
             "gte" => compare_json(actual, expected)
                 .is_some_and(|ordering| matches!(ordering, Ordering::Greater | Ordering::Equal)),
             "contains" => contains_json(actual, expected),
-            "exists" => expected.as_bool().unwrap_or(true) == !actual.is_null(),
+            "exists" => expected.as_bool().unwrap_or(true) != actual.is_null(),
             "prefix" => actual
                 .as_str()
                 .zip(expected.as_str())
@@ -993,8 +995,9 @@ fn projection_event_diagnostic(record: &ProjectionEventRecord) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn encode_reject_classifier_recognizes_documented_prefixes() {

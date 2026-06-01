@@ -12,14 +12,13 @@
 //! bridging, or bot capability inheritance chains.
 //!
 //! Spec anchors:
-//!   - `contrix-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5
-//!     (manifest signing, bot / ghost actor accountability)
-//!   - `contrix-spec/spec/v1/zh/extensions/applet-schema.md`
-//!     (manifest schema)
-//!   - `contrix-spec/spec/v1/zh/identity/tsp-integration.md` §3–§8
-//!     (TSP transport declaration, relationship bootstrap, audit chain)
-//!   - `contrix-spec/spec/v1/zh/sync/sovereign-deployment.md` §2–§6
-//!     (sovereign enclave profile, outbound federation guard)
+//!   - `contrix-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
+//!     ghost actor accountability)
+//!   - `contrix-spec/spec/v1/zh/extensions/applet-schema.md` (manifest schema)
+//!   - `contrix-spec/spec/v1/zh/identity/tsp-integration.md` §3–§8 (TSP transport declaration,
+//!     relationship bootstrap, audit chain)
+//!   - `contrix-spec/spec/v1/zh/sync/sovereign-deployment.md` §2–§6 (sovereign enclave profile,
+//!     outbound federation guard)
 //!
 //! TODO(G3.S9-followup): full TSP envelope verify/decrypt + nested
 //! metadata-privacy enforcement; capability inheritance from primary

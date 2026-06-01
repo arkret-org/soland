@@ -255,8 +255,7 @@ struct TracingGuards {
 
 fn init_tracing(log_format: soland::config::LogFormat) -> anyhow::Result<TracingGuards> {
     use soland::config::LogFormat;
-    use tracing_subscriber::fmt;
-    use tracing_subscriber::{Layer, Registry};
+    use tracing_subscriber::{Layer, Registry, fmt};
 
     let filter = tracing_subscriber::EnvFilter::from_default_env();
     // Stdout writer: structured JSON in production, ANSI-decorated text in

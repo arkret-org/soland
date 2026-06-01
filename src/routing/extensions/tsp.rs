@@ -4,15 +4,12 @@
 //! Implements the minimum wire surface required by
 //! `cotest/e2e/scenarios/identity/tsp-bootstrap.md`:
 //!
-//! - **Transport declaration** — an actor publishes a TSP transport
-//!   (endpoint URL + supported protocols). Spec
-//!   `identity/tsp-integration.md` §4 (Endpoint).
-//! - **Route establishment** — two actors agree on a sequence of
-//!   transports forming a TSP route. Spec §3 (Relationship) + §5
-//!   (Contrix over TSP).
-//! - **Audit chain** — every TSP route hop emits an audit entry. Spec
-//!   §8 (Security: audit log records relationship id + payload hash +
-//!   verification result).
+//! - **Transport declaration** — an actor publishes a TSP transport (endpoint URL + supported
+//!   protocols). Spec `identity/tsp-integration.md` §4 (Endpoint).
+//! - **Route establishment** — two actors agree on a sequence of transports forming a TSP route.
+//!   Spec §3 (Relationship) + §5 (Contrix over TSP).
+//! - **Audit chain** — every TSP route hop emits an audit entry. Spec §8 (Security: audit log
+//!   records relationship id + payload hash + verification result).
 //!
 //! All state is process-local for the stub (see TODO at bottom).
 //!
@@ -425,8 +422,9 @@ async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> J
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
+    use super::*;
 
     // Same serialisation rationale as `bot_actor::tests::TEST_GUARD`.
     static TEST_GUARD: Mutex<()> = Mutex::new(());

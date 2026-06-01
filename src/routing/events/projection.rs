@@ -35,13 +35,12 @@ use super::{
     flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
-use crate::ids;
-use crate::kinds;
 use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
 use crate::state::{
     AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord,
     RetentionPolicyRecord, RetentionTombstoneRecord, SpaceInviteRecord,
 };
+use crate::{ids, kinds};
 
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {
@@ -1825,7 +1824,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                 deleted: false,
                 discoverability: operation_realm_discoverability(operation)
                     .filter(|value| is_valid_discoverability(value))
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         if payload_public || directory_public {
                             "public"
                         } else {
@@ -2505,8 +2504,9 @@ fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     const REALM_ID: &str = "cx:realm:01904100-0000-7000-8000-000000000001";
     const OPERATION_ID: &str = "cx:operation:01904100-0000-7000-8000-000000000002";

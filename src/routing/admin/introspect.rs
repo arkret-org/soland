@@ -5,15 +5,12 @@
 //! response carrying `(principal_id, admin_scopes, expires_at,
 //! device_id)`. This module wires that into soland:
 //!
-//! 1. [`introspect_admin_scopes`] talks to the configured
-//!    `session_grant_introspection_url` over HTTP, returning the typed
-//!    [`SessionGrantIntrospection`]. Results are cached per-token-hash
-//!    with a short TTL so a single admin request doesn't fan out into
-//!    multiple introspection calls.
+//! 1. [`introspect_admin_scopes`] talks to the configured `session_grant_introspection_url` over
+//!    HTTP, returning the typed [`SessionGrantIntrospection`]. Results are cached per-token-hash
+//!    with a short TTL so a single admin request doesn't fan out into multiple introspection calls.
 //!
-//! 2. [`require_admin_scope`] is the production-mode gate: it
-//!    introspects the caller's bearer token and rejects the request
-//!    unless the granted `admin_scopes` include the requested scope.
+//! 2. [`require_admin_scope`] is the production-mode gate: it introspects the caller's bearer token
+//!    and rejects the request unless the granted `admin_scopes` include the requested scope.
 //!
 //! In `development_mode` (no introspection URL configured) the helpers
 //! return a synthetic introspection asserting every well-known admin

@@ -1,13 +1,11 @@
 //! Federation endpoint stubs for the B.3 outbound surface.
 //!
-//! - `GET /.well-known/contrix` — server description. Spec-aligned shape
-//!   so peers can discover the service DID, trust domain, public base
-//!   URL, and federation policy without an auth round-trip. The body is
-//!   built from the live `AppConfig`; the route is unauthenticated.
-//! - `POST /api/v1/federation/send-event` — outbound federation
-//!   send-event stub. Returns 501 `unsupported_feature` until the active
-//!   path lands; the route is mounted today so peers can probe support
-//!   and the OpenAPI doc carries the operation id.
+//! - `GET /.well-known/contrix` — server description. Spec-aligned shape so peers can discover the
+//!   service DID, trust domain, public base URL, and federation policy without an auth round-trip.
+//!   The body is built from the live `AppConfig`; the route is unauthenticated.
+//! - `POST /api/v1/federation/send-event` — outbound federation send-event stub. Returns 501
+//!   `unsupported_feature` until the active path lands; the route is mounted today so peers can
+//!   probe support and the OpenAPI doc carries the operation id.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;

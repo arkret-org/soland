@@ -8,25 +8,21 @@
 //! - `POST /queue/{id}/priority` — set priority.
 //!
 //! ### Decisions
-//! - `POST /decision` — admin issues `cx.moderation.decision`. Body:
-//!   `{ target_ref, realm_id, action, reason_text_ref?, decision_ref? }`.
-//! - `POST /decision/{decision_id}/lift` — issues
-//!   `cx.moderation.decision.lift` (used when an appeal overturns a
-//!   decision; the admin endpoint records the lift separately so the
+//! - `POST /decision` — admin issues `cx.moderation.decision`. Body: `{ target_ref, realm_id,
+//!   action, reason_text_ref?, decision_ref? }`.
+//! - `POST /decision/{decision_id}/lift` — issues `cx.moderation.decision.lift` (used when an
+//!   appeal overturns a decision; the admin endpoint records the lift separately so the
 //!   appeal-decision handler can pair them in the same batch).
 //!
 //! ### Appeals
 //! - `GET /appeals` — list (one record per appeal_id, latest event).
 //! - `GET /appeals/{appeal_id}` — full history.
-//! - `POST /appeals/{appeal_id}/review` — reviewer claims the appeal.
-//!   Transitions FSM: `submitted → under_review`.
-//! - `POST /appeals/{appeal_id}/decision` — reviewer issues verdict.
-//!   Transitions FSM: `under_review → decided`. `verdict=overturn`
-//!   MUST be paired with an explicit `decision_lift_ref` so the
-//!   `appeal_decision_overturn_paired_check` in
-//!   [`crate::round23`] passes.
-//! - `POST /appeals/{appeal_id}/close` — closes the appeal.
-//!   Transitions: `decided → closed`.
+//! - `POST /appeals/{appeal_id}/review` — reviewer claims the appeal. Transitions FSM: `submitted →
+//!   under_review`.
+//! - `POST /appeals/{appeal_id}/decision` — reviewer issues verdict. Transitions FSM: `under_review
+//!   → decided`. `verdict=overturn` MUST be paired with an explicit `decision_lift_ref` so the
+//!   `appeal_decision_overturn_paired_check` in [`crate::round23`] passes.
+//! - `POST /appeals/{appeal_id}/close` — closes the appeal. Transitions: `decided → closed`.
 //!
 //! All endpoints require the caller to pass
 //! [`super::require_admin_principal`]; the `same actor cannot review

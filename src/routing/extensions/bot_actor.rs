@@ -4,11 +4,10 @@
 //! actor's authority (the applet controller). Per
 //! `extensions/applet-integration.md` §3–§5:
 //!
-//! - A **bot actor** is a stable per-applet DID. Registered once when
-//!   the applet completes manifest verification; lives until revoked.
-//! - A **ghost actor** is a per-external-user DID minted by the applet
-//!   to represent an external user inside the portal realm. Same wire
-//!   shape as bots; the `kind` discriminator differs.
+//! - A **bot actor** is a stable per-applet DID. Registered once when the applet completes manifest
+//!   verification; lives until revoked.
+//! - A **ghost actor** is a per-external-user DID minted by the applet to represent an external
+//!   user inside the portal realm. Same wire shape as bots; the `kind` discriminator differs.
 //!
 //! Both flavours are recorded in a process-local registry
 //! (`BOT_REGISTRY` below) for the stub. Persistence in the
@@ -248,8 +247,9 @@ async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
+    use super::*;
 
     // Tests share the process-local `BOT_REGISTRY` static, so they
     // would race if run in parallel under `cargo test`. The

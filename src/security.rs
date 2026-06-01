@@ -402,8 +402,9 @@ fn env_bool(name: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Mutex, OnceLock};
+
+    use super::*;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

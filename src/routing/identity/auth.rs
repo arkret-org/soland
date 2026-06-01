@@ -2,8 +2,8 @@
 //!
 //! Surfaces:
 //! - `POST /api/v1/auth/dev-login` — dev-mode bearer issue
-//! - direct OAuth bearer authentication — Matrix/Palpo-style validation through
-//!   coauth `/oauth/introspect`
+//! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
+//!   `/oauth/introspect`
 //! - `POST /api/v1/auth/session-grant/exchange` — legacy coauth session-grant bridge
 //! - `POST /api/v1/auth/logout` — revoke the bearer + the bound device
 //!
@@ -817,11 +817,10 @@ async fn authenticated_oauth_session(
 // The introspection call is the dominant signal that distinguishes a known
 // vs unknown bearer token from the caller's perspective. We wrap each call
 // in:
-//   1. A fixed timeout (`OAUTH_INTROSPECTION_TIMEOUT`) so success/failure
-//      both bound at the same upper edge.
-//   2. A constant-time floor: we always wait at least
-//      `OAUTH_INTROSPECTION_MIN_LATENCY` before returning, with a small
-//      random jitter on top so the floor itself is not observable as a
+//   1. A fixed timeout (`OAUTH_INTROSPECTION_TIMEOUT`) so success/failure both bound at the same
+//      upper edge.
+//   2. A constant-time floor: we always wait at least `OAUTH_INTROSPECTION_MIN_LATENCY` before
+//      returning, with a small random jitter on top so the floor itself is not observable as a
 //      sharp edge.
 //
 // The work is dispatched onto the current tokio runtime (the auth path is

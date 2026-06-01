@@ -4,12 +4,12 @@
 //!
 //! Priority order (first resolver that `supports()` a DID wins):
 //!
-//! 1. [`LocalIdentityResolver`] — resolves DID documents stored in soland's
-//!    durable identity store. This is what makes the embedded `did:webvh`
-//!    provider usable without an external StarID/webvh service.
-//! 2. [`DidWebvhResolver`] — inserted when the external provider boot probe
-//!    succeeds. The SDK resolver is cache-oriented; actual external fetching
-//!    still belongs to a provider-specific client.
+//! 1. [`LocalIdentityResolver`] — resolves DID documents stored in soland's durable identity store.
+//!    This is what makes the embedded `did:webvh` provider usable without an external StarID/webvh
+//!    service.
+//! 2. [`DidWebvhResolver`] — inserted when the external provider boot probe succeeds. The SDK
+//!    resolver is cache-oriented; actual external fetching still belongs to a provider-specific
+//!    client.
 //! 3. [`DidWebResolver`] — generic `did:web:` fallback. Placed AFTER `DidWebvhResolver` so a
 //!    `did:webvh:...` DID never falls through here (DidWebResolver does not support webvh, but
 //!    ordering keeps intent clear and makes future `did:web` ↔ `did:webvh` migration semantics

@@ -2,30 +2,24 @@
 //!
 //! Implements the scoped subset of the MLS event family:
 //!
-//! 1. **KeyPackage atomic claim** — `apply_keypackage_publish` /
-//!    `apply_keypackage_claim`. The claim path is a compare-and-swap on
-//!    the `claimed_by` slot so two concurrent Welcomes can't grab the
-//!    same KeyPackage; the second claim returns
-//!    `ProjectionEffect::Rejected { reason: "mls_keypackage_already_claimed" }`
-//!    which the routing layer maps to HTTP 409 `cas_conflict`.
+//! 1. **KeyPackage atomic claim** — `apply_keypackage_publish` / `apply_keypackage_claim`. The
+//!    claim path is a compare-and-swap on the `claimed_by` slot so two concurrent Welcomes can't
+//!    grab the same KeyPackage; the second claim returns `ProjectionEffect::Rejected { reason:
+//!    "mls_keypackage_already_claimed" }` which the routing layer maps to HTTP 409 `cas_conflict`.
 //!
-//! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`.
-//!    Each accepted Welcome is appended to a per-`(recipient_actor_id,
-//!    recipient_device_id)` queue inside `ProjectionState::mls_welcomes`.
-//!    The recipient device drains its queue via the
-//!    `GET /api/v1/mls/welcomes/pending` route, which marks delivered
-//!    rows with `delivered_at = now()` so subsequent polls don't
-//!    redeliver.
+//! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`. Each accepted Welcome is
+//!    appended to a per-`(recipient_actor_id, recipient_device_id)` queue inside
+//!    `ProjectionState::mls_welcomes`. The recipient device drains its queue via the `GET
+//!    /api/v1/mls/welcomes/pending` route, which marks delivered rows with `delivered_at = now()`
+//!    so subsequent polls don't redeliver.
 //!
-//! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for
-//!    a new MLS group and initializes its covered-frontier accumulator.
+//! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
+//!    initializes its covered-frontier accumulator.
 //!
-//! 4. **commit_epoch increment** — `apply_commit_epoch`. The reducer
-//!    only accepts a commit whose `expected_prev_epoch` matches the
-//!    group's current stored epoch (0 for a brand-new group). Stale /
-//!    out-of-order commits are rejected with `mls_epoch_skew`. Accepted
-//!    commits merge the attested governance frontier into the group's
-//!    covered-frontier accumulator.
+//! 4. **commit_epoch increment** — `apply_commit_epoch`. The reducer only accepts a commit whose
+//!    `expected_prev_epoch` matches the group's current stored epoch (0 for a brand-new group).
+//!    Stale / out-of-order commits are rejected with `mls_epoch_skew`. Accepted commits merge the
+//!    attested governance frontier into the group's covered-frontier accumulator.
 //!
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
@@ -347,7 +341,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// `expected_prev_epoch + 1`. Stale or out-of-order commits leave state
 /// untouched and emit `ProjectionEffect::Rejected { reason:
 /// "mls_epoch_skew" }`.
-///
 pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {
     let payload = &op.payload;
     let Some(group_id) = payload

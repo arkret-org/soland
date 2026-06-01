@@ -246,18 +246,16 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
 /// `compat_surfaces`) into a describe response.
 ///
 /// Invariants enforced here:
-/// - `verified_profiles` MUST be empty when `development_mode=true`. The
-///   loader [`crate::verified_profiles::load_from_env`] already returns an
-///   empty vec when the env var is unset, but we additionally enforce the
-///   dev-mode rule below: even if an operator points
-///   `SOLAND_VERIFIED_PROFILES_ARTIFACT` at a real file while running with
-///   `development_mode=true`, the wire surface emits `[]`.
-/// - `claimed_profiles[].claim_kind` is always `self_claimed`; cotest
-///   verifier output (G4.T3) is the only path to `verified_profiles`.
-/// - Every loaded verified entry whose `profile_id` does NOT appear in
-///   `claimed_profiles[]` is dropped with a `warn!` line. The wire never
-///   advertises a profile we don't also self-claim — that would be a
-///   silent cross-binding lie.
+/// - `verified_profiles` MUST be empty when `development_mode=true`. The loader
+///   [`crate::verified_profiles::load_from_env`] already returns an empty vec when the env var is
+///   unset, but we additionally enforce the dev-mode rule below: even if an operator points
+///   `SOLAND_VERIFIED_PROFILES_ARTIFACT` at a real file while running with `development_mode=true`,
+///   the wire surface emits `[]`.
+/// - `claimed_profiles[].claim_kind` is always `self_claimed`; cotest verifier output (G4.T3) is
+///   the only path to `verified_profiles`.
+/// - Every loaded verified entry whose `profile_id` does NOT appear in `claimed_profiles[]` is
+///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
+///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
     value: &mut Value,
     development_mode: bool,

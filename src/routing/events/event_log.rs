@@ -3,8 +3,8 @@
 //! Surfaces:
 //! - `GET  /api/v1/events/describe`  — declare the active event registry, schema/reducer profiles,
 //!   and limits.
-//! - `POST /api/v1/events`           — submit one canonical Event Envelope,
-//!   an `events[]` batch, or a federation `service_binding_ref` + `events[]` batch.
+//! - `POST /api/v1/events`           — submit one canonical Event Envelope, an `events[]` batch, or
+//!   a federation `service_binding_ref` + `events[]` batch.
 //! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
 //! - `POST /api/v1/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /api/v1/events`            — paginated list (filtered by actor / realm).
@@ -15,7 +15,8 @@
 
 use std::collections::BTreeMap;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use contrix_sdk::{
     EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
@@ -2589,12 +2590,11 @@ fn validate_event_schema_and_payload(
 /// R3.2 (contrix-spec @ b56cab1) — wire-breaking deny validators applied on
 /// the event ingest path.
 ///
-/// - MIU-SOL-1: `cx.member.identity.update` payloads MUST NOT carry the
-///   removed handle fields (`primary_handle` / `handles[]` /
-///   `verified_handle`).
-/// - HC-SOL-3: message event payloads carrying mention references MUST use
-///   the v2 shape (`subject_id` authoritative); the legacy
-///   `subject` / `handle` / `display_snapshot` shape is rejected.
+/// - MIU-SOL-1: `cx.member.identity.update` payloads MUST NOT carry the removed handle fields
+///   (`primary_handle` / `handles[]` / `verified_handle`).
+/// - HC-SOL-3: message event payloads carrying mention references MUST use the v2 shape
+///   (`subject_id` authoritative); the legacy `subject` / `handle` / `display_snapshot` shape is
+///   rejected.
 ///
 /// Each maps a [`crate::wire_validators::WireRejection`] to a
 /// `schema_violation`-class [`EventValidationError`] carrying the precise
@@ -2977,15 +2977,14 @@ fn validate_event_proofs(
         ));
     }
     // Proof validation forks on `state.config.development_mode`:
-    // - **Production** (`development_mode=false`): EVERY proof MUST be a full
-    //   detached-JWS proof with `kind`/`alg`/`verification_method`/
-    //   `event_digest`/`created_at`/`jws`, hashing the full canonical envelope.
-    //   The `type=="dev-proof"` and payload-only hash forms are NOT accepted
-    //   under any circumstance — a malicious client claiming
-    //   `type="dev-proof"` in production fails-closed here.
-    // - **Development** (`development_mode=true`): the minimal dev-proof shape
-    //   (`type="dev-proof"`, `verification_method`, `payload_digest`-of-payload)
-    //   is also accepted so integration fixtures round-trip without keying.
+    // - **Production** (`development_mode=false`): EVERY proof MUST be a full detached-JWS proof
+    //   with `kind`/`alg`/`verification_method`/ `event_digest`/`created_at`/`jws`, hashing the
+    //   full canonical envelope. The `type=="dev-proof"` and payload-only hash forms are NOT
+    //   accepted under any circumstance — a malicious client claiming `type="dev-proof"` in
+    //   production fails-closed here.
+    // - **Development** (`development_mode=true`): the minimal dev-proof shape (`type="dev-proof"`,
+    //   `verification_method`, `payload_digest`-of-payload) is also accepted so integration
+    //   fixtures round-trip without keying.
     let is_production = !state.config.development_mode;
     for proof in proofs {
         let Some(proof_object) = proof.as_object() else {
@@ -3152,7 +3151,7 @@ fn event_proof_binding_bytes(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            &format!("proof binding canonicalization failed: {error}"),
+            format!("proof binding canonicalization failed: {error}"),
         )
     })
 }
@@ -4738,9 +4737,8 @@ mod proof_strictness_tests {
     /// inherit the same fail-closed semantics they get inline today.
     #[test]
     fn soland_dev_proof_gate_matches_sdk_production_verifier() {
-        use contrix_sdk::Audience;
-        use contrix_sdk::Hash;
         use contrix_sdk::signatures::{ProductionVerifier, build_proof_envelope};
+        use contrix_sdk::{Audience, Hash};
 
         struct Noop;
         impl contrix_sdk::signatures::EventVerifier for Noop {

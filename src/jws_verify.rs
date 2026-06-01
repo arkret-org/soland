@@ -13,14 +13,12 @@
 //! # Two-tier verifier model (unchanged)
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use
-//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515
-//!   §3.2 detached shape, alg=EdDSA, no zero-sentinel signature, no
-//!   actual crypto. Lets test fixtures and local dev iterate without
-//!   managing real keys.
+//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached shape,
+//!   alg=EdDSA, no zero-sentinel signature, no actual crypto. Lets test fixtures and local dev
+//!   iterate without managing real keys.
 //! - Production mode (default): handlers use [`verify_jws_ed25519`] via
-//!   [`AppState::jws_verifier`]'s closure factory — same shape checks
-//!   PLUS DID resolution + Ed25519 public-key extraction + RFC 7515
-//!   §5.2 signing-input reconstruction + ed25519-dalek verify.
+//!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
+//!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 
 use contrix_sdk::identity::{DidDocument, DidResolver};
 use contrix_sdk::{Did, Hash};

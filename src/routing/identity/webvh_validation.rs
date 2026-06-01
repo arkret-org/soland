@@ -3,20 +3,18 @@
 //! Implements the deterministic, well-bounded validations the resolver
 //! used to skip:
 //!
-//! 1. **prev_hash chain validation** — every non-genesis entry MUST link to
-//!    the prior entry by carrying that entry's `versionId` in its own
-//!    `previousVersionId` field, AND the hash portion of the entry's own
-//!    `versionId` MUST match the canonical hash of the (proof- /
-//!    versionId-stripped) entry. Spec: `identity/identity-did.md` §3.4
-//!    ("entry hash chain") and the DIF didwebvh v1.0 method spec.
-//! 2. **SCID mismatch rejection** — the SCID embedded in the DID string
-//!    MUST equal the SCID derivable from the genesis entry (§3 / §3.4 —
-//!    "DNS hijack protection" / "可审计的 DID 控制历史").
-//! 3. **Witness signature verification** — every witness proof present on
-//!    an entry must verify, distinct valid witnesses are counted toward the
-//!    configured quorum, and entries with configured witnesses may only
-//!    remain in `degraded_no_witness` for 24h. Rotation entries fail closed
-//!    immediately when quorum is missing.
+//! 1. **prev_hash chain validation** — every non-genesis entry MUST link to the prior entry by
+//!    carrying that entry's `versionId` in its own `previousVersionId` field, AND the hash portion
+//!    of the entry's own `versionId` MUST match the canonical hash of the (proof- /
+//!    versionId-stripped) entry. Spec: `identity/identity-did.md` §3.4 ("entry hash chain") and the
+//!    DIF didwebvh v1.0 method spec.
+//! 2. **SCID mismatch rejection** — the SCID embedded in the DID string MUST equal the SCID
+//!    derivable from the genesis entry (§3 / §3.4 — "DNS hijack protection" / "可审计的 DID
+//!    控制历史").
+//! 3. **Witness signature verification** — every witness proof present on an entry must verify,
+//!    distinct valid witnesses are counted toward the configured quorum, and entries with
+//!    configured witnesses may only remain in `degraded_no_witness` for 24h. Rotation entries fail
+//!    closed immediately when quorum is missing.
 //!
 //! Canonical JSON uses `contrix_sdk::canonical::canonical_json_bytes`
 //! (`encoding.md` §2 — deterministic, integer-only number profile) — the
@@ -713,9 +711,10 @@ fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::RngCore;
+
+    use super::*;
 
     fn fresh_signing_key() -> SigningKey {
         let mut bytes = [0u8; 32];

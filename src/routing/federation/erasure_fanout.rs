@@ -5,24 +5,19 @@
 //!
 //! ## Surface
 //!
-//! - [`fanout_erasure_receipt`] — called from the projection write
-//!   path after a `cx.audit.erasure_receipt` lands. Looks up the
-//!   federation peer set for the affected Realm (currently
-//!   `config.federation_peers` — the full peer set acts as the
-//!   conservative super-set of "peers that have received content from
-//!   the Realm"; once per-Realm membership tracking ships this scopes
-//!   down), enqueues one outbound `cx.audit.erasure_receipt`
-//!   envelope per peer into the federation outbox, and seeds the
-//!   receipt's `peer_status` map.
-//! - [`sweep_erasure_fanout_timeouts`] — called from the periodic
-//!   timeout job (`crate::routing::federation::erasure_fanout_worker`).
-//!   Scans `state.projection.erasure_receipts`; for each receipt that
-//!   has any peer with `acked_at.is_none()` and whose `recorded_at`
-//!   age exceeds `config.erasure_propagation_window_ms`, flips
-//!   `fanout_status = "incomplete"`.
-//! - [`spawn`] — spawns the periodic sweep on the current tokio
-//!   runtime. Mirrors the `multisig_watchdog` / `federation_outbox`
-//!   dispatcher contract.
+//! - [`fanout_erasure_receipt`] — called from the projection write path after a
+//!   `cx.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
+//!   (currently `config.federation_peers` — the full peer set acts as the conservative super-set of
+//!   "peers that have received content from the Realm"; once per-Realm membership tracking ships
+//!   this scopes down), enqueues one outbound `cx.audit.erasure_receipt` envelope per peer into the
+//!   federation outbox, and seeds the receipt's `peer_status` map.
+//! - [`sweep_erasure_fanout_timeouts`] — called from the periodic timeout job
+//!   (`crate::routing::federation::erasure_fanout_worker`). Scans
+//!   `state.projection.erasure_receipts`; for each receipt that has any peer with
+//!   `acked_at.is_none()` and whose `recorded_at` age exceeds
+//!   `config.erasure_propagation_window_ms`, flips `fanout_status = "incomplete"`.
+//! - [`spawn`] — spawns the periodic sweep on the current tokio runtime. Mirrors the
+//!   `multisig_watchdog` / `federation_outbox` dispatcher contract.
 //!
 //! ## What this lands
 //!
@@ -424,9 +419,10 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::reducer::ErasureReceiptRecord;
-    use serde_json::json;
 
     fn fake_state() -> AppState {
         // Reuse the federation::tests config builder via a thin
@@ -470,16 +466,23 @@ mod tests {
             });
         }
         fanout_erasure_receipt(&state, "r1").await;
-        let proj = state.projection.lock().unwrap();
-        let record = proj
-            .erasure_receipts
-            .iter()
-            .find(|r| r.receipt_id.as_deref() == Some("r1"))
-            .unwrap();
-        assert_eq!(record.peer_status.len(), 1);
-        let peer = record.peer_status.get("did:web:peer1.example").unwrap();
-        assert!(peer.sent_at.is_some(), "sent_at must be stamped on enqueue");
-        assert!(peer.acked_at.is_none());
+        let (peer_status_len, peer_sent, peer_unacked) = {
+            let proj = state.projection.lock().unwrap();
+            let record = proj
+                .erasure_receipts
+                .iter()
+                .find(|r| r.receipt_id.as_deref() == Some("r1"))
+                .unwrap();
+            let peer = record.peer_status.get("did:web:peer1.example").unwrap();
+            (
+                record.peer_status.len(),
+                peer.sent_at.is_some(),
+                peer.acked_at.is_none(),
+            )
+        };
+        assert_eq!(peer_status_len, 1);
+        assert!(peer_sent, "sent_at must be stamped on enqueue");
+        assert!(peer_unacked);
         let outbox = state
             .persistence
             .federation_outbox()

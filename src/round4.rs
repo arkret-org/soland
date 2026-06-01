@@ -5,54 +5,46 @@
 //! and depends on the SDK's `model::round4` typed surface
 //! (`contrix_sdk::*`). Wire-breaking summary (see `_todos.md` §B1):
 //!
-//! - **ServiceDescribe v2** — 17 required top-level fields including
-//!   `trust_domain`, `plaintext_visibility`, `claimed_profiles`,
-//!   `verified_profiles`. Validated in [`crate::wire::describe`].
-//! - **EventsFrontier 3-way split** — `peer_role` query param routes to
-//!   `account_client` / `federation_peer` / `anonymous_health`. The
-//!   typed response variants are built via
-//!   [`build_typed_frontier_response`]. `anonymous_health` MUST NOT
-//!   carry receipts or actor_seq_upper_bounds (the type system enforces
-//!   this).
+//! - **ServiceDescribe v2** — 17 required top-level fields including `trust_domain`,
+//!   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`. Validated in
+//!   [`crate::wire::describe`].
+//! - **EventsFrontier 3-way split** — `peer_role` query param routes to `account_client` /
+//!   `federation_peer` / `anonymous_health`. The typed response variants are built via
+//!   [`build_typed_frontier_response`]. `anonymous_health` MUST NOT carry receipts or
+//!   actor_seq_upper_bounds (the type system enforces this).
 //! - **EventsSubscribe typed frames** — NDJSON producer emits
-//!   [`contrix_sdk::EventsSubscribeFrameBody`]. `Dropped` MUST carry a
-//!   resume cursor; absence is downgraded to `ResyncRequired`.
-//! - **EventsSubmit discriminated** — `cx.events.submit` accepts
-//!   `single` / `batch` / `federation` forms. The federation form MUST
-//!   carry all 6 fields of [`contrix_sdk::FederationServiceBindingRef`];
-//!   any missing field returns `schema_violation`.
-//! - **Federation S2S headers** — `Source-Trust-Domain`,
-//!   `Destination-Trust-Domain`, and `Request-Canonical-Digest` MUST be
-//!   present on every inbound federation request and MUST be appended
-//!   to the message-signature transcript via
+//!   [`contrix_sdk::EventsSubscribeFrameBody`]. `Dropped` MUST carry a resume cursor; absence is
+//!   downgraded to `ResyncRequired`.
+//! - **EventsSubmit discriminated** — `cx.events.submit` accepts `single` / `batch` / `federation`
+//!   forms. The federation form MUST carry all 6 fields of
+//!   [`contrix_sdk::FederationServiceBindingRef`]; any missing field returns `schema_violation`.
+//! - **Federation S2S headers** — `Source-Trust-Domain`, `Destination-Trust-Domain`, and
+//!   `Request-Canonical-Digest` MUST be present on every inbound federation request and MUST be
+//!   appended to the message-signature transcript via
 //!   [`contrix_sdk::federation_trust_domain_transcript_fragment`].
-//! - **Federation idempotency cache** — key carries
-//!   `source_did + dest_did + request_canonical_digest + idempotency_key +
-//!   origin_key_state_digest`. Replay after key-state change emits
-//!   `reason_code=historical_only` (no side effects).
-//! - **`/blob/presign` realm_id** — request MUST carry `realm_id`; for
-//!   Realm-owned blobs the value MUST match the blob metadata's
-//!   `realm_id` field.
-//! - **`AuditRywReceipt.trust_domain`** — recompute the policy version
-//!   hash via the 4-arg SDK helper
-//!   [`contrix_sdk::compute_audit_policy_version_digest`].
-//! - **`cx.consent.revoke` observed_dots** — required. Implicit cascade
-//!   is `schema_violation`.
-//! - **`cx.cross_signing.publish` CAS** — accept only when
-//!   `expected_previous_generation == current` and
-//!   `new == current + 1`. Cell_subject via
+//! - **Federation idempotency cache** — key carries `source_did + dest_did +
+//!   request_canonical_digest + idempotency_key + origin_key_state_digest`. Replay after key-state
+//!   change emits `reason_code=historical_only` (no side effects).
+//! - **`/blob/presign` realm_id** — request MUST carry `realm_id`; for Realm-owned blobs the value
+//!   MUST match the blob metadata's `realm_id` field.
+//! - **`AuditRywReceipt.trust_domain`** — recompute the policy version hash via the 4-arg SDK
+//!   helper [`contrix_sdk::compute_audit_policy_version_digest`].
+//! - **`cx.consent.revoke` observed_dots** — required. Implicit cascade is `schema_violation`.
+//! - **`cx.cross_signing.publish` CAS** — accept only when `expected_previous_generation ==
+//!   current` and `new == current + 1`. Cell_subject via
 //!   [`contrix_sdk::cross_signing_publish_cell_subject`].
-//! - **`cx.flow.update` / `cx.flow.tracks_patch` cell metadata** —
-//!   CAS-register, family `cx.component.flow.metadata.v1`, bottom=reject;
-//!   subject is the flow_id, via SDK helpers.
-//! - **`cx.audit.policy_access access_kind=e2ee_late_recovery`** —
-//!   carries `late_recovery_original_event_id`. Validated via
+//! - **`cx.flow.update` / `cx.flow.tracks_patch` cell metadata** — CAS-register, family
+//!   `cx.component.flow.metadata.v1`, bottom=reject; subject is the flow_id, via SDK helpers.
+//! - **`cx.audit.policy_access access_kind=e2ee_late_recovery`** — carries
+//!   `late_recovery_original_event_id`. Validated via
 //!   [`contrix_sdk::AuditPolicyAccessPayload::validate_minimal`].
 //!
 //! Complex internals that are still outside this module's narrow wire
 //! helpers (SnapshotBootstrap chunk generator / signature and the full
 //! 3PID invite verifier chain) remain in their owning modules; the
 //! cross-project wire shape + API paths are correct.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use contrix_sdk::{
@@ -72,7 +64,6 @@ use contrix_sdk::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
 
 // ════════════════════════════════════════════════════════════════════════
 // EventsFrontier 3-way split — typed response builder.
@@ -997,8 +988,9 @@ pub use contrix_sdk::validate_call_signal_envelope as validate_call_signal_envel
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use contrix_sdk::identifiers::Cursor;
+
+    use super::*;
 
     fn realm() -> RealmId {
         RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap()

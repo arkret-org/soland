@@ -469,10 +469,8 @@ async fn build_sync_snapshot(
     // On full sync (no `after` cursor -> empty `after_cursor.positions`)
     // there is nothing to compare against; the client already treats
     // omission from `spaces` as authoritative there.
-    let visible_space_ids: BTreeSet<&str> = visible_spaces
-        .iter()
-        .map(|(id, _, _, _, _, _)| id.as_str())
-        .collect();
+    let visible_space_ids: BTreeSet<&str> =
+        visible_spaces.iter().map(|(id, ..)| id.as_str()).collect();
     let left_spaces: Vec<String> = if body.after.is_some() {
         after_cursor
             .positions
@@ -1686,13 +1684,11 @@ fn verify_stateless_sync_cursor_signature(
         ));
     }
 
-    let signature = stateless_cursor_signature(cursor).map_err(|error| {
+    let signature = stateless_cursor_signature(cursor).inspect_err(|_error| {
         crate::metrics::record_digest_mismatch("cursor_canonical_digest");
-        error
     })?;
-    let canonical_body = stateless_cursor_canonical_body(cursor).map_err(|error| {
+    let canonical_body = stateless_cursor_canonical_body(cursor).inspect_err(|_error| {
         crate::metrics::record_digest_mismatch("cursor_canonical_digest");
-        error
     })?;
     state
         .anchorer_signing_key()
@@ -1968,15 +1964,13 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// Translate an optional client cursor to a backfill (event-id) cursor.
 ///
 /// - `None` → `None` (start from the beginning).
-/// - Plain string that does NOT start with `cx:cursor:` → pass through
-///   unchanged; the caller already speaks the projection's `event_id` cursor.
-/// - `cx:cursor:...` → decode the structured cursor, look up
-///   the handle's stored position for `realm_id` (a `timestamp_micros`
-///   checkpoint), then walk
-///   the space's projected events and persisted messages to find the most
-///   recent event at-or-before that checkpoint and return its
-///   `event_id`. When no event sits at-or-before the checkpoint, return
-///   `None` so backfill streams from the start of the space.
+/// - Plain string that does NOT start with `cx:cursor:` → pass through unchanged; the caller
+///   already speaks the projection's `event_id` cursor.
+/// - `cx:cursor:...` → decode the structured cursor, look up the handle's stored position for
+///   `realm_id` (a `timestamp_micros` checkpoint), then walk the space's projected events and
+///   persisted messages to find the most recent event at-or-before that checkpoint and return its
+///   `event_id`. When no event sits at-or-before the checkpoint, return `None` so backfill streams
+///   from the start of the space.
 pub async fn resolve_sync_cursor_to_event_id(
     state: &AppState,
     realm_id: &str,
@@ -3180,8 +3174,9 @@ async fn snapshot_chunk(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::*;
 
     #[test]
     fn timeline_position_disambiguates_same_second_events() {

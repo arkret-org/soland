@@ -1,13 +1,11 @@
 //! G3.S5 — HTTP integration tests for the realm-links surface:
 //!
-//! - `POST /api/v1/realms/{realm_id}/links` — create / status-flip a
-//!   `cx.realm.link`.
-//! - `DELETE /api/v1/realms/{realm_id}/links/{target_realm_id}` —
-//!   tombstone an existing link.
-//! - `GET /api/v1/realms/{realm_id}/effective-policy` — read the
-//!   merged effective policy (walks the inheritance chain).
-//! - Cycle-detection negative: a 3-realm `governed_by` triangle MUST
-//!   be rejected with `realm_link_cycle` at the third POST.
+//! - `POST /api/v1/realms/{realm_id}/links` — create / status-flip a `cx.realm.link`.
+//! - `DELETE /api/v1/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
+//! - `GET /api/v1/realms/{realm_id}/effective-policy` — read the merged effective policy (walks the
+//!   inheritance chain).
+//! - Cycle-detection negative: a 3-realm `governed_by` triangle MUST be rejected with
+//!   `realm_link_cycle` at the third POST.
 
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
@@ -126,8 +124,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     let svc = service(state.clone());
     let token = dev_token(&svc).await;
 
-    // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes
-    //    the projected status.
+    // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes the projected status.
     let body: Value = TestClient::post(format!("http://server/api/v1/realms/{REALM_B}/links"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
@@ -144,13 +141,13 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     assert_eq!(body["target_realm_id"], REALM_A);
     assert_eq!(body["status"], "active");
 
-    // 2. Explicit inheritance opt-in on B (spec §6.1 — opt-in is
-    //    mandatory; cycle detection alone doesn't enable inheritance).
+    // 2. Explicit inheritance opt-in on B (spec §6.1 — opt-in is mandatory; cycle detection alone
+    //    doesn't enable inheritance).
     project_inheritance_policy(&state, REALM_B, REALM_A, &["b.policy"]);
     project_inheritance_policy(&state, REALM_A, REALM_A, &["a.policy"]);
 
-    // 3. GET effective-policy on B. Body shape pinned by the task spec:
-    //    `{realm_id, effective_policy, inheritance_chain, inheritance_mode}`.
+    // 3. GET effective-policy on B. Body shape pinned by the task spec: `{realm_id,
+    //    effective_policy, inheritance_chain, inheritance_mode}`.
     let ep: Value = TestClient::get(format!(
         "http://server/api/v1/realms/{REALM_B}/effective-policy"
     ))

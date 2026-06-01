@@ -2,7 +2,8 @@
 //!
 //! Surfaces:
 //! - `POST /api/v1/moves`   — submit a Move; verifier validates structural shape + signature
-//!   payload_digest + effect-shape against the cell registry, then stashes pending in [`MoveStore`].
+//!   payload_digest + effect-shape against the cell registry, then stashes pending in
+//!   [`MoveStore`].
 //! - `POST /api/v1/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
 //!   predecessor known → frontier monotonic → batch-verify Moves → atomic effect append → recompute
 //!   state_root → persist.
@@ -35,9 +36,9 @@ use crate::{JsonResult, json_ok};
 /// Every reject reason routes through the canonical Contrix error
 /// registry:
 ///
-/// - `UnknownPredecessor`, `FrontierNotMonotonic`, `Structural`, `MissingMove`,
-///   `StateRootMismatch` → [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally
-///   invalid anchor envelope).
+/// - `UnknownPredecessor`, `FrontierNotMonotonic`, `Structural`, `MissingMove`, `StateRootMismatch`
+///   → [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally invalid anchor
+///   envelope).
 /// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
 ///
 /// The resulting `AppError` is rendered with HTTP `409 Conflict` to match

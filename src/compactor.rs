@@ -20,20 +20,17 @@
 //!
 //! ## What it does NOT do
 //!
-//! - **No lease coordination**. Single-process worker today; multi-node
-//!   deployments running the worker simultaneously will all try to prune
-//!   the same candidates. `prune_predecessor` is structurally idempotent
-//!   (a second call on an already-pruned anchor returns
-//!   [`StoreError::NotFound`]) so duplicates fail soft rather than
-//!   corrupt the DAG, but a real multi-node cluster wants a lease layer
-//!   on top of this (see [`multisig_watchdog`] for the pattern).
-//! - **No metrics surface**. The pass returns a [`CompactorPassReport`]
-//!   so tests + callers can inspect outcomes; a `tracing::info!` line is
-//!   logged when anything was pruned or rejected.
-//! - **No back-pressure on Pg**. The walk just iterates and prunes; for
-//!   very large DAGs the operator should bound the per-Space limit
-//!   conservatively (default 50/pass) and accept that catching up takes
-//!   multiple passes.
+//! - **No lease coordination**. Single-process worker today; multi-node deployments running the
+//!   worker simultaneously will all try to prune the same candidates. `prune_predecessor` is
+//!   structurally idempotent (a second call on an already-pruned anchor returns
+//!   [`StoreError::NotFound`]) so duplicates fail soft rather than corrupt the DAG, but a real
+//!   multi-node cluster wants a lease layer on top of this (see [`multisig_watchdog`] for the
+//!   pattern).
+//! - **No metrics surface**. The pass returns a [`CompactorPassReport`] so tests + callers can
+//!   inspect outcomes; a `tracing::info!` line is logged when anything was pruned or rejected.
+//! - **No back-pressure on Pg**. The walk just iterates and prunes; for very large DAGs the
+//!   operator should bound the per-Space limit conservatively (default 50/pass) and accept that
+//!   catching up takes multiple passes.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -290,12 +287,13 @@ fn eligibility_wire(eligibility: &PruneEligibility) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
-    use crate::db::Db;
     use std::collections::BTreeMap;
     use std::net::SocketAddr;
     use std::str::FromStr;
+
+    use super::*;
+    use crate::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
+    use crate::db::Db;
 
     fn test_config() -> AppConfig {
         AppConfig {

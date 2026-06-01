@@ -21,10 +21,6 @@ pub mod policy_client;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
-
-use crate::ids;
-
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
 // live in the SDK so yougen and sodmin admin can call them client-side. See
@@ -34,6 +30,9 @@ pub use contrix_sdk::authz::delegation::{
     delegation_chain_intact, grant_effective_expiry, is_grant_expired, resource_within,
     revoke_with_cascade,
 };
+use serde::Serialize;
+
+use crate::ids;
 
 /// Result of an authorization check.
 #[derive(Clone, Debug, Serialize)]

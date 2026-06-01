@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use contrix_sdk::{Did, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -9,8 +12,6 @@ use soland::reducer::{
 };
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
-use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(1_000);
 

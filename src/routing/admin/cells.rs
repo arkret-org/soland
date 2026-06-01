@@ -238,9 +238,9 @@ async fn admin_get_cell(
 /// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
 ///   (e.g. `cx.component.consent.`).
 /// - `limit` / `offset` — pagination. Default and max page sizes come from
-///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`,
-///   default `100`) and `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`,
-///   default `1000`). `offset` defaults to `0`.
+///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`, default `100`) and
+///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
+///   to `0`.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.cells.list",
     tags("admin", "cells"),

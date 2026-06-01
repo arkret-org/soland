@@ -15,9 +15,8 @@ use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::error::AppError;
-use crate::ids;
 use crate::state::{AppState, ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, ids, json_ok};
 
 pub(super) fn router() -> Router {
     Router::with_path("consent")

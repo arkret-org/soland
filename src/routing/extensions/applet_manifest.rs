@@ -3,22 +3,18 @@
 //! `AppletManifest` is a signed envelope an applet developer submits to
 //! soland for registration. The verifier performs four checks:
 //!
-//! 1. **Signature** — Ed25519 over the canonical-JSON serialization of
-//!    the manifest's body fields (everything except `signature`). The
-//!    verifying key is the one bound to the manifest's `signer_did`
-//!    (resolved via the trusted registry DID's published key for
-//!    runnable-stub purposes — full DID resolver chain integration is a
-//!    follow-up).
-//! 2. **Trusted signer** — `signer_did` MUST match the
-//!    `trusted_registry_did` configured for this verifier call (the
-//!    cotest scenario uses `mock-applet-registry`'s service DID).
-//! 3. **Schema hash** — the manifest carries a `schema_hash` field
-//!    pinning the version of `applet.schema.json` it was generated
-//!    against. We lazily load the schema, hash it, and reject the
-//!    manifest if the hashes diverge — a basic guard against silently
-//!    accepting manifests built against stale schemas.
-//! 4. **Capabilities** — every entry in `requested_capabilities` MUST be
-//!    in the known registry below (`KNOWN_APPLET_CAPABILITIES`).
+//! 1. **Signature** — Ed25519 over the canonical-JSON serialization of the manifest's body fields
+//!    (everything except `signature`). The verifying key is the one bound to the manifest's
+//!    `signer_did` (resolved via the trusted registry DID's published key for runnable-stub
+//!    purposes — full DID resolver chain integration is a follow-up).
+//! 2. **Trusted signer** — `signer_did` MUST match the `trusted_registry_did` configured for this
+//!    verifier call (the cotest scenario uses `mock-applet-registry`'s service DID).
+//! 3. **Schema hash** — the manifest carries a `schema_hash` field pinning the version of
+//!    `applet.schema.json` it was generated against. We lazily load the schema, hash it, and reject
+//!    the manifest if the hashes diverge — a basic guard against silently accepting manifests built
+//!    against stale schemas.
+//! 4. **Capabilities** — every entry in `requested_capabilities` MUST be in the known registry
+//!    below (`KNOWN_APPLET_CAPABILITIES`).
 //!
 //! Spec anchor: `contrix-spec/spec/v1/zh/extensions/applet-integration.md`
 //! §3 (manifest shape) + `extensions/applet-schema.md` (JSON schema).
@@ -305,8 +301,9 @@ async fn verify_endpoint(body: JsonBody<Value>) -> JsonResult<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    use super::*;
 
     fn build_manifest(signer_did: &str) -> (AppletManifest, SigningKey) {
         let signing = SigningKey::from_bytes(&[7u8; 32]);

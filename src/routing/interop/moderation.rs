@@ -1,22 +1,20 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /api/v1/moderation/report` (`cx.moderation.report`) — file a
-//!   report. Persists both the report record and a derived queue item
-//!   (`ModerationQueueItem`) per the spec's triage architecture.
-//! - `POST /api/v1/moderation/appeal` (`cx.moderation.appeal.submit`)
-//!   — file an appeal against a moderation decision. Validates the
-//!   four-state FSM via `crate::round23::AppealState` and enforces
-//!   separation-of-duties when the decision is later reviewed by an
-//!   admin.
+//! - `POST /api/v1/moderation/report` (`cx.moderation.report`) — file a report. Persists both the
+//!   report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
+//!   architecture.
+//! - `POST /api/v1/moderation/appeal` (`cx.moderation.appeal.submit`) — file an appeal against a
+//!   moderation decision. Validates the four-state FSM via `crate::round23::AppealState` and
+//!   enforces separation-of-duties when the decision is later reviewed by an admin.
+
+use std::time::Duration;
 
 use chrono::Utc;
+use contrix_sdk::RealmId;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::time::Duration;
-
-use contrix_sdk::RealmId;
 
 use super::{append_audit_log, now, query_param, space_has_member, validate_did};
 use crate::error::{AppError, ErrorCode};
@@ -184,7 +182,7 @@ pub(crate) async fn visible_reports_for_actor(
     let mut visible = Vec::new();
     for report in all {
         let realm_id = report_realm_id(&report);
-        if !realm_filter.is_none_or(|filter| realm_id == Some(filter)) {
+        if realm_filter.is_some_and(|filter| realm_id != Some(filter)) {
             continue;
         }
         if moderation_report_visible_to_actor(state, &report, actor).await {

@@ -237,8 +237,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Round 15k — moderation, push, webrtc handler batch.
     // - moderation/moderation.rs::moderation_report
     // - interop/push.rs::{push_unregister, delete_push_rule, push_notify}
-    // - interop/webrtc.rs::{create_webrtc_session, put_webrtc_signal,
-    //   get_webrtc_signals, delete_webrtc_session}
+    // - interop/webrtc.rs::{create_webrtc_session, put_webrtc_signal, get_webrtc_signals,
+    //   delete_webrtc_session}
     // All wire types already carry `ToSchema`; the conversions attach
     // operation_id + typed request/response/path/query schemas.
     for typed_now in [
@@ -275,8 +275,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     // Round 15l — access/policy.rs + access/authz.rs::authz_check typed batch.
-    // - access/policy.rs::{list_policy_documents, get_policy_document,
-    //   upsert_policy_document, delete_policy_document, policy_check}
+    // - access/policy.rs::{list_policy_documents, get_policy_document, upsert_policy_document,
+    //   delete_policy_document, policy_check}
     // - access/authz.rs::authz_check
     // Wire types already carry ToSchema; canonical operation_ids come
     // from the SOLAND_EXTENSION_OPERATIONS registry in routing/mod.rs.
@@ -309,8 +309,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     // Round 15m — identity/key_backup.rs + identity/profile.rs typed batch.
-    // - identity/key_backup.rs::{put_key_backup, list_key_backups,
-    //   get_key_backup, delete_key_backup}
+    // - identity/key_backup.rs::{put_key_backup, list_key_backups, get_key_backup,
+    //   delete_key_backup}
     // - identity/profile.rs::profile_presence
     // Note: profile_presence's response wrapper `ProfilePresenceResponse`
     // is newly added in profile.rs (no upstream wire type existed).

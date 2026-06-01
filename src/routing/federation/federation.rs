@@ -6,12 +6,11 @@
 //! - `GET /api/v1/federation/pull-operations`
 //! - `GET /api/v1/federation/space-members`
 //! - `POST /api/v1/federation/verify-actor`
-//! - `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list
-//!   locally-held Anchors for a Space) + `POST /api/v1/federation/anchors`
-//!   (peer-push: accept Anchor envelopes for replication). The wire path
-//!   is identical for both [`crate::config::FederationPolicy::Mesh`] and
-//!   [`crate::config::FederationPolicy::Hub`]; only the outbound routing
-//!   decision (broadcast vs hub-only) differs.
+//! - `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for a
+//!   Space) + `POST /api/v1/federation/anchors` (peer-push: accept Anchor envelopes for
+//!   replication). The wire path is identical for both [`crate::config::FederationPolicy::Mesh`]
+//!   and [`crate::config::FederationPolicy::Hub`]; only the outbound routing decision (broadcast vs
+//!   hub-only) differs.
 //!
 //! Production gaps: `validation_class` instead of bool, reducer-profile
 //! digest enforcement, revocation fanout, and a long-running retry daemon.
@@ -1328,7 +1327,7 @@ pub(super) async fn federation_verify_actor(
                 .with_status(StatusCode::BAD_REQUEST)
         })?;
     let verification =
-        verify_federation_actor_signature(&state, &body, &unsigned_request_digest).await?;
+        verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
 
     json_ok(contrix_sdk::FederationVerifyActorResBody {
         valid: true,

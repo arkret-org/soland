@@ -4,16 +4,14 @@
 //! The spec mention node (`models/flow-and-message.md §9.4`,
 //! `identity/identity-handles.md §3.8.1`) was rewritten wire-breaking:
 //!
-//! - Authoritative field: `subject_id` (principal DID). It is the ONLY
-//!   field that participates in actor attribution, authorization,
-//!   resolution and render lookup.
-//! - Audit metadata (MAY): `handle_at_time` / `display_name_at_time` /
-//!   `mention_text_original` / `resolved_at`. Verifier / reducer / policy
-//!   engine MUST ignore these for trust decisions (SEC-SOL-1 — soland's
-//!   authz / audit / federation paths never read them).
-//! - The pre-R3.2 fields `subject` / `handle` / `display_snapshot` are
-//!   GONE; an envelope carrying any of them MUST be rejected as a
-//!   `schema_violation` with reason `mention_reference_legacy_shape`.
+//! - Authoritative field: `subject_id` (principal DID). It is the ONLY field that participates in
+//!   actor attribution, authorization, resolution and render lookup.
+//! - Audit metadata (MAY): `handle_at_time` / `display_name_at_time` / `mention_text_original` /
+//!   `resolved_at`. Verifier / reducer / policy engine MUST ignore these for trust decisions
+//!   (SEC-SOL-1 — soland's authz / audit / federation paths never read them).
+//! - The pre-R3.2 fields `subject` / `handle` / `display_snapshot` are GONE; an envelope carrying
+//!   any of them MUST be rejected as a `schema_violation` with reason
+//!   `mention_reference_legacy_shape`.
 //!
 //! NOTE: soland also accepts a separate deployment-local message-mention
 //! convention (`{type: "actor"|"flow", ...}`) validated by
@@ -68,8 +66,9 @@ pub fn validate_content_mention_references(content: &Value) -> Result<(), WireRe
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn accepts_v2_subject_id_shape() {

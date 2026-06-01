@@ -1,24 +1,20 @@
 //! Realm governance HTTP surface (R3.1 + G3.S5).
 //!
 //! Surfaces:
-//! - `GET /api/v1/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...`
-//!   — list the typed cross-Realm links projected from `cx.realm.link`
-//!   events. Powered by [`crate::reducer::ProjectionState::realm_links_query`].
-//! - `POST /api/v1/realms/{realm_id}/links` — write a `cx.realm.link`
-//!   Move from `realm_id → target_realm_id`. The reducer runs the
-//!   `realm_link_*` validators including cycle detection (G3.S5); a
-//!   rejected payload comes back as HTTP 422 with the spec reason code
-//!   (e.g. `realm_link_cycle`, `realm_link_self_reference`).
-//! - `DELETE /api/v1/realms/{realm_id}/links/{target_realm_id}` — write
-//!   a tombstoning `cx.realm.link` Move (status = `tombstoned`) for
-//!   the `(realm_id, target_realm_id, link_kind)` triple. `link_kind`
-//!   defaults to `governed_by`; callers may override via query param.
-//! - `GET /api/v1/realms/{realm_id}/effective-policy` — return the
-//!   merged effective policy after walking `governed_by` /
-//!   `inherits_policy_from` ancestors per the realm's
-//!   `cx.realm.inheritance_policy` declaration (G3.S5). Body shape per
-//!   the task spec: `{realm_id, effective_policy, inheritance_chain,
-//!   inheritance_mode}`.
+//! - `GET /api/v1/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...` —
+//!   list the typed cross-Realm links projected from `cx.realm.link` events. Powered by
+//!   [`crate::reducer::ProjectionState::realm_links_query`].
+//! - `POST /api/v1/realms/{realm_id}/links` — write a `cx.realm.link` Move from `realm_id →
+//!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
+//!   (G3.S5); a rejected payload comes back as HTTP 422 with the spec reason code (e.g.
+//!   `realm_link_cycle`, `realm_link_self_reference`).
+//! - `DELETE /api/v1/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
+//!   `cx.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
+//!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
+//! - `GET /api/v1/realms/{realm_id}/effective-policy` — return the merged effective policy after
+//!   walking `governed_by` / `inherits_policy_from` ancestors per the realm's
+//!   `cx.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
+//!   effective_policy, inheritance_chain, inheritance_mode}`.
 
 use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;

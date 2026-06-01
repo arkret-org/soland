@@ -27,13 +27,13 @@ pub struct HealthResponse {
     /// accepts unsigned / weakly-signed envelopes.
     pub proof_verifier_mode: &'static str,
     /// Effective admin-API authentication posture:
-    ///   - `"development"` — any authenticated session may call admin endpoints
-    ///     (dev mode lets every session through)
+    ///   - `"development"` — any authenticated session may call admin endpoints (dev mode lets
+    ///     every session through)
     ///   - `"did_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_DIDS`
     ///   - `"oauth_introspection"` — bearer tokens are introspected against
     ///     `SOLAND_OAUTH_INTROSPECTION_URL` (no admin allowlist configured)
-    ///   - `"closed"` — production mode with no admin principals AND no
-    ///     introspection configured; admin endpoints are effectively locked.
+    ///   - `"closed"` — production mode with no admin principals AND no introspection configured;
+    ///     admin endpoints are effectively locked.
     pub admin_auth_mode: &'static str,
     /// T8.3 — non-sensitive production hardening checklist snapshot.
     /// Surfaced on `/health` so sodmin's `/hardening` dashboard can
@@ -989,15 +989,14 @@ pub struct PolicyCheckReqBody {
 /// The four hashes pin the decision to a concrete authz universe so a
 /// client (or auditor) can detect that the decision is stale once any
 /// of the four frontiers move:
-///   - `realm_id` — scope this binding applies to (canonical
-///     `cx:realm:<uuid>` form). May be empty string when the request
-///     was realm-less (e.g. a global capability check).
-///   - `auth_state_digest` — sha256 hex over canonical JSON
-///     `{actor, action, resource, request_canonical_digest}`.
-///   - `policy_frontier_digest` — sha256 hex over canonical JSON
-///     `{policy_documents: [<sorted policy_ids>]}`.
-///   - `membership_frontier_digest` — sha256 hex over canonical JSON
-///     `{realm_id, members: [<sorted member DIDs>]}`.
+///   - `realm_id` — scope this binding applies to (canonical `cx:realm:<uuid>` form). May be empty
+///     string when the request was realm-less (e.g. a global capability check).
+///   - `auth_state_digest` — sha256 hex over canonical JSON `{actor, action, resource,
+///     request_canonical_digest}`.
+///   - `policy_frontier_digest` — sha256 hex over canonical JSON `{policy_documents: [<sorted
+///     policy_ids>]}`.
+///   - `membership_frontier_digest` — sha256 hex over canonical JSON `{realm_id, members: [<sorted
+///     member DIDs>]}`.
 ///   - `expires_at` — soft TTL for the binding (now + 1h).
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct PolicyBinding {

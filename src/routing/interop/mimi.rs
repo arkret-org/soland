@@ -4,18 +4,14 @@
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Contrix reducer chain:
 //!
-//!   * `POST /mimi/flows/{flow_id}/messages` -> emits a
-//!     `MessageRecord` + a `cx.message.create` projection event so
-//!     the MIMI ingress shows up on the canonical Contrix timeline.
-//!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a
-//!     `cx.mimi.room_binding` projection event whenever the update
-//!     body carries a `room_binding` block.
-//!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic
-//!     `cx.mimi.notify` projection event so live subscribers observe
-//!     MIMI fanout.
-//!   * `POST /mimi/report-abuse` -> persists the moderation report
-//!     row AND emits a `cx.moderation.report` projection event so
-//!     the audit timeline reflects the report.
+//!   * `POST /mimi/flows/{flow_id}/messages` -> emits a `MessageRecord` + a `cx.message.create`
+//!     projection event so the MIMI ingress shows up on the canonical Contrix timeline.
+//!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a `cx.mimi.room_binding` projection event
+//!     whenever the update body carries a `room_binding` block.
+//!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic `cx.mimi.notify` projection
+//!     event so live subscribers observe MIMI fanout.
+//!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
+//!     `cx.moderation.report` projection event so the audit timeline reflects the report.
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so
@@ -30,10 +26,9 @@ use serde_json::{Value, json};
 
 use super::{append_audit_log, now, sha256_hex};
 use crate::error::AppError;
-use crate::ids;
-use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
+use crate::{ids, kinds};
 
 pub(super) fn router() -> Router {
     Router::with_path("mimi")

@@ -4,14 +4,12 @@
 //! Spins up a tiny in-process mock policy server (a `tokio::net::TcpListener`
 //! that hand-crafts a fixed JSON response) and exercises:
 //!
-//! 1. `policy_server_integration_hits_mock` — happy path: a configured
-//!    realm causes [`crate::authz::check_with_policy_server`] to POST the
-//!    `/policy/check` request to the mock and propagate the returned
-//!    decision.
-//! 2. `policy_server_integration_timeout_fails_closed` — when the mock
-//!    is unresponsive (listener never accepts), the client deadline
-//!    elapses and the merged decision flips to deny with the canonical
-//!    `policy_server_timeout` reason code.
+//! 1. `policy_server_integration_hits_mock` — happy path: a configured realm causes
+//!    [`crate::authz::check_with_policy_server`] to POST the `/policy/check` request to the mock
+//!    and propagate the returned decision.
+//! 2. `policy_server_integration_timeout_fails_closed` — when the mock is unresponsive (listener
+//!    never accepts), the client deadline elapses and the merged decision flips to deny with the
+//!    canonical `policy_server_timeout` reason code.
 //!
 //! These cover the contract Wave B test
 //! `cotest/e2e/tests/authz/policy-server-check.spec.ts` formalises at

@@ -30,8 +30,7 @@
 //! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §5–§6.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -654,12 +653,14 @@ fn decode_ed25519_multibase(multibase: &str) -> Result<VerifyingKey, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use chrono::Utc;
     use contrix_sdk::identity::{DidDocument, DidWebResolver};
     use ed25519_dalek::{Signer, SigningKey};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     fn realm_config(url: &str) -> RealmPolicyServerConfig {
         RealmPolicyServerConfig {

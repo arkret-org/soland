@@ -26,12 +26,14 @@
 //!   in-process anchorer worker (`crate::anchorer::run_one_signing_pass`) so the new admin Move /
 //!   Anchor flows through the same `apply_anchor` pipeline as everything else. Where Move
 //!   construction / signing for a brand-new admin DID needs threading through the admin signer
-//!   flow, we land a structurally correct placeholder response **and** an inline
-//!   `FUTURE:` anchor so sodmin's UI can smoke-test wire shapes without blocking on
-//!   the multi-signer / DID-resolver work.
+//!   flow, we land a structurally correct placeholder response **and** an inline `FUTURE:` anchor
+//!   so sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
+//!   work.
 //! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual` repair (free-form effects), and
 //!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
 //!   per-Space leader election that lands under `_todos.md` MAL-3 / MAL-11.
+
+use std::collections::BTreeSet;
 
 use contrix_sdk::lattice::CellState;
 use contrix_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
@@ -45,13 +47,11 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 
 use super::AuthArgs;
-use crate::app_error;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, app_error, json_ok};
 
 // ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
 

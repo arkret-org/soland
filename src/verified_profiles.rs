@@ -2,9 +2,8 @@
 //! startup.
 //!
 //! Pipeline:
-//! - cotest's `write-verified-profiles.mjs` parses Playwright's junit.xml
-//!   from a joint-e2e run and emits `verified-profiles.json` next to it.
-//!   Schema:
+//! - cotest's `write-verified-profiles.mjs` parses Playwright's junit.xml from a joint-e2e run and
+//!   emits `verified-profiles.json` next to it. Schema:
 //!
 //!   ```text
 //!   {
@@ -26,15 +25,13 @@
 //!     ]
 //!   }
 //!   ```
-//! - soland reads the path from env var
-//!   [`VERIFIED_PROFILES_ARTIFACT_ENV`] (`SOLAND_VERIFIED_PROFILES_ARTIFACT`)
-//!   at startup, filters to entries whose `service_role` matches
-//!   [`SOLAND_SERVICE_ROLE`] (`principal_server`), and stores them in
+//! - soland reads the path from env var [`VERIFIED_PROFILES_ARTIFACT_ENV`]
+//!   (`SOLAND_VERIFIED_PROFILES_ARTIFACT`) at startup, filters to entries whose `service_role`
+//!   matches [`SOLAND_SERVICE_ROLE`] (`principal_server`), and stores them in
 //!   [`crate::state::AppState::verified_profiles`].
-//! - `describe.rs::apply_claim_level_partition` reads that vector and
-//!   emits a `verified_profiles[]` array matching the wire schema
-//!   `service-describe.schema.json#/properties/verified_profiles` (via
-//!   the SDK's typed [`contrix_sdk::VerifiedProfileEntry`]).
+//! - `describe.rs::apply_claim_level_partition` reads that vector and emits a `verified_profiles[]`
+//!   array matching the wire schema `service-describe.schema.json#/properties/verified_profiles`
+//!   (via the SDK's typed [`contrix_sdk::VerifiedProfileEntry`]).
 //!
 //! Dev-mode invariant (service-surface.md §3.0): when the env var is unset
 //! OR the file is missing OR malformed, the loaded vector is empty and the
@@ -49,10 +46,11 @@
 //! could otherwise advertise profiles this binary does not actually
 //! self-claim, which would be a silent broken-trust posture.
 
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 /// Env var soland reads at startup to locate the cotest
 /// `verified-profiles.json` artifact. Absence / empty value disables the
@@ -289,8 +287,9 @@ fn required_non_empty(value: Option<String>, field: &str, profile_id: &str) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     #[test]
     fn missing_env_var_yields_empty() {

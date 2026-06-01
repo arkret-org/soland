@@ -10,10 +10,6 @@
 //! The artifact drift tests at the bottom stay here because they
 //! consult `crate::artifacts::*` which lives in soland.
 
-pub use contrix_sdk::lattice_registry::{
-    build_sdk_cell_registry, default_lattice_registry, lattice_bindings_for_sdk_registry,
-};
-
 // Re-export the individual cell-family impl structs as well so any
 // soland test that referenced them by name (e.g. `ViewCreate`,
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
@@ -29,6 +25,7 @@ pub use contrix_sdk::lattice_registry::{
     SpaceModerationPolicy, SpaceOrganization, SpaceParent, SpacePlaintextVisibleServices,
     SpacePolicy, SpacePolicyComponents, SpacePolicyServer, SpaceReadReceiptPolicyLattice,
     SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate, ViewReconcile, ViewUpdate,
+    build_sdk_cell_registry, default_lattice_registry, lattice_bindings_for_sdk_registry,
 };
 
 #[cfg(test)]
@@ -133,7 +130,7 @@ mod tests {
         let binding_for = |family: &str| {
             bindings
                 .iter()
-                .find(|(registered_family, _, _)| *registered_family == family)
+                .find(|(registered_family, ..)| *registered_family == family)
                 .copied()
                 .unwrap_or_else(|| panic!("missing SDK lattice binding for {family}"))
         };

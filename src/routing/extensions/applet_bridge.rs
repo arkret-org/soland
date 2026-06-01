@@ -13,18 +13,16 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::applet_manifest::{AppletManifest, VerifiedAppletManifest, verify_manifest};
+use super::bot_actor::{self, BotActor, KIND_BOT, KIND_GHOST};
 use crate::error::AppError;
-use crate::ids;
-use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::events::flow::flow_id_from_space_id;
 use crate::routing::events::projection::projection_event_json;
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::sha256_hex;
 use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
-
-use super::applet_manifest::{AppletManifest, VerifiedAppletManifest, verify_manifest};
-use super::bot_actor::{self, BotActor, KIND_BOT, KIND_GHOST};
+use crate::{ids, kinds};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletBridgeRecord {

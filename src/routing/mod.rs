@@ -1098,11 +1098,10 @@ async fn cors_preflight(res: &mut Response) {
 /// Catch-all handler under `/api/v1/*` and `/contrix/v1/*`.
 ///
 /// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10:
-/// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code":
-///   "unrecognized_endpoint", ...}}`.
-/// * Known path, wrong method -> `405 Method Not Allowed` + JSON envelope
-///   `{"error":{"code": "method_not_allowed", ...}}` AND the `Allow`
-///   response header MUST list the supported methods.
+/// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
+///   ...}}`.
+/// * Known path, wrong method -> `405 Method Not Allowed` + JSON envelope `{"error":{"code":
+///   "method_not_allowed", ...}}` AND the `Allow` response header MUST list the supported methods.
 ///
 /// Salvo's own 405 logic doesn't populate `Allow`, so we do the
 /// disambiguation here using the registered OpenAPI route table (see
@@ -1282,14 +1281,12 @@ fn pattern_matches_path(pattern: &str, path: &str) -> bool {
 /// the browser. Salvo's `Cors` builder also panics if `*` is combined with
 /// `allow_credentials(true)`, so we branch:
 ///
-/// - `"*"` → mirror the request origin (universally usable as a `*`
-///   substitute that survives the no-credentials constraint) and skip
-///   `allow_credentials`. Suitable for local-dev and any deployment where
-///   auth is carried in the `Authorization` header rather than cookies.
-/// - any other value → treat as an explicit origin allow-list (split on
-///   `,` for multi-origin operators) and enable `allow_credentials` so
-///   cookie-bearing browser clients deployed under a known origin still
-///   work.
+/// - `"*"` → mirror the request origin (universally usable as a `*` substitute that survives the
+///   no-credentials constraint) and skip `allow_credentials`. Suitable for local-dev and any
+///   deployment where auth is carried in the `Authorization` header rather than cookies.
+/// - any other value → treat as an explicit origin allow-list (split on `,` for multi-origin
+///   operators) and enable `allow_credentials` so cookie-bearing browser clients deployed under a
+///   known origin still work.
 fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     let entries: Vec<String> = raw
         .split(',')
@@ -2369,9 +2366,10 @@ mod framework_error_routing_tests {
     /// `tests/http_api.rs::framework_errors_use_contrix_error_envelope`).
     #[tokio::test]
     async fn contrix_v1_unknown_path_returns_unrecognized_endpoint() {
+        use salvo::test::{ResponseExt, TestClient};
+
         use crate::db::Db;
         use crate::state::AppState;
-        use salvo::test::{ResponseExt, TestClient};
 
         let state = AppState::new(test_state_config(), Db { pool: None });
         let svc = crate::service(state);
@@ -2392,9 +2390,10 @@ mod framework_error_routing_tests {
     /// `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10.
     #[tokio::test]
     async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() {
+        use salvo::test::{ResponseExt, TestClient};
+
         use crate::db::Db;
         use crate::state::AppState;
-        use salvo::test::{ResponseExt, TestClient};
 
         let state = AppState::new(test_state_config(), Db { pool: None });
         let svc = crate::service(state);

@@ -11,12 +11,8 @@ mod moderation;
 mod retention;
 mod spec;
 
-pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
-
 use audit::append_audit_log;
-
-use crate::error::{AppError, ErrorCode};
-use crate::state::{AppState, SessionRecord};
+pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
 use super::system::util;
 use super::{
@@ -24,6 +20,8 @@ use super::{
     flow_id_for_projection_event, flow_id_from_space_id, flow_projection_for_space, now,
     policy_document_to_response, projection_event_from_operation, sha256_hex, space_has_member,
 };
+use crate::error::{AppError, ErrorCode};
+use crate::state::{AppState, SessionRecord};
 
 /// Salvo middleware that gates an admin route on an OAuth-style admin
 /// scope. The middleware performs the bearer session lookup, introspects

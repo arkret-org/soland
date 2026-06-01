@@ -373,8 +373,9 @@ async fn require_space_owner(
 }
 
 fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError {
-    use crate::authz::DelegationError;
     use salvo::http::StatusCode;
+
+    use crate::authz::DelegationError;
     // We don't have a canonical `failed_precondition` ErrorCode in the
     // registry; reuse `StateMismatch` as the base (semantically close — a
     // precondition on parent grant state failed) and override the wire

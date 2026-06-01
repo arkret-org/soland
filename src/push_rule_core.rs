@@ -5,7 +5,6 @@
 //! watch-state decision.
 
 pub use contrix_sdk::push_rule_core::{EventContext, WatchLevel, reason_code};
-
 use contrix_sdk::push_rule_core::{ShouldNotify as CoreShouldNotify, evaluate_watch_level};
 
 /// Internal diagnostic strings. These are deliberately *not* a stable wire

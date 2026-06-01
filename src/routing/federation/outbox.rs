@@ -2,19 +2,15 @@
 //!
 //! ## Surface
 //!
-//! - [`enqueue_outbound`] — synchronous insert into the
-//!   `federation_outbox` table. Called from
-//!   [`super::federation::broadcast_move_to_peers`] (and the symmetric
-//!   anchor helper) after the per-peer transcript is persisted. Returns
-//!   the row's [`FederationOutboxRecord`] (newly-inserted or pre-existing
-//!   when `(peer_did, idempotency_key)` already matched a prior row).
-//! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Polls
-//!   the outbox every [`POLL_INTERVAL`], picks up to
-//!   [`POLL_BATCH_LIMIT`] rows whose `next_attempt_at <= now`, POSTs each
-//!   one to its peer with the spec-required headers, and writes the
-//!   resulting delivery state (`delivered_at`, `last_status`,
-//!   `last_response_excerpt`, `next_attempt_at`, `attempts`) back to the
-//!   row.
+//! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table. Called from
+//!   [`super::federation::broadcast_move_to_peers`] (and the symmetric anchor helper) after the
+//!   per-peer transcript is persisted. Returns the row's [`FederationOutboxRecord`] (newly-inserted
+//!   or pre-existing when `(peer_did, idempotency_key)` already matched a prior row).
+//! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Polls the outbox every
+//!   [`POLL_INTERVAL`], picks up to [`POLL_BATCH_LIMIT`] rows whose `next_attempt_at <= now`, POSTs
+//!   each one to its peer with the spec-required headers, and writes the resulting delivery state
+//!   (`delivered_at`, `last_status`, `last_response_excerpt`, `next_attempt_at`, `attempts`) back
+//!   to the row.
 //!
 //! ## What this lands today
 //!
@@ -26,17 +22,15 @@
 //!
 //! ## What's deferred
 //!
-//! - **Operator replay API**. Terminal failures are mirrored into
-//!   `federation_outbox_dead_letter`, but there is not yet an HTTP
-//!   endpoint that re-queues them with a fresh idempotency key.
+//! - **Operator replay API**. Terminal failures are mirrored into `federation_outbox_dead_letter`,
+//!   but there is not yet an HTTP endpoint that re-queues them with a fresh idempotency key.
 //!
 //! ## Parallel-work coordination
 //!
 //! - DOES NOT touch `reducer.rs` — G3.Y0 / G3.S3 own that.
-//! - DOES NOT change the inbound federation handler shape — G2.T1 owns
-//!   that.
-//! - DOES NOT introduce a new HTTP client — reuses the existing
-//!   `reqwest` async client soland already pulls in.
+//! - DOES NOT change the inbound federation handler shape — G2.T1 owns that.
+//! - DOES NOT introduce a new HTTP client — reuses the existing `reqwest` async client soland
+//!   already pulls in.
 
 use std::sync::Arc;
 use std::time::Duration;

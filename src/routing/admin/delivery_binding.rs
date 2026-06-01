@@ -3,15 +3,13 @@
 //!
 //! Endpoints:
 //!
-//! - `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` —
-//!   projected `cx.component.realm.delivery_binding_policy.v1`
-//!   cas-register value for a Realm (security boundary). Mirrors the
-//!   wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
+//! - `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` — projected
+//!   `cx.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
+//!   boundary). Mirrors the wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
 //!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
-//! - `GET /api/admin/v1/spaces/{space_id}/delivery-binding-policy` —
-//!   410 Gone shim. Realm/Space reversal (R1.2) moved the policy onto
-//!   the Realm boundary; the old `/spaces/{id}/...` path is retired in
-//!   the aggressive-mode v1 cutover (no back-compat).
+//! - `GET /api/admin/v1/spaces/{space_id}/delivery-binding-policy` — 410 Gone shim. Realm/Space
+//!   reversal (R1.2) moved the policy onto the Realm boundary; the old `/spaces/{id}/...` path is
+//!   retired in the aggressive-mode v1 cutover (no back-compat).
 //!
 //! The cell value itself is read off the in-process reducer via
 //! [`crate::reducer::SpaceProjection::delivery_binding_policy_cell_value`]
@@ -28,11 +26,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::AuthArgs;
-use crate::app_error;
-use crate::routing::system::util::render_error;
-use crate::routing::system::util::validate_space_id;
+use crate::routing::system::util::{render_error, validate_space_id};
 use crate::state::AppState;
-use crate::{JsonResult, json_ok};
+use crate::{JsonResult, app_error, json_ok};
 
 /// `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` response.
 ///

@@ -85,7 +85,7 @@ impl Db {
                 // managed) and `available` (idle, ready to hand out); the
                 // difference is the number checked out and in use.
                 let status = pool.status();
-                let in_use = status.size.saturating_sub(status.available.max(0) as usize);
+                let in_use = status.size.saturating_sub(status.available);
                 u32::try_from(in_use).unwrap_or(u32::MAX)
             })
             .unwrap_or(0)

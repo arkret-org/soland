@@ -8,15 +8,14 @@
 //! on the projection-side state machine surfaces immediately:
 //!
 //! 1. `cx.circle.create` writes a live Circle into the projection;
-//! 2. `cx.circle.member.state -> active` for a non-Realm member is
-//!    rejected with the canonical CXP-0007 reason
-//!    `circle_member_must_be_realm_member`;
-//! 3. After the actor joins the parent Realm, the same membership write
-//!    is accepted and the Circle members set is updated;
-//! 4. A Flow create with `scope_circle_id` pointing at a Circle in a
-//!    different Realm is rejected with `circle_realm_mismatch`;
-//! 5. `cx.circle.tombstone` flips the projection to the terminal state
-//!    and the read helper hides the row.
+//! 2. `cx.circle.member.state -> active` for a non-Realm member is rejected with the canonical
+//!    CXP-0007 reason `circle_member_must_be_realm_member`;
+//! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
+//!    members set is updated;
+//! 4. A Flow create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
+//!    with `circle_realm_mismatch`;
+//! 5. `cx.circle.tombstone` flips the projection to the terminal state and the read helper hides
+//!    the row.
 
 use contrix_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};

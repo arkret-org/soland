@@ -1,13 +1,12 @@
 //! HC-SOL-1/2 handle-claim ingest hardening.
 //!
-//! - HC-SOL-1: the `claim_kind` enum lost `service_handle`; v1 only allows
-//!   `handle_binding` / `organization_handle`. The retired `claim_type` and
-//!   `class` field names MUST be rejected as forbidden wire fields.
-//! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a
-//!   Realm `actor_id` (`cx:actor:`), a server-local `account_id`
-//!   (`cx:account:`), a service DID, or a generic resource id. We delegate
-//!   to the SDK `validate_handle_claim_subject` so soland / coauth / cotest
-//!   agree on the exact rejection surface, mapping its error to reason
+//! - HC-SOL-1: the `claim_kind` enum lost `service_handle`; v1 only allows `handle_binding` /
+//!   `organization_handle`. The retired `claim_type` and `class` field names MUST be rejected as
+//!   forbidden wire fields.
+//! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
+//!   (`cx:actor:`), a server-local `account_id` (`cx:account:`), a service DID, or a generic
+//!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
+//!   cotest agree on the exact rejection surface, mapping its error to reason
 //!   `handle_claim_subject_not_principal_did`.
 
 use serde_json::Value;
@@ -67,8 +66,9 @@ pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn accepts_principal_did_subject_and_handle_binding_claim() {

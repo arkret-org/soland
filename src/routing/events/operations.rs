@@ -23,7 +23,8 @@
 //! encrypted-attachment `key_ref` shape, and the operation-schema gaps
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
-use contrix_sdk::{Hash, Operation, schema::event_payload_validator_catalog};
+use contrix_sdk::schema::event_payload_validator_catalog;
+use contrix_sdk::{Hash, Operation};
 use serde_json::Value;
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
@@ -739,15 +740,13 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             Ok(())
         }
         // REDU-3 / REDU-4 — `cx.call.state` shape checks.
-        //   - `session_focus` is write-once: clients MUST NOT mutate an
-        //     already-committed value. The wire-level check ensures the
-        //     payload doesn't carry a `session_focus_revision` marker
-        //     other than the genesis `1`. The full
-        //     `session_focus_already_committed` deduplication runs in
-        //     the reducer once the per-call cell projection lands.
-        //   - `participants[].participant_binding.scheme` MUST be the
-        //     canonical `cx.media.participant_binding.v1`; otherwise
-        //     reject with `participant_binding_invalid`.
+        //   - `session_focus` is write-once: clients MUST NOT mutate an already-committed value.
+        //     The wire-level check ensures the payload doesn't carry a `session_focus_revision`
+        //     marker other than the genesis `1`. The full `session_focus_already_committed`
+        //     deduplication runs in the reducer once the per-call cell projection lands.
+        //   - `participants[].participant_binding.scheme` MUST be the canonical
+        //     `cx.media.participant_binding.v1`; otherwise reject with
+        //     `participant_binding_invalid`.
         "cx.call.state" => {
             // REDU-3 — write-once `session_focus`. Wire-shape check: a
             // payload that carries `session_focus_revision > 1` MUST
@@ -2840,9 +2839,10 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
 
 #[cfg(test)]
 mod flow_tracks_update_tests {
-    use super::*;
     use contrix_sdk::Operation;
     use serde_json::json;
+
+    use super::*;
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -3151,9 +3151,10 @@ mod flow_tracks_update_tests {
 
 #[cfg(test)]
 mod message_projection_schema_tests {
-    use super::*;
     use contrix_sdk::Operation;
     use serde_json::json;
+
+    use super::*;
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -3199,9 +3200,10 @@ mod message_projection_schema_tests {
 
 #[cfg(test)]
 mod spec_sync_validator_tests {
-    use super::*;
     use contrix_sdk::Operation;
     use serde_json::json;
+
+    use super::*;
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -3360,9 +3362,10 @@ mod spec_sync_validator_tests {
 
 #[cfg(test)]
 mod sdk_artifact_schema_tests {
-    use super::*;
     use contrix_sdk::Operation;
     use serde_json::json;
+
+    use super::*;
 
     fn cross_signing_reset(payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -3491,8 +3494,9 @@ mod sdk_artifact_schema_tests {
 
 #[cfg(test)]
 mod audience_mention_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn audience_mention_accepts_here_as_flow_engaged() {

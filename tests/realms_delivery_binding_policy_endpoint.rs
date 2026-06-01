@@ -4,10 +4,10 @@
 //! Pins the wire shape on the two paths the Realm/Space reversal
 //! introduced on the admin surface:
 //!
-//! - `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy`
-//!   returns 200 with the SDK-typed `RealmDeliveryBindingPolicy`
-//!   envelope (sodmin's `RealmDeliveryBindingPolicy` DTO consumes
+//! - `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` returns 200 with the SDK-typed
+//!   `RealmDeliveryBindingPolicy` envelope (sodmin's `RealmDeliveryBindingPolicy` DTO consumes
 //!   this).
+//!
 //! These tests boot the salvo `Service` in-process via
 //! `salvo::test::TestClient` — no network, no separate process.
 

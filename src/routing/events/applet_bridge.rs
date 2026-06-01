@@ -8,18 +8,14 @@
 //!
 //! Two dispatch modes:
 //!
-//! 1. **Outbound HTTP** — if the AppletProjection's `manifest` carries
-//!    a `bridge_url` (or top-level `endpoint_url`), the bridge POSTs
-//!    the invocation to that URL and emits a `*.status` /
-//!    `*.bridge_error` event with the upstream's response. This is
-//!    the production path. The POST body shape is the same as the
-//!    agent bridge — `{ session_id, applet_id, params }` — so an
-//!    applet service that already implements the agent bridge wire
-//!    can be reused.
+//! 1. **Outbound HTTP** — if the AppletProjection's `manifest` carries a `bridge_url` (or top-level
+//!    `endpoint_url`), the bridge POSTs the invocation to that URL and emits a `*.status` /
+//!    `*.bridge_error` event with the upstream's response. This is the production path. The POST
+//!    body shape is the same as the agent bridge — `{ session_id, applet_id, params }` — so an
+//!    applet service that already implements the agent bridge wire can be reused.
 //!
-//! 2. **In-process echo** — fallback used when the applet has no
-//!    registered bridge URL. Mirrors `params` back as `detail.echo`
-//!    with `status="completed"`. Exists so dev fixtures keep working
+//! 2. **In-process echo** — fallback used when the applet has no registered bridge URL. Mirrors
+//!    `params` back as `detail.echo` with `status="completed"`. Exists so dev fixtures keep working
 //!    without requiring a real applet service.
 //!
 //! The bridge dispatches asynchronously: `project_accepted_operations`
@@ -29,11 +25,9 @@
 
 use serde_json::{Value, json};
 
-use crate::ids;
-use crate::kinds;
-use crate::state::{AppState, EventNotification, ProjectionEventRecord};
-
 use super::projection::append_projection_event;
+use crate::state::{AppState, EventNotification, ProjectionEventRecord};
+use crate::{ids, kinds};
 
 /// Look up the applet's registered bridge URL from its
 /// `AppletProjection.manifest`. Returns the first non-empty value
@@ -293,8 +287,9 @@ async fn emit_applet_outcome_event(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn outcome_success_emits_status_event() {

@@ -8,24 +8,19 @@
 //! `realm_links` / `realm_links_inbound` side-band caches. This module
 //! layers the cross-link semantics on top of that projection:
 //!
-//! 1. **State machine** — links transition through `active → rejected`
-//!    or `active → tombstoned`. Per `realm-links.md §4` `status` is the
-//!    terminal field on the cell; a new event for the same
-//!    `(source, target, link_kind)` triple replaces the previous status.
-//!    Projection-derived statuses (`confirmed` / `unconfirmed_link`)
-//!    live one level above the cell and are not stored in the cell
-//!    itself.
+//! 1. **State machine** — links transition through `active → rejected` or `active → tombstoned`.
+//!    Per `realm-links.md §4` `status` is the terminal field on the cell; a new event for the same
+//!    `(source, target, link_kind)` triple replaces the previous status. Projection-derived
+//!    statuses (`confirmed` / `unconfirmed_link`) live one level above the cell and are not stored
+//!    in the cell itself.
 //!
-//! 2. **Cycle detection** — before an `active` link is admitted, the
-//!    reducer walks the existing link graph DFS from the proposed
-//!    `target_realm_id` and rejects with `realm_link_cycle` if any
-//!    directed path leads back to `source_realm_id`. Only the **directed
-//!    governance / inheritance** link kinds participate in the cycle
-//!    check (`governed_by`, `inherits_policy_from`,
-//!    `confidential_extension_of`, `split_from`, `replaces`).
-//!    `discoverable_from`, `join_gate_from`, and `mirror_of` are
-//!    symmetric / advisory and MAY form cycles — the spec doesn't
-//!    forbid e.g. `A mirror_of B` paired with `B mirror_of A`.
+//! 2. **Cycle detection** — before an `active` link is admitted, the reducer walks the existing
+//!    link graph DFS from the proposed `target_realm_id` and rejects with `realm_link_cycle` if any
+//!    directed path leads back to `source_realm_id`. Only the **directed governance / inheritance**
+//!    link kinds participate in the cycle check (`governed_by`, `inherits_policy_from`,
+//!    `confidential_extension_of`, `split_from`, `replaces`). `discoverable_from`,
+//!    `join_gate_from`, and `mirror_of` are symmetric / advisory and MAY form cycles — the spec
+//!    doesn't forbid e.g. `A mirror_of B` paired with `B mirror_of A`.
 //!
 //!    **Complexity**: O(V + E) per check, where V/E are the realms /
 //!    directed-kind edges visited from the proposed `target_realm_id`.
@@ -36,23 +31,18 @@
 //!    "A New Approach to Incremental Cycle Detection and Related
 //!    Problems") if the link graph grows past ~10⁴ edges.
 //!
-//! 3. **Explicit inheritance** — `realm-links.md §6` requires the child
-//!    Realm to opt in via `cx.realm.inheritance_policy`. Walking the
-//!    link graph for policy without that opt-in MUST NOT yield any
-//!    inherited rules ("禁止隐式级联", §5). The
-//!    [`effective_policy_for_realm`] helper enforces this: when no
-//!    `RealmInheritancePolicyState` is present for the realm,
-//!    `inheritance_mode` is `"none"` and the chain is empty regardless
-//!    of how many `governed_by` / `inherits_policy_from` parents exist
-//!    in the link graph.
+//! 3. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
+//!    `cx.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
+//!    yield any inherited rules ("禁止隐式级联", §5). The [`effective_policy_for_realm`] helper
+//!    enforces this: when no `RealmInheritancePolicyState` is present for the realm,
+//!    `inheritance_mode` is `"none"` and the chain is empty regardless of how many `governed_by` /
+//!    `inherits_policy_from` parents exist in the link graph.
 //!
 //! 4. **Effective policy** — computed on demand from
-//!    [`ProjectionState::realm_inheritance_policies`] +
-//!    [`ProjectionState::realm_links`]. We deliberately do NOT cache
-//!    this in projection state: caching is bounded only by the (small)
-//!    link-graph fanout, and re-computing on each query keeps the
-//!    invalidation surface ("recompute on link change OR policy change")
-//!    trivially correct.
+//!    [`ProjectionState::realm_inheritance_policies`] + [`ProjectionState::realm_links`]. We
+//!    deliberately do NOT cache this in projection state: caching is bounded only by the (small)
+//!    link-graph fanout, and re-computing on each query keeps the invalidation surface ("recompute
+//!    on link change OR policy change") trivially correct.
 //!
 //! Per `realm-links.md §6.3` "本地 deny / revoke / ban 覆盖 inherited
 //! allow" — local policy wins. At this layer we expose the inherited
@@ -152,21 +142,18 @@ impl InheritanceMode {
 /// Computed effective policy for one Realm.
 ///
 /// - `realm_id` echoes the queried Realm.
-/// - `inheritance_mode` is `Explicit` iff the Realm has a
-///   `cx.realm.inheritance_policy` projection (opt-in per spec §6).
-/// - `inheritance_chain` lists ancestor realm ids in walk order
-///   (`source_realm_id` of the projected inheritance policy, then any
-///   transitive parents discovered via `governed_by` /
-///   `inherits_policy_from` active links). Capped at
-///   [`MAX_INHERITANCE_CHAIN`] to bound traversal cost (spec §6.4 caps
-///   `max_depth` at 1 today; the cap here is a generous safety net for
-///   future multi-depth profiles).
-/// - `effective_policy` is the JSON merge of the realm's own declared
-///   `allowed_policies` / `allowed_capability_bundles` plus the union
-///   contributed by each ancestor in the chain. Per spec §6.2 derived
-///   grants MUST NOT be wider than the source — at this layer we
-///   surface the union; the policy evaluator applies the narrow-only
-///   intersection at decision time (see `routing/access/policy.rs`).
+/// - `inheritance_mode` is `Explicit` iff the Realm has a `cx.realm.inheritance_policy` projection
+///   (opt-in per spec §6).
+/// - `inheritance_chain` lists ancestor realm ids in walk order (`source_realm_id` of the projected
+///   inheritance policy, then any transitive parents discovered via `governed_by` /
+///   `inherits_policy_from` active links). Capped at [`MAX_INHERITANCE_CHAIN`] to bound traversal
+///   cost (spec §6.4 caps `max_depth` at 1 today; the cap here is a generous safety net for future
+///   multi-depth profiles).
+/// - `effective_policy` is the JSON merge of the realm's own declared `allowed_policies` /
+///   `allowed_capability_bundles` plus the union contributed by each ancestor in the chain. Per
+///   spec §6.2 derived grants MUST NOT be wider than the source — at this layer we surface the
+///   union; the policy evaluator applies the narrow-only intersection at decision time (see
+///   `routing/access/policy.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectivePolicy {
     pub realm_id: String,
@@ -186,16 +173,13 @@ pub const MAX_INHERITANCE_CHAIN: usize = 8;
 /// for the returned shape.
 ///
 /// Invariants:
-/// - Returns `inheritance_mode = "none"` and an empty
-///   `inheritance_chain` when the Realm has no
-///   `cx.realm.inheritance_policy` projection — per spec §5
-///   inheritance MUST be explicit.
-/// - Walks `governed_by` / `inherits_policy_from` `active` links only.
-///   Rejected / tombstoned links contribute nothing (spec §4 + §6.3).
-/// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a
-///   realm already in the chain (defence-in-depth — the cycle check on
-///   `apply_realm_link` should already prevent loops, but the read
-///   path can be invoked on a corrupted projection during recovery).
+/// - Returns `inheritance_mode = "none"` and an empty `inheritance_chain` when the Realm has no
+///   `cx.realm.inheritance_policy` projection — per spec §5 inheritance MUST be explicit.
+/// - Walks `governed_by` / `inherits_policy_from` `active` links only. Rejected / tombstoned links
+///   contribute nothing (spec §4 + §6.3).
+/// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a realm already in the chain
+///   (defence-in-depth — the cycle check on `apply_realm_link` should already prevent loops, but
+///   the read path can be invoked on a corrupted projection during recovery).
 pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> EffectivePolicy {
     let own = state.realm_inheritance_policy(realm_id);
     let inheritance_mode = if own.is_some() {
@@ -380,11 +364,12 @@ pub fn check_realm_link_admissible(
 
 #[cfg(test)]
 mod tests {
+    use contrix_sdk::{Operation, OperationId, RealmId};
+    use serde_json::json;
+
     use super::*;
     use crate::hlc::ServerHlc;
     use crate::kinds::{CX_REALM_INHERITANCE_POLICY, CX_REALM_LINK};
-    use contrix_sdk::{Operation, OperationId, RealmId};
-    use serde_json::json;
 
     const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
     const REALM_B: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";

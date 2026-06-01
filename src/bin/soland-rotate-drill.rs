@@ -4,8 +4,8 @@
 //!
 //! Three modes — selected by exactly one of the mode flags:
 //!
-//! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full
-//!    `rotate-signing-key` flow end-to-end against a running soland instance:
+//! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full `rotate-signing-key`
+//!    flow end-to-end against a running soland instance:
 //!      - mints a fresh ed25519 seed,
 //!      - calls `POST /api/admin/v1/spaces/{space_id}/anchorer/rotate-signing-key` on the live
 //!        server (via `--target` URL),

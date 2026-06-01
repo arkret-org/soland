@@ -23,13 +23,12 @@ impl Drop for OtelGuard {
 pub fn init_layer(default_service_name: &str) -> anyhow::Result<(OtelGuard, Option<OtelLayer>)> {
     use std::time::Duration;
 
-    use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::{KeyValue, global};
     use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-    use opentelemetry_sdk::{
-        Resource,
-        propagation::TraceContextPropagator,
-        trace::{Sampler, SdkTracerProvider},
-    };
+    use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 
     if !otel_enabled() {
         return Ok((OtelGuard { provider: None }, None));

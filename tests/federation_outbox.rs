@@ -7,11 +7,10 @@
 //! enqueues an outbox row directly, runs one dispatcher pass, then
 //! asserts:
 //!
-//!   1. The mock peer received exactly one POST with the
-//!      spec-required `Idempotency-Key` + `Content-Digest` headers
-//!      (RFC 9530, and the deterministic key shape G3.S0 emits).
-//!   2. The outbox row was marked `delivered_at IS NOT NULL` and
-//!      `last_status` records the mock's 2xx response.
+//!   1. The mock peer received exactly one POST with the spec-required `Idempotency-Key` +
+//!      `Content-Digest` headers (RFC 9530, and the deterministic key shape G3.S0 emits).
+//!   2. The outbox row was marked `delivered_at IS NOT NULL` and `last_status` records the mock's
+//!      2xx response.
 //!
 //! The dispatcher's background loop is NOT spawned here — we drive
 //! `FederationDispatcher::run_one_pass` directly so the test stays

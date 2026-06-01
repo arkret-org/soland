@@ -127,8 +127,9 @@ pub fn looks_like_sha256_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn canonical_json_sorts_object_keys() {

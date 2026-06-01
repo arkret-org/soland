@@ -3,16 +3,14 @@
 //! Spec-canonical binding under `/api/v1/keys/keypackages/*` (see
 //! `contrix-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /api/v1/keys/keypackages/upload` — op `cx.keys.keypackages.upload`
-//!   (publishes a fresh KeyPackage).
-//! - `POST /api/v1/keys/keypackages/claim`  — op `cx.keys.keypackages.claim`
-//!   (atomically claim a published KeyPackage; second claim of the same id
-//!   returns `409 cas_conflict`).
+//! - `POST /api/v1/keys/keypackages/upload` — op `cx.keys.keypackages.upload` (publishes a fresh
+//!   KeyPackage).
+//! - `POST /api/v1/keys/keypackages/claim`  — op `cx.keys.keypackages.claim` (atomically claim a
+//!   published KeyPackage; second claim of the same id returns `409 cas_conflict`).
 //! - `GET  /api/v1/keys/keypackages/welcomes/pending` — extension op
-//!   `cx.extension.soland.mls.welcomes.pending` (drain the calling device's
-//!   Welcome queue; caps at 50 per call; marks delivered rows with
-//!   `delivered_at = now()` so subsequent polls don't redeliver). This is a
-//!   soland-specific extension (not in the canonical spec registry).
+//!   `cx.extension.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
+//!   50 per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
+//!   redeliver). This is a soland-specific extension (not in the canonical spec registry).
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `cx.mls.commit` events via the normal `POST /api/v1/events`
@@ -22,10 +20,10 @@
 //!
 //! Each handler:
 //!   1. authenticates the caller via [`AuthArgs`] (bearer session);
-//!   2. drives the reducer's `apply_*` helper in
-//!      [`crate::reducer::mls`] to keep the in-process projection in lockstep;
-//!   3. mirrors the write into the corresponding persistence store
-//!      ([`MlsKeyPackageStore`] / [`MlsWelcomeStore`]).
+//!   2. drives the reducer's `apply_*` helper in [`crate::reducer::mls`] to keep the in-process
+//!      projection in lockstep;
+//!   3. mirrors the write into the corresponding persistence store ([`MlsKeyPackageStore`] /
+//!      [`MlsWelcomeStore`]).
 //!
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - decryption_pending   — deferred-decryption queue + retry.

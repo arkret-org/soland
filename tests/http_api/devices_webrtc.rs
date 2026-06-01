@@ -3,9 +3,10 @@
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
 #![allow(unused_imports)]
-use super::common::*;
 use contrix_sdk::CellRef;
 use contrix_sdk::lattice::CellState;
+
+use super::common::*;
 
 #[tokio::test]
 async fn device_pairing_challenge_and_authorization_surface_work() {

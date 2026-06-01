@@ -13,9 +13,8 @@ use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };
 use diesel::{OptionalExtension, QueryableByName, sql_query};
-use diesel_async::AsyncPgConnection;
-use diesel_async::RunQueryDsl;
 use diesel_async::pooled_connection::deadpool::Object;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 use uuid::Uuid;
 

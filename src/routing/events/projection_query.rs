@@ -6,13 +6,12 @@
 //! `cx.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/spaces?realm_id=...` — canonical projection
-//!   endpoint listing Space containers in a Realm scope, with
-//!   `state` ∈ {active, archived, tombstoned} (spec `common-fields.md §5.1`).
-//! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows
-//!   (state ∈ {active, archived, redacted}).
-//! - `GET /api/v1/projection/morphs?realm_id=...` — same for Morphs
-//!   (same enum as Flows).
+//! - `GET /api/v1/projection/spaces?realm_id=...` — canonical projection endpoint listing Space
+//!   containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
+//!   `common-fields.md §5.1`).
+//! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows (state ∈ {active, archived,
+//!   redacted}).
+//! - `GET /api/v1/projection/morphs?realm_id=...` — same for Morphs (same enum as Flows).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe

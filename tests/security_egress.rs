@@ -1,9 +1,10 @@
-use reqwest::Url;
 use std::ffi::OsString;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use reqwest::Url;
 
 #[test]
 fn production_egress_rejects_private_targets() {

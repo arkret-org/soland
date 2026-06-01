@@ -671,16 +671,15 @@ async fn start_recording(
 // caller that already has a committed `cx.call.state.session_focus`.
 //
 // Wire-level checks implemented here:
-//   - `focus_id` must equal the call's committed session_focus →
-//     `focus_mismatch` (MEDIA-2, REDU-3).
-//   - Focus selection is oldest-membership-wins; until the session_focus
-//     cell is wired through the reducer, the handler derives the focus from
-//     the call participants and their latest `foci_preferred[]` signal.
-//   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default
-//     `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s) (MEDIA-1).
-//   - `service_signature.kid` / `participant_binding.issuer_kid` resolves
-//     to the current `cx.realm.media_service.service_id` epoch →
-//     `token_issuer_unauthorised` (MEDIA-1).
+//   - `focus_id` must equal the call's committed session_focus → `focus_mismatch` (MEDIA-2,
+//     REDU-3).
+//   - Focus selection is oldest-membership-wins; until the session_focus cell is wired through the
+//     reducer, the handler derives the focus from the call participants and their latest
+//     `foci_preferred[]` signal.
+//   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s)
+//     (MEDIA-1).
+//   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
+//     `cx.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
 const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "cx.component.realm.media_service.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -866,18 +865,14 @@ async fn handle_rtc_token(
     // emission paths land with the cx.realm.media_service epoch
     // projection (TODO(R4)).
     //
-    //   - UNKNOWN_FOCUS_TYPE: emitted by the foci[] type validator
-    //     when the requested focus.type isn't in the
-    //     {contrix-native, livekit, mediasoup, jitsi} enum.
-    //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's
-    //     `cx.realm.media_service` cell doesn't expose a focus that
-    //     intersects the caller's `foci_preferred[]`.
-    //   - E2EE_KEY_SOURCE_UNAUTHORISED: emitted when the caller's
-    //     `e2ee_key_source` doesn't appear in the realm's
-    //     `cx.realm.media_service.e2ee_key_sources_allowed[]`.
-    //   - RECORDING_ARTIFACT_PIPELINE_BYPASSED: emitted by the
-    //     recording-artifact uploader when the binding chain to
-    //     `cx.realm.recording_artifact_pipeline` is broken.
+    //   - UNKNOWN_FOCUS_TYPE: emitted by the foci[] type validator when the requested focus.type
+    //     isn't in the {contrix-native, livekit, mediasoup, jitsi} enum.
+    //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's `cx.realm.media_service` cell
+    //     doesn't expose a focus that intersects the caller's `foci_preferred[]`.
+    //   - E2EE_KEY_SOURCE_UNAUTHORISED: emitted when the caller's `e2ee_key_source` doesn't appear
+    //     in the realm's `cx.realm.media_service.e2ee_key_sources_allowed[]`.
+    //   - RECORDING_ARTIFACT_PIPELINE_BYPASSED: emitted by the recording-artifact uploader when the
+    //     binding chain to `cx.realm.recording_artifact_pipeline` is broken.
     let _unknown_focus_type_reason: &str = crate::error::reasons::UNKNOWN_FOCUS_TYPE;
     let _focus_unavailable_reason: &str = crate::error::reasons::FOCUS_UNAVAILABLE_FOR_CLIENT;
     let _e2ee_unauth_reason: &str = crate::error::reasons::E2EE_KEY_SOURCE_UNAUTHORISED;
@@ -1064,22 +1059,22 @@ fn session_focus_for_call(
 
     member_order.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
     let default_focus_ids = media_epoch.focus_ids();
-    for (actor, _) in member_order {
+    if let Some((actor, _)) = member_order.into_iter().next() {
         let preferences = focus_preferences_for_member(webrtc, &actor);
         if preferences.is_empty() {
             if let Some(focus_id) = default_focus_ids.first() {
                 return Ok(focus_id.clone());
             }
-            break;
-        }
-        for focus_id in preferences {
-            if media_epoch.focus(&focus_id).is_some() {
-                return Ok(focus_id);
+        } else {
+            for focus_id in preferences {
+                if media_epoch.focus(&focus_id).is_some() {
+                    return Ok(focus_id);
+                }
             }
+            return Err(focus_unavailable_error(format!(
+                "no media_service focus intersects foci_preferred[] for {actor}"
+            )));
         }
-        return Err(focus_unavailable_error(format!(
-            "no media_service focus intersects foci_preferred[] for {actor}"
-        )));
     }
     Err(focus_unavailable_error(
         "realm media_service epoch has no available foci",

@@ -5,9 +5,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
-use soland::ids;
-use soland::service;
 use soland::state::AppState;
+use soland::{ids, service};
 
 fn test_config() -> AppConfig {
     AppConfig {

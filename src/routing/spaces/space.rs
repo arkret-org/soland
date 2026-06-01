@@ -635,9 +635,9 @@ pub async fn space_search_discoverability(state: &AppState, space_id: &str) -> b
 ///
 /// Read-side authorization rules (space-and-place.md §3.4 + §3.7):
 /// 1. `discoverability=public` → anyone.
-/// 2. `history_visibility=world_readable` → anyone (including anonymous /
-///    non-member registered actors). MLS-encrypted Spaces are explicitly
-///    forbidden from this state (`incompatible_history_with_encryption`).
+/// 2. `history_visibility=world_readable` → anyone (including anonymous / non-member registered
+///    actors). MLS-encrypted Spaces are explicitly forbidden from this state
+///    (`incompatible_history_with_encryption`).
 /// 3. Otherwise → caller MUST be an authenticated member.
 pub async fn space_id_accessible(
     state: &AppState,

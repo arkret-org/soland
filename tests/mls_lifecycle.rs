@@ -3,10 +3,9 @@
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. submit canonical `cx.mls.genesis` and `cx.mls.welcome` events
-//!      and assert they mirror into the MLS epoch / Welcome stores,
-//!   4. drain the calling device's queue via
-//!      `GET /api/v1/keys/keypackages/welcomes/pending`.
+//!   3. submit canonical `cx.mls.genesis` and `cx.mls.welcome` events and assert they mirror into
+//!      the MLS epoch / Welcome stores,
+//!   4. drain the calling device's queue via `GET /api/v1/keys/keypackages/welcomes/pending`.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
 //! `cx.mls.commit` events via the canonical `POST /api/v1/events` pipeline

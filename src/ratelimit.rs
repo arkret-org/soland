@@ -5,8 +5,8 @@
 //! a peer's quota across the rest of the API surface. We currently
 //! recognize three endpoint classes:
 //!
-//! - `auth`   — `/api/v1/auth/*` (strict, low ceiling): bearer-issuing
-//!   surface, must be hardened against credential-stuffing.
+//! - `auth`   — `/api/v1/auth/*` (strict, low ceiling): bearer-issuing surface, must be hardened
+//!   against credential-stuffing.
 //! - `api`    — every other `/api/v1/*` request (moderate ceiling).
 //! - `other`  — anything outside `/api/v1/*` (default ceiling).
 //!

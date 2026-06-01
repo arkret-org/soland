@@ -53,8 +53,9 @@ fn deny_forbidden_fields(object: &Value, location: &str) -> Result<(), WireRejec
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn accepts_clean_payload() {

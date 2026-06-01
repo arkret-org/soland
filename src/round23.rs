@@ -3,11 +3,11 @@
 //! This module consolidates the 17 new normative reducer/validation paths
 //! introduced by spec round 2+3 cleanup. It contains:
 //!
-//! - **events.submit gates** — ephemeral kind reject, receipt-object reject,
-//!   terminal-Realm reject (T02 / T07 / T23).
+//! - **events.submit gates** — ephemeral kind reject, receipt-object reject, terminal-Realm reject
+//!   (T02 / T07 / T23).
 //! - **cross_signing.reset cross-domain replay defence** (T08).
-//! - **realm.policy_components hard ceiling + compliance mutex + media
-//!   plaintext binding** (T09 / T12).
+//! - **realm.policy_components hard ceiling + compliance mutex + media plaintext binding** (T09 /
+//!   T12).
 //! - **anchor frontier digest validation** (T04).
 //! - **moderation.appeal.* reducer + state machine** (T06).
 //! - **Realm tombstone vs destroy lifecycle** (T07).
@@ -115,10 +115,9 @@ pub fn terminal_realm_check(
 /// Round R2/R3 (T08).
 ///
 /// Verification order MUST be:
-/// 1. `payload.trust_domain` equals server's configured trust_domain
-///    (else `cross_domain_replay_rejected`)
-/// 2. `payload.reset_event_id` equals the enclosing Event's id
-///    (else `reset_event_id_mismatch`)
+/// 1. `payload.trust_domain` equals server's configured trust_domain (else
+///    `cross_domain_replay_rejected`)
+/// 2. `payload.reset_event_id` equals the enclosing Event's id (else `reset_event_id_mismatch`)
 /// 3. signature check (existing path; not implemented here)
 ///
 /// Wire-breaking: the old payload without these required fields MUST be
@@ -199,10 +198,9 @@ pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
-/// 2. `cx.profile.e2ee_relaxed.v1` not active with any audit compliance
-///    profile (T09 mutex)
-/// 3. When `media_service_decrypts=true`, all three governance bindings
-///    are present (T12) — caller passes the resolved bindings.
+/// 2. `cx.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
+/// 3. When `media_service_decrypts=true`, all three governance bindings are present (T12) — caller
+///    passes the resolved bindings.
 pub fn realm_policy_components_check(
     payload: &Value,
     active_profiles: &[String],
@@ -946,8 +944,9 @@ pub fn hash_to_hex(hash: &Hash) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn ephemeral_kind_rejected_at_submit_entry() {
