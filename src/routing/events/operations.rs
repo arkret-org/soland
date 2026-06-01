@@ -227,12 +227,14 @@ const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     "object",
     "space create operation requires object",
 )];
-// `cx.space.update` carries `space_id` + `patch`.
-const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id"];
+// `cx.space.update` carries the canonical object_patch_payload
+// (`target_ref` + `patch`). `space_id` remains accepted while older
+// clients migrate.
+const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["target_ref", "space_id"];
 const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         SPACE_CONTAINER_UPDATE_ID_FIELDS,
-        "space update operation requires space_id",
+        "space update operation requires target_ref",
     ),
     PayloadRequirement::Required("patch", "space update operation requires patch"),
 ];
@@ -282,7 +284,10 @@ const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "morph create operation requires object",
 )];
 const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("morph_id", "morph update operation requires morph_id"),
+    PayloadRequirement::AnyOf(
+        &["target_ref", "morph_id"],
+        "morph update operation requires target_ref",
+    ),
     PayloadRequirement::Required("patch", "morph update operation requires patch"),
 ];
 const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -2883,16 +2888,25 @@ mod flow_tracks_update_tests {
     }
 
     #[test]
-    fn canonical_space_update_requires_space_id_and_patch() {
+    fn canonical_space_update_accepts_target_ref_and_patch() {
         let schema = operation_schema_for_kind(kinds::CX_SPACE_CONTAINER_UPDATE).unwrap();
         let operation = space_container_op(
+            kinds::CX_SPACE_CONTAINER_UPDATE,
+            json!({
+                "target_ref": "cx:space:01904100-0000-7000-8000-000000000003",
+                "patch": {"title": "Launch v2"}
+            }),
+        );
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let legacy_space_id = space_container_op(
             kinds::CX_SPACE_CONTAINER_UPDATE,
             json!({
                 "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
             }),
         );
-        assert!(validate_operation_schema(&operation, schema).is_ok());
+        assert!(validate_operation_schema(&legacy_space_id, schema).is_ok());
 
         let missing_space_id = space_container_op(
             kinds::CX_SPACE_CONTAINER_UPDATE,
@@ -2900,7 +2914,7 @@ mod flow_tracks_update_tests {
         );
         assert_eq!(
             validate_operation_schema(&missing_space_id, schema),
-            Err("space update operation requires space_id")
+            Err("space update operation requires target_ref")
         );
     }
 
