@@ -67,12 +67,26 @@ pub(crate) fn agent_key_pair_router() -> Router {
 }
 
 fn validate_agent_principal_id(value: &str) -> Result<(), AppError> {
-    if !value.starts_with("cx:agent_principal:") {
+    if validate_did(value).is_err() {
         return Err(AppError::invalid_param(
-            "agent_principal_id must be a cx:agent_principal:<uuidv7> typed id",
+            "agent_principal_id must be a DID scalar",
         ));
     }
     Ok(())
+}
+
+fn verification_method_principal(verification_method: &str) -> &str {
+    verification_method
+        .split('#')
+        .next()
+        .unwrap_or("")
+        .split('?')
+        .next()
+        .unwrap_or("")
+}
+
+fn generate_agent_principal_did() -> String {
+    format!("did:web:agent-{}.agents.example", uuid::Uuid::now_v7())
 }
 
 #[endpoint(
@@ -94,6 +108,11 @@ async fn agent_key_pair(
     validate_agent_principal_id(&body.agent_principal_id)?;
     if body.verification_method.trim().is_empty() {
         return Err(AppError::invalid_param("verification_method is required"));
+    }
+    if verification_method_principal(&body.verification_method) != body.agent_principal_id {
+        return Err(AppError::invalid_param(
+            "verification_method DID must match agent_principal_id",
+        ));
     }
     // ERR-1 — PROOF_INVALID +
     // VERIFICATION_METHOD_PRINCIPAL_MISMATCH +
@@ -144,7 +163,7 @@ async fn agent_key_pair(
         authorized_at,
         todos: vec![
             "P2-impl: write cx.agent.key.authorize event into the event log".to_owned(),
-            "P2-impl: enforce verification_method↔agent_principal_id consistency".to_owned(),
+            "P2-impl: persist controller approval consumption before accepting key authorization".to_owned(),
             "P2-impl: wire runtime_attestation verifier before accepting attested key authorization".to_owned(),
         ],
     })
@@ -185,7 +204,7 @@ async fn provision_agent(
     if validate_did(&agent_id).is_err() {
         return Err(AppError::invalid_param("agent_id must be a DID"));
     }
-    let agent_principal_id = ids::generate("agent_principal");
+    let agent_principal_id = generate_agent_principal_did();
     let timestamp = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     append_audit_log(
         state,
@@ -293,11 +312,32 @@ async fn lifecycle_transition(
     //   - state == Deactivated                       → AGENT_DEACTIVATED
     let _agent_paused_reason: &str = crate::error::reasons::AGENT_PAUSED;
     let _agent_deactivated_reason: &str = crate::error::reasons::AGENT_DEACTIVATED;
-    let at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut payload = json!({
         "agent_principal_id": agent_id,
-        "state": new_state,
+        "controller_principal_id": session.actor.clone(),
+        "transition": match event_kind {
+            "cx.agent.pause" => "pause",
+            "cx.agent.resume" => "resume",
+            "cx.agent.deactivate" => "deactivate",
+            _ => new_state,
+        },
+        "previous_status": match event_kind {
+            "cx.agent.resume" => "paused",
+            "cx.agent.deactivate" => "active",
+            _ => "active",
+        },
+        "status_changed_at": status_changed_at.clone(),
     });
+    let frontier_key = if event_kind == "cx.agent.deactivate" {
+        "revocation_frontier"
+    } else {
+        "freshness_frontier"
+    };
+    payload.as_object_mut().expect("payload object").insert(
+        frontier_key.to_owned(),
+        json!({ "captured_at": status_changed_at.clone() }),
+    );
     if let Some(reason) = reason.as_ref() {
         payload
             .as_object_mut()
@@ -318,7 +358,7 @@ async fn lifecycle_transition(
         ok: true,
         agent_principal_id: agent_id,
         state: new_state.to_owned(),
-        at,
+        status_changed_at,
         todos,
     })
 }
@@ -618,4 +658,26 @@ async fn ensure_sidecar_thread(
             "P2-impl: enforce context-realm-preferred sidecar home policy".to_owned(),
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_principal_id_is_did_not_typed_id() {
+        validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
+        assert!(
+            validate_agent_principal_id("cx:agent_principal:01999999-0000-7000-8000-00000000a001")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn verification_method_principal_strips_query_and_fragment() {
+        assert_eq!(
+            verification_method_principal("did:web:agent.example?versionId=1#key-1"),
+            "did:web:agent.example"
+        );
+    }
 }

@@ -450,18 +450,36 @@ const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
 // shape per spec `agent_pause_payload` / `agent_resume_payload` /
 // `agent_deactivate_payload`. The FSM transition guard runs in the
 // reducer (REDU-1, `apply_agent_lifecycle`).
-const AGENT_PAUSE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "agent_principal_id",
-    "cx.agent.pause requires agent_principal_id",
-)];
-const AGENT_RESUME_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "agent_principal_id",
-    "cx.agent.resume requires agent_principal_id",
-)];
-const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "agent_principal_id",
-    "cx.agent.deactivate requires agent_principal_id",
-)];
+const AGENT_PAUSE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "agent_principal_id",
+        "cx.agent.pause requires agent_principal_id",
+    ),
+    PayloadRequirement::Required(
+        "status_changed_at",
+        "cx.agent.pause requires status_changed_at",
+    ),
+];
+const AGENT_RESUME_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "agent_principal_id",
+        "cx.agent.resume requires agent_principal_id",
+    ),
+    PayloadRequirement::Required(
+        "status_changed_at",
+        "cx.agent.resume requires status_changed_at",
+    ),
+];
+const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "agent_principal_id",
+        "cx.agent.deactivate requires agent_principal_id",
+    ),
+    PayloadRequirement::Required(
+        "status_changed_at",
+        "cx.agent.deactivate requires status_changed_at",
+    ),
+];
 
 // R3 spec-sync — `actor_private_event` payloads. These do NOT advance
 // the anchor frontier / actor_seq (reducer_input=false).

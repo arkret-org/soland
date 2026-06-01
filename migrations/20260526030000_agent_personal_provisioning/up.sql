@@ -1,6 +1,6 @@
 -- CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent + Sidecar
 -- provisioning durable bookkeeping. Mirrors the canonical id-kind-registry
--- shapes for `agent_principal`, `agent_session`, `agent_key`,
+-- shapes for `agent_session`, `agent_key`,
 -- `accountability_grant`, `backup_series`, `recovery_session`. The reducer
 -- continues to authoritatively project from the Event log; these tables
 -- are the restart-durability mirror plus the queue used by the
@@ -13,7 +13,10 @@
 
 CREATE TABLE agent_principal (
     agent_principal_id     TEXT PRIMARY KEY
-        CHECK (agent_principal_id LIKE 'cx:agent_principal:%'),
+        CHECK (
+            agent_principal_id LIKE 'did:%'
+            AND agent_principal_id !~ '[[:space:]#?]'
+        ),
     controller_did         TEXT NOT NULL,
     agent_id               TEXT NOT NULL,
     display_name           TEXT NOT NULL,

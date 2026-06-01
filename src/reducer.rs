@@ -1241,9 +1241,9 @@ pub enum ProjectionEffect {
         agent_id: String,
     },
     /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — agent
-    /// lifecycle FSM transition projected. `agent_principal_id` is the
-    /// `cx:agent_principal:<uuid>` from the payload; `new_state` is the
-    /// post-transition AgentLifecycleState. Bottom = `Reject`;
+    /// lifecycle FSM transition projected. `agent_principal_id` is the DID
+    /// from the payload; `new_state` is the post-transition
+    /// AgentLifecycleState. Bottom = `Reject`;
     /// Deactivated is terminal.
     AgentLifecycleProjected {
         agent_principal_id: String,
