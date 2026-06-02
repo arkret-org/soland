@@ -103,20 +103,20 @@ impl AnchorerWorker {
     pub fn sign_pending_for_space(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        realm_id: &SpaceId,
         max_moves: usize,
     ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
         // Step 1: authorization. v1 single-DID mode — accept if anchorer
         // cell is unset (genesis Space) OR set to our service DID. Anything
         // else is "not our turn to sign".
-        if !self.is_authorized_for(state, space_id)? {
-            return Err(AnchorerError::NotAuthorized(space_id.to_string()));
+        if !self.is_authorized_for(state, realm_id)? {
+            return Err(AnchorerError::NotAuthorized(realm_id.to_string()));
         }
 
         // Step 2: list pending Moves (oldest first).
         let pending = state
             .move_store
-            .list_pending_for_anchorer(space_id, None, max_moves)?;
+            .list_pending_for_anchorer(realm_id, None, max_moves)?;
         if pending.is_empty() {
             return Ok(None);
         }
@@ -125,9 +125,9 @@ impl AnchorerWorker {
         // The v1 Genesis Anchor is an empty-frontier DAG root. If this is the
         // first signed batch for the Realm, materialize that root before
         // anchoring any Move so the successor never uses predecessor_refs=[].
-        let mut leaves = state.anchor_store.list_leaves(space_id)?;
+        let mut leaves = state.anchor_store.list_leaves(realm_id)?;
         if leaves.is_empty() {
-            let genesis = self.build_genesis_anchor(state, space_id)?;
+            let genesis = self.build_genesis_anchor(state, realm_id)?;
             let verifier = select_jws_verifier(state);
             let effect = apply_anchor(
                 &genesis,
@@ -139,7 +139,7 @@ impl AnchorerWorker {
             )
             .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
             tracing::info!(
-                space_id = %space_id,
+                realm_id = %realm_id,
                 anchor_id = %effect.anchor,
                 "materialized empty Genesis Anchor before signing pending Moves"
             );
@@ -150,7 +150,7 @@ impl AnchorerWorker {
         // empty.
         let view = effective_anchor_view(
             &leaves,
-            space_id,
+            realm_id,
             state.anchor_store.as_ref(),
             state.cell_store.as_ref(),
             state.cell_registry.as_ref(),
@@ -159,7 +159,7 @@ impl AnchorerWorker {
 
         // Recompute pre_state map (effective_anchor_view returns state_root
         // but we need the per-cell map for verify_move).
-        let pre_state = self.read_effective_state(state, space_id)?;
+        let pre_state = self.read_effective_state(state, realm_id)?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
@@ -197,7 +197,7 @@ impl AnchorerWorker {
         // Step 6: predict the post-state and state_root after applying
         // accepted moves' effects on top of pre_state.
         let predicted_state_root =
-            self.predict_post_state_root(state, space_id, &pre_state, &accepted)?;
+            self.predict_post_state_root(state, realm_id, &pre_state, &accepted)?;
 
         // Step 7: compose Anchor (predecessor_refs = current leaves, frontier
         // = predecessor frontier ∪ new accepted moves), then derive id, then
@@ -224,7 +224,7 @@ impl AnchorerWorker {
         let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
             id: zero_anchor_id,
-            realm_id: space_id.clone(),
+            realm_id: realm_id.clone(),
             predecessor_refs: leaves,
             frontier,
             state_root: predicted_state_root.clone(),
@@ -267,7 +267,7 @@ impl AnchorerWorker {
         // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
             "cx:cell:cx.component.mls.epoch.v1:{}",
-            space_id.as_str()
+            realm_id.as_str()
         ))
         .ok();
         let prev_epoch_value: Option<serde_json::Value> =
@@ -280,7 +280,7 @@ impl AnchorerWorker {
             });
         if let Ok(mut proj) = state.projection.lock() {
             if let Err(error) = proj.reload_cells_from_store(
-                space_id,
+                realm_id,
                 state.cell_store.as_ref(),
                 state.cell_registry.as_ref(),
             ) {
@@ -294,7 +294,7 @@ impl AnchorerWorker {
         let _ = state
             .event_broadcast
             .send(crate::state::EventNotification::frontier(
-                space_id.as_str().to_owned(),
+                realm_id.as_str().to_owned(),
                 effect.anchor.as_str().to_owned(),
                 effect.post_state_root.as_str().to_owned(),
             ));
@@ -311,7 +311,7 @@ impl AnchorerWorker {
                     state
                         .event_broadcast
                         .send(crate::state::EventNotification::epoch_rotation(
-                            space_id.as_str().to_owned(),
+                            realm_id.as_str().to_owned(),
                             prev_epoch_value,
                             new_epoch,
                         ));
@@ -589,14 +589,14 @@ impl AnchorerWorker {
     fn build_genesis_anchor(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        realm_id: &SpaceId,
     ) -> Result<Anchor, AnchorerError> {
         let zero_anchor_id = AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
             .expect("zero AnchorId is well-formed");
         let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
             id: zero_anchor_id,
-            realm_id: space_id.clone(),
+            realm_id: realm_id.clone(),
             predecessor_refs: Vec::new(),
             frontier: Vec::new(),
             state_root: Hash::new(contrix_sdk::EMPTY_STATE_ROOT.to_owned())

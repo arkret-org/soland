@@ -497,7 +497,7 @@ async fn append_portal_message(
         "message_id": crate::routing::events::flow::message_id_from_event_id(&event_id),
         "event_id": event_id,
         "operation_id": operation_id,
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "portal_realm_id": applet.portal_realm_id,
     }))
 }

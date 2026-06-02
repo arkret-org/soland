@@ -214,7 +214,6 @@ async fn issue_ice_config(
     }
     let mut response = json!({
         "realm_id": realm_id,
-        "space_id": realm_id,
         "call_id": call_id,
         "actor_id": actor_id,
         "device_id": device_id,
@@ -303,7 +302,7 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
 #[endpoint(
     operation_id = "cx.extension.soland.webrtc.create_session",
     tags("webrtc"),
-    summary = "Create a WebRTC signaling session bound to a Space"
+    summary = "Create a WebRTC signaling session bound to a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
@@ -315,12 +314,12 @@ async fn create_webrtc_session(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_space_id(&body.space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    if RealmId::new(body.realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
-    if !space_has_member(state, &body.space_id, &session.actor).await {
+    if !space_has_member(state, &body.realm_id, &session.actor).await {
         return Err(AppError::capability_denied(
-            "actor is not a joined member of the space",
+            "actor is not a joined member of the realm",
         ));
     }
     let mode = normalize_call_mode(body.mode.as_deref())?.to_owned();
@@ -332,9 +331,9 @@ async fn create_webrtc_session(
         if validate_did(&participant).is_err() {
             return Err(AppError::invalid_param("invalid participant did"));
         }
-        if !space_has_member(state, &body.space_id, &participant).await {
+        if !space_has_member(state, &body.realm_id, &participant).await {
             return Err(AppError::capability_denied(
-                "participant is not a joined member of the space",
+                "participant is not a joined member of the realm",
             ));
         }
         participants.insert(participant);
@@ -348,7 +347,7 @@ async fn create_webrtc_session(
     let participant_list = participants.iter().cloned().collect::<Vec<_>>();
     let record = WebrtcSessionRecord {
         session_id: session_id.clone(),
-        realm_id: body.space_id.clone(),
+        realm_id: body.realm_id.clone(),
         created_by: session.actor,
         participants,
         mode: mode.clone(),
@@ -368,7 +367,7 @@ async fn create_webrtc_session(
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(CreateWebrtcSessionResponse {
         session_id,
-        space_id: body.space_id,
+        realm_id: body.realm_id,
         participants: participant_list,
         mode,
         recording_policy,
@@ -624,11 +623,14 @@ async fn start_recording(
         ));
     }
     let body = body.into_inner();
-    if let Some(space_id) = body.get("space_id").and_then(Value::as_str)
-        && space_id != record.realm_id
+    if let Some(realm_id) = body
+        .get("realm_id")
+        .or_else(|| body.get("space_id"))
+        .and_then(Value::as_str)
+        && realm_id != record.realm_id
     {
         return Err(AppError::invalid_param(
-            "space_id does not match the call session",
+            "realm_id does not match the call session",
         ));
     }
     if record.recording_policy != "allow" {
@@ -658,7 +660,7 @@ async fn start_recording(
     json_ok(json!({
         "ok": true,
         "call_id": call_id,
-        "space_id": record.realm_id,
+        "realm_id": record.realm_id,
         "recording_policy": record.recording_policy,
         "recording_id": recording_id,
         "recording_started_by": session.actor,

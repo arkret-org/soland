@@ -5461,7 +5461,7 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
             realm_id: row
                 .realm_id
                 .as_ref()
-                .map(|u| ids::format_typed_uuid("space", u)),
+                .map(|u| ids::format_typed_uuid("realm", u)),
             kind: row.kind,
             schema_id: row.schema_id,
             canonical_digest: row.canonical_digest,
@@ -5477,7 +5477,7 @@ impl EventStore for PgEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let event_id_uuid = ids::typed_uuid_part_or_panic(&record.event_id);
-        let space_id_uuid: Option<Uuid> = record
+        let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
             .map(ids::typed_uuid_part_or_panic);
@@ -5490,7 +5490,7 @@ impl EventStore for PgEventStore {
         .bind::<SqlUuid, _>(event_id_uuid)
         .bind::<Text, _>(&record.actor_id)
         .bind::<BigInt, _>(record.actor_seq as i64)
-        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.schema_id)
         .bind::<Text, _>(&record.canonical_digest)
@@ -8440,7 +8440,7 @@ mod tests {
             event_id: event_id.to_owned(),
             actor_id: actor.to_owned(),
             actor_seq: seq,
-            realm_id: Some("cx:space:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             kind: "cx.message.create".to_owned(),
             schema_id: "cx.schema.event.message.v1".to_owned(),
             canonical_digest: "sha256:abc".to_owned(),

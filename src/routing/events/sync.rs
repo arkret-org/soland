@@ -1104,7 +1104,7 @@ fn bottom_cells_for_space(projection: &ProjectionState, realm_id: &str) -> Vec<V
                 return None;
             }
             Some(json!({
-                "space_id": realm_id,
+                "realm_id": realm_id,
                 "cell_id": cell_id,
                 "state": "bottom",
                 "bottom": bottom,

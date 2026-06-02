@@ -1084,7 +1084,7 @@ pub(super) async fn admin_repair_bottom(
             // scoped-validated, even though the signing path lands later
             // (MAL-15).
             let canonical_request = serde_json::json!({
-                "space_id": realm_id,
+                "realm_id": realm_id,
                 "cell_id": cell_id_str,
                 "strategy": &body,
             });
@@ -1355,8 +1355,8 @@ pub(super) async fn admin_prune_anchor_dag(
         contrix_sdk::admin_scopes::ANCHOR_PRUNE,
     )
     .await?;
-    let space_id_str = realm_id.into_inner();
-    let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
+    let realm_id_str = realm_id.into_inner();
+    let realm = SpaceId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1384,20 +1384,20 @@ pub(super) async fn admin_prune_anchor_dag(
             AppError::new(
                 ErrorCode::NotFound,
                 format!(
-                    "anchor `{}` not found in space `{}`",
-                    candidate_id, space_id_str
+                    "anchor `{}` not found in realm `{}`",
+                    candidate_id, realm_id_str
                 ),
             )
             .with_status(StatusCode::NOT_FOUND)
         })?;
-    if candidate.realm_id.as_str() != space.as_str() {
+    if candidate.realm_id.as_str() != realm.as_str() {
         return Err(AppError::new(
             ErrorCode::InvalidParam,
             format!(
-                "anchor `{}` belongs to space `{}`, not `{}`",
+                "anchor `{}` belongs to realm `{}`, not `{}`",
                 candidate_id,
                 candidate.realm_id.as_str(),
-                space_id_str
+                realm_id_str
             ),
         )
         .with_status(StatusCode::BAD_REQUEST));
@@ -1405,7 +1405,7 @@ pub(super) async fn admin_prune_anchor_dag(
 
     // Successor count — direct successors in the DAG.
     let successors = anchor_store
-        .successors(&space, &candidate_id)
+        .successors(&realm, &candidate_id)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -1434,7 +1434,7 @@ pub(super) async fn admin_prune_anchor_dag(
             if succ_anchor.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = anchor_store.successors(&space, &next_id) {
+            if let Ok(next_succs) = anchor_store.successors(&realm, &next_id) {
                 stack.extend(next_succs);
             }
         }
@@ -1444,7 +1444,7 @@ pub(super) async fn admin_prune_anchor_dag(
     // `set_genesis_if_absent`; the spec-canonical zero-anchor placeholder
     // (`cx:anchor:sha256:000...`) used at `apply_anchor` genesis is also
     // treated as genesis when present.
-    let is_genesis = match anchor_store.genesis(&space) {
+    let is_genesis = match anchor_store.genesis(&realm) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };
@@ -1509,7 +1509,7 @@ pub(super) async fn admin_prune_anchor_dag(
     // shape if desired); we surface the *successor* ids that were
     // rewired, which is what the prune actually touched.
     let _parents = anchor_store
-        .prune_predecessor(&space, &candidate_id)
+        .prune_predecessor(&realm, &candidate_id)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::Conflict,
@@ -1590,8 +1590,8 @@ pub(super) async fn admin_submit_multisig_partial(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _session = super::require_admin_principal(state, session)?;
-    let space_id_str = realm_id.into_inner();
-    let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
+    let realm_id_str = realm_id.into_inner();
+    let _realm_id = SpaceId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1624,7 +1624,7 @@ pub(super) async fn admin_submit_multisig_partial(
         Some(r) => r,
         None => crate::state::MultisigPendingRecord {
             anchor_id: anchor_id_str.clone(),
-            realm_id: space_id_str.clone(),
+            realm_id: realm_id_str.clone(),
             threshold_k: 1,
             threshold_n: 1,
             members: vec![body.signer_did.clone()],
@@ -1707,8 +1707,8 @@ pub(super) async fn admin_list_multisig_pending(
 ) -> JsonResult<MultisigPendingResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id_str = realm_id.into_inner();
-    let _space_id = SpaceId::new(space_id_str.clone()).map_err(|e| {
+    let realm_id_str = realm_id.into_inner();
+    let _realm_id = SpaceId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1716,7 +1716,7 @@ pub(super) async fn admin_list_multisig_pending(
     let rows = state
         .persistence
         .multisig_pending()
-        .list_for_space(&space_id_str)
+        .list_for_space(&realm_id_str)
         .await
         .map_err(persistence_to_app_err)?;
 
@@ -1807,8 +1807,8 @@ pub(super) async fn admin_rotate_signing_key(
     .await?;
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a
     // bogus path; the rotation itself is process-wide.
-    let space_id_str = realm_id.into_inner();
-    let _ = SpaceId::new(space_id_str.clone()).map_err(|e| {
+    let realm_id_str = realm_id.into_inner();
+    let _ = SpaceId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1858,7 +1858,7 @@ pub(super) async fn admin_rotate_signing_key(
         state,
         Some(did.as_str()),
         "admin.anchorer.rotate_signing_key",
-        json!({"space_id": space_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
+        json!({"realm_id": realm_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
         "accepted",
     )
     .await;
@@ -1961,15 +1961,15 @@ pub(super) async fn admin_list_gc_candidates(
 ) -> JsonResult<GcCandidatesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id_str = realm_id.into_inner();
-    let space = SpaceId::new(space_id_str.clone()).map_err(|e| {
+    let realm_id_str = realm_id.into_inner();
+    let realm = SpaceId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let candidates = crate::gc::scan_gc_candidates(state, &space);
+    let candidates = crate::gc::scan_gc_candidates(state, &realm);
     let total = candidates.len();
     json_ok(GcCandidatesResponse {
-        realm_id: space_id_str,
+        realm_id: realm_id_str,
         candidates,
         total,
     })

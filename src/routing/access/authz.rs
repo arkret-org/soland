@@ -291,9 +291,9 @@ async fn create_grant(
     } else {
         // Root grant: only the space owner MAY issue. capabilities.md §3
         // (Grant 由 issuer 持有,且 issuer MUST hold the action — owner does).
-        require_space_owner(state, &body.space_id, &session.actor).await?;
+        require_space_owner(state, &body.realm_id, &session.actor).await?;
         state.authz.create_grant_with_options(
-            body.space_id,
+            body.realm_id,
             session.actor.clone(),
             body.subject,
             body.resource,
@@ -519,7 +519,7 @@ async fn invites(
         .map(|invite| {
             json!({
                 "invite_id": invite.invite_id,
-                "space_id": invite.realm_id,
+                "realm_id": invite.realm_id,
                 "inviter": invite.inviter,
                 "invitee": invite.invitee,
                 "invite_token": invite.invite_token,

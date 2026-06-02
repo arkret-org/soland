@@ -1251,14 +1251,14 @@ pub(crate) fn signed_redaction_event(
 
 pub(crate) async fn persist_test_message(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     sender: &str,
     body: &str,
 ) -> MessageRecord {
     let event_id = new_prefixed_uuid7("cx:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
-        realm_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         sender: sender.to_owned(),
         thread_id: format!("cx:flow:test-{}", event_id),
         content: serde_json::json!({"body": body}),

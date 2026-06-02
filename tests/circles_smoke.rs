@@ -87,7 +87,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
         (realm_id.to_owned(), actor.to_owned()),
         MembershipState {
             member: actor.to_owned(),
-            space_id: realm_id.to_owned(),
+            realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
             invited_at: None,

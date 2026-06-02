@@ -793,7 +793,7 @@ impl RedactionCellValue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectedMessageView {
     pub event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub sender: String,
     pub thread_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -840,7 +840,7 @@ pub struct PollOptionState {
 pub struct PollState {
     pub poll_id: String,
     pub message_event_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub question: String,
     pub options: Vec<PollOptionState>,
     pub votes: BTreeMap<String, BTreeSet<String>>,
@@ -1068,7 +1068,7 @@ impl RelationState {
 #[derive(Clone, Debug)]
 pub struct MembershipState {
     pub member: String,
-    pub space_id: String,
+    pub realm_id: String,
     /// Canonical FSM state value (one of `invite` / `join` / `leave` /
     /// `ban` / `knock`). Authoritative source is the
     /// `cx.component.member.state.v1` cell in
@@ -1086,7 +1086,7 @@ pub struct MembershipState {
 
 #[derive(Clone, Debug)]
 pub struct SpaceState {
-    pub space_id: String,
+    pub realm_id: String,
     pub owner: Option<String>,
     pub title: Option<String>,
     pub deleted: bool,
@@ -1140,12 +1140,12 @@ pub enum ProjectionEffect {
         relation_id: String,
     },
     MembershipChanged {
-        space_id: String,
+        realm_id: String,
         member: String,
         action: String,
     },
     SpaceLifecycle {
-        space_id: String,
+        realm_id: String,
         action: String,
     },
     /// Space-container lifecycle transition accepted; new state is reflected in
@@ -1205,7 +1205,7 @@ pub enum ProjectionEffect {
     /// into the canonical `cx.component.realm.delivery_binding_policy.v1`
     /// cas-register cell.
     DeliveryBindingPolicyProjected {
-        space_id: String,
+        realm_id: String,
     },
     /// R3.1 — `cx.realm.link` event was projected into the
     /// `cx.component.realm.link.v1` or_set cell + the `realm_links`
@@ -3173,6 +3173,18 @@ fn string_array_field(object: &serde_json::Map<String, Value>, key: &str) -> Vec
         .unwrap_or_default()
 }
 
+fn projection_object_realm_id(
+    object: &serde_json::Map<String, Value>,
+    operation: &Operation,
+) -> String {
+    object
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| operation.realm_id.to_string())
+}
+
 fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
     fields
         .get("document")
@@ -3756,7 +3768,7 @@ impl ProjectionState {
             PollState {
                 poll_id,
                 message_event_id: message.event_id.clone(),
-                space_id: message.realm_id.clone(),
+                realm_id: message.realm_id.clone(),
                 question,
                 options,
                 votes: BTreeMap::new(),
@@ -4391,14 +4403,14 @@ impl ProjectionState {
     /// (`delivery_binding_policy_cell_value` + the `apply_membership`
     /// validation path) can inspect each policy field directly.
     fn apply_delivery_binding_policy(&mut self, operation: &Operation) -> ProjectionEffect {
-        let space_id = operation.realm_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
+            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
-        ProjectionEffect::DeliveryBindingPolicyProjected { space_id }
+        ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
     /// R3.1 — project a `cx.realm.link` event.
@@ -4913,7 +4925,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.realm_id.to_string();
+        let realm_id = operation.realm_id.to_string();
 
         if member.is_empty() {
             return ProjectionEffect::Ignored;
@@ -4931,7 +4943,7 @@ impl ProjectionState {
             match delivery_status {
                 None => {
                     tracing::warn!(
-                        space_id = %space_id,
+                        realm_id = %realm_id,
                         member = %member,
                         "rejected join without delivery_status (spec 0a5ab85)"
                     );
@@ -4944,7 +4956,7 @@ impl ProjectionState {
                         .and_then(Value::as_object)
                     else {
                         tracing::warn!(
-                            space_id = %space_id,
+                            realm_id = %realm_id,
                             member = %member,
                             "rejected routable join without delivery_binding (spec 0a5ab85)"
                         );
@@ -4954,7 +4966,7 @@ impl ProjectionState {
                     // Without a projected policy cell, fail-closed for
                     // routable joins per spec join-policy.md §5.1.3 —
                     // there is no DID Document fallback path.
-                    let policy_value = self.delivery_binding_policy_cell_value(&space_id).cloned();
+                    let policy_value = self.delivery_binding_policy_cell_value(&realm_id).cloned();
                     let Some(policy) = policy_value else {
                         return ProjectionEffect::Rejected {
                             reason: "delivery_binding_policy_unset".to_owned(),
@@ -4972,7 +4984,7 @@ impl ProjectionState {
                 }
                 Some(other) => {
                     tracing::warn!(
-                        space_id = %space_id,
+                        realm_id = %realm_id,
                         member = %member,
                         delivery_status = %other,
                         "rejected join with unknown delivery_status"
@@ -4991,7 +5003,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("member")
             .to_owned();
-        let key = (space_id.clone(), member.clone());
+        let key = (realm_id.clone(), member.clone());
         let previous = self.members.get(&key);
         let invited_at = match new_state {
             "invite" => previous.and_then(|m| m.invited_at).or(Some(now)),
@@ -5013,7 +5025,7 @@ impl ProjectionState {
             key.clone(),
             MembershipState {
                 member: member.clone(),
-                space_id: space_id.clone(),
+                realm_id: realm_id.clone(),
                 state: new_state.to_owned(),
                 role,
                 invited_at,
@@ -5036,7 +5048,7 @@ impl ProjectionState {
         }
 
         ProjectionEffect::MembershipChanged {
-            space_id,
+            realm_id,
             member,
             action: new_state.to_owned(),
         }
@@ -5100,13 +5112,13 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
-        space_id: &str,
+        realm_id: &str,
         owner: Option<&String>,
         title: Option<&String>,
         security_class: Option<&String>,
         federation_policy: Option<&String>,
     ) -> Option<ProjectionEffect> {
-        let cell_id = Self::realm_organization_cell_id(space_id)?;
+        let cell_id = Self::realm_organization_cell_id(realm_id)?;
         match self.cells.get(&cell_id) {
             Some(CellState::Bottom(_)) => {
                 return Some(ProjectionEffect::Rejected {
@@ -5157,7 +5169,7 @@ impl ProjectionState {
                 };
                 self.cells.insert(cell_id, CellState::Bottom(bottom));
                 return Some(ProjectionEffect::SpaceLifecycle {
-                    space_id: space_id.to_owned(),
+                    realm_id: realm_id.to_owned(),
                     action: "bottom_expose".to_owned(),
                 });
             }
@@ -5169,8 +5181,8 @@ impl ProjectionState {
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
             Some(crate::kinds::CX_REALM_UPDATE) => {
-                let space_id = operation.realm_id.to_string();
-                if let Some(cell_id) = Self::realm_organization_cell_id(&space_id)
+                let realm_id = operation.realm_id.to_string();
+                if let Some(cell_id) = Self::realm_organization_cell_id(&realm_id)
                     && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
                 {
                     return Err("cell_bottom_state");
@@ -5246,13 +5258,13 @@ impl ProjectionState {
         let value =
             augment_repair_winner_value(winner, &heads, operation.operation_id.as_str(), now);
         self.cells.insert(cell, CellState::Value(value.clone()));
-        if let Some(space_id) = realm_organization_space_id_from_cell(&cell_id) {
+        if let Some(realm_id) = realm_organization_space_id_from_cell(&cell_id) {
             if let Some(title) = value.get("title").and_then(Value::as_str) {
                 let entry = self
                     .space_states
-                    .entry(space_id.clone())
+                    .entry(realm_id.clone())
                     .or_insert_with(|| SpaceState {
-                        space_id: space_id.clone(),
+                        realm_id: realm_id.clone(),
                         owner: None,
                         title: Some(title.to_owned()),
                         deleted: false,
@@ -5266,7 +5278,7 @@ impl ProjectionState {
                 entry.updated_at = now;
             }
             return ProjectionEffect::SpaceLifecycle {
-                space_id,
+                realm_id,
                 action: "conflict_repair".to_owned(),
             };
         }
@@ -5330,7 +5342,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let space_id = operation.realm_id.to_string();
+        let realm_id = operation.realm_id.to_string();
         let owner = operation
             .payload
             .get("owner")
@@ -5415,7 +5427,7 @@ impl ProjectionState {
             // Compare against any prior locked value. Any mismatch is a
             // cross-domain replay attempt: a peer is trying to relabel a
             // Realm into a different trust domain.
-            if let Some(existing) = self.space_states.get(&space_id)
+            if let Some(existing) = self.space_states.get(&realm_id)
                 && let Some(locked_td) = existing.trust_domain.as_deref()
                 && locked_td != new_td.as_str()
             {
@@ -5424,14 +5436,14 @@ impl ProjectionState {
                 };
             }
         }
-        let projected_security_class = self.realm_security_class(&space_id);
+        let projected_security_class = self.realm_security_class(&realm_id);
         let effective_security_class = payload_security_class.clone().or(projected_security_class);
         // Constraint: high_assurance forbids federation_policy=open. The
         // projected federation_policy is computed by taking the payload
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
             contrix_sdk::CellRef::new(format!(
-                "cx:cell:cx.component.realm.organization.v1:{space_id}"
+                "cx:cell:cx.component.realm.organization.v1:{realm_id}"
             ))
             .ok()
             .and_then(|c| self.cell_value(&c).cloned())
@@ -5453,7 +5465,7 @@ impl ProjectionState {
         // in `tombstoned` or `destroyed` state MUST NOT accept another
         // terminal-state write (cell family is cas-register with
         // bottom=reject; the structured cache mirrors that).
-        if let Some(existing) = self.space_states.get(&space_id)
+        if let Some(existing) = self.space_states.get(&realm_id)
             && existing.terminal_state.is_some()
             && matches!(
                 kind,
@@ -5488,7 +5500,7 @@ impl ProjectionState {
                             reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                         };
                     }
-                    if id == space_id {
+                    if id == realm_id {
                         return ProjectionEffect::Rejected {
                             reason: "successor_self_reference".to_owned(),
                         };
@@ -5507,7 +5519,7 @@ impl ProjectionState {
             && let Some(effect) = self.maybe_project_realm_update_bottom(
                 operation,
                 now,
-                &space_id,
+                &realm_id,
                 owner.as_ref(),
                 title.as_ref(),
                 payload_security_class.as_ref(),
@@ -5520,9 +5532,9 @@ impl ProjectionState {
         // Structured cache mirror.
         let space = self
             .space_states
-            .entry(space_id.clone())
+            .entry(realm_id.clone())
             .or_insert_with(|| SpaceState {
-                space_id: space_id.clone(),
+                realm_id: realm_id.clone(),
                 owner: owner.clone(),
                 title: title.clone(),
                 deleted: false,
@@ -5577,7 +5589,7 @@ impl ProjectionState {
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.create.v1:{space_id}"
+                    "cx:cell:cx.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
@@ -5605,7 +5617,7 @@ impl ProjectionState {
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.organization.v1:{space_id}"
+                    "cx:cell:cx.component.realm.organization.v1:{realm_id}"
                 )) {
                     // Start from the existing cell value so partial
                     // updates retain previously-set fields.
@@ -5642,7 +5654,7 @@ impl ProjectionState {
                 // Bottom = reject (the structured-cache preflight above
                 // mirrors that).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.destroy.v1:{space_id}"
+                    "cx:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
@@ -5661,7 +5673,7 @@ impl ProjectionState {
             k if k == crate::kinds::CX_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.destroy.v1:{space_id}"
+                    "cx:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
@@ -5673,12 +5685,12 @@ impl ProjectionState {
                 }
                 // Stream-F (Wave 1B): destroy cascade per spec
                 // §2.5.1 ¶6 + ¶7.
-                self.cascade_realm_destroy(&space_id);
+                self.cascade_realm_destroy(&realm_id);
             }
             _ => {}
         }
 
-        ProjectionEffect::SpaceLifecycle { space_id, action }
+        ProjectionEffect::SpaceLifecycle { realm_id, action }
     }
 
     /// Stream-F (Wave 1B + Wave 2C) — `cx.realm.destroy` child-cascade.
@@ -5903,7 +5915,7 @@ impl ProjectionState {
         // a dedicated `ProjectionEffect::ErasureReceiptRecorded` once
         // the federation layer wants a typed handle.
         ProjectionEffect::SpaceLifecycle {
-            space_id: operation.realm_id.to_string(),
+            realm_id: operation.realm_id.to_string(),
             action: "audit.erasure_receipt".to_owned(),
         }
     }
@@ -6030,11 +6042,7 @@ impl ProjectionState {
             .get("rank")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let space_id = object
-            .get("space_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.realm_id.to_string());
+        let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -6050,7 +6058,7 @@ impl ProjectionState {
 
         let projection = SpaceContainerProjection {
             container_space_id: container_space_id.clone(),
-            realm_id: space_id,
+            realm_id,
             kind,
             title,
             parent_ref,
@@ -6571,11 +6579,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        let space_id = object
-            .get("space_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.realm_id.to_string());
+        let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -6591,7 +6595,7 @@ impl ProjectionState {
 
         let projection = FlowProjection {
             flow_id: flow_id.clone(),
-            realm_id: space_id,
+            realm_id,
             title,
             summary,
             fields,
@@ -6965,11 +6969,7 @@ impl ProjectionState {
         let fields = object_map_to_fields(object.get("fields"));
         let schema_refs = string_array_field(object, "schema_refs");
         let facets = string_array_field(object, "facets");
-        let space_id = object
-            .get("space_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.realm_id.to_string());
+        let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
             .and_then(|v| v.as_str())
@@ -6988,7 +6988,7 @@ impl ProjectionState {
 
         let projection = MorphProjection {
             morph_id: morph_id.clone(),
-            realm_id: space_id,
+            realm_id,
             morph_type,
             title,
             fields,
@@ -7808,7 +7808,7 @@ impl ProjectionState {
         };
         Some(ProjectedMessageView {
             event_id: msg.event_id.clone(),
-            space_id: msg.realm_id.clone(),
+            realm_id: msg.realm_id.clone(),
             sender: msg.sender.clone(),
             thread_id: msg.thread_id.clone(),
             created_at: msg.created_at,
@@ -9562,7 +9562,7 @@ mod tests {
                 serde_json::json!({
                     "object": {
                         "id": flow_id,
-                        "space_id": realm_id,
+                        "realm_id": realm_id,
                         "metadata": {
                             "title": "Review PR",
                             "fields": {
@@ -9675,7 +9675,7 @@ mod tests {
                 serde_json::json!({
                     "object": {
                         "id": flow_id,
-                        "space_id": realm_id,
+                        "realm_id": realm_id,
                         "metadata": {
                             "title": "Review PR",
                             "fields": {

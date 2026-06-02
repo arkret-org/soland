@@ -42,7 +42,8 @@ struct UpsertOrganizationRequest {
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct LinkOrganizationSpaceRequest {
-    space_id: String,
+    #[serde(alias = "space_id")]
+    realm_id: String,
 }
 
 pub(crate) fn router() -> Router {
@@ -289,10 +290,10 @@ async fn link_organization_space(
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor);
-    link_space_to_organization(state, &body.space_id, &organization_id);
+    link_space_to_organization(state, &body.realm_id, &organization_id);
     json_ok(json!({
         "organization_id": organization_id,
-        "space_id": body.space_id,
+        "realm_id": body.realm_id,
         "linked": true,
     }))
 }
@@ -476,12 +477,12 @@ pub(crate) fn space_policy_override_has_approval(
 
 pub(crate) fn persist_space_moderation_policy(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     payload: Value,
     actor: &str,
 ) -> SpaceModerationPolicyRecord {
     let record = SpaceModerationPolicyRecord {
-        realm_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         payload,
         updated_by: actor.to_owned(),
         updated_at: Utc::now(),
@@ -490,7 +491,7 @@ pub(crate) fn persist_space_moderation_policy(
         .space_moderation_policies
         .lock()
         .expect("space moderation policies lock")
-        .insert(space_id.to_owned(), record.clone());
+        .insert(realm_id.to_owned(), record.clone());
     record
 }
 
@@ -577,7 +578,7 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
 fn space_policy_record_json(record: &SpaceModerationPolicyRecord) -> Value {
     json!({
         "kind": "cx.realm.moderation_policy",
-        "space_id": record.realm_id.clone(),
+        "realm_id": record.realm_id.clone(),
         "policy": record.payload.clone(),
         "updated_by": record.updated_by.clone(),
         "updated_at": record.updated_at.to_rfc3339(),

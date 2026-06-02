@@ -81,7 +81,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
         .unwrap_or("")
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
-    let space_id_str = operation.realm_id.to_string();
+    let realm_id_str = operation.realm_id.to_string();
     let origin_owned = origin.to_owned();
 
     if let Some(bridge_url) = lookup_bridge_url(state, &applet_id) {
@@ -105,7 +105,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
             .await;
             emit_applet_outcome_event(
                 &state_clone,
-                &space_id_str,
+                &realm_id_str,
                 &session_clone,
                 &applet_clone,
                 &bridge_url_clone,
@@ -130,7 +130,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     });
     let record = ProjectionEventRecord {
         event_id: synthetic_event_id,
-        realm_id: space_id_str,
+        realm_id: realm_id_str,
         event_kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS.to_owned(),
         operation_type: "echo_bridge_response".to_owned(),
         operation_id: None,

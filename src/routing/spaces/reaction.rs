@@ -47,7 +47,7 @@ async fn add_reaction(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.realm_id.clone()).unwrap(),
         kinds::CX_REACTION_ADD,
         payload,
     );
@@ -85,7 +85,7 @@ async fn remove_reaction(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.realm_id.clone()).unwrap(),
         kinds::CX_REACTION_REMOVE,
         payload,
     );

@@ -64,7 +64,7 @@ async fn configure_retention_policy(
         Some(&session.actor),
         "cx.audit.retention_policy.updated",
         json!({
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "ttl_seconds": ttl_seconds,
         }),
         "accepted",
@@ -88,7 +88,8 @@ async fn sweep_retention_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_id = required_string(&body, "space_id")?;
+    let realm_id =
+        required_string(&body, "realm_id").or_else(|_| required_string(&body, "space_id"))?;
     let now = optional_now(&body)?.unwrap_or_else(Utc::now);
     let policy = state
         .retention_policies
@@ -165,7 +166,7 @@ async fn sweep_retention_policy(
         Some(&session.actor),
         "cx.audit.retention_sweep",
         json!({
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "examined": examined,
             "tombstoned_count": created.len(),
             "physical_delete_count": 0,
@@ -174,7 +175,7 @@ async fn sweep_retention_policy(
     )
     .await;
     json_ok(json!({
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "policy": policy_json(&policy),
         "examined": examined,
         "tombstoned_count": created.len(),
@@ -214,7 +215,7 @@ fn optional_now(body: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
 
 fn policy_json(record: &RetentionPolicyRecord) -> Value {
     json!({
-        "space_id": record.realm_id.as_str(),
+        "realm_id": record.realm_id.as_str(),
         "ttl_seconds": record.ttl_seconds,
         "updated_by": record.updated_by.as_str(),
         "updated_at": record.updated_at.to_rfc3339(),
@@ -224,7 +225,7 @@ fn policy_json(record: &RetentionPolicyRecord) -> Value {
 fn tombstone_json(record: &RetentionTombstoneRecord) -> Value {
     json!({
         "event_id": record.event_id.as_str(),
-        "space_id": record.realm_id.as_str(),
+        "realm_id": record.realm_id.as_str(),
         "retention_state": "tombstoned",
         "reason": record.reason.as_str(),
         "policy_ttl_seconds": record.policy_ttl_seconds,

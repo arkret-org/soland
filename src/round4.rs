@@ -84,18 +84,18 @@ pub fn parse_peer_role(value: Option<&str>) -> Result<FrontierPeerRole, &'static
     }
 }
 
-/// Round 4 (B1.4) — convert a per-space frontier table to the typed
+/// Round 4 (B1.4) — convert a per-realm frontier table to the typed
 /// `BTreeMap<SpaceId, Vec<EventId>>` shape required by
 /// [`EventsFrontierAccountClientResponse`] / [`EventsFrontierFederationPeerResponse`].
 /// Entries whose ids fail SDK typed-id parsing are silently dropped — this
 /// is the server's introspection surface, not the canonical persistence
 /// layer, so a single malformed row should not break the whole response.
-pub fn typed_space_frontier(
-    space_to_event_ids: impl IntoIterator<Item = (String, Vec<String>)>,
+pub fn typed_realm_frontier(
+    realm_to_event_ids: impl IntoIterator<Item = (String, Vec<String>)>,
 ) -> std::collections::BTreeMap<SpaceId, Vec<EventId>> {
     let mut out = std::collections::BTreeMap::new();
-    for (space, events) in space_to_event_ids {
-        let Ok(space_id) = SpaceId::new(space) else {
+    for (realm, events) in realm_to_event_ids {
+        let Ok(realm_id) = SpaceId::new(realm) else {
             continue;
         };
         let typed_events: Vec<EventId> = events
@@ -103,7 +103,7 @@ pub fn typed_space_frontier(
             .filter_map(|id| EventId::new(id).ok())
             .collect();
         if !typed_events.is_empty() {
-            out.insert(space_id, typed_events);
+            out.insert(realm_id, typed_events);
         }
     }
     out
@@ -112,7 +112,7 @@ pub fn typed_space_frontier(
 /// Round 4 (B1.4) — convert the actor → seq upper bound table to the
 /// typed `BTreeMap<Did, u64>` shape. Entries whose actor strings fail
 /// `Did::new` are silently dropped (same rationale as
-/// [`typed_space_frontier`]).
+/// [`typed_realm_frontier`]).
 pub fn typed_actor_upper_bounds(
     actor_to_seq: impl IntoIterator<Item = (String, u64)>,
 ) -> std::collections::BTreeMap<Did, u64> {

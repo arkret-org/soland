@@ -372,7 +372,7 @@ async fn mimi_room_message(
         "mimi.submit_message",
         json!({
             "room_id": room_id,
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "operation_id": operation_id,
             "event_id": event_id,
             "source_format": source_format,
@@ -389,7 +389,7 @@ async fn mimi_room_message(
         "mimi_message_id": mimi_message_id,
         "mapped_operation_id": operation_id,
         "contrix_event_id": event_id,
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "receipt": receipt
     }))
 }
@@ -1085,7 +1085,7 @@ async fn emit_mimi_room_binding_event(
             "mimi_room_uri": mimi_room_uri_value,
             "mimi_room_id": room_id,
             "binding_scope": {
-                "space_id": realm_id,
+                "realm_id": realm_id,
                 "flow_id": binding
                     .get("binding_scope")
                     .and_then(|s| s.get("flow_id"))
@@ -1118,7 +1118,7 @@ fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Valu
         "profile": "cx.profile.mimi_interop.v1",
         "mimi_room_uri": mimi_room_uri(state, room_id),
         "binding_scope": {
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "channel_id": Value::Null
         },
         "hub_provider": state.config.service_did.clone(),

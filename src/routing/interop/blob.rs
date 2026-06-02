@@ -248,7 +248,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         "created_at": now(),
         "encrypted_attachment": encryption,
         "encrypted": encrypted,
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "content_digest": content_digest.clone(),
     });
     if !encrypted && let Some(filename) = filename {

@@ -308,7 +308,7 @@ async fn notify_audit_agent_for_report(
         .unwrap_or_default();
 
     let invite_body = json!({
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "invite": {
             "event_id": target_ref,
             "report_id": report_id,
@@ -341,7 +341,7 @@ async fn notify_audit_agent_for_report(
                 None,
                 "cx.audit.agent_invite",
                 json!({
-                    "space_id": realm_id,
+                    "realm_id": realm_id,
                     "report_id": report_id,
                     "audit_agent_principal_id": audit_agent_principal_id,
                     "status": response.status().as_u16(),
@@ -356,7 +356,7 @@ async fn notify_audit_agent_for_report(
                 None,
                 "cx.audit.agent_invite",
                 json!({
-                    "space_id": realm_id,
+                    "realm_id": realm_id,
                     "report_id": report_id,
                     "audit_agent_principal_id": audit_agent_principal_id,
                     "error": error.to_string(),
@@ -389,7 +389,7 @@ async fn notify_audit_agent_for_report(
                 None,
                 "cx.audit.report",
                 json!({
-                    "space_id": realm_id,
+                    "realm_id": realm_id,
                     "report_id": report_id,
                     "audit_agent_principal_id": audit_agent_principal_id,
                     "status": response.status().as_u16(),
@@ -404,7 +404,7 @@ async fn notify_audit_agent_for_report(
                 None,
                 "cx.audit.report",
                 json!({
-                    "space_id": realm_id,
+                    "realm_id": realm_id,
                     "report_id": report_id,
                     "audit_agent_principal_id": audit_agent_principal_id,
                     "error": error.to_string(),

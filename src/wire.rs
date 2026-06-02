@@ -773,10 +773,6 @@ pub struct EventsPageResponse {
 pub struct EventsFrontierResBody {
     pub actor_frontier: BTreeMap<String, u64>,
     pub realm_frontier: BTreeMap<String, Value>,
-    /// Legacy internal frontier keyed by the pre-R1.2 `cx:space:*` realm
-    /// mirror. Kept while old clients and persistence rows still use the
-    /// internal scope key.
-    pub space_frontier: BTreeMap<String, Value>,
     pub frontier: Value,
 }
 
@@ -1644,7 +1640,8 @@ pub struct DeviceMessagesReceiveResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateWebrtcSessionRequest {
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
     #[serde(default)]
     pub participants: Vec<String>,
     #[serde(default)]
@@ -1658,7 +1655,7 @@ pub struct CreateWebrtcSessionRequest {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct CreateWebrtcSessionResponse {
     pub session_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub participants: Vec<String>,
     pub mode: String,
     pub recording_policy: String,
@@ -2148,7 +2145,8 @@ pub struct RedactMessageResponse {
 pub struct AddReactionRequest {
     pub event_id: String,
     pub key: String,
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -2163,7 +2161,8 @@ pub struct ReactionResponse {
 pub struct RemoveReactionRequest {
     pub event_id: String,
     pub key: String,
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -2220,7 +2219,8 @@ pub struct GetReadMarkersRequest {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRelationRequest {
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
     pub relation_kind: String,
     pub from: Option<String>,
     pub to: Option<String>,
@@ -2231,7 +2231,7 @@ pub struct CreateRelationRequest {
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RelationResponse {
     pub relation_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub relation_kind: String,
     pub from: Option<String>,
     pub to: Option<String>,
@@ -2242,7 +2242,8 @@ pub struct RelationResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ListRelationsRequest {
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
     pub relation_kind: Option<String>,
 }
 
@@ -2288,7 +2289,8 @@ pub struct RevokeGrantResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateGrantRequest {
-    pub space_id: String,
+    #[serde(alias = "space_id")]
+    pub realm_id: String,
     pub subject: String,
     pub resource: String,
     pub actions: Vec<String>,

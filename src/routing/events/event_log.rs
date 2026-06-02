@@ -515,7 +515,7 @@ async fn events_frontier(
             "events.frontier requires at least one of realm_id or actor_id",
         ));
     }
-    let internal_space_selector = match realm_selector.as_deref() {
+    let internal_realm_selector = match realm_selector.as_deref() {
         Some(value) if RealmId::new(value.to_owned()).is_ok() => Some(value.to_owned()),
         Some(_) => return Err(AppError::invalid_param("invalid realm_id")),
         None => None,
@@ -543,9 +543,7 @@ async fn events_frontier(
         .unwrap_or_default();
     let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
     let mut realm_frontier: BTreeMap<String, Value> = BTreeMap::new();
-    let mut space_frontier: BTreeMap<String, Value> = BTreeMap::new();
     let mut realm_latest: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
-    let mut space_latest: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
     for record in &events {
         if actor_id
             .as_deref()
@@ -553,8 +551,9 @@ async fn events_frontier(
         {
             continue;
         }
-        if internal_space_selector.as_deref() != record.realm_id.as_deref()
-            && internal_space_selector.is_some()
+        let record_realm_id = canonical_realm_id_for_record(record);
+        if internal_realm_selector.as_deref() != record_realm_id.as_deref()
+            && internal_realm_selector.is_some()
         {
             continue;
         }
@@ -565,32 +564,15 @@ async fn events_frontier(
             .entry(record.actor_id.clone())
             .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
             .or_insert(record.actor_seq);
-        if let Some(space_id) = record.realm_id.as_deref() {
-            if let Some(realm_id) = canonical_realm_id_for_record(record) {
-                let replace = frontier_entry_is_newer(&realm_latest, &realm_id, record);
-                if replace {
-                    realm_latest.insert(
-                        realm_id.clone(),
-                        (record.received_at, record.event_id.clone()),
-                    );
-                    realm_frontier.insert(
-                        realm_id,
-                        json!({
-                            "event_id": record.event_id.clone(),
-                            "actor_seq": record.actor_seq,
-                            "canonical_digest": record.canonical_digest.clone()
-                        }),
-                    );
-                }
-            }
-            let replace = frontier_entry_is_newer(&space_latest, space_id, record);
+        if let Some(realm_id) = record_realm_id {
+            let replace = frontier_entry_is_newer(&realm_latest, &realm_id, record);
             if replace {
-                space_latest.insert(
-                    space_id.to_owned(),
+                realm_latest.insert(
+                    realm_id.clone(),
                     (record.received_at, record.event_id.clone()),
                 );
-                space_frontier.insert(
-                    space_id.to_owned(),
+                realm_frontier.insert(
+                    realm_id,
                     json!({
                         "event_id": record.event_id.clone(),
                         "actor_seq": record.actor_seq,
@@ -609,19 +591,19 @@ async fn events_frontier(
     use contrix_sdk::Did as SdkDid;
     let service_did = SdkDid::new(state.config.service_did.clone())
         .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
-    let latest_space_event_ids = space_frontier.iter().filter_map(|(space, entry)| {
+    let latest_realm_event_ids = realm_frontier.iter().filter_map(|(realm, entry)| {
         entry
             .get("event_id")
             .and_then(Value::as_str)
-            .map(|event_id| (space.clone(), vec![event_id.to_owned()]))
+            .map(|event_id| (realm.clone(), vec![event_id.to_owned()]))
     });
-    let typed_space_frontier = crate::round4::typed_space_frontier(latest_space_event_ids);
+    let typed_realm_frontier = crate::round4::typed_realm_frontier(latest_realm_event_ids);
     let typed_actor_bounds = crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
     let generated_at = now();
     let selected_realm_id = realm_selector
         .as_deref()
         .and_then(|value| RealmId::new(value.to_owned()).ok());
-    let frontier_root = crate::round4::frontier_root(&typed_space_frontier, &typed_actor_bounds)
+    let frontier_root = crate::round4::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
     let federation_signature = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer)
     {
@@ -646,7 +628,7 @@ async fn events_frontier(
         });
         let service_binding_ref = crate::round4::frontier_service_binding_ref(
             &binding_realm,
-            &typed_space_frontier,
+            &typed_realm_frontier,
             &typed_actor_bounds,
         )
         .map_err(|error| AppError::internal(format!("frontier service binding: {error}")))?;
@@ -662,7 +644,7 @@ async fn events_frontier(
     let typed_response = crate::round4::build_typed_frontier_response(
         peer_role,
         &service_did,
-        typed_space_frontier,
+        typed_realm_frontier,
         typed_actor_bounds,
         federation_binding,
     );
@@ -715,7 +697,6 @@ async fn events_frontier(
             return crate::result::json_ok(EventsFrontierResBody {
                 actor_frontier: BTreeMap::new(),
                 realm_frontier: BTreeMap::new(),
-                space_frontier: BTreeMap::new(),
                 frontier,
             });
         }
@@ -724,7 +705,6 @@ async fn events_frontier(
     crate::result::json_ok(EventsFrontierResBody {
         actor_frontier,
         realm_frontier,
-        space_frontier,
         frontier,
     })
 }
@@ -737,7 +717,6 @@ struct ValidatedEventEnvelope {
     actor_id: String,
     actor_seq: u64,
     realm_id: String,
-    space_id: Option<String>,
     kind: String,
     schema_id: String,
     prev_refs: Vec<String>,
@@ -1172,7 +1151,6 @@ async fn submit_event_value(
         event_id = %parsed.event_id,
         kind = %parsed.kind,
         realm_id = %parsed.realm_id,
-        space_id = ?parsed.space_id,
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
@@ -1310,7 +1288,7 @@ async fn submit_event_value(
             event_id: parsed.event_id.clone(),
             actor_id: parsed.actor_id.clone(),
             actor_seq: parsed.actor_seq,
-            realm_id: parsed.space_id.clone(),
+            realm_id: Some(parsed.realm_id.clone()),
             kind: parsed.kind.clone(),
             schema_id: parsed.schema_id.clone(),
             canonical_digest: parsed.canonical_digest.clone(),
@@ -1341,13 +1319,13 @@ async fn submit_event_value(
         .await;
     }
     if parsed.kind == "cx.realm.create"
-        && let Some(space_id_str) = parsed.space_id.as_deref()
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
-        bootstrap_realm_member_index(state, space_id_str, &parsed.actor_id, envelope_object).await;
+        bootstrap_realm_member_index(state, &parsed.realm_id, &parsed.actor_id, envelope_object)
+            .await;
         organizations::record_realm_organizations_from_event(
             state,
-            space_id_str,
+            &parsed.realm_id,
             &envelope_for_bootstrap,
         );
     }
@@ -1359,7 +1337,6 @@ async fn submit_event_value(
         json!({
             "event_id": parsed.event_id.clone(),
             "realm_id": parsed.realm_id.clone(),
-            "space_id": parsed.space_id.clone(),
             "kind": parsed.kind.clone(),
             "canonical_digest": parsed.canonical_digest.clone()
         }),
@@ -1424,9 +1401,7 @@ fn preflight_mls_projection_reject(
     }
 }
 
-fn event_scope_ids(
-    object: &serde_json::Map<String, Value>,
-) -> Result<(String, String), EventValidationError> {
+fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, EventValidationError> {
     if let Some(realm_id) = event_string_field(object, &["realm_id"]) {
         if RealmId::new(realm_id.clone()).is_err() {
             return Err(event_validation_error(
@@ -1435,7 +1410,7 @@ fn event_scope_ids(
                 "realm_id must use the cx:realm: typed prefix",
             ));
         }
-        return Ok((realm_id.clone(), realm_id));
+        return Ok(realm_id.clone());
     }
 
     Err(event_validation_error(
@@ -1635,14 +1610,14 @@ async fn validate_event_envelope(
     }
     validate_event_time_fields(state, object)?;
 
-    let (realm_id, space_id) = event_scope_ids(object)?;
+    let realm_id = event_realm_id(object)?;
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`cx.realm.tombstone` OR `cx.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
     let realm_terminal = state
         .projection
         .lock()
-        .map(|proj| proj.space_is_in_terminal_state(&space_id))
+        .map(|proj| proj.space_is_in_terminal_state(&realm_id))
         .unwrap_or(false);
     if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
@@ -1662,12 +1637,12 @@ async fn validate_event_envelope(
     // session naturally passes the regular realm_has_member check.
     let is_realm_create_bootstrap = kind == "cx.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
-        && !space_exists_in_index(state, &space_id);
+        && !space_exists_in_index(state, &realm_id);
     let is_invite_acceptance_join =
-        member_join_accepts_pending_invite(state, object, &session.actor, &space_id).await;
+        member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
-        && !realm_has_member(state, &space_id, &session.actor).await
+        && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -1741,9 +1716,9 @@ async fn validate_event_envelope(
             }
         }
         let media_plaintext_service_present =
-            projected_media_plaintext_service_present(state, &space_id, &payload).await;
+            projected_media_plaintext_service_present(state, &realm_id, &payload).await;
         let mls_governance_binding_covers_policy_root =
-            projected_mls_governance_binding_covers_policy_root(state, &space_id, &payload);
+            projected_mls_governance_binding_covers_policy_root(state, &realm_id, &payload);
         if let Err((code, reason)) = crate::round23::realm_policy_components_check(
             &payload,
             &active_profiles,
@@ -1800,7 +1775,6 @@ async fn validate_event_envelope(
         actor_id,
         actor_seq,
         realm_id,
-        space_id: Some(space_id),
         kind,
         schema_id,
         prev_refs,
@@ -2017,7 +1991,7 @@ async fn append_encrypted_message_franking(
     };
     let mut proof = json!({
         "kind": CX_MODERATION_FRANKING_PROOF,
-        "space_id": parsed.realm_id,
+        "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
         "receiving_service_did": state.config.service_did,
@@ -2068,7 +2042,8 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == kinds::CX_REALM_CREATE && record.realm_id.as_deref() == Some(realm_id)
+            record.kind == kinds::CX_REALM_CREATE
+                && canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
         })
         .rev()
         .find_map(|record| {
@@ -3760,7 +3735,6 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
         "actor_id": record.actor_id.clone(),
         "actor_seq": record.actor_seq,
         "realm_id": realm_id,
-        "space_id": record.realm_id.clone(),
         "kind": record.kind.clone(),
         "schema_id": record.schema_id.clone(),
         "canonical_digest": record.canonical_digest.clone(),
@@ -3856,7 +3830,6 @@ pub(super) fn event_read_response_for_state(
 pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
     let mut actors: BTreeMap<String, u64> = BTreeMap::new();
     let mut realms: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
-    let mut spaces: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
     for record in records {
         actors
             .entry(record.actor_id.clone())
@@ -3867,27 +3840,14 @@ pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
                 realms.insert(realm_id, (record.received_at, record.event_id.clone()));
             }
         }
-        if let Some(space_id) = record.realm_id.as_deref() {
-            if frontier_entry_is_newer(&spaces, space_id, record) {
-                spaces.insert(
-                    space_id.to_owned(),
-                    (record.received_at, record.event_id.clone()),
-                );
-            }
-        }
     }
     let realms = realms
-        .into_iter()
-        .map(|(id, (_, event_id))| (id, event_id))
-        .collect::<BTreeMap<_, _>>();
-    let spaces = spaces
         .into_iter()
         .map(|(id, (_, event_id))| (id, event_id))
         .collect::<BTreeMap<_, _>>();
     json!({
         "actors": actors,
         "realms": realms,
-        "spaces": spaces,
         "event_count": records.len()
     })
 }
@@ -3909,7 +3869,13 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
         .get("realm_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .or_else(|| record.realm_id.clone())
+        .or_else(|| record.realm_id.as_deref().map(normalize_persisted_realm_id))
+}
+
+fn normalize_persisted_realm_id(id: &str) -> String {
+    id.strip_prefix("cx:space:")
+        .map(|suffix| format!("cx:realm:{suffix}"))
+        .unwrap_or_else(|| id.to_owned())
 }
 
 pub(super) async fn event_visible_to_session(
@@ -3920,11 +3886,11 @@ pub(super) async fn event_visible_to_session(
     if record.actor_id == session.actor {
         return true;
     }
-    match record.realm_id.as_deref() {
-        Some(space_id) => {
+    match canonical_realm_id_for_record(record) {
+        Some(realm_id) => {
             realm_event_visible_to_session(
                 state,
-                space_id,
+                &realm_id,
                 record.received_at,
                 Some(&record.actor_id),
                 Some(session),
@@ -4015,7 +3981,7 @@ pub async fn effective_read_receipt_policy_for_space(
         if record.kind != "cx.realm.read_receipt_policy" {
             continue;
         }
-        if record.realm_id.as_deref() != Some(space_id) {
+        if canonical_realm_id_for_record(record).as_deref() != Some(space_id) {
             continue;
         }
         match latest {

@@ -1874,13 +1874,14 @@ fn federation_verify_actor_signature_transcript(
     body: &contrix_sdk::FederationVerifyActorReqBody,
     unsigned_request_digest: &str,
 ) -> Value {
+    let scope_id = body.space_id.as_ref().map(|value| value.as_str());
     json!({
         "type": "cx.federation.verify_actor.signature.v1",
         "actor_id": body.actor_id.as_str(),
         "purpose": body.purpose,
         "challenge": body.challenge,
         "signed_payload_digest": body.signed_payload_digest.as_ref().map(|digest| digest.as_str()),
-        "space_id": body.space_id.as_ref().map(|space_id| space_id.as_str()),
+        "realm_id": scope_id,
         "request_binding_digest": unsigned_request_digest,
     })
 }
@@ -2118,7 +2119,7 @@ async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
     operation_ids.sort();
     let latest_operation_id = operation_ids.last().cloned();
     let digest_payload = json!({
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "operation_ids": operation_ids,
     });
     let frontier_digest = contrix_sdk::canonical::canonical_sha256(&digest_payload)
@@ -2136,7 +2137,7 @@ async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
             )
         });
     json!({
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "operation_count": operations.len(),
         "operation_ids": digest_payload["operation_ids"].clone(),
         "latest_operation_id": latest_operation_id,

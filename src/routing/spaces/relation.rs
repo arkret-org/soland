@@ -2,7 +2,7 @@
 //!
 //! Surfaces:
 //! - `POST   /api/v1/relations`                — create
-//! - `GET    /api/v1/relations`                — list, filtered by `?space_id` / `?kind`
+//! - `GET    /api/v1/relations`                — list, filtered by `?realm_id` / `?kind`
 //! - `DELETE /api/v1/relations/{relation_id}`  — delete (soft)
 //!
 //! `cx.relation.update` is intentionally not exposed as its own handler — the
@@ -19,6 +19,7 @@ use super::{accept_local_operations, validate_space_id};
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
+use crate::routing::system::util::query_param;
 use crate::state::AppState;
 use crate::wire::{
     CreateRelationRequest, DeleteRelationResponse, ListRelationsResponse, RelationResponse,
@@ -50,13 +51,13 @@ async fn create_relation(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_space_id(&body.space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    if validate_space_id(&body.realm_id).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
     // Spec: models/relation.md §3.2 — structural relations (`contains`,
     // `parent_of`) MUST stay within a single Space. When `from` / `to`
     // refs resolve to known Flow projections from a *different* space
-    // than the relation's `space_id`, reject up front.
+    // than the relation's `realm_id`, reject up front.
     let structural_kinds: &[&str] = &["contains", "parent_of", "child_of"];
     if structural_kinds.contains(&body.relation_kind.as_str()) {
         let proj = state.projection.lock().expect("projection lock");
@@ -66,7 +67,7 @@ async fn create_relation(
             };
             if ref_id.starts_with("cx:flow:")
                 && let Some(flow) = proj.flows.get(ref_id)
-                && flow.realm_id != body.space_id
+                && flow.realm_id != body.realm_id
             {
                 return Err(AppError::invalid_param(
                     "structural relation refs MUST belong to the same Space as the relation",
@@ -86,7 +87,7 @@ async fn create_relation(
     });
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(body.space_id.clone()).unwrap(),
+        RealmId::new(body.realm_id.clone()).unwrap(),
         kinds::CX_RELATION_CREATE,
         payload,
     );
@@ -100,7 +101,7 @@ async fn create_relation(
     let r = relation.ok_or_else(|| AppError::internal("relation not found after creation"))?;
     json_ok(RelationResponse {
         relation_id: r.relation_id,
-        space_id: r.realm_id,
+        realm_id: r.realm_id,
         relation_kind: r.relation_kind,
         from: r.from_ref,
         to: r.to_ref,
@@ -125,15 +126,15 @@ async fn delete_relation(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let relation_id = relation_id.into_inner();
-    let space_id = {
+    let realm_id = {
         let proj = state.projection.lock().expect("projection lock");
         proj.relations.get(&relation_id).map(|r| r.realm_id.clone())
     };
-    let space_id = space_id.ok_or_else(|| AppError::not_found("relation not found"))?;
+    let realm_id = realm_id.ok_or_else(|| AppError::not_found("relation not found"))?;
     let operation_id = ids::generate_operation_id();
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(space_id).unwrap(),
+        RealmId::new(realm_id).unwrap(),
         kinds::CX_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );
@@ -154,22 +155,23 @@ async fn delete_relation(
 #[tracing::instrument(skip_all, fields(op = "cx.relation.list"))]
 async fn list_relations(
     aa: AuthArgs,
-    space_id: QueryParam<String, false>,
     kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<ListRelationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner().unwrap_or_default();
+    let realm_id = query_param(req, "realm_id")
+        .or_else(|| query_param(req, "space_id"))
+        .unwrap_or_default();
     let kind = kind.into_inner();
     let relations = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.relations_for_space(&space_id, kind.as_deref())
+        proj.relations_for_space(&realm_id, kind.as_deref())
             .into_iter()
             .map(|r| RelationResponse {
                 relation_id: r.relation_id.clone(),
-                space_id: r.realm_id.clone(),
+                realm_id: r.realm_id.clone(),
                 relation_kind: r.relation_kind.clone(),
                 from: r.from_ref.clone(),
                 to: r.to_ref.clone(),
