@@ -1175,11 +1175,9 @@ async fn submit_event_value(
         if let Err(message) =
             validate_operation_policy(state, std::slice::from_ref(operation)).await
         {
-            return Err(SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                message,
-            ));
+            let (status, code) =
+                crate::routing::events::operations::operation_policy_reason_code(message);
+            return Err(SubmitOneError::new(status, code, message));
         }
         if let Err(rejection) = policy_gate::enforce_operation_policy_server(
             state,

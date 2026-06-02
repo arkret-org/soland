@@ -25,7 +25,8 @@ use crate::state::{
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
     FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
-    PushRuleRecord, RealmMetaRecord, RecoveryPolicyRecord, RecoveryReceiptRecord, SessionRecord,
+    PushRuleRecord, RealmMetaRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
+    RecoverySessionRecord, SessionRecord,
     SpaceInviteRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord,
     WebvhLogRecord,
 };
@@ -952,6 +953,12 @@ pub trait RecoveryPolicyStore: Send + Sync {
         &self,
         principal_id: &str,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>>;
+    /// All policies for a principal, newest version first (REC-1 read API /
+    /// UI audit history).
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryPolicyRecord>>;
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()>;
 }
 
@@ -963,7 +970,29 @@ pub trait RecoveryReceiptStore: Send + Sync {
         &self,
         recovery_session_id: &str,
     ) -> PersistenceResult<Option<RecoveryReceiptRecord>>;
+    /// All receipts for a principal, newest accepted first (REC-1 read API /
+    /// recovery history).
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryReceiptRecord>>;
     async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()>;
+}
+
+/// C-P2 (REC-1) — recovery session lifecycle store.
+///
+/// A session is created on `POST recovery-sessions` (snapshot of the active
+/// policy + server challenge), read on `GET recovery-sessions/{id}`, and
+/// advanced by `POST .../{id}/proofs` (records the submitted proof; C-P3
+/// verifies it) and `POST .../{id}/complete` (only when `state == verified`).
+#[async_trait]
+pub trait RecoverySessionStore: Send + Sync {
+    async fn get(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>>;
+    async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
+    async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()>;
 }
 
 /// Combined persistence store trait. Every state surface that used to live
@@ -992,6 +1021,7 @@ pub trait PersistenceStore: Send + Sync {
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
+    fn recovery_sessions(&self) -> &dyn RecoverySessionStore;
     fn webvh(&self) -> &dyn WebvhStore;
     fn space_invites(&self) -> &dyn SpaceInviteStore;
     fn events(&self) -> &dyn EventStore;
@@ -1034,6 +1064,7 @@ pub struct MemoryPersistenceStore {
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
     recovery_receipts: MemoryRecoveryReceiptStore,
+    recovery_sessions: MemoryRecoverySessionStore,
     webvh: MemoryWebvhStore,
     space_invites: MemorySpaceInviteStore,
     events: MemoryEventStore,
@@ -1077,6 +1108,7 @@ impl MemoryPersistenceStore {
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
+            recovery_sessions: MemoryRecoverySessionStore::new(),
             webvh: MemoryWebvhStore::new(),
             space_invites: MemorySpaceInviteStore::new(),
             events: MemoryEventStore::new(),
@@ -1190,6 +1222,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
         &self.recovery_receipts
+    }
+
+    fn recovery_sessions(&self) -> &dyn RecoverySessionStore {
+        &self.recovery_sessions
     }
 
     fn webvh(&self) -> &dyn WebvhStore {
@@ -2817,6 +2853,20 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         Ok(recovery_active_policy_locked(&data, principal_id))
     }
 
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
+        let data = self.data.lock().expect("recovery policy lock");
+        let mut out: Vec<RecoveryPolicyRecord> = data
+            .values()
+            .filter(|record| record.principal_id == principal_id)
+            .cloned()
+            .collect();
+        out.sort_by_key(|p| std::cmp::Reverse(p.version));
+        Ok(out)
+    }
+
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("recovery policy lock");
         if data.contains_key(&record.policy_id) {
@@ -2883,6 +2933,20 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
             .cloned())
     }
 
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryReceiptRecord>> {
+        let by_session = self.by_session.lock().expect("recovery receipt lock");
+        let mut out: Vec<RecoveryReceiptRecord> = by_session
+            .values()
+            .filter(|record| record.principal_id == principal_id)
+            .cloned()
+            .collect();
+        out.sort_by_key(|r| std::cmp::Reverse(r.accepted_at));
+        Ok(out)
+    }
+
     async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
         let mut by_session = self.by_session.lock().expect("recovery receipt lock");
         let mut receipt_ids = self.receipt_ids.lock().expect("recovery receipt id lock");
@@ -2900,6 +2964,56 @@ impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
         }
         receipt_ids.insert(record.receipt_id.clone());
         by_session.insert(record.recovery_session_id.clone(), record);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct MemoryRecoverySessionStore {
+    by_id: Mutex<BTreeMap<String, RecoverySessionRecord>>,
+}
+
+impl MemoryRecoverySessionStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl RecoverySessionStore for MemoryRecoverySessionStore {
+    async fn get(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        Ok(self
+            .by_id
+            .lock()
+            .expect("recovery session lock")
+            .get(recovery_session_id)
+            .cloned())
+    }
+
+    async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
+        let mut by_id = self.by_id.lock().expect("recovery session lock");
+        if by_id.contains_key(&record.recovery_session_id) {
+            return Err(PersistenceError::Conflict(format!(
+                "recovery_session_id `{}` already exists",
+                record.recovery_session_id
+            )));
+        }
+        by_id.insert(record.recovery_session_id.clone(), record);
+        Ok(())
+    }
+
+    async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
+        let mut by_id = self.by_id.lock().expect("recovery session lock");
+        if !by_id.contains_key(&record.recovery_session_id) {
+            return Err(PersistenceError::NotFound(format!(
+                "recovery_session_id `{}` not found",
+                record.recovery_session_id
+            )));
+        }
+        by_id.insert(record.recovery_session_id.clone(), record);
         Ok(())
     }
 }
@@ -3714,6 +3828,7 @@ pub struct PgPersistenceStore {
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
     recovery_receipts: PgRecoveryReceiptStore,
+    recovery_sessions: PgRecoverySessionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
@@ -3748,6 +3863,7 @@ impl PgPersistenceStore {
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
             recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
+            recovery_sessions: PgRecoverySessionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
@@ -3847,6 +3963,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
         &self.recovery_receipts
+    }
+
+    fn recovery_sessions(&self) -> &dyn RecoverySessionStore {
+        &self.recovery_sessions
     }
 
     fn webvh(&self) -> &dyn WebvhStore {
@@ -6973,6 +7093,23 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         .transpose()
     }
 
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+                    expires_at, issued_at, verification_method, raw_payload, accepted_at \
+             FROM recovery_policies WHERE principal_id = $1 \
+             ORDER BY version DESC, accepted_at DESC",
+        )
+        .bind::<Text, _>(principal_id)
+        .get_results::<RecoveryPolicyRow>(&mut *conn)
+        .await?;
+        rows.into_iter().map(RecoveryPolicyRecord::try_from).collect()
+    }
+
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
         if self.get_by_policy_id(&record.policy_id).await?.is_some() {
             return Err(PersistenceError::Conflict(format!(
@@ -7121,6 +7258,26 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
         .transpose()
     }
 
+    async fn list_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Vec<RecoveryReceiptRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+                    trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
+                    verification_method, raw_payload, accepted_at \
+             FROM recovery_receipts WHERE principal_id = $1 \
+             ORDER BY accepted_at DESC",
+        )
+        .bind::<Text, _>(principal_id)
+        .get_results::<RecoveryReceiptRow>(&mut *conn)
+        .await?;
+        rows.into_iter()
+            .map(RecoveryReceiptRecord::try_from)
+            .collect()
+    }
+
     async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
         if self
             .get_by_session_id(&record.recovery_session_id)
@@ -7158,6 +7315,144 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
         .await
         .map(|_| ())
         .map_err(PersistenceError::from)
+    }
+}
+
+struct PgRecoverySessionStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct RecoverySessionRow {
+    #[diesel(sql_type = Text)]
+    recovery_session_id: String,
+    #[diesel(sql_type = Text)]
+    principal_id: String,
+    #[diesel(sql_type = Text)]
+    requesting_device_id: String,
+    #[diesel(sql_type = Text)]
+    trust_domain: String,
+    #[diesel(sql_type = Text)]
+    policy_id: String,
+    #[diesel(sql_type = Integer)]
+    policy_version: i32,
+    #[diesel(sql_type = Jsonb)]
+    policy_payload: Value,
+    #[diesel(sql_type = Text)]
+    challenge: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    proof_payload: Option<Value>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: RecoverySessionRow) -> Result<Self, Self::Error> {
+        let policy_version = u32::try_from(row.policy_version).map_err(|_| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid policy_version {}",
+                row.recovery_session_id, row.policy_version
+            ))
+        })?;
+        Ok(Self {
+            recovery_session_id: row.recovery_session_id,
+            principal_id: row.principal_id,
+            requesting_device_id: row.requesting_device_id,
+            trust_domain: row.trust_domain,
+            policy_id: row.policy_id,
+            policy_version,
+            policy_payload: row.policy_payload,
+            challenge: row.challenge,
+            state: row.state,
+            proof_payload: row.proof_payload,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            expires_at: row.expires_at,
+        })
+    }
+}
+
+const RECOVERY_SESSION_COLUMNS: &str = "recovery_session_id, principal_id, requesting_device_id, \
+     trust_domain, policy_id, policy_version, policy_payload, challenge, state, proof_payload, \
+     created_at, updated_at, expires_at";
+
+#[async_trait]
+impl RecoverySessionStore for PgRecoverySessionStore {
+    async fn get(
+        &self,
+        recovery_session_id: &str,
+    ) -> PersistenceResult<Option<RecoverySessionRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(format!(
+            "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_session \
+             WHERE recovery_session_id = $1"
+        ))
+        .bind::<Text, _>(recovery_session_id)
+        .get_result::<RecoverySessionRow>(&mut *conn)
+        .await
+        .optional()?
+        .map(RecoverySessionRecord::try_from)
+        .transpose()
+    }
+
+    async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO recovery_session \
+             (recovery_session_id, principal_id, requesting_device_id, trust_domain, policy_id, \
+              policy_version, policy_payload, challenge, state, proof_payload, created_at, \
+              updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        )
+        .bind::<Text, _>(&record.recovery_session_id)
+        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.requesting_device_id)
+        .bind::<Text, _>(&record.trust_domain)
+        .bind::<Text, _>(&record.policy_id)
+        .bind::<Integer, _>(record.policy_version as i32)
+        .bind::<Jsonb, _>(&record.policy_payload)
+        .bind::<Text, _>(&record.challenge)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Timestamptz, _>(record.expires_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let affected = sql_query(
+            "UPDATE recovery_session SET \
+                state = $2, proof_payload = $3, updated_at = $4, expires_at = $5 \
+             WHERE recovery_session_id = $1",
+        )
+        .bind::<Text, _>(&record.recovery_session_id)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Timestamptz, _>(record.expires_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        if affected == 0 {
+            return Err(PersistenceError::NotFound(format!(
+                "recovery_session_id `{}` not found",
+                record.recovery_session_id
+            )));
+        }
+        Ok(())
     }
 }
 

@@ -538,7 +538,7 @@ fn evaluate_constraint(
     resource_facets: &[String],
 ) -> Option<String> {
     match constraint {
-        Constraint::Temporal { expires_at } => {
+        Constraint::Temporal { expires_at, .. } => {
             // Check if the grant hasn't expired
             if let Some(expires) = expires_at {
                 return if chrono::Utc::now() < *expires {

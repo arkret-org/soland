@@ -576,6 +576,7 @@ pub fn validate_operation_semantics(
         // check so a legacy `target_ref` payload is rejected with the
         // round-4 reason rather than the generic SDK schema error.
         round4_validate_payload(kind, operation)?;
+        validate_reaction_target_kind(kind, operation)?;
         if let Some(schema) = operation_schema_for_kind(kind) {
             validate_operation_schema(operation, schema)?;
         } else {
@@ -583,6 +584,38 @@ pub fn validate_operation_semantics(
         }
     }
     Ok(())
+}
+
+/// flow-and-message.md §9.8.2 — v1 core reactions may only target a
+/// `cx:message:`. The reducer keys the OR-Set on the message's storage id
+/// (`cx:event:`), so both the canonical `cx:message:` object ref and the
+/// internal `cx:event:` form are accepted; every other typed object kind
+/// (`cx:flow:`, `cx:morph:`, `cx:circle:`, …) is rejected fail-closed with
+/// `reaction_target_unsupported` (a `schema_violation` sub-reason).
+/// Profiles MAY register additional target kinds; v1 core does not.
+fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<(), &'static str> {
+    if !matches!(kind, kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE) {
+        return Ok(());
+    }
+    let target = REACTION_TARGET_FIELDS
+        .iter()
+        .find_map(|field| {
+            operation
+                .payload
+                .get(*field)
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
+    let Some(target) = target else {
+        // Missing target is caught by REACTION_REQUIREMENTS; treat here as
+        // unsupported so the canonical reason still surfaces.
+        return Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED);
+    };
+    if target.starts_with("cx:message:") || target.starts_with("cx:event:") {
+        Ok(())
+    } else {
+        Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED)
+    }
 }
 
 /// Round 4 (B1.13 / B1.14 / B1.15) — typed payload validators dispatched
@@ -1708,6 +1741,22 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
     Ok(())
 }
 
+/// Map a `validate_operation_policy` reason string to its wire status +
+/// `code`. Most policy failures are `capability_denied`; the §14.2 message
+/// edit/redact window and the §9.8.2 reaction scope check are
+/// `failed_precondition` (the returned reason string is carried through as
+/// the human-facing detail / sub-reason).
+pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
+    if message.starts_with("message_edit_window")
+        || message.starts_with("message_redact_window")
+        || message == contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH
+    {
+        (salvo::http::StatusCode::PRECONDITION_FAILED, "failed_precondition")
+    } else {
+        (salvo::http::StatusCode::FORBIDDEN, "capability_denied")
+    }
+}
+
 pub async fn validate_operation_policy(
     state: &AppState,
     operations: &[Operation],
@@ -1730,8 +1779,242 @@ pub async fn validate_operation_policy(
         validate_realm_moderation_policy(state, operation)?;
         validate_poll_operation_policy(state, operation)?;
         validate_audience_mention_operation_policy(state, operation).await?;
+        validate_message_edit_redact_window_policy(state, operation).await?;
+        validate_reaction_scope_policy(state, operation)?;
     }
     Ok(())
+}
+
+/// flow-and-message.md §9.8.2 — a reaction MUST target an object inside its
+/// own effective scope. soland's effective scope is the Realm, so a
+/// `cx.reaction.*` whose `target_ref` resolves to a Message in a different
+/// Realm is rejected with `reaction_scope_mismatch` (a `failed_precondition`
+/// sub-reason). The target-kind gate (`reaction_target_unsupported`) already
+/// ran in `validate_operation_semantics`; an unknown / not-yet-observed
+/// target is left to the reducer's dependency handling.
+fn validate_reaction_scope_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Ok(());
+    };
+    if !matches!(kind, kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE) {
+        return Ok(());
+    }
+    let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
+        operation
+            .payload
+            .get(*field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+    });
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let Some(target_realm) = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.message_realm(target))
+    else {
+        // Target not yet observed — reducer keeps the reaction pending.
+        return Ok(());
+    };
+    if realm_ids_match(operation.realm_id.as_str(), &target_realm) {
+        Ok(())
+    } else {
+        Err(contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
+    }
+}
+
+/// Compare two realm identifiers tolerating the `cx:realm:` / `cx:space:`
+/// alias soland uses interchangeably for a Realm's id.
+fn realm_ids_match(a: &str, b: &str) -> bool {
+    fn canonical(id: &str) -> &str {
+        id.strip_prefix("cx:realm:")
+            .or_else(|| id.strip_prefix("cx:space:"))
+            .unwrap_or(id)
+    }
+    a == b || canonical(a) == canonical(b)
+}
+
+/// constraint-schema.md §14.2 — enforce the message edit / redact temporal
+/// windows declared on the actor's grants.
+///
+/// The pure SDK constraint engine cannot run on this path (it needs the
+/// target Message `created_at` plus the actor's effective grant set), so
+/// soland evaluates the window at admission time. The rules:
+///
+/// - The window only bites when a grant authorizing the relevant `.own`
+///   action carries a `temporal` window field. With no such grant the
+///   action is unbounded (default member / owner behaviour is unchanged).
+/// - Holding the broader `cx.message.revise` / `cx.message.redact`
+///   capability (or `*`), or being the Realm owner, lifts the window
+///   entirely (admin override).
+/// - `message_redact_window` is authoritative for redact; otherwise redact
+///   shares the edit window unless `allow_redact_after_window` is set.
+async fn validate_message_edit_redact_window_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Ok(());
+    };
+    let is_redact = matches!(kind, kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION);
+    let is_revise = matches!(kind, kinds::CX_MESSAGE_REVISE);
+    if !is_redact && !is_revise {
+        return Ok(());
+    }
+    let Some(actor) = operation_actor(operation) else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+
+    // Realm owner is exempt from the .own window (admin override).
+    if realm_owner_matches(state, realm_id, actor).await {
+        return Ok(());
+    }
+
+    // Resolve the target Message's creation time.
+    let target_ref = if is_redact {
+        operation
+            .payload
+            .get("target_event_id")
+            .or_else(|| operation.payload.get("target"))
+            .or_else(|| operation.payload.get("redacts"))
+    } else {
+        operation
+            .payload
+            .get("target_event_id")
+            .or_else(|| operation.payload.get("target_ref"))
+            .or_else(|| operation.payload.get("revision_of"))
+            .or_else(|| operation.payload.get("event_id"))
+    }
+    .and_then(Value::as_str)
+    .filter(|value| !value.is_empty());
+    let Some(target_ref) = target_ref else {
+        return Ok(());
+    };
+    let Some(created_at) = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.message_origin(target_ref).map(|origin| origin.0))
+    else {
+        // Unknown target — leave it to the reducer's dependency handling.
+        return Ok(());
+    };
+
+    let (own_action, broad_action) = if is_redact {
+        ("cx.message.redact.own", "cx.message.redact")
+    } else {
+        ("cx.message.revise.own", "cx.message.revise")
+    };
+
+    let grants = state.authz.grants_for_subject(actor, realm_id);
+
+    // Admin override: a broader (non-`.own`) capability is not time-boxed.
+    let holds_broad = grants.iter().any(|grant| {
+        grant
+            .actions
+            .iter()
+            .any(|action| action == broad_action || action == "*")
+    });
+    if holds_broad {
+        return Ok(());
+    }
+
+    let age = operation.created_at - created_at;
+    let mut saw_window = false;
+    let mut permitted = false;
+    for grant in &grants {
+        let authorizes = grant
+            .actions
+            .iter()
+            .any(|action| action == own_action || action == broad_action);
+        if !authorizes {
+            continue;
+        }
+        for constraint in &grant.constraints {
+            if let crate::authz::Constraint::Temporal {
+                message_edit_window,
+                message_redact_window,
+                allow_redact_after_window,
+                ..
+            } = constraint
+            {
+                if message_edit_window.is_none() && message_redact_window.is_none() {
+                    continue; // plain expiry-only temporal constraint
+                }
+                saw_window = true;
+                if message_window_permits(
+                    is_redact,
+                    age,
+                    message_edit_window.as_ref(),
+                    message_redact_window.as_ref(),
+                    *allow_redact_after_window,
+                ) {
+                    permitted = true;
+                }
+            }
+        }
+    }
+
+    // No window declared anywhere → unbounded. Otherwise allow when at least
+    // one authorizing grant's window still permits the action.
+    if !saw_window || permitted {
+        Ok(())
+    } else if is_redact {
+        Err("message_redact_window elapsed")
+    } else {
+        Err("message_edit_window elapsed")
+    }
+}
+
+/// Decide whether a single grant's window permits the action, per §14.2.
+fn message_window_permits(
+    is_redact: bool,
+    age: chrono::Duration,
+    message_edit_window: Option<&contrix_sdk::authz::ConstraintDuration>,
+    message_redact_window: Option<&contrix_sdk::authz::ConstraintDuration>,
+    allow_redact_after_window: bool,
+) -> bool {
+    if is_redact {
+        // Redact window is authoritative when declared.
+        if let Some(window) = message_redact_window {
+            return duration_covers_age(window, age);
+        }
+        // Otherwise redact is coupled to the edit window unless the grant
+        // opts out (then recall is unbounded).
+        if allow_redact_after_window {
+            return true;
+        }
+        if let Some(window) = message_edit_window {
+            return duration_covers_age(window, age);
+        }
+        return true;
+    }
+    match message_edit_window {
+        Some(window) => duration_covers_age(window, age),
+        None => true,
+    }
+}
+
+/// `true` when `age` is within the constraint window (mirror of the SDK
+/// `max_age_contains` helper). Unknown units fail closed.
+fn duration_covers_age(
+    window: &contrix_sdk::authz::ConstraintDuration,
+    age: chrono::Duration,
+) -> bool {
+    let allowed = match window.unit.as_str() {
+        "s" => chrono::Duration::seconds(window.value as i64),
+        "m" => chrono::Duration::minutes(window.value as i64),
+        "h" => chrono::Duration::hours(window.value as i64),
+        "d" => chrono::Duration::days(window.value as i64),
+        _ => return false,
+    };
+    age <= allowed
 }
 
 pub async fn validate_content_encryption_floor(
@@ -2057,7 +2340,8 @@ fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant) -> bool {
             matches!(
                 constraint,
                 crate::authz::Constraint::Temporal {
-                    expires_at: Some(_)
+                    expires_at: Some(_),
+                    ..
                 }
             )
         });
@@ -3602,4 +3886,151 @@ pub fn validate_encrypted_payload_envelope(
         return Err("encrypted content envelope digests must be sha256:<64 lowercase hex>");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reaction_and_window_policy_tests {
+    use contrix_sdk::Operation;
+    use serde_json::json;
+
+    use super::*;
+
+    fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+                .unwrap(),
+            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            kind,
+            payload,
+        )
+    }
+
+    #[test]
+    fn reaction_on_message_target_is_accepted() {
+        let op = reaction_op(
+            kinds::CX_REACTION_ADD,
+            json!({
+                "target_ref": "cx:message:01904100-0000-7000-8000-000000000001",
+                "actor": "did:web:alice",
+                "key": "👍",
+            }),
+        );
+        assert!(validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op).is_ok());
+    }
+
+    #[test]
+    fn reaction_on_event_storage_id_is_accepted() {
+        let op = reaction_op(
+            kinds::CX_REACTION_ADD,
+            json!({ "target_ref": "cx:event:01904100-0000-7000-8000-000000000001" }),
+        );
+        assert!(validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op).is_ok());
+    }
+
+    #[test]
+    fn reaction_on_non_message_target_is_rejected() {
+        for target in [
+            "cx:flow:01904100-0000-7000-8000-000000000001",
+            "cx:morph:01904100-0000-7000-8000-000000000001",
+            "cx:circle:01904100-0000-7000-8000-000000000001",
+        ] {
+            let op = reaction_op(kinds::CX_REACTION_ADD, json!({ "target_ref": target }));
+            assert_eq!(
+                validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op),
+                Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
+                "target {target} must be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn non_reaction_kinds_skip_target_check() {
+        let op = reaction_op(
+            kinds::CX_MESSAGE_CREATE,
+            json!({ "target_ref": "cx:flow:01904100-0000-7000-8000-000000000001" }),
+        );
+        assert!(validate_reaction_target_kind(kinds::CX_MESSAGE_CREATE, &op).is_ok());
+    }
+
+    #[test]
+    fn realm_id_alias_forms_match() {
+        assert!(realm_ids_match(
+            "cx:realm:01904100-0000-7000-8000-668e2181b41d",
+            "cx:space:01904100-0000-7000-8000-668e2181b41d",
+        ));
+        assert!(realm_ids_match("cx:realm:abc", "cx:realm:abc"));
+        assert!(!realm_ids_match("cx:realm:abc", "cx:realm:def"));
+    }
+
+    fn dur(value: u64, unit: &str) -> contrix_sdk::authz::ConstraintDuration {
+        contrix_sdk::authz::ConstraintDuration { value, unit: unit.to_owned() }
+    }
+
+    #[test]
+    fn redact_window_authoritative_within_and_after() {
+        let edit = dur(15, "m");
+        let redact = dur(24, "h");
+        // Within the 24h redact window — permitted regardless of the edit window.
+        assert!(message_window_permits(
+            true,
+            chrono::Duration::hours(1),
+            Some(&edit),
+            Some(&redact),
+            true,
+        ));
+        // Past the 24h redact window — denied even with allow_redact_after_window.
+        assert!(!message_window_permits(
+            true,
+            chrono::Duration::hours(25),
+            Some(&edit),
+            Some(&redact),
+            true,
+        ));
+    }
+
+    #[test]
+    fn redact_shares_edit_window_unless_opted_out() {
+        let edit = dur(15, "m");
+        // Coupled: past the edit window with no redact window and flag false → denied.
+        assert!(!message_window_permits(
+            true,
+            chrono::Duration::minutes(16),
+            Some(&edit),
+            None,
+            false,
+        ));
+        // Opted out: allow_redact_after_window=true → unbounded recall.
+        assert!(message_window_permits(
+            true,
+            chrono::Duration::minutes(16),
+            Some(&edit),
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn revise_uses_edit_window_only() {
+        let edit = dur(15, "m");
+        assert!(message_window_permits(false, chrono::Duration::minutes(10), Some(&edit), None, false));
+        assert!(!message_window_permits(false, chrono::Duration::minutes(16), Some(&edit), None, false));
+        // No edit window declared → unbounded edits.
+        assert!(message_window_permits(false, chrono::Duration::days(365), None, None, false));
+    }
+
+    #[test]
+    fn policy_reason_code_maps_precondition_vs_capability() {
+        assert_eq!(
+            operation_policy_reason_code("message_redact_window elapsed").1,
+            "failed_precondition"
+        );
+        assert_eq!(
+            operation_policy_reason_code(contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH).1,
+            "failed_precondition"
+        );
+        assert_eq!(
+            operation_policy_reason_code("some other policy failure").1,
+            "capability_denied"
+        );
+    }
 }

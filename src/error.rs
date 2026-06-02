@@ -159,6 +159,13 @@ pub mod reasons {
     pub const METADATA_ENCRYPTION_FLOOR_VIOLATION: &str =
         core_error::REASON_METADATA_ENCRYPTION_FLOOR_VIOLATION;
 
+    // ── Reaction model (spec flow-and-message.md §9.8, commit 4d9438f) —
+    // v1 Reaction target-scope sub-reasons. `reaction_target_unsupported`
+    // sits under `schema_violation`; `reaction_scope_mismatch` under
+    // `failed_precondition`.
+    pub const REACTION_TARGET_UNSUPPORTED: &str = core_error::REASON_REACTION_TARGET_UNSUPPORTED;
+    pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
+
     /// CXP-0007 reason codes registered in this round. Test scaffolding
     /// uses this slice to assert the full set is surfaced through
     /// `crate::error::reasons`.

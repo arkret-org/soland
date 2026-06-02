@@ -19,7 +19,7 @@ use chrono::SecondsFormat;
 use contrix_sdk::Did;
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Map, Value, json};
 
@@ -27,7 +27,10 @@ use super::{AuthArgs, append_audit_log};
 use crate::error::{AppError, ErrorCode};
 use crate::persistence::PersistenceError;
 use crate::result::{JsonResult, json_ok};
-use crate::state::{AppState, RecoveryPolicyRecord, RecoveryReceiptRecord};
+use crate::state::{
+    AppState, DeviceInventoryRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
+    RecoverySessionRecord,
+};
 
 /// Allowed `proof_kind` enum per the spec
 /// `recovery-policy.schema.json` / `recovery-receipt.schema.json`.
@@ -44,6 +47,11 @@ const ALLOWED_PROOF_KINDS: &[&str] = &[
 /// `recovery_witness_revoke_lagging`. The window matches spec
 /// `device-lifecycle.md §14.5` (default 24h).
 const RECOVERY_WITNESS_FRESHNESS_SECS: i64 = 86_400;
+
+/// C-P2 (REC-1) — recovery session lifetime. A freshly created session must be
+/// proven + completed within this window; afterwards it is treated as
+/// `expired`. Matches the device-lifecycle interactive recovery window.
+const RECOVERY_SESSION_TTL_SECS: i64 = 900;
 
 const POLICY_SIGNATURE_TYPE: &str = "cx.identity.recovery_policy.signature.v1";
 const RECEIPT_SIGNATURE_TYPE: &str = "cx.identity.recovery_receipt.signature.v1";
@@ -95,8 +103,709 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
 
 pub(super) fn router() -> Router {
     Router::with_path("identity")
-        .push(Router::with_path("recovery-policy").post(recovery_policy_put))
+        .push(
+            Router::with_path("recovery-policy")
+                .post(recovery_policy_put)
+                .get(recovery_policy_get),
+        )
+        .push(Router::with_path("recovery-policies").get(recovery_policies_get))
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
+        .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
+        .push(
+            Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}")
+                .get(recovery_session_get),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
+                .post(recovery_session_proof_submit),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/complete")
+                .post(recovery_session_complete),
+        )
+}
+
+/// REC-1 read APIs — resolve the principal to read recovery state for, enforcing
+/// principal isolation: a caller may only read its OWN recovery state. The
+/// principal is the authenticated actor; an optional `?principal_id=` query MUST
+/// match it (else 403).
+async fn resolve_recovery_read_principal(
+    aa: &AuthArgs,
+    state: &AppState,
+    req: &mut Request,
+    principal_id_param: Option<String>,
+) -> Result<String, AppError> {
+    let session = aa.authenticated_session(state, req).await?;
+    let principal = session.actor;
+    if let Some(requested) = principal_id_param.filter(|p| !p.trim().is_empty())
+        && requested != principal
+    {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "principal_id does not match the authenticated principal",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("recovery_principal_isolation"));
+    }
+    Ok(principal)
+}
+
+fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
+    json!({
+        "policy_id": record.policy_id,
+        "principal_id": record.principal_id,
+        "version": record.version,
+        "trust_domain": record.trust_domain,
+        "allowed_proof_kinds": record.allowed_proof_kinds,
+        "supersedes": record.supersedes,
+        "expires_at": record.expires_at,
+        "issued_at": record.issued_at,
+        "accepted_at": record.accepted_at,
+        "policy": record.raw_payload,
+    })
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_policy.get",
+    tags("identity", "recovery"),
+    summary = "Read the currently accepted recovery policy (REC-1)",
+    status_codes(200, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_policy.get"))]
+async fn recovery_policy_get(
+    aa: AuthArgs,
+    principal_id: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let principal =
+        resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
+    let active = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(&principal)
+        .await
+        .map_err(recovery_store_error)?;
+    json_ok(json!({ "active_policy": active.as_ref().map(recovery_policy_summary) }))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_policies.get",
+    tags("identity", "recovery"),
+    summary = "List recovery policy history newest-first (REC-1)",
+    status_codes(200, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_policies.get"))]
+async fn recovery_policies_get(
+    aa: AuthArgs,
+    principal_id: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let principal =
+        resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
+    let policies = state
+        .persistence
+        .recovery_policies()
+        .list_for_principal(&principal)
+        .await
+        .map_err(recovery_store_error)?;
+    let items: Vec<Value> = policies.iter().map(recovery_policy_summary).collect();
+    json_ok(json!({ "policies": items }))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_receipts.get",
+    tags("identity", "recovery"),
+    summary = "List recovery receipt history newest-first (REC-1)",
+    status_codes(200, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_receipts.get"))]
+async fn recovery_receipts_get(
+    aa: AuthArgs,
+    principal_id: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let principal =
+        resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
+    let receipts = state
+        .persistence
+        .recovery_receipts()
+        .list_for_principal(&principal)
+        .await
+        .map_err(recovery_store_error)?;
+    let items: Vec<Value> = receipts
+        .iter()
+        .map(|r| {
+            json!({
+                "receipt_id": r.receipt_id,
+                "recovery_session_id": r.recovery_session_id,
+                "policy_id": r.policy_id,
+                "policy_version": r.policy_version,
+                "trust_domain": r.trust_domain,
+                "new_device_id": r.new_device_id,
+                "outcome": r.outcome,
+                "completed_at": r.completed_at,
+                "accepted_at": r.accepted_at,
+                "receipt": r.raw_payload,
+            })
+        })
+        .collect();
+    json_ok(json!({ "receipts": items }))
+}
+
+// ── C-P2 (REC-1) recovery session lifecycle ──────────────────────────────
+//
+// A recovery session binds a *requesting device* to the principal's currently
+// accepted recovery policy snapshot + a server-issued anti-replay challenge,
+// and advances `pending -> verified -> completed` (or `rejected` / `expired`).
+//
+//   POST recovery-sessions                  — create (snapshot policy + challenge)
+//   GET  recovery-sessions/{id}             — read status (principal-isolated)
+//   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
+//   POST recovery-sessions/{id}/complete    — finalize (only when state == verified)
+//
+// C-P3 — `/proofs` verifies the `principal_signing` kind cryptographically
+// (Ed25519 over the canonical recovery-proof transcript binding every
+// session-defining field) and advances `pending -> verified` ONLY on success.
+// Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
+// rather than silently leaving the session pending.
+//
+// C-P4 — completion emission of a `cx.device.authorize` + receipt is NOT yet
+// implemented: `/complete` rejects a non-`verified` session with 409
+// `recovery_session_not_verified`, and a `verified` session with 501
+// `recovery_completion_unimplemented`. The server never fakes a completed state.
+
+fn recovery_session_summary(record: &RecoverySessionRecord) -> Value {
+    json!({
+        "recovery_session_id": record.recovery_session_id,
+        "principal_id": record.principal_id,
+        "requesting_device_id": record.requesting_device_id,
+        "trust_domain": record.trust_domain,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "state": record.state,
+        "challenge": record.challenge,
+        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+/// Load a session and enforce principal isolation: only the authenticated
+/// principal (== `session.actor`) may read or act on its own recovery sessions.
+async fn load_owned_recovery_session(
+    aa: &AuthArgs,
+    state: &AppState,
+    req: &mut Request,
+    recovery_session_id: &str,
+) -> Result<RecoverySessionRecord, AppError> {
+    let session = aa.authenticated_session(state, req).await?;
+    let principal = session.actor;
+    let record = state
+        .persistence
+        .recovery_sessions()
+        .get(recovery_session_id)
+        .await
+        .map_err(recovery_store_error)?
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "recovery session `{recovery_session_id}` not found"
+            ))
+        })?;
+    if record.principal_id != principal {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "recovery session belongs to a different principal",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("recovery_principal_isolation"));
+    }
+    Ok(record)
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_session.create",
+    tags("identity", "recovery"),
+    summary = "Open a recovery session bound to the active policy (REC-1)",
+    status_codes(200, 201, 400, 401, 403, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.create"))]
+async fn recovery_session_create(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    res: &mut Response,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let principal = session.actor.clone();
+    let payload = body.into_inner();
+
+    let requesting_device_id = require_string(&payload, "requesting_device_id")?;
+    if !requesting_device_id.starts_with("cx:device:") {
+        return Err(AppError::invalid_param(format!(
+            "requesting_device_id `{requesting_device_id}` must start with cx:device:",
+        )));
+    }
+    let trust_domain = require_string(&payload, "trust_domain")?;
+    if !trust_domain.starts_with("cx:trust_domain:") {
+        return Err(AppError::invalid_param(format!(
+            "trust_domain `{trust_domain}` must start with cx:trust_domain:",
+        )));
+    }
+
+    // A session can only be opened against an accepted recovery policy — and the
+    // requested trust_domain MUST match it (no domain confusion).
+    let active = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(&principal)
+        .await
+        .map_err(recovery_store_error)?
+        .ok_or_else(|| {
+            AppError::conflict(format!(
+                "no accepted recovery policy for principal `{principal}`"
+            ))
+            .with_wire_code("recovery_policy_missing")
+        })?;
+    if active.trust_domain != trust_domain {
+        return Err(AppError::conflict(format!(
+            "trust_domain `{trust_domain}` does not match active policy `{}`",
+            active.trust_domain
+        ))
+        .with_wire_code("recovery_policy_trust_domain_mismatch"));
+    }
+    if active.allowed_proof_kinds.is_empty() {
+        // An explicit-revocation policy (allowed_proof_kinds == []) cannot back a
+        // recovery session — there is no proof the requester could ever satisfy.
+        return Err(AppError::conflict(format!(
+            "active recovery policy `{}` permits no proof kinds (recovery disabled)",
+            active.policy_id
+        ))
+        .with_wire_code("recovery_policy_revoked"));
+    }
+
+    let now = chrono::Utc::now();
+    let record = RecoverySessionRecord {
+        recovery_session_id: crate::ids::generate("recovery_session"),
+        principal_id: principal.clone(),
+        requesting_device_id,
+        trust_domain,
+        policy_id: active.policy_id.clone(),
+        policy_version: active.version,
+        policy_payload: active.raw_payload.clone(),
+        challenge: generate_recovery_challenge(),
+        state: "pending".to_owned(),
+        proof_payload: None,
+        created_at: now,
+        updated_at: now,
+        expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
+    };
+    state
+        .persistence
+        .recovery_sessions()
+        .insert(record.clone())
+        .await
+        .map_err(recovery_session_store_error)?;
+
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "cx.extension.soland.identity.recovery_session.create",
+        json!({
+            "recovery_session_id": record.recovery_session_id.clone(),
+            "principal_id": record.principal_id.clone(),
+            "policy_id": record.policy_id.clone(),
+            "trust_domain": record.trust_domain.clone(),
+        }),
+        "created",
+    )
+    .await;
+
+    res.status_code(StatusCode::CREATED);
+    json_ok(recovery_session_summary(&record))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_session.get",
+    tags("identity", "recovery"),
+    summary = "Read a recovery session status (REC-1)",
+    status_codes(200, 401, 403, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.get"))]
+async fn recovery_session_get(
+    aa: AuthArgs,
+    recovery_session_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let mut record =
+        load_owned_recovery_session(&aa, state, req, &recovery_session_id.into_inner()).await?;
+    record = expire_if_elapsed(state, record).await?;
+    json_ok(recovery_session_summary(&record))
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_session.proof_submit",
+    tags("identity", "recovery"),
+    summary = "Submit a recovery proof for a pending session (REC-1)",
+    status_codes(200, 400, 401, 403, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.proof_submit"))]
+async fn recovery_session_proof_submit(
+    aa: AuthArgs,
+    recovery_session_id: PathParam<String>,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session_id = recovery_session_id.into_inner();
+    let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
+    let record = expire_if_elapsed(state, record).await?;
+    if record.state != "pending" {
+        return Err(AppError::conflict(format!(
+            "recovery session is `{}`, proofs accepted only while `pending`",
+            record.state
+        ))
+        .with_wire_code("recovery_session_not_pending"));
+    }
+
+    let payload = body.into_inner();
+    let proof = payload
+        .get("proof")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("proof object is required"))?;
+    let proof_kind = proof
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("proof.kind is required"))?;
+    if !ALLOWED_PROOF_KINDS.contains(&proof_kind) {
+        return Err(AppError::invalid_param(format!(
+            "proof.kind `{proof_kind}` not in spec enum",
+        ))
+        .with_wire_code("recovery_proof_kind_unknown"));
+    }
+    // The proof kind MUST be one the bound policy snapshot permits.
+    let policy_allows = record
+        .policy_payload
+        .get("allowed_proof_kinds")
+        .and_then(Value::as_array)
+        .map(|kinds| kinds.iter().any(|k| k.as_str() == Some(proof_kind)))
+        .unwrap_or(false);
+    if !policy_allows {
+        return Err(AppError::conflict(format!(
+            "proof.kind `{proof_kind}` is not permitted by the bound recovery policy",
+        ))
+        .with_wire_code("recovery_proof_kind_not_allowed"));
+    }
+    // Anti-replay: the proof MUST echo the server-issued session challenge.
+    let echoed = proof
+        .get("challenge")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("proof.challenge is required"))?;
+    if echoed != record.challenge {
+        return Err(AppError::new(
+            ErrorCode::InvalidSignature,
+            "proof.challenge does not match the session challenge",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("recovery_session_challenge_mismatch"));
+    }
+
+    // C-P3 — verify the proof by kind. Only `principal_signing` is implemented;
+    // other (policy-permitted) kinds return 501 rather than silently leaving the
+    // session pending, so a caller is never misled into thinking the server
+    // accepted a proof it cannot actually check.
+    match proof_kind {
+        "principal_signing" => {
+            verify_principal_signing_proof(state, &record, proof).await?;
+        }
+        other => {
+            return Err(AppError::unsupported_feature(format!(
+                "proof.kind `{other}` verification not yet implemented (C-P3)"
+            ))
+            .with_status(StatusCode::NOT_IMPLEMENTED)
+            .with_wire_code("recovery_proof_kind_unimplemented"));
+        }
+    }
+
+    // Proof verified — advance `pending -> verified` and record the proof. The
+    // server only reaches this point after a real cryptographic check.
+    let now = chrono::Utc::now();
+    let updated = RecoverySessionRecord {
+        state: "verified".to_owned(),
+        proof_payload: Some(payload.clone()),
+        updated_at: now,
+        ..record
+    };
+    state
+        .persistence
+        .recovery_sessions()
+        .update(updated.clone())
+        .await
+        .map_err(recovery_session_store_error)?;
+
+    json_ok(json!({
+        "ok": true,
+        "recovery_session_id": updated.recovery_session_id,
+        "state": updated.state,
+        "verification": "verified",
+    }))
+}
+
+/// C-P3 — verify a `principal_signing` recovery proof.
+///
+/// The proof MUST carry an Ed25519 signature by the principal's signing key
+/// over the canonical recovery-proof transcript, which binds every
+/// session-defining field: `(principal_id, requesting_device_id, trust_domain,
+/// policy_id, policy_version, recovery_session_id, challenge, expires_at)`.
+/// Because the transcript is reconstructed server-side from the stored session,
+/// any proof signed over a different binding (stale policy, replayed across
+/// principal/domain, different session) fails verification — this gives the
+/// `recovery_evidence_unbound` guarantee for free.
+async fn verify_principal_signing_proof(
+    state: &AppState,
+    record: &RecoverySessionRecord,
+    proof: &Map<String, Value>,
+) -> Result<(), AppError> {
+    let verification_method = proof
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("proof.verification_method is required"))?;
+    let principal_did = Did::new(record.principal_id.clone())
+        .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
+    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+        state,
+        &principal_did,
+        verification_method,
+    )
+    .await
+    .map_err(|error| {
+        recovery_signature_error(format!("recovery verification key invalid: {error}"))
+    })?;
+
+    let transcript = recovery_proof_transcript(record, "principal_signing");
+    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+        .map_err(|error| AppError::internal(format!("recovery proof transcript failed: {error}")))?;
+
+    let signature_b64 = proof
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("proof.signature is required"))?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
+    resolved_key
+        .public_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_proof_digest");
+            recovery_signature_error("recovery proof signature verification failed")
+        })
+}
+
+/// Canonical recovery-proof transcript binding every session-defining field.
+/// Both the requesting device (when signing) and the server (when verifying)
+/// MUST construct this identically.
+fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Value {
+    json!({
+        "type": "cx.identity.recovery_proof.v1",
+        "kind": kind,
+        "principal_id": record.principal_id,
+        "requesting_device_id": record.requesting_device_id,
+        "trust_domain": record.trust_domain,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "recovery_session_id": record.recovery_session_id,
+        "challenge": record.challenge,
+        "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+#[endpoint(
+    operation_id = "cx.extension.soland.identity.recovery_session.complete",
+    tags("identity", "recovery"),
+    summary = "Finalize a verified recovery session (REC-1)",
+    status_codes(200, 401, 403, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.complete"))]
+async fn recovery_session_complete(
+    aa: AuthArgs,
+    recovery_session_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session_id = recovery_session_id.into_inner();
+    let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
+    let record = expire_if_elapsed(state, record).await?;
+
+    // The only path to completion is a `verified` session. Proof verification
+    // (C-P3) is what flips `pending -> verified`; until it lands no session can
+    // reach `verified`, so this endpoint always rejects rather than fabricating
+    // a successful recovery.
+    if record.state != "verified" {
+        return Err(AppError::conflict(format!(
+            "recovery session is `{}`, completion requires `verified`",
+            record.state
+        ))
+        .with_wire_code("recovery_session_not_verified"));
+    }
+
+    // C-P4 — the proof was cryptographically verified (C-P3), so authorize the
+    // requesting device for the principal. This writes a real, auth-consulted
+    // `DeviceInventoryRecord` (verification_state=verified) carrying recovery
+    // provenance (session id + policy snapshot + proof summary). We mirror the
+    // existing `device_authorize_pairing` convention, including its honest
+    // `production_gap` marker: the canonical `cx.device.authorize` operation is
+    // not yet appended to the principal control/operation stream. The recovery
+    // *receipt* remains the principal-signed `POST recovery-receipt` path.
+    let now = chrono::Utc::now();
+    let proof_summary = record
+        .proof_payload
+        .as_ref()
+        .and_then(|p| p.get("proof"))
+        .and_then(Value::as_object)
+        .map(|proof| {
+            json!({
+                "kind": proof.get("kind").cloned().unwrap_or(Value::Null),
+                "verification_method": proof
+                    .get("verification_method")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .unwrap_or(Value::Null);
+    let device = DeviceInventoryRecord {
+        actor: record.principal_id.clone(),
+        device_id: record.requesting_device_id.clone(),
+        display_name: None,
+        verification_state: "verified".to_owned(),
+        payload: json!({
+            "recovery": {
+                "recovery_session_id": record.recovery_session_id,
+                "policy_id": record.policy_id,
+                "policy_version": record.policy_version,
+                "trust_domain": record.trust_domain,
+                "proof_summary": proof_summary,
+                "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+            }
+        }),
+        created_at: now,
+        updated_at: now,
+        revoked_at: None,
+    };
+    state
+        .persistence
+        .devices()
+        .put(&device)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+
+    let completed = RecoverySessionRecord {
+        state: "completed".to_owned(),
+        updated_at: now,
+        ..record
+    };
+    state
+        .persistence
+        .recovery_sessions()
+        .update(completed.clone())
+        .await
+        .map_err(recovery_session_store_error)?;
+
+    let authorization_event = json!({
+        "event_id": crate::ids::generate_event_id(),
+        "event_kind": "cx.device.authorize",
+        "actor": completed.principal_id,
+        "device_id": completed.requesting_device_id,
+        "recovery_session_id": completed.recovery_session_id,
+        "policy_id": completed.policy_id,
+        "policy_version": completed.policy_version,
+        "created_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+    });
+    append_audit_log(
+        state,
+        Some(&completed.principal_id),
+        "cx.extension.soland.identity.recovery_session.complete",
+        json!({
+            "recovery_session_id": completed.recovery_session_id,
+            "device_id": completed.requesting_device_id,
+            "policy_id": completed.policy_id,
+            "authorization_event": authorization_event,
+        }),
+        "completed",
+    )
+    .await;
+
+    json_ok(json!({
+        "ok": true,
+        "recovery_session_id": completed.recovery_session_id,
+        "state": completed.state,
+        "device_id": completed.requesting_device_id,
+        "authorization_event": authorization_event,
+        "production_gap": "authorization_event_not_yet_in_operation_stream",
+    }))
+}
+
+/// Lazily expire a session whose TTL has elapsed: if a `pending`/`verified`
+/// session is past `expires_at`, persist the `expired` transition and return
+/// the updated record. Terminal states are returned unchanged.
+async fn expire_if_elapsed(
+    state: &AppState,
+    record: RecoverySessionRecord,
+) -> Result<RecoverySessionRecord, AppError> {
+    let now = chrono::Utc::now();
+    let is_open = matches!(record.state.as_str(), "pending" | "verified");
+    if is_open && now > record.expires_at {
+        let expired = RecoverySessionRecord {
+            state: "expired".to_owned(),
+            updated_at: now,
+            ..record
+        };
+        state
+            .persistence
+            .recovery_sessions()
+            .update(expired.clone())
+            .await
+            .map_err(recovery_session_store_error)?;
+        return Ok(expired);
+    }
+    Ok(record)
+}
+
+/// Generate a 256-bit anti-replay challenge (base64url, no padding). Pulled
+/// from the OS CSPRNG.
+fn generate_recovery_challenge() -> String {
+    use rand::RngCore;
+    let mut buf = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    URL_SAFE_NO_PAD.encode(buf)
+}
+
+fn recovery_session_store_error(error: PersistenceError) -> AppError {
+    match error {
+        PersistenceError::Conflict(message) if message.contains("already exists") => {
+            AppError::conflict(message).with_wire_code("recovery_session_conflict")
+        }
+        other => recovery_store_error(other),
+    }
 }
 
 #[endpoint(

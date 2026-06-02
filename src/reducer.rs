@@ -7777,6 +7777,36 @@ impl ProjectionState {
         msgs
     }
 
+    /// Resolve a Message's `(created_at, sender, thread_id)` by target ref,
+    /// accepting either the `cx:event:` storage id or the `cx:message:`
+    /// object-ref form. Used by the constraint-schema.md §14.2 edit/redact
+    /// window evaluator, which needs the original Message `created_at` to
+    /// measure the elapsed window. Returns `None` for unknown targets.
+    pub fn message_origin(
+        &self,
+        target_ref: &str,
+    ) -> Option<(chrono::DateTime<chrono::Utc>, String, String)> {
+        let event_id = message_event_id_from_ref(target_ref);
+        let msg = self
+            .messages
+            .get(&event_id)
+            .or_else(|| self.messages.get(target_ref))?;
+        Some((msg.created_at, msg.sender.clone(), msg.thread_id.clone()))
+    }
+
+    /// Resolve the `realm_id` (effective scope) of a Message by target ref,
+    /// accepting the `cx:message:` object-ref or `cx:event:` storage id.
+    /// Used by the flow-and-message.md §9.8.2 reaction scope check. Returns
+    /// `None` for unknown targets (the reducer's dependency handling then
+    /// keeps the reaction pending).
+    pub fn message_realm(&self, target_ref: &str) -> Option<String> {
+        let event_id = message_event_id_from_ref(target_ref);
+        self.messages
+            .get(&event_id)
+            .or_else(|| self.messages.get(target_ref))
+            .map(|msg| msg.realm_id.clone())
+    }
+
     /// Projection-layer view of a single message that
     /// consults the parallel `redaction` cell. Returns:
     ///   - `Some(view)` with `content = Some(_)` for live messages (no redaction cell set, or set

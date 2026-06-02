@@ -107,6 +107,11 @@ fn validate_key_backup_encryption(
         .ok_or_else(|| schema_error("key backup encryption.recipient_method is required"))?;
     match method {
         "passphrase_kdf" => {
+            if backup_class == "did_recovery" {
+                return Err(schema_error(
+                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, threshold_recovery, or hardware_wrapped_key",
+                ));
+            }
             if backup_class == "mls_history" {
                 return Err(schema_error(
                     "mls_history key backups must use secret_storage_key or recovery_public_key",
@@ -970,6 +975,16 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("recovery_public_key without aead.enc must be rejected");
         assert!(err.message.contains("enc"));
+    }
+
+    #[test]
+    fn did_recovery_rejects_passphrase_kdf() {
+        // Spec §5.0.1 first-backup gate: passphrase_kdf-only did_recovery forbidden.
+        let body = key_backup_body("did_recovery", "recovery_key_share", passphrase_encryption());
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("passphrase_kdf did_recovery must be rejected");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("did_recovery"));
     }
 
     #[test]

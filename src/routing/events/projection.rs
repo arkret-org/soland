@@ -1009,9 +1009,11 @@ pub async fn ingest_federation_operations(
         if let Err(message) =
             validate_operation_policy(state, std::slice::from_ref(&operation)).await
         {
+            let (_, code) =
+                crate::routing::events::operations::operation_policy_reason_code(message);
             rejected.push(json!({
                 "operation_id": operation_id,
-                "reason": "policy_denied",
+                "reason": code,
                 "message": message,
             }));
             continue;

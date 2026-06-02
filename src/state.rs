@@ -1088,6 +1088,35 @@ pub struct RecoveryReceiptRecord {
     pub accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// C-P2 (REC-1) — recovery session lifecycle record.
+///
+/// A session binds a requesting device to the principal's active recovery
+/// policy snapshot + a server challenge, and transitions
+/// `pending -> verified -> completed` (or `rejected` / `expired`). Proof
+/// verification (C-P3) is what advances `pending -> verified`; completion
+/// (C-P4) emits a `cx.device.authorize` + receipt.
+#[derive(Clone, Debug)]
+pub struct RecoverySessionRecord {
+    pub recovery_session_id: String,
+    pub principal_id: String,
+    pub requesting_device_id: String,
+    pub trust_domain: String,
+    pub policy_id: String,
+    pub policy_version: u32,
+    /// Snapshot of the active policy at session-creation time (so a later policy
+    /// rotation cannot retroactively change what this session was bound to).
+    pub policy_payload: Value,
+    /// Server-issued anti-replay challenge the proof transcript MUST bind.
+    pub challenge: String,
+    /// `pending` | `verified` | `completed` | `rejected` | `expired`.
+    pub state: String,
+    /// The submitted proof payload (recorded on `/proofs`; verified in C-P3).
+    pub proof_payload: Option<Value>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Per-actor failed-login bookkeeping. Spec: A.3 — five failures within
 /// the active window flip the actor into a 15-minute lockout. The record
 /// is cleared on any successful login.
