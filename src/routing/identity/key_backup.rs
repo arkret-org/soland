@@ -165,6 +165,36 @@ fn validate_key_backup_encryption(
             }
             Ok(())
         }
+        "recovery_public_key" => {
+            // Spec key-management.md §7.5.2: HPKE base-mode to the recovery
+            // public key. The KEM encapsulation rides in `encryption.aead.enc`;
+            // no passphrase KDF, no wire nonce. Valid for any backup_class.
+            let recipient = encryption
+                .get("recipient_key_ref")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if recipient.trim().is_empty() {
+                return Err(schema_error(
+                    "recovery_public_key key backup requires a non-empty recipient_key_ref",
+                ));
+            }
+            let enc = encryption
+                .get("aead")
+                .and_then(|aead| aead.get("enc"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !is_base64url_token(enc) {
+                return Err(schema_error(
+                    "recovery_public_key key backup requires base64url encryption.aead.enc",
+                ));
+            }
+            if encryption.get("kdf").is_some() {
+                return Err(schema_error(
+                    "recovery_public_key key backups must not carry encryption.kdf",
+                ));
+            }
+            Ok(())
+        }
         other => Err(schema_error(format!(
             "unsupported key backup recipient_method `{other}`"
         ))),
@@ -896,6 +926,18 @@ mod tests {
         })
     }
 
+    fn recovery_public_key_encryption() -> Value {
+        json!({
+            "recipient_method": "recovery_public_key",
+            "recipient_key_ref": "did:web:alice.example#recovery",
+            "aead": {
+                "name": "chacha20_poly1305",
+                "aead_profile": "cx.aead.chacha20_poly1305.v1",
+                "enc": "ZW5jYXBzdWxhdGVka2V5"
+            }
+        })
+    }
+
     #[test]
     fn mls_history_accepts_secret_storage_key() {
         let body = key_backup_body(
@@ -906,6 +948,28 @@ mod tests {
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("MLS history secret_storage_key backup should validate");
+    }
+
+    #[test]
+    fn mls_history_accepts_recovery_public_key() {
+        let body = key_backup_body(
+            "mls_history",
+            "mls_group_state",
+            recovery_public_key_encryption(),
+        );
+
+        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect("MLS history recovery_public_key (HPKE) backup should validate");
+    }
+
+    #[test]
+    fn recovery_public_key_requires_enc() {
+        let mut enc = recovery_public_key_encryption();
+        enc["aead"].as_object_mut().unwrap().remove("enc");
+        let body = key_backup_body("secret_storage", "recovery_secret", enc);
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("recovery_public_key without aead.enc must be rejected");
+        assert!(err.message.contains("enc"));
     }
 
     #[test]
