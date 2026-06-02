@@ -921,3 +921,72 @@ pub async fn typing_ephemeral_for_space(
         })
         .collect()
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// cx.space.archive / restore / tombstone payload parsing (spec B1.13).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spec B1.13 — parse a `cx.space.archive` / `cx.space.restore` payload
+/// into the typed [`contrix_sdk::SpaceStateTransitionPayload`]. Returns
+/// `Err` (with `schema_violation`) when the payload still carries the
+/// legacy top-level `target_ref` form (pre-typed wire).
+pub fn parse_space_state_transition_payload(
+    payload: &Value,
+) -> Result<contrix_sdk::SpaceStateTransitionPayload, (&'static str, String)> {
+    if payload.get("target_ref").is_some() {
+        return Err((
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            "cx.space.archive/restore payload legacy `target_ref` form is wire-broken; \
+             use the typed `space_state_transition_payload` shape (space_id, new_state, reason?)"
+                .to_owned(),
+        ));
+    }
+    serde_json::from_value::<contrix_sdk::SpaceStateTransitionPayload>(payload.clone()).map_err(
+        |err| {
+            (
+                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                format!(
+                    "cx.space.archive/restore payload must match SpaceStateTransitionPayload: {err}"
+                ),
+            )
+        },
+    )
+}
+
+/// Spec B1.13 — parse a `cx.space.tombstone` payload into the typed
+/// [`contrix_sdk::SpaceObjectTombstonePayload`].
+pub fn parse_space_object_tombstone_payload(
+    payload: &Value,
+) -> Result<contrix_sdk::SpaceObjectTombstonePayload, (&'static str, String)> {
+    if payload.get("target_ref").is_some() {
+        return Err((
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            "cx.space.tombstone payload legacy `target_ref` form is wire-broken; \
+             use the typed `space_object_tombstone_payload` shape (space_id, tombstone_reason)"
+                .to_owned(),
+        ));
+    }
+    serde_json::from_value::<contrix_sdk::SpaceObjectTombstonePayload>(payload.clone()).map_err(
+        |err| {
+            (
+                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                format!("cx.space.tombstone payload must match SpaceObjectTombstonePayload: {err}"),
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod space_lifecycle_payload_tests {
+    use super::*;
+
+    #[test]
+    fn space_state_transition_accepts_typed_shape() {
+        parse_space_state_transition_payload(&json!({
+            "space_id": "cx:space:01904100-0000-7000-8000-000000000001",
+            "new_state": "archived",
+            "reason": "stale",
+        }))
+        .unwrap();
+    }
+}

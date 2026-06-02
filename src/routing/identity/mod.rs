@@ -8,6 +8,7 @@ pub(crate) mod consent;
 mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
+mod identity_link;
 mod key_backup;
 mod keys;
 mod profile;

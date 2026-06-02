@@ -368,3 +368,94 @@ pub async fn append_audit_log(
         crate::metrics::record_audit_append_failure();
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Audit policy version hash + late-recovery access payload (spec B1.12 / B1.16).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spec B1.12 — recompute the audit policy version hash using the 4-arg
+/// SDK helper. The legacy 2-arg signature is removed; any audit receipt
+/// produced by an out-of-tree signer using the old form MUST be re-issued.
+pub fn compute_audit_policy_hash(
+    realm_id: &contrix_sdk::RealmId,
+    trust_domain: &contrix_sdk::TypedTrustDomainId,
+    audit_disclosure: &Value,
+    audit_assurance: &Value,
+) -> [u8; 32] {
+    contrix_sdk::compute_audit_policy_version_digest(
+        realm_id,
+        trust_domain,
+        audit_disclosure,
+        audit_assurance,
+    )
+    .unwrap_or([0u8; 32])
+}
+
+/// Spec B1.16 — build a `cx.audit.policy_access` payload for the
+/// late-key-recovery path. `late_recovery_original_event_id` is REQUIRED
+/// on this access_kind; the SDK validator catches a missing value but we
+/// surface a typed builder for readability.
+pub fn build_late_recovery_audit_payload(
+    realm_id: contrix_sdk::RealmId,
+    actor: contrix_sdk::Did,
+    original_event_id: contrix_sdk::EventId,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> contrix_sdk::AuditPolicyAccessPayload {
+    contrix_sdk::AuditPolicyAccessPayload {
+        realm_id,
+        actor,
+        access_kind: contrix_sdk::AccessKind::E2EELateRecovery,
+        late_recovery_original_event_id: Some(original_event_id),
+        observed_at,
+    }
+}
+
+#[cfg(test)]
+mod audit_policy_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn realm() -> contrix_sdk::RealmId {
+        contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap()
+    }
+    fn td() -> contrix_sdk::TypedTrustDomainId {
+        contrix_sdk::TypedTrustDomainId::new("cx:trust_domain:soland.local").unwrap()
+    }
+    fn other_td() -> contrix_sdk::TypedTrustDomainId {
+        contrix_sdk::TypedTrustDomainId::new("cx:trust_domain:other.example").unwrap()
+    }
+
+    #[test]
+    fn audit_policy_version_digest_domain_separates() {
+        let h1 = compute_audit_policy_hash(
+            &realm(),
+            &td(),
+            &json!({"mode": "strict"}),
+            &json!("attested_hardware"),
+        );
+        let h2 = compute_audit_policy_hash(
+            &realm(),
+            &other_td(),
+            &json!({"mode": "strict"}),
+            &json!("attested_hardware"),
+        );
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn late_recovery_audit_payload_populates_event_id() {
+        let payload = build_late_recovery_audit_payload(
+            realm(),
+            contrix_sdk::Did::new("did:web:alice.example").unwrap(),
+            contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001").unwrap(),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            payload.access_kind,
+            contrix_sdk::AccessKind::E2EELateRecovery
+        ));
+        assert!(payload.late_recovery_original_event_id.is_some());
+        payload.validate_minimal().unwrap();
+    }
+}

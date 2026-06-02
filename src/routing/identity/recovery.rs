@@ -1537,3 +1537,119 @@ fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Late key recovery state machine (spec T16).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spec T16 — per-(actor, ciphertext) late-recovery state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LateRecoveryState {
+    DecryptionPending,
+    DecryptionFailed,
+    LateRecovered,
+}
+
+impl LateRecoveryState {
+    pub fn can_transition_to(self, new: Self) -> bool {
+        use LateRecoveryState::*;
+        matches!(
+            (self, new),
+            (DecryptionPending, DecryptionFailed)
+                | (DecryptionPending, LateRecovered)
+                | (DecryptionFailed, LateRecovered)
+        )
+    }
+}
+
+/// Spec T16 — accept-late-recovery preconditions. All four MUST evaluate
+/// true for the reducer to apply a late key share to a `decryption_failed`
+/// cell.
+#[derive(Clone, Copy, Debug)]
+pub struct LateRecoveryAcceptInputs {
+    /// (a) Actor was a Realm member at T₀ (recovery-target ciphertext's
+    /// epoch).
+    pub member_at_t0: bool,
+    /// (b) Realm policy at T₀ permitted the actor to read the ciphertext.
+    pub policy_permitted_at_t0: bool,
+    /// (c) The presented key share was authorised by an origin permitted
+    /// to issue late shares (e.g. cross-signed device or trusted recovery
+    /// service).
+    pub key_share_authorised: bool,
+    /// (d) Audit profile MUST emit a paired `cx.audit.accessed{late_recovery=true}`
+    /// event for the read. Callers set this true once they have queued the
+    /// audit emit.
+    pub audit_emit_queued: bool,
+}
+
+/// Spec T16 — apply the 4 accept conditions; reject revoked / removed
+/// members with `late_recovery_rejected_membership`.
+pub fn late_recovery_accept_check(
+    inputs: LateRecoveryAcceptInputs,
+) -> Result<(), (ErrorCode, &'static str)> {
+    if !inputs.member_at_t0 {
+        return Err((
+            ErrorCode::LateRecoveryRejectedMembership,
+            "actor was not a Realm member at the recovery T₀; late key \
+             recovery refused",
+        ));
+    }
+    if !inputs.policy_permitted_at_t0 {
+        return Err((
+            ErrorCode::LateRecoveryRejectedMembership,
+            "Realm policy at T₀ did not permit the actor to read this \
+             ciphertext",
+        ));
+    }
+    if !inputs.key_share_authorised {
+        return Err((
+            ErrorCode::InvalidSignature,
+            "late key share origin is not authorised",
+        ));
+    }
+    if !inputs.audit_emit_queued {
+        return Err((
+            ErrorCode::FailedPrecondition,
+            "late key recovery requires a paired cx.audit.accessed{late_recovery=true} \
+             audit emit",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod late_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn late_recovery_rejects_revoked_actor() {
+        let err = late_recovery_accept_check(LateRecoveryAcceptInputs {
+            member_at_t0: false,
+            policy_permitted_at_t0: true,
+            key_share_authorised: true,
+            audit_emit_queued: true,
+        })
+        .unwrap_err();
+        assert_eq!(err.0, ErrorCode::LateRecoveryRejectedMembership);
+    }
+
+    #[test]
+    fn late_recovery_accepts_when_all_four_conditions() {
+        late_recovery_accept_check(LateRecoveryAcceptInputs {
+            member_at_t0: true,
+            policy_permitted_at_t0: true,
+            key_share_authorised: true,
+            audit_emit_queued: true,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn late_recovery_state_machine_transitions() {
+        use LateRecoveryState::*;
+        assert!(DecryptionPending.can_transition_to(DecryptionFailed));
+        assert!(DecryptionFailed.can_transition_to(LateRecovered));
+        assert!(!LateRecovered.can_transition_to(DecryptionPending));
+    }
+}

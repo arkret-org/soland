@@ -1857,7 +1857,7 @@ pub fn parse_and_validate_sync_cursor(
     let Some(handle) = value.get("h").and_then(|h| h.as_str()) else {
         return Err(SyncCursorError::Integrity("after cursor must contain h"));
     };
-    if crate::round23::validate_cursor_handle(handle).is_err() {
+    if validate_cursor_handle(handle).is_err() {
         return Err(SyncCursorError::Invalid("invalid cursor handle"));
     }
     let stored = stored_sync_cursor_by_handle(state, handle)?;
@@ -2508,7 +2508,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 &subscribe_scope_key_for_stream,
                                 SUBSCRIBE_RECONNECT_AFTER_MS,
                             );
-                            let body = crate::round4::dropped_or_resync(
+                            let body = dropped_or_resync(
                                 cursor_typed,
                                 format!("broadcast_lagged skipped={skipped}"),
                                 Some(SUBSCRIBE_RECONNECT_AFTER_MS),
@@ -3735,5 +3735,122 @@ mod tests {
             .expect_err("expired signed stateless cursor must fail");
 
         assert!(matches!(error, SyncCursorError::Expired));
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// EventsSubscribe NDJSON typed frames + cursor handle entropy (spec B1.5/T03).
+// ════════════════════════════════════════════════════════════════════════
+
+/// Spec B1.5 — wrap a typed `EventsSubscribeFrameBody` in the envelope
+/// shape soland emits on the wire (kept distinct from the SDK body type so
+/// the per-frame `seq` / `space_id` envelope can evolve independently of
+/// the SDK's `kind`-tagged body).
+///
+/// The envelope serialises a flattened body via `#[serde(flatten)]` so
+/// downstream consumers see exactly the SDK `EventsSubscribeFrameBody`
+/// fields plus the wrapper's `seq` / `space_id` / `cursor` fields at the
+/// top level.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubscribeFrameEnvelope {
+    /// Monotonic per-connection sequence (matches the legacy `seq` field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    /// Originating space (for fan-out frames). Optional; absent on
+    /// `heartbeat`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<String>,
+    /// Cursor for the frame, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(flatten)]
+    pub body: contrix_sdk::EventsSubscribeFrameBody,
+}
+
+/// Spec B1.5 — when an implementation would emit a `Dropped` frame but
+/// cannot supply a resume cursor, the wire-breaking rule downgrades to
+/// `ResyncRequired`. Callers use [`dropped_or_resync`] to construct the
+/// correct frame body from an optional cursor.
+///
+/// Note: the cursor type expected by `EventsSubscribeFrameBody::Dropped`
+/// is the typed-id `contrix_identifiers::Cursor` (`cx:cursor:<base64url>`),
+/// NOT the `contrix_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
+/// The typed-id is exposed as `contrix_sdk::identifiers::Cursor`.
+pub fn dropped_or_resync(
+    cursor: Option<contrix_sdk::identifiers::Cursor>,
+    reason: impl Into<String>,
+    reconnect_after_ms: Option<u64>,
+) -> contrix_sdk::EventsSubscribeFrameBody {
+    let reason = reason.into();
+    match cursor {
+        Some(cursor) => contrix_sdk::EventsSubscribeFrameBody::Dropped {
+            cursor,
+            reason,
+            reconnect_after_ms,
+        },
+        None => contrix_sdk::EventsSubscribeFrameBody::ResyncRequired {
+            reason,
+            reconnect_after_ms,
+        },
+    }
+}
+
+/// Spec T03 — minimum length of a base64url cursor handle to supply
+/// ≥128-bit entropy. Spec tightened `h.minLength` from 16 → 22.
+pub const CURSOR_HANDLE_MIN_LENGTH: usize = 22;
+
+/// Validate an inbound cursor handle (post-base64url-decode is callers'
+/// responsibility). Spec T03 — rejects shorter than 22 chars.
+pub fn validate_cursor_handle(handle: &str) -> Result<(), (crate::error::ErrorCode, &'static str)> {
+    if handle.len() < CURSOR_HANDLE_MIN_LENGTH {
+        return Err((
+            crate::error::ErrorCode::CursorIntegrityInvalid,
+            "cursor handle MUST be at least 22 base64url characters \
+             (≥128-bit entropy); spec tightening",
+        ));
+    }
+    if !handle
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err((
+            crate::error::ErrorCode::CursorIntegrityInvalid,
+            "cursor handle MUST be base64url (no padding)",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod cursor_frame_tests {
+    use super::*;
+
+    #[test]
+    fn dropped_without_cursor_downgrades_to_resync() {
+        let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
+        assert!(matches!(
+            body,
+            contrix_sdk::EventsSubscribeFrameBody::ResyncRequired { .. }
+        ));
+        let cursor = contrix_sdk::identifiers::Cursor::new("cx:cursor:resume").unwrap();
+        let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
+        assert!(matches!(
+            body,
+            contrix_sdk::EventsSubscribeFrameBody::Dropped {
+                reconnect_after_ms: Some(10_000),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cursor_handle_minimum_length_enforced() {
+        // 22-char handle should pass.
+        let ok = "a".repeat(22);
+        validate_cursor_handle(&ok).unwrap();
+        // 21-char handle must fail.
+        let bad = "a".repeat(21);
+        let err = validate_cursor_handle(&bad).unwrap_err();
+        assert_eq!(err.0, crate::error::ErrorCode::CursorIntegrityInvalid);
     }
 }

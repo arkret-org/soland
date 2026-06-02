@@ -26,6 +26,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
         .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
         .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
+        .push(Router::with_path("devices/{device_id}/rename").post(device_rename))
 }
 
 #[endpoint(
@@ -115,6 +116,93 @@ async fn device_revoke(
         "revoked_device_id": target_device_id,
         "revoked_at": now().to_rfc3339(),
     }))
+}
+
+/// Maximum length (in Unicode scalar values) of a device `display_name`,
+/// aligned with the actor / profile `display_name` bound in
+/// `contrix-spec` (`models/actor.md`, `discovery/profiles-presence.md`).
+const DEVICE_DISPLAY_NAME_MAX_CHARS: usize = 128;
+
+#[endpoint(
+    operation_id = "cx.devices.rename",
+    tags("devices"),
+    summary = "Rename a device the caller controls (update its user-facing display_name)",
+    status_codes(200, 400, 401, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "cx.devices.rename"))]
+async fn device_rename(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    device_id: salvo::oapi::extract::PathParam<String>,
+    body: JsonBody<Value>,
+) -> JsonResult<Value> {
+    // Spec: crypto-media/device-lifecycle.md §4 — `display_name` is the
+    // optional, user-facing, mutable device name; the canonical id is
+    // always `device_id`. Renaming only touches display metadata, never
+    // device trust / authorization state.
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let target_device_id = device_id.into_inner();
+    let body = body.into_inner();
+    let display_name = body
+        .get("display_name")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::missing_param("display_name is required"))?;
+    if display_name.chars().count() > DEVICE_DISPLAY_NAME_MAX_CHARS {
+        return Err(AppError::invalid_param(format!(
+            "display_name must be at most {DEVICE_DISPLAY_NAME_MAX_CHARS} characters"
+        ))
+        .with_wire_code("display_name_too_long"));
+    }
+    let existing = state
+        .persistence
+        .devices()
+        .get(&session.actor, &target_device_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(mut record) = existing else {
+        return Err(AppError::not_found("device not found"));
+    };
+    if record.revoked_at.is_some() {
+        return Err(AppError::invalid_param("cannot rename a revoked device")
+            .with_wire_code("device_revoked"));
+    }
+    let updated_at = now();
+    record.display_name = Some(display_name.to_owned());
+    if let Some(object) = record.payload.as_object_mut() {
+        object.insert("display_name".to_owned(), json!(display_name));
+        object.insert("last_seen_at".to_owned(), json!(updated_at));
+    }
+    record.updated_at = updated_at;
+    state
+        .persistence
+        .devices()
+        .put(&record)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "device.rename",
+        json!({
+            "device_id": target_device_id,
+            "by_device_id": session.device_id,
+            "display_name": display_name,
+        }),
+        "accepted",
+    )
+    .await;
+    let mut value = device_inventory_to_json(&record);
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "is_current_session_device".to_owned(),
+            json!(record.device_id == session.device_id),
+        );
+    }
+    json_ok(value)
 }
 
 #[endpoint(

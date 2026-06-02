@@ -513,7 +513,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
 }
 
 /// True for any `cx.audit.*` event kind. Used by the Realm terminal-state
-/// admission guard (`round23::terminal_realm_check`) to admit audit-class
+/// admission guard (`routing::events::event_log::terminal_realm_check`) to
+/// admit audit-class
 /// writes even after a Realm has reached `cx.realm.tombstone` /
 /// `cx.realm.destroy` terminal state. Spec
 /// `contrix-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
@@ -658,6 +659,44 @@ pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
 pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
 pub const CX_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "cx.extensions.tsp.route_establish";
 pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append";
+
+// ────────────────────────────────────────────────────────────────────────
+// Audit-compliance profiles + Realm terminal-state classifier (spec T07/T09/T23).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Active audit-compliance profile ids. Spec T09.
+pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = &[
+    "cx.profile.attested_audit.e2ee.v1",
+    "cx.profile.disclosed_audit.e2ee.v1",
+];
+
+/// Spec T07 — Realm lifecycle state classifier; mirror of the SDK
+/// [`contrix_sdk::events::RealmLifecycleState`] terminal predicate.
+pub fn realm_state_is_terminal(state: contrix_sdk::events::RealmLifecycleState) -> bool {
+    contrix_sdk::events::is_terminal_realm_state(state)
+}
+
+/// Spec T23 — true when `cx.audit.ryw_receipt` may be accepted as a durable
+/// Event. Requires `cx.profile.attested_audit.e2ee.v1` to be in the Realm's
+/// active profile set.
+pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
+    active_profiles
+        .iter()
+        .any(|p| p == "cx.profile.attested_audit.e2ee.v1")
+}
+
+#[cfg(test)]
+mod audit_profile_tests {
+    use super::*;
+
+    #[test]
+    fn ryw_receipt_durable_only_under_attested_profile() {
+        assert!(!ryw_receipt_durable_event_allowed(&[]));
+        assert!(ryw_receipt_durable_event_allowed(&[
+            "cx.profile.attested_audit.e2ee.v1".to_owned()
+        ]));
+    }
+}
 
 #[cfg(test)]
 mod tests {

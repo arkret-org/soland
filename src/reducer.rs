@@ -1107,7 +1107,7 @@ pub struct SpaceState {
     ///   - `Some("destroyed")` — `cx.realm.destroy` accepted; no successor.
     ///
     /// Both terminal states block non-audit writes via
-    /// `crate::round23::terminal_realm_check`. Spec
+    /// `routing::events::event_log::terminal_realm_check`. Spec
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
     /// Stream-F (Wave 1B) — for `cx.realm.tombstone` only: the
@@ -4005,7 +4005,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let reason = crate::round23::redaction_human_reason(&operation.payload);
+        let reason = redaction_human_reason(&operation.payload);
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
             by,
@@ -8201,9 +8201,44 @@ impl ProjectionState {
     }
 }
 
+/// Spec T07 — federation fanout window for erasure receipts emitted by
+/// `cx.realm.destroy`. Spec: 30 days.
+pub const REALM_DESTROY_FANOUT_WINDOW_DAYS: i64 = 30;
+
+/// Extract the operator-supplied human reason from a redaction payload,
+/// preferring an explicit `human_reason` over the machine `reason` /
+/// `reason_text` fields. Returns `None` when no non-empty reason is
+/// present.
+pub(crate) fn redaction_human_reason(payload: &Value) -> Option<String> {
+    ["human_reason", "reason", "reason_text"]
+        .iter()
+        .find_map(|field| {
+            payload
+                .get(*field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redaction_human_reason_prefers_explicit_field() {
+        let payload = serde_json::json!({
+            "target_event_id": "cx:event:01904100-0000-7000-8000-000000000abc",
+            "reason": "machine policy",
+            "human_reason": "moderator request"
+        });
+
+        assert_eq!(
+            redaction_human_reason(&payload).as_deref(),
+            Some("moderator request")
+        );
+    }
     use crate::hlc::ServerHlc;
 
     fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {

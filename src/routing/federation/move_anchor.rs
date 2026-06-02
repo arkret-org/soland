@@ -296,8 +296,7 @@ async fn submit_anchor(
         .iter()
         .map(|m| m.as_str().to_owned())
         .collect();
-    if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&frontier_entries)
-    {
+    if let Err((code, reason)) = validate_anchor_frontier_entries(&frontier_entries) {
         return Err(AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST));
     }
 
@@ -516,6 +515,61 @@ impl MoveStorePutVia for contrix_sdk::state_res::MemoryMoveStore {
     fn put_pending_via_trait(&self, m: &Move) -> contrix_sdk::state_res::StoreResult<()> {
         use contrix_sdk::state_res::MoveStore;
         self.put_pending(m)
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Anchor frontier digest validation (spec T04).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Validate every entry in an Anchor `frontier[]` is shaped as
+/// `sha256:<64 lowercase hex>` — never a `cx:event:<uuid>` form. Spec T04.
+///
+/// Receivers MUST recompute and verify entries; the strict shape check
+/// here guards against the legacy event-id form that was permitted in
+/// pre-T04 spec drafts.
+pub(crate) fn validate_anchor_frontier_entries(
+    frontier: &[String],
+) -> Result<(), (ErrorCode, String)> {
+    for entry in frontier {
+        if !is_sha256_digest(entry) {
+            return Err((
+                ErrorCode::SchemaViolation,
+                format!(
+                    "anchor frontier entries must match sha256:<64 lowercase hex>; \
+                     got {entry:?}"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_sha256_digest(s: &str) -> bool {
+    let Some(hex) = s.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+}
+
+#[cfg(test)]
+mod anchor_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn anchor_frontier_rejects_event_id_form() {
+        let entries = vec!["cx:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        let err = validate_anchor_frontier_entries(&entries).unwrap_err();
+        assert_eq!(err.0, ErrorCode::SchemaViolation);
+    }
+
+    #[test]
+    fn anchor_frontier_accepts_sha256() {
+        let entries = vec![format!("sha256:{}", "a".repeat(64))];
+        validate_anchor_frontier_entries(&entries).unwrap();
     }
 }
 

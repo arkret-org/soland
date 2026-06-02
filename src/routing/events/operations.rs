@@ -571,11 +571,11 @@ pub fn validate_operation_semantics(
         let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
             return Err("unregistered operation kind");
         };
-        // Round 4 (B1.13 / B1.14) — typed payload validators for the
+        // Spec B1.13 / B1.14 — typed payload validators for the
         // new wire-broken shapes. These run BEFORE the per-kind schema
         // check so a legacy `target_ref` payload is rejected with the
-        // round-4 reason rather than the generic SDK schema error.
-        round4_validate_payload(kind, operation)?;
+        // typed-shape reason rather than the generic SDK schema error.
+        validate_typed_payload_shapes(kind, operation)?;
         validate_reaction_target_kind(kind, operation)?;
         if let Some(schema) = operation_schema_for_kind(kind) {
             validate_operation_schema(operation, schema)?;
@@ -618,15 +618,15 @@ fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<()
     }
 }
 
-/// Round 4 (B1.13 / B1.14 / B1.15) — typed payload validators dispatched
-/// on the canonical event kind. Hooks the SDK round-4 typed payload
-/// shapes (SpaceStateTransition / SpaceObjectTombstone / ConsentRevoke)
-/// into the soland operation admission pipeline.
+/// Spec B1.13 / B1.14 / B1.15 — typed payload validators dispatched on the
+/// canonical event kind. Hooks the SDK typed payload shapes
+/// (SpaceStateTransition / SpaceObjectTombstone / ConsentRevoke) into the
+/// soland operation admission pipeline.
 ///
 /// For the space lifecycle events the SDK's typed payload requires
 /// `space_id` + `new_state`. The validator here HARD-REJECTS the
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
-fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'static str> {
+fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
         // cx.space.archive / cx.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
@@ -660,10 +660,10 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
             {
                 return Ok(());
             }
-            crate::round4::validate_consent_revoke_payload(&operation.payload)
+            validate_consent_revoke_payload(&operation.payload)
                 .map(|_| ())
                 .or_else(|_| validate_observed_dots_payload(operation))
-                .map_err(|_| "cx.consent.revoke payload violates round-4 observed_dots requirement")
+                .map_err(|_| "cx.consent.revoke payload violates observed_dots requirement")
         }
         // cx.cross_signing.publish — round 4 CAS-register cell with
         // required `expected_previous_generation`. The reducer accepts
@@ -701,10 +701,10 @@ fn round4_validate_payload(kind: &str, operation: &Operation) -> Result<(), &'st
         // `cx:applet:<uuidv7>` typed id.
         "cx.applet.protocol_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
-                crate::round4::validate_applet_id(applet_id)
+                validate_applet_id(applet_id)
                     .map(|_| ())
                     .map_err(
-                        |_| "applet_id must be a DID or cx:applet:<uuidv7> (round-4 wire break)",
+                        |_| "applet_id must be a DID or cx:applet:<uuidv7> (typed-id wire break)",
                     )?;
             }
             Ok(())
@@ -4032,5 +4032,234 @@ mod reaction_and_window_policy_tests {
             operation_policy_reason_code("some other policy failure").1,
             "capability_denied"
         );
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Typed wire-payload validators + cell-subject helpers (spec B1.10/B1.11/
+// B1.14/B1.15/B1.17).
+// ════════════════════════════════════════════════════════════════════════
+
+/// Spec B1.14 — validate a `cx.consent.revoke` payload. Empty or missing
+/// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
+/// forbidden.
+pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
+    let parsed: contrix_sdk::ConsentRevokePayload = serde_json::from_value(payload.clone())
+        .map_err(|err| {
+            (
+                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                format!("cx.consent.revoke payload shape is invalid: {err}"),
+            )
+        })?;
+    parsed.validate_minimal().map_err(|err| {
+        (
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            format!("cx.consent.revoke payload invariant violation: {err}"),
+        )
+    })?;
+    Ok(())
+}
+
+/// Spec B1.10 — CAS check for `cx.cross_signing.publish`. The reducer
+/// accepts the publish only when:
+///
+/// - `expected_previous_generation == current_generation`, AND
+/// - `new_generation == current_generation + 1`.
+///
+/// The cell_subject for the CAS-register cell is the tuple
+/// `(principal_id, expected_previous_generation)`; producers and consumers
+/// MUST use [`publish_cell_subject`] to keep the canonical form aligned.
+pub fn cross_signing_publish_cas_check(
+    current_generation: u64,
+    expected_previous_generation: u64,
+    new_generation: u64,
+) -> Result<(), (&'static str, String)> {
+    if expected_previous_generation != current_generation {
+        return Err((
+            "cas_conflict",
+            format!(
+                "cross_signing.publish expected_previous_generation={expected_previous_generation} \
+                 does not match current_generation={current_generation}"
+            ),
+        ));
+    }
+    if new_generation != current_generation.saturating_add(1) {
+        return Err((
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            format!(
+                "cross_signing.publish new_generation={new_generation} must equal \
+                 current_generation+1 ({})",
+                current_generation.saturating_add(1)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Spec B1.10 — build the CAS-register cell_subject string for
+/// `cx.cross_signing.publish`. Delegates to the SDK helper.
+pub fn publish_cell_subject(principal_id: &contrix_sdk::Did, expected_previous_generation: u64) -> String {
+    contrix_sdk::cross_signing_publish_cell_subject(principal_id, expected_previous_generation)
+}
+
+/// Spec B1.11 — request body for `/api/v1/blob/presign`. The `realm_id`
+/// field is REQUIRED for Realm-owned blobs. For deployment-owned
+/// (anonymous) blobs the field may be omitted; the matching metadata
+/// lookup is the only authoritative check.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlobPresignRequest {
+    pub blob_ref: String,
+    pub purpose: String,
+    /// REQUIRED when the blob's metadata declares a realm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+}
+
+/// Spec B1.11 — verify the request `realm_id` matches the blob metadata's
+/// `realm_id`. Returns `Ok(())` on match (or when the blob has no realm
+/// binding); returns `Err((code, msg))` on mismatch.
+pub fn verify_blob_presign_realm_binding(
+    request_realm_id: Option<&str>,
+    blob_metadata_realm_id: Option<&str>,
+) -> Result<(), (&'static str, String)> {
+    match (request_realm_id, blob_metadata_realm_id) {
+        (None, None) => Ok(()),
+        (Some(req), Some(meta)) if req == meta => Ok(()),
+        (None, Some(meta)) => Err((
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            format!("/blob/presign request MUST carry realm_id={meta:?} for Realm-owned blob"),
+        )),
+        (Some(req), None) => Err((
+            "capability_denied",
+            format!("/blob/presign request carries realm_id={req:?} but blob has no realm binding"),
+        )),
+        (Some(req), Some(meta)) => Err((
+            "capability_denied",
+            format!(
+                "/blob/presign request realm_id={req:?} does not match blob metadata realm_id={meta:?}"
+            ),
+        )),
+    }
+}
+
+/// Spec B1.15 — cell_subject for `cx.flow.update`. The cell family is
+/// `cx.component.flow.metadata.v1` with CAS-register semantics and
+/// `bottom=reject`. The subject is the flow_id.
+pub fn flow_update_subject(flow_id: &contrix_sdk::FlowId) -> String {
+    contrix_sdk::flow_update_cell_subject(flow_id)
+}
+
+/// Spec B1.15 — cell_subject for `cx.flow.tracks_patch`. Same cell family
+/// as `cx.flow.update` — they compete via CAS.
+pub fn flow_tracks_patch_subject(flow_id: &contrix_sdk::FlowId) -> String {
+    contrix_sdk::flow_tracks_patch_cell_subject(flow_id)
+}
+
+/// Spec B1.17 — accept an `agent_id` value. Must be a DID
+/// (`did:webvh:...` etc.). Returns the typed DID on success.
+pub fn validate_agent_id(value: &str) -> Result<contrix_sdk::Did, (&'static str, String)> {
+    contrix_sdk::Did::new(value.to_owned()).map_err(|err| {
+        (
+            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            format!("agent_id must be a DID: {err}"),
+        )
+    })
+}
+
+/// Spec B1.17 — accept an `applet_id` value. Must be either a DID or a
+/// strictly-validated `cx:applet:<uuidv7>` typed id. Returns the typed
+/// wrapper on success.
+pub fn validate_applet_id(
+    value: &str,
+) -> Result<contrix_sdk::AppletIdentifier, (&'static str, String)> {
+    // The SDK's `AppletIdentifier` is `enum { Did(Did), Cx(AppletId) }`.
+    // We attempt the DID form first (covers `did:webvh:applet.example`
+    // and similar), then fall back to the typed `cx:applet:` form.
+    if let Ok(did) = contrix_sdk::Did::new(value.to_owned()) {
+        return Ok(contrix_sdk::AppletIdentifier::Did(did));
+    }
+    if let Ok(applet) = contrix_sdk::AppletId::new(value.to_owned()) {
+        return Ok(contrix_sdk::AppletIdentifier::Cx(applet));
+    }
+    Err((
+        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+        format!("applet_id must be a DID or cx:applet:<uuidv7>: got {value:?}"),
+    ))
+}
+
+#[cfg(test)]
+mod wire_payload_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn consent_revoke_empty_observed_dots_rejected() {
+        let err = validate_consent_revoke_payload(&json!({
+            "consent_id": "cid",
+            "peer": "did:web:bob.example",
+            "scope": "invite",
+            "observed_dots": [],
+        }))
+        .unwrap_err();
+        assert_eq!(err.0, contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    }
+
+    #[test]
+    fn consent_revoke_accepts_non_empty_observed_dots() {
+        validate_consent_revoke_payload(&json!({
+            "consent_id": "cid",
+            "peer": "did:web:bob.example",
+            "scope": "invite",
+            "observed_dots": [
+                {"actor_id": "did:web:alice.example", "actor_seq": 1}
+            ],
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn cross_signing_publish_cas_check_requires_exact_increment() {
+        cross_signing_publish_cas_check(5, 5, 6).unwrap();
+        // Wrong previous → cas_conflict.
+        assert!(cross_signing_publish_cas_check(5, 4, 6).is_err());
+        // Wrong new (skip) → schema_violation.
+        assert!(cross_signing_publish_cas_check(5, 5, 7).is_err());
+        // Same generation → schema_violation.
+        assert!(cross_signing_publish_cas_check(5, 5, 5).is_err());
+    }
+
+    #[test]
+    fn blob_presign_realm_binding_mismatch_rejects() {
+        verify_blob_presign_realm_binding(None, None).unwrap();
+        verify_blob_presign_realm_binding(Some("cx:realm:abc"), Some("cx:realm:abc")).unwrap();
+        // Blob has realm, request doesn't → schema_violation.
+        assert!(verify_blob_presign_realm_binding(None, Some("cx:realm:abc")).is_err());
+        // Blob has realm but mismatched → capability_denied.
+        let err = verify_blob_presign_realm_binding(Some("cx:realm:abc"), Some("cx:realm:def"))
+            .unwrap_err();
+        assert_eq!(err.0, "capability_denied");
+    }
+
+    #[test]
+    fn agent_id_must_be_did() {
+        assert!(validate_agent_id("did:web:agent.example").is_ok());
+        // Non-DID must reject.
+        assert!(validate_agent_id("cx:agent:01904100-0000-7000-8000-000000000001").is_err());
+    }
+
+    #[test]
+    fn applet_id_accepts_did_or_cx_form() {
+        assert!(validate_applet_id("did:web:applet.example").is_ok());
+        assert!(validate_applet_id("cx:applet:01904100-0000-7000-8000-000000000001").is_ok());
+        assert!(validate_applet_id("not-a-valid-id").is_err());
+    }
+
+    #[test]
+    fn flow_cell_subject_helpers_return_flow_id() {
+        let flow =
+            contrix_sdk::FlowId::new("cx:flow:01904100-0000-7000-8000-000000000001").unwrap();
+        assert_eq!(flow_update_subject(&flow), flow.as_str());
+        assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
     }
 }

@@ -529,7 +529,7 @@ async fn events_frontier(
     // variants. The legacy single-shape response is wire-broken. We parse
     // via the SDK helper so unknown values surface as invalid_param.
     let peer_role_raw = query_param(req, "peer_role");
-    let peer_role = match crate::round4::parse_peer_role(peer_role_raw.as_deref()) {
+    let peer_role = match super::frontier::parse_peer_role(peer_role_raw.as_deref()) {
         Ok(pr) => pr,
         Err(msg) => {
             return Err(AppError::invalid_param(msg));
@@ -597,19 +597,19 @@ async fn events_frontier(
             .and_then(Value::as_str)
             .map(|event_id| (realm.clone(), vec![event_id.to_owned()]))
     });
-    let typed_realm_frontier = crate::round4::typed_realm_frontier(latest_realm_event_ids);
-    let typed_actor_bounds = crate::round4::typed_actor_upper_bounds(actor_frontier.clone());
+    let typed_realm_frontier = super::frontier::typed_realm_frontier(latest_realm_event_ids);
+    let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let generated_at = now();
     let selected_realm_id = realm_selector
         .as_deref()
         .and_then(|value| RealmId::new(value.to_owned()).ok());
-    let frontier_root = crate::round4::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
+    let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
     let federation_signature = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer)
     {
         let signing_key = state.anchorer_signing_key();
         Some(
-            crate::round4::sign_frontier_root(
+            super::frontier::sign_frontier_root(
                 &service_did,
                 selected_realm_id.as_ref(),
                 generated_at,
@@ -626,13 +626,13 @@ async fn events_frontier(
             RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000".to_owned())
                 .expect("built-in fallback realm id is valid")
         });
-        let service_binding_ref = crate::round4::frontier_service_binding_ref(
+        let service_binding_ref = super::frontier::frontier_service_binding_ref(
             &binding_realm,
             &typed_realm_frontier,
             &typed_actor_bounds,
         )
         .map_err(|error| AppError::internal(format!("frontier service binding: {error}")))?;
-        Some(crate::round4::FederationFrontierBinding {
+        Some(super::frontier::FederationFrontierBinding {
             service_binding_ref,
             frontier_root: frontier_root.clone(),
             receipts: Vec::new(),
@@ -641,7 +641,7 @@ async fn events_frontier(
     } else {
         None
     };
-    let typed_response = crate::round4::build_typed_frontier_response(
+    let typed_response = super::frontier::build_typed_frontier_response(
         peer_role,
         &service_did,
         typed_realm_frontier,
@@ -873,7 +873,7 @@ async fn submit_federation_events(
         }
     }
 
-    let trust_headers = match crate::round4::FederationTrustHeaders::from_salvo_request(req) {
+    let trust_headers = match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req) {
         Ok(headers) => headers,
         Err(violation) => {
             render_error(
@@ -946,7 +946,7 @@ async fn submit_federation_events(
         }
     };
     if let Err((code, message)) =
-        crate::round4::EventsSubmitRequest::validate_federation_binding(&submit)
+        EventsSubmitRequest::validate_federation_binding(&submit)
     {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
@@ -1500,7 +1500,7 @@ async fn validate_event_envelope(
     // kinds at the submit entrypoint. Aggressive mode: no compat path —
     // pre-Round-R2/R3 senders MUST switch to cx.schema.ephemeral_envelope.v1
     // (broadcast forms) or cx.schema.device_message.v1 (cx.key.verification.*).
-    if let Some((code, reason)) = crate::round23::events_submit_pre_admit_check(&kind) {
+    if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
             error_http_status(code),
             code.as_str(),
@@ -1617,7 +1617,7 @@ async fn validate_event_envelope(
         .lock()
         .map(|proj| proj.space_is_in_terminal_state(&realm_id))
         .unwrap_or(false);
-    if let Some((code, reason)) = crate::round23::terminal_realm_check(realm_terminal, &kind) {
+    if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
             error_http_status(code),
             code.as_str(),
@@ -1676,7 +1676,7 @@ async fn validate_event_envelope(
     // the registered `cross_domain_replay_rejected` (409) code.
     if kind == "cx.cross_signing.reset" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-        if let Err((code, reason)) = crate::round23::cross_signing_reset_replay_check(
+        if let Err((code, reason)) = cross_signing_reset_replay_check(
             &payload,
             &event_id,
             &state.config.trust_domain,
@@ -1717,7 +1717,7 @@ async fn validate_event_envelope(
             projected_media_plaintext_service_present(state, &realm_id, &payload).await;
         let mls_governance_binding_covers_policy_root =
             projected_mls_governance_binding_covers_policy_root(state, &realm_id, &payload);
-        if let Err((code, reason)) = crate::round23::realm_policy_components_check(
+        if let Err((code, reason)) = realm_policy_components_check(
             &payload,
             &active_profiles,
             media_plaintext_service_present,
@@ -1744,7 +1744,9 @@ async fn validate_event_envelope(
             .iter()
             .filter_map(|v| v.as_str().map(ToOwned::to_owned))
             .collect();
-        if let Err((code, reason)) = crate::round23::validate_anchor_frontier_entries(&entries) {
+        if let Err((code, reason)) =
+            crate::routing::federation::move_anchor::validate_anchor_frontier_entries(&entries)
+        {
             return Err(event_validation_error(
                 error_http_status(code),
                 code.as_str(),
@@ -4006,6 +4008,429 @@ pub async fn effective_read_receipt_policy_for_space(
         .and_then(Value::as_bool)
         .unwrap_or(true);
     Some((disclosure, visibility, scope_overrides_allowed))
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// events.submit discriminated request + admission gates
+// (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
+// ════════════════════════════════════════════════════════════════════════
+
+/// Spec B1.6 — discriminated `/api/v1/events` POST body. Single is the
+/// pre-existing canonical Event Envelope; batch and federation are the new
+/// typed shapes.
+///
+/// Wire-breaking: producers MUST use spec `events[]`; producers that
+/// include the `service_binding_ref` are routed to [`Self::Federation`].
+/// Client-account writes omit `service_binding_ref`; federation writes are
+/// gated by federation authentication.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum EventsSubmitRequest {
+    /// Federation form — `service_binding_ref` is REQUIRED and all 6
+    /// fields validated.
+    Federation(EventsSubmitFederationRequest),
+    /// Batch form — multiple envelopes, optional `idempotency_key`.
+    Batch(contrix_sdk::EventsSubmitBatchRequest),
+    /// Single Event Envelope (legacy / dominant shape).
+    Single(Value),
+}
+
+impl EventsSubmitRequest {
+    /// Classify an incoming JSON body without consuming it. Returns the
+    /// discriminator name for tracing / metrics.
+    pub fn shape(body: &Value) -> &'static str {
+        if body.get("service_binding_ref").is_some() {
+            "federation"
+        } else if body.get("events").is_some() {
+            "batch"
+        } else {
+            "single"
+        }
+    }
+
+    /// Spec B1.6 — validate the `service_binding_ref` carried on a
+    /// federation submit. All 6 fields MUST be populated and well-shaped
+    /// per SDK typed validators (already enforced by deserialisation); we
+    /// additionally reject `membership_frontier` and
+    /// `delivery_binding_frontier` if they are non-empty arrays containing
+    /// duplicates.
+    pub fn validate_federation_binding(
+        req: &EventsSubmitFederationRequest,
+    ) -> Result<(), (&'static str, String)> {
+        let binding = &req.service_binding_ref;
+        for (name, frontier) in [
+            ("membership_frontier", &binding.membership_frontier),
+            (
+                "delivery_binding_frontier",
+                &binding.delivery_binding_frontier,
+            ),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for entry in frontier {
+                if !seen.insert(entry.as_str()) {
+                    return Err((
+                        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                        format!("{name} contains duplicate entry {:?}", entry.as_str()),
+                    ));
+                }
+            }
+        }
+        if binding.destination_service_type.trim().is_empty() {
+            return Err((
+                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                "service_binding_ref.destination_service_type MUST be a non-empty string"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Reject any event kind that is ephemeral or receipt-object-only at the
+/// `cx.events.submit` entrypoint. Spec T02 + T23.
+///
+/// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
+/// rejected; returns `None` when the kind is fine to forward to the
+/// existing durable-event validator pipeline.
+pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
+    if contrix_sdk::events::is_ephemeral_kind(kind) {
+        return Some((
+            ErrorCode::SchemaViolation,
+            "ephemeral kind MUST be carried via cx.schema.ephemeral_envelope.v1 \
+             (broadcast forms) or cx.schema.device_message.v1 \
+             (cx.key.verification.* to-device); not durable cx.events.submit",
+        ));
+    }
+    if contrix_sdk::events::is_receipt_object_only(kind) {
+        return Some((
+            ErrorCode::SchemaViolation,
+            "cx.event_batch_receipt is a receipt object only; \
+             never accepted as Event.kind",
+        ));
+    }
+    None
+}
+
+/// Reject any non-audit-class write on a Realm whose lifecycle state is
+/// terminal (`cx.realm.tombstone` or `cx.realm.destroy` applied). Spec T07.
+///
+/// Returns `Some((ErrorCode::RealmTerminalState, reason))` when the write
+/// MUST be rejected; `None` otherwise.
+pub fn terminal_realm_check(
+    realm_in_terminal_state: bool,
+    kind: &str,
+) -> Option<(ErrorCode, &'static str)> {
+    if realm_in_terminal_state && !crate::kinds::is_audit_kind(kind) {
+        return Some((
+            ErrorCode::RealmTerminalState,
+            "Realm has reached cx.realm.tombstone or cx.realm.destroy \
+             terminal state; only audit-class events are accepted",
+        ));
+    }
+    None
+}
+
+/// `cx.cross_signing.reset` payload trust-domain & reset_event_id check.
+/// Spec T08.
+///
+/// Verification order MUST be:
+/// 1. `payload.trust_domain` equals server's configured trust_domain (else `cross_domain_replay_rejected`)
+/// 2. `payload.reset_event_id` equals the enclosing Event's id (else `reset_event_id_mismatch`)
+/// 3. signature check (existing path; not implemented here)
+pub fn cross_signing_reset_replay_check(
+    payload: &Value,
+    event_id: &str,
+    server_trust_domain: &str,
+) -> Result<(), (ErrorCode, String)> {
+    let payload_td = payload
+        .get("trust_domain")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            (
+                ErrorCode::SchemaViolation,
+                "cross_signing.reset payload missing required `trust_domain` \
+                 field (wire-breaking)"
+                    .to_owned(),
+            )
+        })?;
+    if TypedTrustDomainId::new(payload_td).is_err() {
+        return Err((
+            ErrorCode::SchemaViolation,
+            "cross_signing.reset.trust_domain must match \
+             cx:trust_domain:<scope> per spec"
+                .to_owned(),
+        ));
+    }
+    if payload_td != server_trust_domain {
+        return Err((
+            ErrorCode::CrossDomainReplayRejected,
+            "cross_signing.reset.trust_domain does not match this \
+             Principal Server's configured trust_domain"
+                .to_owned(),
+        ));
+    }
+    let payload_reset_event_id = payload
+        .get("reset_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            (
+                ErrorCode::SchemaViolation,
+                "cross_signing.reset payload missing required \
+                     `reset_event_id` field (wire-breaking)"
+                    .to_owned(),
+            )
+        })?;
+    if contrix_sdk::EventId::new(payload_reset_event_id).is_err() {
+        return Err((
+            ErrorCode::SchemaViolation,
+            "cross_signing.reset.reset_event_id must be a cx:event:<uuidv7>".to_owned(),
+        ));
+    }
+    if payload_reset_event_id != event_id {
+        return Err((
+            ErrorCode::ResetEventIdMismatch,
+            "cross_signing.reset.reset_event_id must equal the enclosing \
+             Event.event_id"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a `cx.realm.policy_components` payload. Spec T09 + T12.
+///
+/// Checks (in order):
+/// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
+/// 2. `cx.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
+/// 3. When `media_service_decrypts=true`, all governance bindings are present (T12).
+pub fn realm_policy_components_check(
+    payload: &Value,
+    active_profiles: &[String],
+    media_plaintext_service_present: bool,
+    mls_governance_binding_covers_policy_root: bool,
+) -> Result<(), (ErrorCode, String)> {
+    // (1) T09 — relaxed_window_max_ms ceiling.
+    if let Some(window) = payload
+        .pointer("/e2ee_relaxed/relaxed_window_max_ms")
+        .and_then(Value::as_u64)
+    {
+        let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
+        if contrix_sdk::validate_relaxed_window_ms(window_u32).is_err() {
+            return Err((
+                ErrorCode::RelaxedWindowExceedsCeiling,
+                format!(
+                    "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
+                     hard ceiling of {}ms",
+                    contrix_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                ),
+            ));
+        }
+    }
+
+    // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
+    let relaxed_active = active_profiles
+        .iter()
+        .any(|p| p == "cx.profile.e2ee_relaxed.v1")
+        || payload
+            .pointer("/e2ee_relaxed/profile")
+            .and_then(Value::as_str)
+            == Some("cx.profile.e2ee_relaxed.v1");
+    let compliance_active = active_profiles
+        .iter()
+        .any(|p| crate::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
+    if relaxed_active && compliance_active {
+        return Err((
+            ErrorCode::E2eeRelaxedDisallowedInComplianceProfile,
+            "cx.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
+             compliance profiles (attested_audit.e2ee.v1 / \
+             disclosed_audit.e2ee.v1)"
+                .to_owned(),
+        ));
+    }
+
+    // (3) T12 — media_service_decrypts triple binding.
+    if payload
+        .get("media_service_decrypts")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        if !media_plaintext_service_present {
+            return Err((
+                ErrorCode::MediaPlaintextServiceNotAuthorised,
+                "media_service_decrypts=true requires the SFU/MCU service DID \
+                 to be listed in plaintext_visible_services[] with \
+                 purpose=media_plaintext"
+                    .to_owned(),
+            ));
+        }
+        if !mls_governance_binding_covers_policy_root {
+            return Err((
+                ErrorCode::MlsGovernanceBindingStale,
+                "media_service_decrypts=true requires the current MLS epoch \
+                 governance binding's policy_root to cover the active media \
+                 plaintext policy"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn ephemeral_kind_rejected_at_submit_entry() {
+        for kind in [
+            "cx.call.signal",
+            "cx.presence",
+            "cx.typing",
+            "cx.receipt.read",
+            "cx.key.verification.start",
+            "cx.key.verification.accept",
+            "cx.key.verification.mac",
+        ] {
+            let result = events_submit_pre_admit_check(kind);
+            assert!(
+                matches!(result, Some((ErrorCode::SchemaViolation, _))),
+                "ephemeral kind {kind} must be rejected by submit entry"
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_object_kind_rejected_at_submit_entry() {
+        assert!(matches!(
+            events_submit_pre_admit_check("cx.event_batch_receipt"),
+            Some((ErrorCode::SchemaViolation, _))
+        ));
+    }
+
+    #[test]
+    fn durable_kind_passes_submit_entry() {
+        assert!(events_submit_pre_admit_check("cx.message.create").is_none());
+        assert!(events_submit_pre_admit_check("cx.realm.create").is_none());
+    }
+
+    #[test]
+    fn terminal_realm_blocks_non_audit_kind() {
+        let blocked = terminal_realm_check(true, "cx.message.create");
+        assert!(matches!(blocked, Some((ErrorCode::RealmTerminalState, _))));
+        let audit_ok = terminal_realm_check(true, "cx.audit.accessed");
+        assert!(audit_ok.is_none());
+        let live_ok = terminal_realm_check(false, "cx.message.create");
+        assert!(live_ok.is_none());
+    }
+
+    #[test]
+    fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
+        let payload = json!({
+            "trust_domain": "cx:trust_domain:other.example",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+        });
+        let err = cross_signing_reset_replay_check(
+            &payload,
+            "cx:event:01904100-0000-7000-8000-000000000001",
+            "cx:trust_domain:soland.local",
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ErrorCode::CrossDomainReplayRejected);
+    }
+
+    #[test]
+    fn cross_signing_reset_replay_rejects_wrong_event_id() {
+        let payload = json!({
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000002",
+        });
+        let err = cross_signing_reset_replay_check(
+            &payload,
+            "cx:event:01904100-0000-7000-8000-000000000001",
+            "cx:trust_domain:soland.local",
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ErrorCode::ResetEventIdMismatch);
+    }
+
+    #[test]
+    fn cross_signing_reset_replay_passes_when_matched() {
+        let payload = json!({
+            "trust_domain": "cx:trust_domain:soland.local",
+            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+        });
+        cross_signing_reset_replay_check(
+            &payload,
+            "cx:event:01904100-0000-7000-8000-000000000001",
+            "cx:trust_domain:soland.local",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn realm_policy_components_relaxed_window_ceiling() {
+        let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
+        let err = realm_policy_components_check(&payload, &[], false, false).unwrap_err();
+        assert_eq!(err.0, ErrorCode::RelaxedWindowExceedsCeiling);
+    }
+
+    #[test]
+    fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
+        let payload = json!({"e2ee_relaxed": {"profile": "cx.profile.e2ee_relaxed.v1"}});
+        let err = realm_policy_components_check(
+            &payload,
+            &["cx.profile.attested_audit.e2ee.v1".to_owned()],
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ErrorCode::E2eeRelaxedDisallowedInComplianceProfile);
+    }
+
+    #[test]
+    fn realm_policy_components_media_plaintext_triple_binding() {
+        let payload = json!({"media_service_decrypts": true});
+        let err = realm_policy_components_check(&payload, &[], false, true).unwrap_err();
+        assert_eq!(err.0, ErrorCode::MediaPlaintextServiceNotAuthorised);
+        let err2 = realm_policy_components_check(&payload, &[], true, false).unwrap_err();
+        assert_eq!(err2.0, ErrorCode::MlsGovernanceBindingStale);
+        realm_policy_components_check(&payload, &[], true, true).unwrap();
+    }
+
+    #[test]
+    fn events_submit_shape_classifies_three_forms() {
+        let single = json!({"event_id": "x"});
+        let batch = json!({"events": []});
+        let federation = json!({"events": [], "service_binding_ref": {"realm_id": "x"}});
+        assert_eq!(EventsSubmitRequest::shape(&single), "single");
+        assert_eq!(EventsSubmitRequest::shape(&batch), "batch");
+        assert_eq!(EventsSubmitRequest::shape(&federation), "federation");
+    }
+
+    #[test]
+    fn federation_binding_rejects_duplicate_frontier_entries() {
+        let req = EventsSubmitFederationRequest {
+            service_binding_ref: contrix_sdk::FederationServiceBindingRef {
+                realm_id: RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                space_policy_hash: contrix_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+                    .unwrap(),
+                membership_frontier: vec![
+                    contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001")
+                        .unwrap(),
+                    contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001")
+                        .unwrap(),
+                ],
+                delivery_binding_frontier: Vec::new(),
+                destination_service_type: "principal_server".to_owned(),
+                reducer_profile_digest: contrix_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
+                    .unwrap(),
+            },
+            events: Vec::new(),
+            idempotency_key: None,
+        };
+        let err = EventsSubmitRequest::validate_federation_binding(&req).unwrap_err();
+        assert_eq!(err.0, contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    }
 }
 
 #[cfg(test)]

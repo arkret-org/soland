@@ -188,7 +188,7 @@ pub fn is_valid_sync_token(token: &str) -> bool {
             .get("x")
             .and_then(|x| x.as_i64())
             .is_some_and(|x| x > 0)
-        && crate::round23::validate_cursor_handle(handle).is_ok()
+        && crate::routing::events::sync::validate_cursor_handle(handle).is_ok()
 }
 
 /// `sha256:<64 lowercase hex>` shape.

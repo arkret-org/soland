@@ -24,7 +24,7 @@ use super::{
     is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
     space_allows_plaintext_service, space_has_member, validate_space_id,
 };
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, BlobRecord, SessionRecord};
 
@@ -341,9 +341,9 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 .as_ref()
                 .map(|session| session.actor.as_str())
                 .unwrap_or("presigned");
-            if let Some(block) = crate::round23::classify_presign_blob_block(&blob_value, actor) {
+            if let Some(block) = classify_presign_blob_block(&blob_value, actor) {
                 let direct_member_e2ee_download =
-                    session.is_some() && matches!(block, crate::round23::PresignBlobBlock::E2ee);
+                    session.is_some() && matches!(block, PresignBlobBlock::E2ee);
                 if !direct_member_e2ee_download {
                     let (code, reason) = block.as_error();
                     render_error(
@@ -358,11 +358,11 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             // Response headers per T11.
             res.headers_mut().insert(
                 salvo::http::header::CACHE_CONTROL,
-                crate::round23::PRESIGN_CACHE_CONTROL.parse().unwrap(),
+                PRESIGN_CACHE_CONTROL.parse().unwrap(),
             );
             res.headers_mut().insert(
                 salvo::http::header::REFERRER_POLICY,
-                crate::round23::PRESIGN_REFERRER_POLICY.parse().unwrap(),
+                PRESIGN_REFERRER_POLICY.parse().unwrap(),
             );
             let total_len = match usize::try_from(blob.size_bytes) {
                 Ok(total_len) => total_len,
@@ -522,7 +522,7 @@ async fn blob_presign(
         return Err(AppError::not_found("blob not found"));
     }
     let blob_value = presign_blob_policy_value(&blob);
-    if let Some(block) = crate::round23::classify_presign_blob_block(&blob_value, &session.actor) {
+    if let Some(block) = classify_presign_blob_block(&blob_value, &session.actor) {
         let (code, reason) = block.as_error();
         return Err(AppError::new(code, reason));
     }
@@ -545,8 +545,8 @@ async fn blob_presign(
         "url": url,
         "method": "GET",
         "expires_at": expires_at.to_rfc3339(),
-        "cache_control": crate::round23::PRESIGN_CACHE_CONTROL,
-        "referrer_policy": crate::round23::PRESIGN_REFERRER_POLICY,
+        "cache_control": PRESIGN_CACHE_CONTROL,
+        "referrer_policy": PRESIGN_REFERRER_POLICY,
         "blob_ref": blob_ref,
         "purpose": purpose,
     }))
@@ -876,6 +876,152 @@ async fn blob_visible_to_session(
         return false;
     }
     space_has_member(state, realm_id, &session.actor).await
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Presign blob fail-closed gating (spec T11).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Blob preflight classifier for presign endpoints. Spec T11.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresignBlobBlock {
+    /// Blob payload is end-to-end encrypted; presign would expose key
+    /// material — refuse fail-closed.
+    E2ee,
+    /// Blob is currently subject to a legal hold.
+    LegalHold,
+    /// Blob has been redacted.
+    Redacted,
+    /// Blob is actor_private and the requester is not the owner.
+    ActorPrivate,
+}
+
+impl PresignBlobBlock {
+    pub fn as_error(self) -> (ErrorCode, &'static str) {
+        match self {
+            Self::E2ee => (
+                ErrorCode::CapabilityDenied,
+                "blob is end-to-end encrypted; presign is refused fail-closed",
+            ),
+            Self::LegalHold => (
+                ErrorCode::LegalHoldActive,
+                "blob is currently subject to a legal hold; presign refused",
+            ),
+            Self::Redacted => (
+                ErrorCode::BlobRedacted,
+                "blob has been redacted; presign refused",
+            ),
+            Self::ActorPrivate => (
+                ErrorCode::CapabilityDenied,
+                "blob is actor_private; only the owner may request a presign URL",
+            ),
+        }
+    }
+}
+
+/// Inspect a blob record for any of the four fail-closed classes. Spec T11.
+/// Returns the matching block reason or `None`.
+///
+/// The blob record is taken as a JSON value so this fn stays decoupled
+/// from `crate::state::BlobRecord`; presign callers pass
+/// `serde_json::to_value(&record)` (cheap — BlobRecord is small).
+pub fn classify_presign_blob_block(
+    blob: &Value,
+    requester_actor: &str,
+) -> Option<PresignBlobBlock> {
+    // E2EE: any encryption metadata present.
+    if blob.get("encryption").is_some_and(|v| !v.is_null()) {
+        return Some(PresignBlobBlock::E2ee);
+    }
+    // Legal hold flag.
+    if blob.get("legal_hold").and_then(Value::as_bool) == Some(true) {
+        return Some(PresignBlobBlock::LegalHold);
+    }
+    // Redaction.
+    if blob.get("redacted").and_then(Value::as_bool) == Some(true) {
+        return Some(PresignBlobBlock::Redacted);
+    }
+    // actor_private visibility class.
+    if blob.get("visibility").and_then(Value::as_str) == Some("actor_private") {
+        let owner = blob
+            .get("uploaded_by")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if owner != requester_actor {
+            return Some(PresignBlobBlock::ActorPrivate);
+        }
+    }
+    None
+}
+
+/// Response headers that MUST be set on presign responses. Spec T11.
+///
+/// Per spec: presign URLs are short-lived bearer tokens; intermediaries
+/// MUST NOT cache them and the referring page MUST NOT leak the URL.
+pub const PRESIGN_CACHE_CONTROL: &str = "private, no-store";
+pub const PRESIGN_REFERRER_POLICY: &str = "no-referrer";
+
+/// Scrub a presign URL down to its origin + path for tracing/logging.
+/// Spec T11 — the query string carries the signature and MUST NOT appear
+/// in logs.
+pub fn scrub_presign_url_for_log(url: &str) -> String {
+    match url.split_once('?') {
+        Some((origin_path, _query)) => format!("{origin_path}?<scrubbed>"),
+        None => url.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod presign_block_tests {
+    use super::*;
+
+    #[test]
+    fn presign_blob_e2ee_blocked() {
+        let blob = json!({"encryption": {"alg": "xchacha20poly1305"}, "uploaded_by": "did:web:alice.example"});
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            Some(PresignBlobBlock::E2ee)
+        );
+    }
+
+    #[test]
+    fn presign_blob_legal_hold_blocked() {
+        let blob = json!({"legal_hold": true, "uploaded_by": "did:web:alice.example"});
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            Some(PresignBlobBlock::LegalHold)
+        );
+    }
+
+    #[test]
+    fn presign_blob_redacted_blocked() {
+        let blob = json!({"redacted": true, "uploaded_by": "did:web:alice.example"});
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            Some(PresignBlobBlock::Redacted)
+        );
+    }
+
+    #[test]
+    fn presign_blob_actor_private_blocked_for_non_owner() {
+        let blob = json!({"visibility": "actor_private", "uploaded_by": "did:web:alice.example"});
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:bob.example"),
+            Some(PresignBlobBlock::ActorPrivate)
+        );
+        assert_eq!(
+            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            None
+        );
+    }
+
+    #[test]
+    fn presign_url_scrub_drops_query_string() {
+        let s = scrub_presign_url_for_log("https://s3/x/y?token=xyz&sig=abc");
+        assert!(!s.contains("token=xyz"));
+        assert!(!s.contains("sig=abc"));
+        assert!(s.contains("https://s3/x/y"));
+    }
 }
 
 #[cfg(test)]

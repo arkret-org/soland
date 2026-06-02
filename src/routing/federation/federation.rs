@@ -75,7 +75,7 @@ pub(super) async fn federation_transaction(
     // schema_violation; destination or request-digest mismatch is
     // cross_domain_replay_rejected.
     let trust_headers =
-        crate::round4::FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+        FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
             AppError::new(
                 crate::error::ErrorCode::SchemaViolation,
                 violation.message(),
@@ -86,7 +86,7 @@ pub(super) async fn federation_transaction(
         state.config.trust_domain.clone(),
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
-    validate_round4_federation_headers(&trust_headers, &expected_destination, &content_digest)?;
+    validate_federation_headers(&trust_headers, &expected_destination, &content_digest)?;
     verify_inbound_transaction_http_signature(state, req, &body)?;
     let fragment = trust_headers.transcript_fragment();
     tracing::trace!(transcript_fragment = %fragment, "round-4 federation transcript fragment");
@@ -103,20 +103,23 @@ pub(super) async fn federation_transaction(
     // service verification key that passed the HTTP Message Signature
     // check, so idempotency no longer falls back to placeholder material.
     let origin_key_state_digest = origin_key_state_digest_for_service(state, body.origin.as_str())?;
-    let r4_idem_key = Some(crate::round4::FederationIdempotencyKey {
+    let idem_key = Some(FederationIdempotencyKey {
         source_did: body.origin.to_string(),
         dest_did: body.destination.to_string(),
         request_canonical_digest: trust_headers.request_canonical_digest.as_str().to_owned(),
         idempotency_key: txn_id.clone(),
         origin_key_state_digest,
     });
-    let _service_binding = crate::round23::FederationIdempotencyServiceBinding {
+    let _service_binding = FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
-        verification_method: r4_idem_key.as_ref().expect("round4 key").strict(),
-        service_binding_ref: r4_idem_key.as_ref().expect("round4 key").canonical_replay(),
-        origin_key_state_digest: r4_idem_key
+        verification_method: idem_key.as_ref().expect("federation idempotency key").strict(),
+        service_binding_ref: idem_key
             .as_ref()
-            .expect("round4 key")
+            .expect("federation idempotency key")
+            .canonical_replay(),
+        origin_key_state_digest: idem_key
+            .as_ref()
+            .expect("federation idempotency key")
             .origin_key_state_digest
             .clone(),
     };
@@ -158,7 +161,7 @@ pub(super) async fn federation_transaction(
             // soland doesn't yet persist `origin_key_state_digest` on
             // the federation_transactions row, so for now we only
             // mark when the headers carry an explicit `historical_only`
-            // hint. TODO(round4-historical-key-rotation): persist the
+            // hint. TODO(federation-historical-key-rotation): persist the
             // origin's key state hash on the cached record so a real
             // rotation triggers historical_only automatically.
             let mut response_value = record.response.clone();
@@ -169,7 +172,7 @@ pub(super) async fn federation_transaction(
                 .map(|s| matches!(s, "true" | "1" | "yes"))
                 .unwrap_or(false);
             if request_signals_historical {
-                response_value = crate::round4::mark_response_historical_only(response_value);
+                response_value = mark_response_historical_only(response_value);
             }
             let response: contrix_sdk::FederationTransactionResBody =
                 serde_json::from_value(response_value).map_err(|error| {
@@ -1304,7 +1307,7 @@ pub(super) async fn federation_verify_actor(
         AppError::new(crate::error::ErrorCode::SchemaViolation, message)
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    validate_round4_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
+    validate_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
 
     if state.config.development_mode {
         return json_ok(contrix_sdk::FederationVerifyActorResBody {
@@ -1340,13 +1343,13 @@ pub(super) async fn federation_verify_actor(
     })
 }
 
-fn validate_round4_federation_request_binding(
+fn validate_federation_request_binding(
     trust_domain: &str,
     req: &Request,
     request_hash: &str,
 ) -> Result<(), AppError> {
     let headers =
-        crate::round4::FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+        FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
             AppError::new(
                 crate::error::ErrorCode::SchemaViolation,
                 violation.message(),
@@ -1355,11 +1358,11 @@ fn validate_round4_federation_request_binding(
         })?;
     let expected_destination = contrix_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
-    validate_round4_federation_headers(&headers, &expected_destination, request_hash)
+    validate_federation_headers(&headers, &expected_destination, request_hash)
 }
 
-fn validate_round4_federation_headers(
-    headers: &crate::round4::FederationTrustHeaders,
+fn validate_federation_headers(
+    headers: &FederationTrustHeaders,
     expected_destination: &contrix_sdk::TypedTrustDomainId,
     request_hash: &str,
 ) -> Result<(), AppError> {
@@ -1440,7 +1443,7 @@ fn verify_inbound_federation_http_signature(
     })?;
     let expected_content_digest = content_digest_header(&body_bytes);
     let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
-    validate_round4_federation_request_binding(
+    validate_federation_request_binding(
         &state.config.trust_domain,
         req,
         &expected_request_digest,
@@ -3103,8 +3106,8 @@ mod tests {
         contrix_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
     }
 
-    fn federation_headers(digest: &str) -> crate::round4::FederationTrustHeaders {
-        crate::round4::FederationTrustHeaders {
+    fn federation_headers(digest: &str) -> FederationTrustHeaders {
+        FederationTrustHeaders {
             source_trust_domain: trust_domain("cx:trust_domain:peer.example"),
             destination_trust_domain: trust_domain("cx:trust_domain:soland.local"),
             request_canonical_digest: contrix_sdk::Hash::new(digest.to_owned()).unwrap(),
@@ -3126,7 +3129,7 @@ mod tests {
         let digest = federation_verify_actor_digest(&body).unwrap();
         let headers = federation_headers(&digest);
 
-        validate_round4_federation_headers(
+        validate_federation_headers(
             &headers,
             &trust_domain("cx:trust_domain:soland.local"),
             &digest,
@@ -3140,7 +3143,7 @@ mod tests {
         let digest = federation_verify_actor_digest(&body).unwrap();
         let headers = federation_headers(&format!("sha256:{}", "0".repeat(64)));
 
-        let error = validate_round4_federation_headers(
+        let error = validate_federation_headers(
             &headers,
             &trust_domain("cx:trust_domain:soland.local"),
             &digest,
@@ -3160,7 +3163,7 @@ mod tests {
         let digest = federation_verify_actor_digest(&body).unwrap();
         let headers = federation_headers(&digest);
 
-        let error = validate_round4_federation_headers(
+        let error = validate_federation_headers(
             &headers,
             &trust_domain("cx:trust_domain:other.example"),
             &digest,
@@ -3584,5 +3587,267 @@ mod tests {
         );
         assert_eq!(after.response["retry"]["status"], "retry_scheduled");
         assert!(after.response["per_peer_state"]["next_retry_at"].is_string());
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Federation S2S trust-domain headers, idempotency cache key, delivery
+// binding handover (spec B1.7 / B1.8 / B1.9 / T14).
+// ════════════════════════════════════════════════════════════════════════
+
+/// Spec B1.7 — the three federation trust-domain headers that MUST appear
+/// on every inbound federation request.
+#[derive(Debug, Clone)]
+pub(crate) struct FederationTrustHeaders {
+    pub source_trust_domain: contrix_sdk::TypedTrustDomainId,
+    pub destination_trust_domain: contrix_sdk::TypedTrustDomainId,
+    pub request_canonical_digest: contrix_sdk::Hash,
+}
+
+impl FederationTrustHeaders {
+    /// Spec B1.7 — extract + validate the three headers from a salvo
+    /// `Request`. Returns the typed triple on success or a
+    /// [`HeaderViolation`] on the first missing / malformed header.
+    pub(crate) fn from_salvo_request(
+        req: &salvo::http::Request,
+    ) -> Result<Self, HeaderViolation> {
+        let header_value = |name: &str| -> Result<&str, HeaderViolation> {
+            let value = req
+                .headers()
+                .get(name)
+                .ok_or_else(|| HeaderViolation::Missing(name.to_owned()))?;
+            value
+                .to_str()
+                .map_err(|_| HeaderViolation::Malformed(name.to_owned()))
+        };
+        let source = header_value(contrix_sdk::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
+        let destination = header_value(contrix_sdk::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
+        let canonical_hash = header_value(contrix_sdk::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
+        let source = contrix_sdk::TypedTrustDomainId::new(source).map_err(|_| {
+            HeaderViolation::Malformed(contrix_sdk::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
+        })?;
+        let destination = contrix_sdk::TypedTrustDomainId::new(destination).map_err(|_| {
+            HeaderViolation::Malformed(contrix_sdk::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
+        })?;
+        let canonical_hash = contrix_sdk::Hash::new(canonical_hash).map_err(|_| {
+            HeaderViolation::Malformed(contrix_sdk::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
+        })?;
+        Ok(Self {
+            source_trust_domain: source,
+            destination_trust_domain: destination,
+            request_canonical_digest: canonical_hash,
+        })
+    }
+
+    /// Spec B1.7 — verify the inbound `destination_trust_domain` matches
+    /// the receiver's configured trust domain. Mismatch →
+    /// `cross_domain_replay_rejected`.
+    pub(crate) fn verify_destination(
+        &self,
+        expected: &contrix_sdk::TypedTrustDomainId,
+    ) -> Result<(), &'static str> {
+        if self.destination_trust_domain != *expected {
+            return Err(contrix_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED);
+        }
+        Ok(())
+    }
+
+    /// Spec B1.7 — build the canonical signing-transcript fragment for
+    /// inclusion in the message-signature transcript. Delegates to the SDK
+    /// helper to keep producer + consumer byte-for-byte identical.
+    pub(crate) fn transcript_fragment(&self) -> String {
+        contrix_sdk::federation_trust_domain_transcript_fragment(
+            &self.source_trust_domain,
+            &self.destination_trust_domain,
+            &self.request_canonical_digest,
+        )
+    }
+}
+
+/// Spec B1.7 — reasons a federation header check can fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HeaderViolation {
+    Missing(String),
+    Malformed(String),
+}
+
+impl HeaderViolation {
+    pub(crate) fn error_code(&self) -> &'static str {
+        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Missing(name) => format!("required federation header {name} missing"),
+            Self::Malformed(name) => format!("federation header {name} malformed"),
+        }
+    }
+}
+
+/// Spec B1.8 — composite idempotency cache key. The pre-existing key did
+/// NOT incorporate `request_canonical_digest` or `origin_key_state_digest`;
+/// a replay after key revocation could mine fresh side effects. This key
+/// mixes both in so a cache hit requires the key state to be unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct FederationIdempotencyKey {
+    pub source_did: String,
+    pub dest_did: String,
+    pub request_canonical_digest: String,
+    pub idempotency_key: String,
+    pub origin_key_state_digest: String,
+}
+
+impl FederationIdempotencyKey {
+    /// Strict key — equal to a cached entry only when ALL fields match,
+    /// including the origin's current key state hash.
+    pub(crate) fn strict(&self) -> String {
+        let canonical = contrix_sdk::canonical::canonical_json_bytes(&json!({
+            "source_did": self.source_did,
+            "dest_did": self.dest_did,
+            "request_canonical_digest": self.request_canonical_digest,
+            "idempotency_key": self.idempotency_key,
+            "origin_key_state_digest": self.origin_key_state_digest,
+        }))
+        .unwrap_or_default();
+        let digest = Sha256::digest(&canonical);
+        format!("sha256:{:x}", digest)
+    }
+
+    /// Canonical-replay key — drops `origin_key_state_digest`. Used to
+    /// detect a replay AFTER the source service rotated its keys.
+    pub(crate) fn canonical_replay(&self) -> String {
+        let canonical = contrix_sdk::canonical::canonical_json_bytes(&json!({
+            "source_did": self.source_did,
+            "dest_did": self.dest_did,
+            "request_canonical_digest": self.request_canonical_digest,
+            "idempotency_key": self.idempotency_key,
+        }))
+        .unwrap_or_default();
+        let digest = Sha256::digest(&canonical);
+        format!("sha256:{:x}", digest)
+    }
+}
+
+/// Spec T14 — fields added to the federation idempotency cache key so a
+/// replay after key revoke is recognised as a stale historical request
+/// rather than a fresh one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct FederationIdempotencyServiceBinding {
+    pub source_service_did: String,
+    pub verification_method: String,
+    pub service_binding_ref: String,
+    pub origin_key_state_digest: String,
+}
+
+/// Spec T14 — marker set on a cached federation response that is replayed
+/// after the source service rotated its verification key.
+pub(crate) const HISTORICAL_ONLY_MARKER: &str = "historical_only";
+
+/// Spec B1.8 — mark a federation response with
+/// `reason_code=historical_only`. Receivers MUST set this whenever the
+/// cache hit was a canonical-replay (post-key-rotation) rather than a
+/// strict-key hit.
+pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "reason_code".to_owned(),
+            Value::String(contrix_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
+        );
+        object.insert(HISTORICAL_ONLY_MARKER.to_owned(), Value::Bool(true));
+    }
+    response
+}
+
+/// Spec B1.9 — emit-shape for `delivery_binding_stale` (409). Returned
+/// when a peer attempts to push events using a stale delivery binding. The
+/// response carries the new recipient service DID and a frontier the sender
+/// should replay from after re-binding.
+pub(crate) fn delivery_binding_stale_response(
+    new_recipient_service_did: &Did,
+    handover_frontier: &[contrix_sdk::EventId],
+) -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": contrix_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
+            "message": "delivery binding is stale; rebind to the new recipient service",
+            "details": {
+                "new_recipient_service_did": new_recipient_service_did.as_str(),
+                "handover_frontier": handover_frontier
+                    .iter()
+                    .map(|e| e.as_str())
+                    .collect::<Vec<_>>(),
+            }
+        }
+    })
+}
+
+/// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
+/// Returned when the inbound delivery is a duplicate of a binding that has
+/// already been handed over to the new recipient.
+pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": contrix_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
+            "message": "delivery binding has already been handed over to the new recipient",
+            "details": {
+                "new_recipient_service_did": new_recipient_service_did.as_str(),
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod federation_wire_tests {
+    use super::*;
+
+    #[test]
+    fn federation_idempotency_strict_key_changes_with_key_state_digest() {
+        let mut key = FederationIdempotencyKey {
+            source_did: "did:web:alice.example".to_owned(),
+            dest_did: "did:web:bob.example".to_owned(),
+            request_canonical_digest: "sha256:abc".to_owned(),
+            idempotency_key: "idem-1".to_owned(),
+            origin_key_state_digest: "sha256:state-A".to_owned(),
+        };
+        let strict_a = key.strict();
+        let replay_a = key.canonical_replay();
+        key.origin_key_state_digest = "sha256:state-B".to_owned();
+        let strict_b = key.strict();
+        let replay_b = key.canonical_replay();
+        assert_ne!(strict_a, strict_b);
+        assert_eq!(replay_a, replay_b);
+    }
+
+    #[test]
+    fn historical_only_marker_set() {
+        let response = mark_response_historical_only(json!({"ok": true}));
+        assert_eq!(
+            response.get("reason_code").and_then(Value::as_str),
+            Some(contrix_sdk::ERROR_CODE_HISTORICAL_ONLY)
+        );
+        assert_eq!(
+            response.get("historical_only").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn delivery_binding_stale_response_carries_new_service_and_frontier() {
+        let response = delivery_binding_stale_response(
+            &Did::new("did:web:bob.example").unwrap(),
+            &[contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001").unwrap()],
+        );
+        assert_eq!(
+            response.pointer("/error/code").and_then(Value::as_str),
+            Some(contrix_sdk::ERROR_CODE_DELIVERY_BINDING_STALE)
+        );
+        assert_eq!(
+            response
+                .pointer("/error/details/new_recipient_service_did")
+                .and_then(Value::as_str),
+            Some("did:web:bob.example")
+        );
     }
 }

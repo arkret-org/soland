@@ -335,7 +335,7 @@ pub trait AuditStore: Send + Sync {
 /// (decisions, appeals, queue items) form the spec-compliant triage
 /// flow: a report becomes a queue item, a queue item gets a decision,
 /// a decision can be appealed (4-state appeal FSM lives in
-/// `crate::round23::AppealState`).
+/// `crate::routing::admin::moderation::AppealState`).
 ///
 /// The Pg backend stubs decisions/appeals/queue items as
 /// `Err(PersistenceError::Internal("not yet wired"))` so production
@@ -389,7 +389,7 @@ pub trait ModerationStore: Send + Sync {
 
     /// Append an appeal event. `payload` MUST carry `appeal_id`,
     /// `realm_id`, and the variant-specific fields (see
-    /// `contrix_core::round23::ModerationAppealPayload`). The store
+    /// the SDK `ModerationAppealPayload`). The store
     /// keeps an event log per appeal; the current FSM state is derived
     /// by replaying events.
     async fn append_appeal(&self, _appeal: Value) -> PersistenceResult<()> {

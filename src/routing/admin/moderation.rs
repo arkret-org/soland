@@ -21,13 +21,13 @@
 //!   under_review`.
 //! - `POST /appeals/{appeal_id}/decision` — reviewer issues verdict. Transitions FSM: `under_review
 //!   → decided`. `verdict=overturn` MUST be paired with an explicit `decision_lift_ref` so the
-//!   `appeal_decision_overturn_paired_check` in [`crate::round23`] passes.
+//!   `appeal_decision_overturn_paired_check` (defined in this module) passes.
 //! - `POST /appeals/{appeal_id}/close` — closes the appeal. Transitions: `decided → closed`.
 //!
 //! All endpoints require the caller to pass
 //! [`super::require_admin_principal`]; the `same actor cannot review
 //! their own decision` separation-of-duties rule from
-//! [`crate::round23::appeal_self_review_check`] is enforced at the
+//! [`appeal_self_review_check`] is enforced at the
 //! `/decision` step.
 
 use chrono::Utc;
@@ -41,9 +41,6 @@ use super::require_admin_principal;
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::round23::{
-    AppealState, appeal_decision_overturn_paired_check, appeal_self_review_check,
-};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -717,4 +714,147 @@ async fn close_appeal(
     )
     .await;
     json_ok(event)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// cx.moderation.appeal.* reducer & state machine (spec T06).
+// ────────────────────────────────────────────────────────────────────────
+
+/// Cell state machine for a `cx:appeal:<uuid>` row. Spec T06.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppealState {
+    None,
+    Submitted,
+    UnderReview,
+    Decided,
+    Closed,
+}
+
+impl AppealState {
+    /// True when `new` is a valid transition from `self` for the
+    /// moderation-appeal cell. Spec T06.
+    pub fn can_transition_to(self, new: AppealState) -> bool {
+        use AppealState::*;
+        matches!(
+            (self, new),
+            (None, Submitted)
+                | (Submitted, UnderReview)
+                | (UnderReview, Decided)
+                | (Decided, Closed)
+        )
+    }
+}
+
+/// Auto-close cool-off in days. Spec T06 — open appeals MUST be auto-closed
+/// once their submitted_at is more than 30 days behind the reducer's
+/// current time.
+pub const APPEAL_AUTO_CLOSE_COOL_OFF_DAYS: i64 = 30;
+
+/// Build the canonical cell id for an appeal. Spec T06.
+pub fn appeal_cell_id(appeal_id: &str) -> String {
+    format!("cx:cell:cx.component.moderation.appeal.v1:{appeal_id}")
+}
+
+/// Spec T06 — when an appeal `decision` event has `verdict=overturn`, the
+/// reducer MUST find a paired `cx.moderation.decision.lift` event in the
+/// same Anchor batch referencing the original decision.
+///
+/// Returns `Err(AppealOverturnMissingLift)` when the verdict is overturn
+/// but no qualifying lift event was provided in the batch.
+pub fn appeal_decision_overturn_paired_check(
+    verdict: &str,
+    original_decision_id: &str,
+    batch_kinds_and_refs: &[(&str, &str)],
+) -> Result<(), (ErrorCode, String)> {
+    if verdict != "overturn" {
+        return Ok(());
+    }
+    let has_lift = batch_kinds_and_refs.iter().any(|(kind, ref_id)| {
+        *kind == "cx.moderation.decision.lift" && *ref_id == original_decision_id
+    });
+    if !has_lift {
+        return Err((
+            ErrorCode::AppealOverturnMissingLift,
+            "cx.moderation.appeal.decision verdict=overturn requires a paired \
+             cx.moderation.decision.lift in the same Anchor batch referencing \
+             the original decision"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Spec T06 — reviewer / decision-issuer separation of duties. The
+/// reviewer (or decision actor) MUST NOT be the actor who issued the
+/// original moderation decision.
+pub fn appeal_self_review_check(
+    reviewer: &str,
+    original_decision_issuer: &str,
+) -> Result<(), (ErrorCode, String)> {
+    if reviewer == original_decision_issuer {
+        return Err((
+            ErrorCode::AppealSelfReviewForbidden,
+            "cx.moderation.appeal review/decision actor MUST differ from the \
+             original moderation decision issuer (separation of duties)"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// SHA-256 of canonical-JSON encoded value. Helper used by the
+/// moderation-appeal reducer to derive the appeal cell digest.
+pub fn canonical_sha256_hex(value: &Value) -> String {
+    use sha2::Digest;
+    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).unwrap_or_default();
+    let digest = sha2::Sha256::digest(&bytes);
+    format!("sha256:{:x}", digest)
+}
+
+#[cfg(test)]
+mod appeal_tests {
+    use super::*;
+
+    #[test]
+    fn appeal_state_machine_transitions() {
+        use AppealState::*;
+        assert!(None.can_transition_to(Submitted));
+        assert!(Submitted.can_transition_to(UnderReview));
+        assert!(UnderReview.can_transition_to(Decided));
+        assert!(Decided.can_transition_to(Closed));
+        assert!(!Submitted.can_transition_to(Closed));
+        assert!(!UnderReview.can_transition_to(Closed));
+        assert!(!Decided.can_transition_to(Submitted));
+        assert!(!Closed.can_transition_to(Submitted));
+    }
+
+    #[test]
+    fn appeal_decision_overturn_requires_lift_in_batch() {
+        let err = appeal_decision_overturn_paired_check(
+            "overturn",
+            "cx:event:01904100-0000-7000-8000-000000000aaa",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ErrorCode::AppealOverturnMissingLift);
+        // Lift event present — ok.
+        appeal_decision_overturn_paired_check(
+            "overturn",
+            "cx:event:01904100-0000-7000-8000-000000000aaa",
+            &[(
+                "cx.moderation.decision.lift",
+                "cx:event:01904100-0000-7000-8000-000000000aaa",
+            )],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn appeal_self_review_forbidden() {
+        let err =
+            appeal_self_review_check("did:web:mod.example", "did:web:mod.example").unwrap_err();
+        assert_eq!(err.0, ErrorCode::AppealSelfReviewForbidden);
+        appeal_self_review_check("did:web:reviewer.example", "did:web:mod.example").unwrap();
+    }
 }

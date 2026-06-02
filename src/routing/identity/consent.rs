@@ -816,3 +816,67 @@ fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str 
     }
     "pending"
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// scope=any cascade.
+// ────────────────────────────────────────────────────────────────────────
+
+/// Spec T17 — child scopes that a `scope=any` revoke MUST cascade into.
+/// The full list is open-ended in spec; soland tracks the five that gate
+/// cross-service routing today.
+pub const CONSENT_SCOPE_CASCADE: &[&str] = &[
+    "directory_reachability",
+    "mimi_consent",
+    "push_contact_psi",
+    "invite_gate",
+    "in_flight_invite",
+];
+
+/// Spec T17 — when a consent revoke is issued with `scope=any`, the
+/// projection MUST mark every cascaded child scope with this marker so
+/// consumers can distinguish "explicitly revoked" from "swept by an
+/// any-revoke".
+pub const SUPERSEDED_BY_ANY_REVOKE: &str = "superseded_by_any_revoke";
+
+/// Spec T17 — five cache-invalidation channels that an `any`-revoke MUST
+/// broadcast to cross-service consumers (teabay / floria / coauth).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsentRevokeInvalidationChannel {
+    DirectoryReachability,
+    MimiConsent,
+    PushContactPsi,
+    InviteGate,
+    InFlightInvite,
+}
+
+impl ConsentRevokeInvalidationChannel {
+    pub const ALL: &'static [Self] = &[
+        Self::DirectoryReachability,
+        Self::MimiConsent,
+        Self::PushContactPsi,
+        Self::InviteGate,
+        Self::InFlightInvite,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectoryReachability => "directory_reachability",
+            Self::MimiConsent => "mimi_consent",
+            Self::PushContactPsi => "push_contact_psi",
+            Self::InviteGate => "invite_gate",
+            Self::InFlightInvite => "in_flight_invite",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consent_revoke_cascade_table_stable() {
+        // Sanity — 5 channels, 5 cascade scopes.
+        assert_eq!(ConsentRevokeInvalidationChannel::ALL.len(), 5);
+        assert_eq!(CONSENT_SCOPE_CASCADE.len(), 5);
+    }
+}
