@@ -109,31 +109,58 @@ fn validate_key_backup_encryption(
         "passphrase_kdf" => {
             if backup_class == "mls_history" {
                 return Err(schema_error(
-                    "mls_history key backups must use device_snapshot_secret",
+                    "mls_history key backups must use secret_storage_key or recovery_public_key",
                 ));
             }
-            validate_key_backup_kdf(backup, encryption)
-        }
-        "device_snapshot_secret" => {
-            if backup_class != "mls_history" {
+            validate_key_backup_kdf(backup, encryption)?;
+            // Spec key-management.md §7.5: passphrase_kdf MUST carry a
+            // producer-generated `nonce_salt` (deterministic nonce transcript)
+            // and a top-level `key_commitment` (wrong-passphrase fail-fast).
+            let nonce_salt = encryption
+                .get("aead")
+                .and_then(|aead| aead.get("nonce_salt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !is_base64url_token(nonce_salt) {
                 return Err(schema_error(
-                    "device_snapshot_secret is only valid for mls_history key backups",
+                    "passphrase_kdf key backup requires base64url encryption.aead.nonce_salt",
+                ));
+            }
+            let key_commitment = backup
+                .get("key_commitment")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !is_sha_digest(key_commitment) {
+                return Err(schema_error(
+                    "passphrase_kdf key backup requires a sha-digest key_commitment",
+                ));
+            }
+            Ok(())
+        }
+        "secret_storage_key" => {
+            // mls_history (and secret_storage caches) are wrapped under a named
+            // secret_storage key (recovered after the secret_storage root is
+            // unlocked). recipient_key_ref names that key id, not a device id;
+            // no passphrase KDF travels on the wire. The legacy
+            // `device_snapshot_secret` wire value was removed (not in the
+            // cx.schema.key_backup.v1 enum).
+            if !matches!(backup_class, "mls_history" | "secret_storage") {
+                return Err(schema_error(
+                    "secret_storage_key is only valid for mls_history or secret_storage key backups",
                 ));
             }
             if encryption.get("kdf").is_some() {
                 return Err(schema_error(
-                    "device_snapshot_secret key backups must not carry encryption.kdf",
+                    "secret_storage_key key backups must not carry encryption.kdf",
                 ));
             }
             let recipient = encryption
                 .get("recipient_key_ref")
                 .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    schema_error("device_snapshot_secret key backup requires recipient_key_ref")
-                })?;
-            if !is_protocol_device_id(recipient) {
+                .unwrap_or_default();
+            if recipient.trim().is_empty() {
                 return Err(schema_error(
-                    "device_snapshot_secret recipient_key_ref must be cx:device:<uuidv7>",
+                    "secret_storage_key key backup requires a non-empty recipient_key_ref",
                 ));
             }
             Ok(())
@@ -213,17 +240,24 @@ fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), App
     Ok(())
 }
 
-fn is_protocol_device_id(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("cx:device:") else {
-        return false;
-    };
-    rest.len() == 36
-        && rest.chars().enumerate().all(|(idx, ch)| match idx {
-            8 | 13 | 18 | 23 => ch == '-',
-            14 => ch == '7',
-            19 => matches!(ch, '8' | '9' | 'a' | 'b'),
-            _ => ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase(),
-        })
+fn is_base64url_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+fn is_sha_digest(value: &str) -> bool {
+    let hex_ok =
+        |hex: &str, len: usize| hex.len() == len && hex.chars().all(|c| c.is_ascii_hexdigit());
+    value.strip_prefix("sha256:").is_some_and(|h| hex_ok(h, 64))
+        || value
+            .strip_prefix("sha3_256:")
+            .is_some_and(|h| hex_ok(h, 64))
+        || value.strip_prefix("blake3:").is_some_and(|h| hex_ok(h, 64))
+        || value
+            .strip_prefix("sha512:")
+            .is_some_and(|h| hex_ok(h, 128))
 }
 
 fn validate_key_backup_body(
@@ -823,7 +857,8 @@ mod tests {
                 "secret_id": "test-secret"
             }],
             "ciphertext": "AAAA",
-            "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "key_commitment": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         })
     }
 
@@ -842,46 +877,69 @@ mod tests {
             },
             "aead": {
                 "name": "xchacha20_poly1305",
-                "nonce": "nonce"
+                "aead_profile": "cx.aead.xchacha20_poly1305.v1",
+                "nonce": "nonce",
+                "nonce_salt": "bm9uY2VzYWx0"
             }
         })
     }
 
-    fn device_snapshot_encryption() -> Value {
+    fn secret_storage_key_encryption() -> Value {
         json!({
-            "recipient_method": "device_snapshot_secret",
-            "recipient_key_ref": DEVICE_ID,
+            "recipient_method": "secret_storage_key",
+            "recipient_key_ref": "mls_group_secrets_backup_key",
             "aead": {
                 "name": "xchacha20_poly1305",
+                "aead_profile": "cx.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce"
             }
         })
     }
 
     #[test]
-    fn mls_history_accepts_device_snapshot_secret() {
+    fn mls_history_accepts_secret_storage_key() {
         let body = key_backup_body(
             "mls_history",
             "mls_group_state",
-            device_snapshot_encryption(),
+            secret_storage_key_encryption(),
         );
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect("MLS history device snapshot backup should validate");
+            .expect("MLS history secret_storage_key backup should validate");
     }
 
     #[test]
-    fn non_mls_backup_rejects_device_snapshot_secret() {
+    fn did_recovery_rejects_secret_storage_key() {
+        // secret_storage_key is valid only for mls_history / secret_storage.
         let body = key_backup_body(
-            "secret_storage",
-            "recovery_secret",
-            device_snapshot_encryption(),
+            "did_recovery",
+            "recovery_key_share",
+            secret_storage_key_encryption(),
         );
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("device snapshot keys are MLS-history only");
+            .expect_err("secret_storage_key is not valid for did_recovery");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("mls_history"));
+        assert!(err.message.contains("secret_storage_key"));
+    }
+
+    #[test]
+    fn passphrase_kdf_requires_nonce_salt_and_key_commitment() {
+        // Drop nonce_salt -> reject.
+        let mut enc = passphrase_encryption();
+        enc["aead"].as_object_mut().unwrap().remove("nonce_salt");
+        let body = key_backup_body("secret_storage", "recovery_secret", enc);
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("passphrase_kdf without nonce_salt must be rejected");
+        assert!(err.message.contains("nonce_salt"));
+
+        // Drop key_commitment -> reject.
+        let mut body2 =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body2.as_object_mut().unwrap().remove("key_commitment");
+        let err2 = validate_key_backup_body(BACKUP_ID, ACTOR, &body2)
+            .expect_err("passphrase_kdf without key_commitment must be rejected");
+        assert!(err2.message.contains("key_commitment"));
     }
 
     #[test]
@@ -915,7 +973,7 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("MLS history passphrase KDF backups are no longer supported");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("device_snapshot_secret"));
+        assert!(err.message.contains("secret_storage_key"));
     }
 
     #[test]
@@ -923,7 +981,7 @@ mod tests {
         let mut body = key_backup_body(
             "mls_history",
             "mls_group_state",
-            device_snapshot_encryption(),
+            secret_storage_key_encryption(),
         );
         body["plaintext"] = json!("raw group state");
 
