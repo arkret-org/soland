@@ -4038,6 +4038,7 @@ pub enum EventsSubmitRequest {
 impl EventsSubmitRequest {
     /// Classify an incoming JSON body without consuming it. Returns the
     /// discriminator name for tracing / metrics.
+    #[allow(dead_code)]
     pub fn shape(body: &Value) -> &'static str {
         if body.get("service_binding_ref").is_some() {
             "federation"

@@ -1543,6 +1543,10 @@ fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Spec T16 — per-(actor, ciphertext) late-recovery state.
+///
+/// Spec reference surface — exercised by the conformance suite; the late
+/// recovery reducer path is not yet wired into a soland route.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LateRecoveryState {
@@ -1551,6 +1555,7 @@ pub enum LateRecoveryState {
     LateRecovered,
 }
 
+#[allow(dead_code)]
 impl LateRecoveryState {
     pub fn can_transition_to(self, new: Self) -> bool {
         use LateRecoveryState::*;
@@ -1566,6 +1571,7 @@ impl LateRecoveryState {
 /// Spec T16 — accept-late-recovery preconditions. All four MUST evaluate
 /// true for the reducer to apply a late key share to a `decryption_failed`
 /// cell.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct LateRecoveryAcceptInputs {
     /// (a) Actor was a Realm member at T₀ (recovery-target ciphertext's
@@ -1585,6 +1591,7 @@ pub struct LateRecoveryAcceptInputs {
 
 /// Spec T16 — apply the 4 accept conditions; reject revoked / removed
 /// members with `late_recovery_rejected_membership`.
+#[allow(dead_code)]
 pub fn late_recovery_accept_check(
     inputs: LateRecoveryAcceptInputs,
 ) -> Result<(), (ErrorCode, &'static str)> {

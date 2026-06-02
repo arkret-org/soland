@@ -930,6 +930,7 @@ pub async fn typing_ephemeral_for_space(
 /// into the typed [`contrix_sdk::SpaceStateTransitionPayload`]. Returns
 /// `Err` (with `schema_violation`) when the payload still carries the
 /// legacy top-level `target_ref` form (pre-typed wire).
+#[allow(dead_code)]
 pub fn parse_space_state_transition_payload(
     payload: &Value,
 ) -> Result<contrix_sdk::SpaceStateTransitionPayload, (&'static str, String)> {
@@ -955,6 +956,7 @@ pub fn parse_space_state_transition_payload(
 
 /// Spec B1.13 — parse a `cx.space.tombstone` payload into the typed
 /// [`contrix_sdk::SpaceObjectTombstonePayload`].
+#[allow(dead_code)]
 pub fn parse_space_object_tombstone_payload(
     payload: &Value,
 ) -> Result<contrix_sdk::SpaceObjectTombstonePayload, (&'static str, String)> {

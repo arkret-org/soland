@@ -749,9 +749,11 @@ impl AppealState {
 /// Auto-close cool-off in days. Spec T06 — open appeals MUST be auto-closed
 /// once their submitted_at is more than 30 days behind the reducer's
 /// current time.
+#[allow(dead_code)]
 pub const APPEAL_AUTO_CLOSE_COOL_OFF_DAYS: i64 = 30;
 
 /// Build the canonical cell id for an appeal. Spec T06.
+#[allow(dead_code)]
 pub fn appeal_cell_id(appeal_id: &str) -> String {
     format!("cx:cell:cx.component.moderation.appeal.v1:{appeal_id}")
 }
@@ -805,6 +807,7 @@ pub fn appeal_self_review_check(
 
 /// SHA-256 of canonical-JSON encoded value. Helper used by the
 /// moderation-appeal reducer to derive the appeal cell digest.
+#[allow(dead_code)]
 pub fn canonical_sha256_hex(value: &Value) -> String {
     use sha2::Digest;
     let bytes = contrix_sdk::canonical::canonical_json_bytes(value).unwrap_or_default();

@@ -4,6 +4,10 @@
 //! routing-cache entry is keyed by a four-field policy frontier digest;
 //! a tightening change to any of the four governance inputs MUST eagerly
 //! invalidate the cached decision.
+//!
+//! Spec reference surface — these helpers are exercised by the conformance
+//! suite and out-of-tree signers; not all are wired into a soland route yet.
+#![allow(dead_code)]
 
 use contrix_sdk::compute_policy_frontier_digest;
 use serde_json::Value;

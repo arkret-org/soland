@@ -376,6 +376,7 @@ pub async fn append_audit_log(
 /// Spec B1.12 — recompute the audit policy version hash using the 4-arg
 /// SDK helper. The legacy 2-arg signature is removed; any audit receipt
 /// produced by an out-of-tree signer using the old form MUST be re-issued.
+#[allow(dead_code)]
 pub fn compute_audit_policy_hash(
     realm_id: &contrix_sdk::RealmId,
     trust_domain: &contrix_sdk::TypedTrustDomainId,
@@ -395,6 +396,7 @@ pub fn compute_audit_policy_hash(
 /// late-key-recovery path. `late_recovery_original_event_id` is REQUIRED
 /// on this access_kind; the SDK validator catches a missing value but we
 /// surface a typed builder for readability.
+#[allow(dead_code)]
 pub fn build_late_recovery_audit_payload(
     realm_id: contrix_sdk::RealmId,
     actor: contrix_sdk::Did,

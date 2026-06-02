@@ -964,6 +964,7 @@ pub const PRESIGN_REFERRER_POLICY: &str = "no-referrer";
 /// Scrub a presign URL down to its origin + path for tracing/logging.
 /// Spec T11 — the query string carries the signature and MUST NOT appear
 /// in logs.
+#[allow(dead_code)]
 pub fn scrub_presign_url_for_log(url: &str) -> String {
     match url.split_once('?') {
         Some((origin_path, _query)) => format!("{origin_path}?<scrubbed>"),

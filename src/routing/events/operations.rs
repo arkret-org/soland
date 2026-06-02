@@ -683,13 +683,13 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 );
             }
             if operation.payload.get("new_generation").is_none() {
-                // ROUND4-ALLOW: error message string for the round-4 CAS contract.
+                // DRIFT-ALLOW: error message string for the round-4 CAS contract.
                 return Err(
                     "cx.cross_signing.publish payload requires new_generation (round-4 CAS)",
                 );
             }
             if operation.payload.get("trust_domain").is_none() {
-                // ROUND4-ALLOW: error message string for the round-4 wire break.
+                // DRIFT-ALLOW: error message string for the round-4 wire break.
                 return Err(
                     "cx.cross_signing.publish payload requires trust_domain (round-4 wire break)",
                 );
@@ -4069,6 +4069,7 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
 /// The cell_subject for the CAS-register cell is the tuple
 /// `(principal_id, expected_previous_generation)`; producers and consumers
 /// MUST use [`publish_cell_subject`] to keep the canonical form aligned.
+#[allow(dead_code)]
 pub fn cross_signing_publish_cas_check(
     current_generation: u64,
     expected_previous_generation: u64,
@@ -4098,6 +4099,7 @@ pub fn cross_signing_publish_cas_check(
 
 /// Spec B1.10 — build the CAS-register cell_subject string for
 /// `cx.cross_signing.publish`. Delegates to the SDK helper.
+#[allow(dead_code)]
 pub fn publish_cell_subject(principal_id: &contrix_sdk::Did, expected_previous_generation: u64) -> String {
     contrix_sdk::cross_signing_publish_cell_subject(principal_id, expected_previous_generation)
 }
@@ -4106,6 +4108,7 @@ pub fn publish_cell_subject(principal_id: &contrix_sdk::Did, expected_previous_g
 /// field is REQUIRED for Realm-owned blobs. For deployment-owned
 /// (anonymous) blobs the field may be omitted; the matching metadata
 /// lookup is the only authoritative check.
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlobPresignRequest {
     pub blob_ref: String,
@@ -4118,6 +4121,7 @@ pub struct BlobPresignRequest {
 /// Spec B1.11 — verify the request `realm_id` matches the blob metadata's
 /// `realm_id`. Returns `Ok(())` on match (or when the blob has no realm
 /// binding); returns `Err((code, msg))` on mismatch.
+#[allow(dead_code)]
 pub fn verify_blob_presign_realm_binding(
     request_realm_id: Option<&str>,
     blob_metadata_realm_id: Option<&str>,
@@ -4145,18 +4149,21 @@ pub fn verify_blob_presign_realm_binding(
 /// Spec B1.15 — cell_subject for `cx.flow.update`. The cell family is
 /// `cx.component.flow.metadata.v1` with CAS-register semantics and
 /// `bottom=reject`. The subject is the flow_id.
+#[allow(dead_code)]
 pub fn flow_update_subject(flow_id: &contrix_sdk::FlowId) -> String {
     contrix_sdk::flow_update_cell_subject(flow_id)
 }
 
 /// Spec B1.15 — cell_subject for `cx.flow.tracks_patch`. Same cell family
 /// as `cx.flow.update` — they compete via CAS.
+#[allow(dead_code)]
 pub fn flow_tracks_patch_subject(flow_id: &contrix_sdk::FlowId) -> String {
     contrix_sdk::flow_tracks_patch_cell_subject(flow_id)
 }
 
 /// Spec B1.17 — accept an `agent_id` value. Must be a DID
 /// (`did:webvh:...` etc.). Returns the typed DID on success.
+#[allow(dead_code)]
 pub fn validate_agent_id(value: &str) -> Result<contrix_sdk::Did, (&'static str, String)> {
     contrix_sdk::Did::new(value.to_owned()).map_err(|err| {
         (

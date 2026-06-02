@@ -3762,6 +3762,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 /// when a peer attempts to push events using a stale delivery binding. The
 /// response carries the new recipient service DID and a frontier the sender
 /// should replay from after re-binding.
+#[allow(dead_code)]
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_service_did: &Did,
     handover_frontier: &[contrix_sdk::EventId],
@@ -3785,6 +3786,7 @@ pub(crate) fn delivery_binding_stale_response(
 /// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
 /// Returned when the inbound delivery is a duplicate of a binding that has
 /// already been handed over to the new recipient.
+#[allow(dead_code)]
 pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &Did) -> Value {
     json!({
         "ok": false,

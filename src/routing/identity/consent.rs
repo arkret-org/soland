@@ -824,6 +824,7 @@ fn effective_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> &'static str 
 /// Spec T17 — child scopes that a `scope=any` revoke MUST cascade into.
 /// The full list is open-ended in spec; soland tracks the five that gate
 /// cross-service routing today.
+#[allow(dead_code)]
 pub const CONSENT_SCOPE_CASCADE: &[&str] = &[
     "directory_reachability",
     "mimi_consent",
@@ -836,10 +837,12 @@ pub const CONSENT_SCOPE_CASCADE: &[&str] = &[
 /// projection MUST mark every cascaded child scope with this marker so
 /// consumers can distinguish "explicitly revoked" from "swept by an
 /// any-revoke".
+#[allow(dead_code)]
 pub const SUPERSEDED_BY_ANY_REVOKE: &str = "superseded_by_any_revoke";
 
 /// Spec T17 — five cache-invalidation channels that an `any`-revoke MUST
 /// broadcast to cross-service consumers (teabay / floria / coauth).
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsentRevokeInvalidationChannel {
     DirectoryReachability,
@@ -849,6 +852,7 @@ pub enum ConsentRevokeInvalidationChannel {
     InFlightInvite,
 }
 
+#[allow(dead_code)]
 impl ConsentRevokeInvalidationChannel {
     pub const ALL: &'static [Self] = &[
         Self::DirectoryReachability,

@@ -3751,6 +3751,7 @@ mod tests {
 /// downstream consumers see exactly the SDK `EventsSubscribeFrameBody`
 /// fields plus the wrapper's `seq` / `space_id` / `cursor` fields at the
 /// top level.
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubscribeFrameEnvelope {
     /// Monotonic per-connection sequence (matches the legacy `seq` field).

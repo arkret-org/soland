@@ -2028,6 +2028,10 @@ fn contact_response(contact: ContactRecord) -> ContactResponse {
 // ────────────────────────────────────────────────────────────────────────
 
 /// The 7 fanout domains triggered by `cx.account.deactivate`. Spec T07.
+///
+/// Spec reference surface — retained for conformance tooling; not all
+/// deactivation fanout domains are wired into a soland route yet.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeactivationFanoutDomain {
@@ -2040,6 +2044,7 @@ pub enum DeactivationFanoutDomain {
     CapabilityCacheInvalidate,
 }
 
+#[allow(dead_code)]
 impl DeactivationFanoutDomain {
     pub const ALL: &'static [Self] = &[
         Self::SessionRevoke,
@@ -2064,6 +2069,7 @@ impl DeactivationFanoutDomain {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeactivationDomainStatus {
@@ -2072,6 +2078,7 @@ pub enum DeactivationDomainStatus {
     Failed,
 }
 
+#[allow(dead_code)]
 pub type DeactivationFanoutFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
 
@@ -2081,6 +2088,7 @@ pub type DeactivationFanoutFuture =
 /// concurrently and records the per-domain status here. The "outcome"
 /// field is `partially_completed` whenever any non-failed domain is still
 /// pending or any domain failed.
+#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeactivationFanoutProjection {
     pub actor: String,
@@ -2090,6 +2098,7 @@ pub struct DeactivationFanoutProjection {
     pub outcome: String,
 }
 
+#[allow(dead_code)]
 impl DeactivationFanoutProjection {
     pub fn new(actor: impl Into<String>, now: DateTime<Utc>) -> Self {
         let mut domain_status = std::collections::BTreeMap::new();
@@ -2146,6 +2155,7 @@ impl DeactivationFanoutProjection {
     }
 }
 
+#[allow(dead_code)]
 pub async fn run_deactivation_fanout_worker<F>(
     projection: &mut DeactivationFanoutProjection,
     drain_domain: F,

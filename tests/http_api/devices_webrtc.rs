@@ -103,6 +103,109 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
 }
 
 #[tokio::test]
+async fn device_rename_updates_display_name() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let sibling = "cx:device:01904100-0000-7000-8000-9b04e0000077";
+
+    // Register a sibling device to rename (current session device is
+    // alice's own device; pairing gives us a second one).
+    let challenge: Value = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "device_id": sibling }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let _: Value = TestClient::post("http://server/api/v1/devices/authorize-pairing")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "challenge_id": challenge["challenge_id"],
+            "device_id": sibling,
+            "display_name": "Old Name",
+            "proof": {"alg": "dev-none"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    // Unauthenticated rename is rejected.
+    let unauth = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+        .json(&serde_json::json!({ "display_name": "Hacker" }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    // Empty display_name is rejected.
+    let empty = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "display_name": "   " }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(empty.status_code, Some(StatusCode::BAD_REQUEST));
+
+    // Over-long display_name (>128 chars) is rejected.
+    let too_long = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "display_name": "x".repeat(129) }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(too_long.status_code, Some(StatusCode::BAD_REQUEST));
+
+    // Renaming an unknown device is a 404.
+    let unknown = TestClient::post(
+        "http://server/api/v1/devices/cx:device:01904100-0000-7000-8000-000000000404/rename",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({ "display_name": "Ghost" }))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
+
+    // Happy path: rename succeeds and the new name is returned + listed.
+    let renamed: Value = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "display_name": "  Work Phone  " }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(renamed["device_id"], sibling);
+    assert_eq!(renamed["display_name"], "Work Phone");
+
+    let devices: Value = TestClient::get("http://server/api/v1/devices")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
+        device["device_id"] == sibling && device["display_name"] == "Work Phone"
+    }));
+
+    // The rename is audited.
+    assert!(
+        state
+            .persistence
+            .audit()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["action"] == "device.rename"
+                    && event["outcome"] == "accepted"
+                    && event["target"]["display_name"] == "Work Phone"
+            })
+    );
+}
+
+#[tokio::test]
 async fn webrtc_signaling_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
