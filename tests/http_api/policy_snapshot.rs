@@ -131,8 +131,8 @@ async fn policy_check_and_validation_work() {
 }
 
 #[tokio::test]
-async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
-    // B4: end-to-end snapshot v2 wire shape check. The single-chunk
+async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
+    // B4: end-to-end snapshot v1 wire shape check. The single-chunk
     // case is exercised inline in `account_contacts_and_space_lifecycle_workflow`
     // — this test focuses on the SDK round-trip: head publishes a
     // generator-proof + merkle_root; chunk returns a chunk-bytes +
@@ -144,8 +144,8 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
     let space = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "snapshot-v2-test",
-        Some("B4 snapshot v2 wire-shape test"),
+        "snapshot-v1-test",
+        Some("B4 snapshot v1 wire-shape test"),
         "public",
         &[],
         &[],
@@ -227,14 +227,14 @@ async fn snapshot_v2_audit_path_verifies_against_merkle_root() {
 }
 
 #[tokio::test]
-async fn snapshot_v2_multi_chunk_fixture_verifies_non_empty_audit_path() {
+async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
     let space = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "snapshot-v2-multi-chunk-test",
+        "snapshot-v1-multi-chunk-test",
         Some("B4 follow-up: ensure multi-chunk audit_path verifies"),
         "public",
         &[],

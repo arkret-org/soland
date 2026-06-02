@@ -63,11 +63,11 @@ mod lattice_kind_scaffold_tests {
         assert!(msg.contains("flow_id"));
 
         let err = LatticeKindError::UnknownCellFamily {
-            observed: "cx.component.unrecognised.v9".to_owned(),
+            observed: "cx.component.unrecognised.v1".to_owned(),
             declared: "cx.component.consent.v1",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("cx.component.unrecognised.v9"));
+        assert!(msg.contains("cx.component.unrecognised.v1"));
         assert!(msg.contains("cx.component.consent.v1"));
     }
 }

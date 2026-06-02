@@ -784,21 +784,21 @@ pub struct SnapshotHeadResponse {
     pub chunks: Vec<Value>,
     pub frontier: Value,
     pub signature: Value,
-    /// Snapshot v2: root of the binary Merkle tree built over chunk
+    /// Snapshot v1: root of the binary Merkle tree built over chunk
     /// digests. Receivers cross-check `chunks[i].digest` reaching this
     /// root via the per-chunk `audit_path`.
     pub merkle_root: String,
-    /// Snapshot v2: number of chunks in `chunks[]`. Equivalent to
+    /// Snapshot v1: number of chunks in `chunks[]`. Equivalent to
     /// `generator_proof.chunk_count` but surfaced explicitly so clients
     /// don't have to parse the proof to plan fetches.
     pub chunk_count: u32,
-    /// Snapshot v2: target per-chunk byte budget the chunker used. The
+    /// Snapshot v1: target per-chunk byte budget the chunker used. The
     /// last chunk MAY be smaller; all others are exactly this size.
     pub chunk_bytes: u32,
-    /// Snapshot v2: sum of per-chunk byte lengths. Lets receivers size
+    /// Snapshot v1: sum of per-chunk byte lengths. Lets receivers size
     /// download buffers before fetching.
     pub total_bytes: u64,
-    /// Snapshot v2: signed commitment from the snapshot generator
+    /// Snapshot v1: signed commitment from the snapshot generator
     /// binding `(generator_did, realm_id, state_root, merkle_root,
     /// chunk_count, total_bytes, chunk_bytes)`.
     pub generator_proof: Value,
@@ -1876,14 +1876,14 @@ pub fn describe(
     let supported_operations = canonical_supported_operations();
     let local_extension_operations = local_extension_operations();
 
-    // Round 4 (B1) — ServiceDescribe v2: 17 required top-level fields.
+    // Round 4 (B1) — ServiceDescribe: 17 required top-level fields.
     // Implemented / claimed / verified profiles are partitioned per spec
     // service-surface.md §3.0; `verified_profiles` MUST be empty when
     // `development_mode=true`. The full T6.1 claim-level partition layer
     // in routing::system::describe::apply_claim_level_partition still
     // overrides these values on the JSON wire response — we keep typed
     // defaults here so out-of-tree typed consumers see the correct shape
-    // and pass `ServerDescription::validate_v2`.
+    // and pass `ServerDescription::validate`.
     // Round 4 — typed entries match `service-describe.schema.json`
     // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
     // `apply_claim_level_partition` reserialises these via the SDK types

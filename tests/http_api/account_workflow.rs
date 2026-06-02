@@ -642,7 +642,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
     assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");
-    // Snapshot v2 (round 9): chunk_id is now a typed integer in the SDK
+    // Snapshot v1 (round 9): chunk_id is now a typed integer in the SDK
     // shape; small test states fit in a single 256 KiB chunk so chunk[0]
     // .digest is the state_digest and chunk_count == 1.
     assert_eq!(snapshot["chunks"][0]["chunk_id"], 0);
@@ -679,7 +679,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(snapshot_chunk["digest"], snapshot["state_digest"]);
     assert_eq!(snapshot_chunk["verified"], true);
     assert!(!snapshot_chunk["bytes_base64"].as_str().unwrap().is_empty());
-    // Snapshot v2: chunk responses surface the audit-path so receivers
+    // Snapshot v1: chunk responses surface the audit-path so receivers
     // can verify the chunk against the head's merkle_root without
     // trusting the chunk source.
     assert!(snapshot_chunk["audit_path"].is_array());

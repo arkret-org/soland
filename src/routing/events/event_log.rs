@@ -586,7 +586,7 @@ async fn events_frontier(
     // Round 4 (B1.4) — build the typed SDK response variant. The legacy
     // `frontier` JSON envelope is retained alongside for the existing
     // ResBody wire shape (consumers that haven't migrated to the typed
-    // `events_frontier_v2` field yet), but the typed variant is the
+    // `events_frontier` field yet), but the typed variant is the
     // canonical shape per spec a77b995.
     use contrix_sdk::Did as SdkDid;
     let service_did = SdkDid::new(state.config.service_did.clone())
@@ -661,7 +661,7 @@ async fn events_frontier(
         "storage": state.db.mode(),
         "generated_at": generated_at,
         "peer_role": peer_role_str,
-        "events_frontier_v2": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
+        "events_frontier": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
     });
     match peer_role {
         contrix_sdk::FrontierPeerRole::FederationPeer => {

@@ -3048,7 +3048,7 @@ async fn sync_gap_backfill(
 #[endpoint(
     operation_id = "cx.snapshot.head",
     tags("sync"),
-    summary = "Read the snapshot-v2 head (manifest + chunk descriptors + merkle_root) for a Realm"
+    summary = "Read the snapshot-v1 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.snapshot.head"))]
 async fn snapshot_head(
@@ -3074,7 +3074,7 @@ async fn snapshot_head(
     let bundle = snapshot_bundle_for_space(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    // Snapshot v2: the manifest already lists per-chunk digests, so
+    // Snapshot v1: the manifest already lists per-chunk digests, so
     // `chunks[]` becomes the per-chunk descriptor (id + size + digest)
     // — receivers fetch each chunk via `/sync/snapshot-chunk?chunk_id=N`
     // and check it against `merkle_root` using the chunk's `audit_path`.
@@ -3119,7 +3119,7 @@ async fn snapshot_head(
 #[endpoint(
     operation_id = "cx.extension.soland.sync.snapshot_chunk",
     tags("sync"),
-    summary = "Read one chunk of a snapshot-v2 bundle (with audit_path proving merkle membership)"
+    summary = "Read one chunk of a snapshot-v1 bundle (with audit_path proving merkle membership)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.sync.snapshot_chunk"))]
 async fn snapshot_chunk(
@@ -3144,7 +3144,7 @@ async fn snapshot_chunk(
             "snapshot_ref no longer matches the current snapshot frontier",
         ));
     }
-    // Snapshot v2: chunks[N] is the SDK-canonical SnapshotChunk @
+    // Snapshot v1: chunks[N] is the SDK-canonical SnapshotChunk @
     // chunk_id=N. Out-of-range `chunk_id` returns 404.
     let tree_size = bundle.tree.tree_size();
     let chunk = bundle

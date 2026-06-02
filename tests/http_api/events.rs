@@ -275,11 +275,11 @@ async fn events_describe_and_single_event_submit_work() {
         "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
     assert_eq!(
-        legacy_frontier["events_frontier_v2"]["frontier_root"],
+        legacy_frontier["events_frontier"]["frontier_root"],
         frontier_root
     );
     assert_eq!(
-        legacy_frontier["events_frontier_v2"]["signatures"][0]["payload_digest"],
+        legacy_frontier["events_frontier"]["signatures"][0]["payload_digest"],
         legacy_frontier["signature"]["payload_digest"]
     );
     assert_eq!(legacy_frontier["signature"]["alg"], "EdDSA");

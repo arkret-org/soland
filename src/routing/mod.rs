@@ -1427,7 +1427,7 @@ pub(crate) async fn snapshot_bundle_for_space(
         state_digest.trim_start_matches("sha256:")
     );
 
-    // Snapshot v2: deterministically chunk the state-document
+    // Snapshot v1: deterministically chunk the state-document
     // bytes via the SDK chunker, build a Merkle tree over the chunk
     // digests, and sign a GeneratorProof binding the tree root to
     // (generator_did, space_id, state_root). Receivers verify the proof

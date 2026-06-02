@@ -5,7 +5,7 @@
 //! and depends on the SDK's `model::round4` typed surface
 //! (`contrix_sdk::*`). Wire-breaking summary (see `_todos.md` §B1):
 //!
-//! - **ServiceDescribe v2** — 17 required top-level fields including `trust_domain`,
+//! - **ServiceDescribe** — 17 required top-level fields including `trust_domain`,
 //!   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`. Validated in
 //!   [`crate::wire::describe`].
 //! - **EventsFrontier 3-way split** — `peer_role` query param routes to `account_client` /
