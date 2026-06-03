@@ -345,8 +345,10 @@ async fn open_recovery_session(
     let policy = signed_recovery_policy(signing, principal_id, vm, 1, None, POLICY_FIELDS);
     post_recovery_policy(state.clone(), token, &policy, StatusCode::CREATED).await;
     let create_body = serde_json::json!({
+        "principal_id": principal_id,
         "trust_domain": "cx:trust_domain:soland.local",
         "requesting_device_id": "cx:device:01904100-0000-7000-8000-000000000099",
+        "ssk_generation": 1,
     });
     post_recovery(
         state,
@@ -396,8 +398,10 @@ async fn recovery_session_create_requires_active_policy() {
         dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
 
     let create_body = serde_json::json!({
+        "principal_id": principal_id,
         "trust_domain": "cx:trust_domain:soland.local",
         "requesting_device_id": "cx:device:01904100-0000-7000-8000-000000000099",
+        "ssk_generation": 1,
     });
     let body = post_recovery(
         state,
@@ -448,7 +452,9 @@ fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
         "policy_id": session["policy_id"],
         "policy_version": session["policy_version"],
         "recovery_session_id": session["recovery_session_id"],
+        "ssk_generation": session["ssk_generation"],
         "challenge": session["challenge"],
+        "created_at": session["created_at"],
         "expires_at": session["expires_at"],
     });
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
@@ -472,6 +478,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
             "kind": "principal_signing",
             "challenge": challenge,
             "verification_method": vm,
+            "alg": "EdDSA",
             "signature": signature,
         },
     });
@@ -483,11 +490,18 @@ async fn recovery_session_principal_signing_proof_verifies() {
         StatusCode::OK,
     )
     .await;
-    assert_eq!(body["ok"], true);
     assert_eq!(body["state"], "verified", "valid proof advances to verified");
     assert_eq!(body["verification"], "verified");
+    assert_eq!(body["proof_summary"]["kind"], "principal_signing");
+    assert!(
+        body["proof_summary"]["proof_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"),
+        "proof_digest present: {body}"
+    );
 
-    // Verified on re-read.
+    // Verified on re-read, with schema + ssk_generation + proof_summary.
     let fetched = get_recovery(
         state,
         &token,
@@ -495,7 +509,10 @@ async fn recovery_session_principal_signing_proof_verifies() {
         StatusCode::OK,
     )
     .await;
+    assert_eq!(fetched["schema"], "cx.schema.recovery_session.v1");
     assert_eq!(fetched["state"], "verified");
+    assert_eq!(fetched["ssk_generation"], 1);
+    assert_eq!(fetched["proof_summary"]["kind"], "principal_signing");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -517,6 +534,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
             "kind": "principal_signing",
             "challenge": challenge,
             "verification_method": vm,
+            "alg": "EdDSA",
             "signature": signature,
         },
     });
@@ -638,6 +656,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
                 "kind": "principal_signing",
                 "challenge": challenge,
                 "verification_method": vm,
+                "alg": "EdDSA",
                 "signature": signature,
             },
         }),
@@ -681,6 +700,77 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     )
     .await;
     assert_eq!(again["error"]["code"], "recovery_session_not_verified");
+}
+
+// ── C-P5 did_recovery ↔ active policy value binding ─────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
+    // A did_recovery backup whose recovery_policy_ref does not equal the actor's
+    // active recovery policy MUST be rejected with recovery_policy_mismatch.
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[121u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let token =
+        dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+
+    // Seed an active recovery policy (v1) — its policy_id is random, so the
+    // backup's fixed wrong policy_id below cannot match it.
+    let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
+    post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+
+    let backup_id = "cx:backup:01964137-0000-7000-8000-0000000000c5";
+    let wrong_policy = "cx:policy:01964137-0000-7000-8000-0000000000ff";
+    let backup = serde_json::json!({
+        "backup_id": backup_id,
+        "actor_id": principal_id,
+        "backup_class": "did_recovery",
+        "backup_version": "kb_1",
+        "created_at": "2026-05-30T00:00:00Z",
+        "series_id": "cx:backup_series:01964137-0000-7000-8000-0000000000c5",
+        "series_seq": 0,
+        "recovery_policy_ref": { "policy_id": wrong_policy, "policy_version": 1 },
+        "encryption": {
+            "recipient_method": "recovery_public_key",
+            "recipient_key_ref": "did:web:alice.example#recovery",
+            "aead": {
+                "name": "chacha20_poly1305",
+                "aead_profile": "cx.aead.chacha20_poly1305.v1",
+                "enc": "ZW5jYXBzdWxhdGVka2V5"
+            }
+        },
+        "contents": [{ "item_type": "recovery_key_share", "secret_id": "test-secret" }],
+        "ciphertext": "AAAA",
+        "ciphertext_digest":
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "key_commitment":
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "auth_data": { "signed_fields": [
+            "backup_id", "actor_id", "backup_class", "backup_version", "series_id",
+            "series_seq", "supersedes", "encryption", "contents", "ciphertext_digest",
+            "recovery_policy_ref"
+        ] }
+    });
+    let body = put_key_backup(state, &token, backup_id, &backup, StatusCode::CONFLICT).await;
+    assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
+}
+
+async fn put_key_backup(
+    state: AppState,
+    token: &str,
+    backup_id: &str,
+    body: &Value,
+    expected_status: StatusCode,
+) -> Value {
+    let mut response = TestClient::put(format!("http://server/api/v1/keys/backups/{backup_id}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(body)
+        .send(&app_from_state(state))
+        .await;
+    let status = response.status_code.unwrap();
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, expected_status, "response body: {body}");
+    body
 }
 
 async fn post_recovery(

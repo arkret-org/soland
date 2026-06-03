@@ -403,6 +403,7 @@ fn validate_key_backup_body(
     if backup_class == "mls_history" {
         validate_mls_history_opaque_only(backup)?;
     }
+    validate_recovery_policy_ref_shape(backup, backup_class)?;
 
     let contents = backup
         .get("contents")
@@ -466,6 +467,108 @@ fn validate_mls_history_opaque_only(backup: &Value) -> Result<(), AppError> {
     }
 
     scan(backup, "")
+}
+
+/// C-P5 (key-backup.schema.json `recovery_policy_ref`) — structural check.
+///
+/// `did_recovery` backups MUST carry a top-level `recovery_policy_ref{policy_id,
+/// policy_version}` and MUST cover it in `auth_data.signed_fields`. Other classes
+/// MAY carry it as a signed hint; when present it MUST be well-formed and also
+/// covered by `signed_fields`. The value-vs-active-policy comparison happens in
+/// the put handler (`enforce_recovery_policy_ref`), which has store access.
+fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Result<(), AppError> {
+    let policy_ref = backup.get("recovery_policy_ref");
+    let present = policy_ref.is_some_and(|v| !v.is_null());
+
+    if backup_class == "did_recovery" && !present {
+        return Err(schema_error(
+            "did_recovery key backups MUST carry recovery_policy_ref{policy_id, policy_version}",
+        ));
+    }
+    if !present {
+        return Ok(());
+    }
+
+    let obj = policy_ref
+        .and_then(Value::as_object)
+        .ok_or_else(|| schema_error("recovery_policy_ref must be an object"))?;
+    let policy_id = obj
+        .get("policy_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| schema_error("recovery_policy_ref.policy_id is required"))?;
+    if !policy_id.starts_with("cx:policy:") {
+        return Err(schema_error(format!(
+            "recovery_policy_ref.policy_id `{policy_id}` must start with cx:policy:"
+        )));
+    }
+    let version = obj
+        .get("policy_version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| schema_error("recovery_policy_ref.policy_version is required (>=1)"))?;
+    if version < 1 {
+        return Err(schema_error("recovery_policy_ref.policy_version must be >= 1"));
+    }
+
+    // signed_fields MUST cover recovery_policy_ref whenever it is present.
+    let covered = backup
+        .get("auth_data")
+        .and_then(|a| a.get("signed_fields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|f| f.as_str() == Some("recovery_policy_ref")));
+    if !covered {
+        return Err(schema_error(
+            "auth_data.signed_fields MUST cover recovery_policy_ref when it is present",
+        ));
+    }
+    Ok(())
+}
+
+/// C-P5 value-level binding: a backup's `recovery_policy_ref` MUST match the
+/// actor's currently accepted recovery policy `(policy_id, version)`.
+///
+/// `did_recovery` MUST carry it (structural check already enforced) and MUST
+/// match the active policy; absence of an active policy yields
+/// `recovery_policy_missing`. Other classes MAY carry it as a hint; when present
+/// it MUST also match (`recovery_policy_mismatch`) but does not replace
+/// series/frontier/Realm checks.
+async fn enforce_recovery_policy_ref(
+    state: &AppState,
+    actor_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let Some(policy_ref) = backup.get("recovery_policy_ref").filter(|v| !v.is_null()) else {
+        return Ok(());
+    };
+    let ref_policy_id = policy_ref.get("policy_id").and_then(Value::as_str);
+    let ref_version = policy_ref.get("policy_version").and_then(Value::as_u64);
+
+    let active = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(actor_id)
+        .await
+        .map_err(|error| match error {
+            crate::persistence::PersistenceError::NotFound(message) => AppError::not_found(message),
+            other => AppError::internal(format!("recovery policy lookup failed: {other}")),
+        })?
+        .ok_or_else(|| {
+            AppError::conflict(format!(
+                "no accepted recovery policy for principal `{actor_id}`"
+            ))
+            .with_wire_code("recovery_policy_missing")
+        })?;
+
+    if ref_policy_id != Some(active.policy_id.as_str())
+        || ref_version != Some(active.version as u64)
+    {
+        return Err(AppError::conflict(format!(
+            "recovery_policy_ref {ref_policy_id:?} v{ref_version:?} does not match active policy \
+             `{}` v{}",
+            active.policy_id, active.version
+        ))
+        .with_wire_code("recovery_policy_mismatch"));
+    }
+    Ok(())
 }
 
 /// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
@@ -706,6 +809,7 @@ async fn put_key_backup(
     let backup = backup.into_inner();
     validate_key_backup_body(&backup_id, &session.actor, &backup)?;
     enforce_key_backup_series_chain(state, &session.actor, &backup).await?;
+    enforce_recovery_policy_ref(state, &session.actor, &backup).await?;
     let ciphertext_digest = backup
         .get("ciphertext_digest")
         .and_then(Value::as_str)
@@ -1000,6 +1104,69 @@ mod tests {
             .expect_err("secret_storage_key is not valid for did_recovery");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert!(err.message.contains("secret_storage_key"));
+    }
+
+    // ── C-P5: recovery_policy_ref binding (structural) ──────────────────────
+
+    const POLICY_REF: &str = "cx:policy:01964137-0000-7000-8000-0000000000aa";
+
+    fn did_recovery_signed_fields() -> Value {
+        json!([
+            "backup_id",
+            "actor_id",
+            "backup_class",
+            "backup_version",
+            "series_id",
+            "series_seq",
+            "supersedes",
+            "encryption",
+            "contents",
+            "ciphertext_digest",
+            "recovery_policy_ref"
+        ])
+    }
+
+    #[test]
+    fn did_recovery_requires_recovery_policy_ref() {
+        // Valid HPKE encryption, but no recovery_policy_ref → rejected.
+        let body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            recovery_public_key_encryption(),
+        );
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("did_recovery without recovery_policy_ref must be rejected");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("recovery_policy_ref"));
+    }
+
+    #[test]
+    fn recovery_policy_ref_must_be_covered_by_signed_fields() {
+        let mut body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            recovery_public_key_encryption(),
+        );
+        body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
+        // signed_fields present but does NOT cover recovery_policy_ref.
+        body["auth_data"] = json!({ "signed_fields": ["backup_id", "encryption"] });
+        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect_err("recovery_policy_ref not covered by signed_fields must be rejected");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert!(err.message.contains("signed_fields"));
+    }
+
+    #[test]
+    fn did_recovery_with_recovery_policy_ref_validates() {
+        let mut body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            recovery_public_key_encryption(),
+        );
+        body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
+        body["auth_data"] = json!({ "signed_fields": did_recovery_signed_fields() });
+        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
+            .expect("did_recovery with well-formed signed recovery_policy_ref should validate");
     }
 
     #[test]

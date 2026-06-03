@@ -18,6 +18,7 @@ CREATE TABLE recovery_session (
     trust_domain          TEXT NOT NULL,
     policy_id             TEXT NOT NULL,
     policy_version        INTEGER NOT NULL CHECK (policy_version >= 1),
+    ssk_generation        INTEGER NOT NULL CHECK (ssk_generation >= 1),
     policy_payload        JSONB NOT NULL,
     challenge             TEXT NOT NULL,
     state                 TEXT NOT NULL DEFAULT 'pending'

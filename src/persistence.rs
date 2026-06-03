@@ -7336,6 +7336,8 @@ struct RecoverySessionRow {
     policy_id: String,
     #[diesel(sql_type = Integer)]
     policy_version: i32,
+    #[diesel(sql_type = Integer)]
+    ssk_generation: i32,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
     #[diesel(sql_type = Text)]
@@ -7362,6 +7364,12 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id, row.policy_version
             ))
         })?;
+        let ssk_generation = u32::try_from(row.ssk_generation).map_err(|_| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid ssk_generation {}",
+                row.recovery_session_id, row.ssk_generation
+            ))
+        })?;
         Ok(Self {
             recovery_session_id: row.recovery_session_id,
             principal_id: row.principal_id,
@@ -7369,6 +7377,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             trust_domain: row.trust_domain,
             policy_id: row.policy_id,
             policy_version,
+            ssk_generation,
             policy_payload: row.policy_payload,
             challenge: row.challenge,
             state: row.state,
@@ -7381,8 +7390,8 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 }
 
 const RECOVERY_SESSION_COLUMNS: &str = "recovery_session_id, principal_id, requesting_device_id, \
-     trust_domain, policy_id, policy_version, policy_payload, challenge, state, proof_payload, \
-     created_at, updated_at, expires_at";
+     trust_domain, policy_id, policy_version, ssk_generation, policy_payload, challenge, state, \
+     proof_payload, created_at, updated_at, expires_at";
 
 #[async_trait]
 impl RecoverySessionStore for PgRecoverySessionStore {
@@ -7408,9 +7417,9 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         sql_query(
             "INSERT INTO recovery_session \
              (recovery_session_id, principal_id, requesting_device_id, trust_domain, policy_id, \
-              policy_version, policy_payload, challenge, state, proof_payload, created_at, \
-              updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+              policy_version, ssk_generation, policy_payload, challenge, state, proof_payload, \
+              created_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind::<Text, _>(&record.recovery_session_id)
         .bind::<Text, _>(&record.principal_id)
@@ -7418,6 +7427,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Text, _>(&record.policy_id)
         .bind::<Integer, _>(record.policy_version as i32)
+        .bind::<Integer, _>(record.ssk_generation as i32)
         .bind::<Jsonb, _>(&record.policy_payload)
         .bind::<Text, _>(&record.challenge)
         .bind::<Text, _>(&record.state)

@@ -1103,6 +1103,11 @@ pub struct RecoverySessionRecord {
     pub trust_domain: String,
     pub policy_id: String,
     pub policy_version: u32,
+    /// Accepted cross-signing generation snapshotted at session creation. The
+    /// recovery proof transcript binds it, and completion (C-P4) MUST reject if
+    /// the current accepted generation no longer equals this value
+    /// (`device_recovery_ssk_generation_mismatch`). Spec: device-lifecycle.md §15.
+    pub ssk_generation: u32,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,

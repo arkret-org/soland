@@ -22,6 +22,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use super::{AuthArgs, append_audit_log};
 use crate::error::{AppError, ErrorCode};
@@ -284,19 +285,57 @@ async fn recovery_receipts_get(
 // `recovery_completion_unimplemented`. The server never fakes a completed state.
 
 fn recovery_session_summary(record: &RecoverySessionRecord) -> Value {
-    json!({
+    let mut out = json!({
+        "schema": "cx.schema.recovery_session.v1",
         "recovery_session_id": record.recovery_session_id,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
-        "state": record.state,
+        "ssk_generation": record.ssk_generation,
         "challenge": record.challenge,
+        "state": record.state,
         "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-    })
+    });
+    // recovery-session.schema.json: verified/completed sessions MUST carry a
+    // proof_summary; rejected sessions MUST carry a rejection_reason_code.
+    if matches!(record.state.as_str(), "verified" | "completed")
+        && let Some(summary) = recovery_proof_summary(record)
+    {
+        out["proof_summary"] = summary;
+    }
+    out
+}
+
+/// Derive the `proof_summary{kind, proof_digest, verification_method}` from a
+/// session that has a recorded proof. `proof_digest` is the SHA-256 of the
+/// canonical recovery-proof transcript, deterministically recomputed from the
+/// stored session fields (no separate column needed).
+fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<Value> {
+    let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
+    let kind = proof.get("kind").and_then(Value::as_str)?;
+    let verification_method = proof.get("verification_method").and_then(Value::as_str);
+    let transcript = recovery_proof_transcript(record, kind);
+    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&transcript_bytes);
+    let proof_digest = format!("sha256:{}", hex_lower(&hasher.finalize()));
+    let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
+    if let Some(vm) = verification_method {
+        summary["verification_method"] = json!(vm);
+    }
+    Some(summary)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Load a session and enforce principal isolation: only the authenticated
@@ -350,6 +389,18 @@ async fn recovery_session_create(
     let principal = session.actor.clone();
     let payload = body.into_inner();
 
+    // `principal_id` is part of the wire contract (recovery-session.schema.json
+    // create_request) and MUST equal the authenticated principal — a caller may
+    // only open a recovery session for itself.
+    let body_principal = require_did(&payload, "principal_id")?;
+    if body_principal != principal {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "principal_id does not match the authenticated principal",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("recovery_principal_isolation"));
+    }
     let requesting_device_id = require_string(&payload, "requesting_device_id")?;
     if !requesting_device_id.starts_with("cx:device:") {
         return Err(AppError::invalid_param(format!(
@@ -362,6 +413,10 @@ async fn recovery_session_create(
             "trust_domain `{trust_domain}` must start with cx:trust_domain:",
         )));
     }
+    // Accepted cross-signing generation the requester believes is current. The
+    // server snapshots it onto the session; completion (C-P4) MUST reject if the
+    // accepted generation has since moved on (device_recovery_ssk_generation_mismatch).
+    let ssk_generation = require_u32_min(&payload, "ssk_generation", 1)?;
 
     // A session can only be opened against an accepted recovery policy — and the
     // requested trust_domain MUST match it (no domain confusion).
@@ -394,6 +449,21 @@ async fn recovery_session_create(
         .with_wire_code("recovery_policy_revoked"));
     }
 
+    // Optional client CAS hint: if `expected_recovery_policy_ref` is present it
+    // MUST match the policy the server is about to snapshot, else the client is
+    // racing a policy rotation → recovery_policy_mismatch.
+    if let Some(expected) = payload.get("expected_recovery_policy_ref") {
+        let exp_id = expected.get("policy_id").and_then(Value::as_str);
+        let exp_ver = expected.get("policy_version").and_then(Value::as_u64);
+        if exp_id != Some(active.policy_id.as_str()) || exp_ver != Some(active.version as u64) {
+            return Err(AppError::conflict(format!(
+                "expected_recovery_policy_ref does not match active policy `{}` v{}",
+                active.policy_id, active.version
+            ))
+            .with_wire_code("recovery_policy_mismatch"));
+        }
+    }
+
     let now = chrono::Utc::now();
     let record = RecoverySessionRecord {
         recovery_session_id: crate::ids::generate("recovery_session"),
@@ -402,6 +472,7 @@ async fn recovery_session_create(
         trust_domain,
         policy_id: active.policy_id.clone(),
         policy_version: active.version,
+        ssk_generation,
         policy_payload: active.raw_payload.clone(),
         challenge: generate_recovery_challenge(),
         state: "pending".to_owned(),
@@ -556,12 +627,16 @@ async fn recovery_session_proof_submit(
         .await
         .map_err(recovery_session_store_error)?;
 
-    json_ok(json!({
-        "ok": true,
+    // recovery-session.schema.json $defs/proof_submit_response (additionalProperties:false).
+    let mut response = json!({
         "recovery_session_id": updated.recovery_session_id,
-        "state": updated.state,
+        "state": "verified",
         "verification": "verified",
-    }))
+    });
+    if let Some(summary) = recovery_proof_summary(&updated) {
+        response["proof_summary"] = summary;
+    }
+    json_ok(response)
 }
 
 /// C-P3 — verify a `principal_signing` recovery proof.
@@ -569,7 +644,8 @@ async fn recovery_session_proof_submit(
 /// The proof MUST carry an Ed25519 signature by the principal's signing key
 /// over the canonical recovery-proof transcript, which binds every
 /// session-defining field: `(principal_id, requesting_device_id, trust_domain,
-/// policy_id, policy_version, recovery_session_id, challenge, expires_at)`.
+/// policy_id, policy_version, recovery_session_id, ssk_generation, challenge,
+/// created_at, expires_at)`.
 /// Because the transcript is reconstructed server-side from the stored session,
 /// any proof signed over a different binding (stale policy, replayed across
 /// principal/domain, different session) fails verification — this gives the
@@ -579,6 +655,18 @@ async fn verify_principal_signing_proof(
     record: &RecoverySessionRecord,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
+    // recovery-session.schema.json $defs/principal_signing_proof requires `alg`.
+    let alg = proof
+        .get("alg")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("proof.alg is required"))?;
+    if !matches!(alg, "EdDSA" | "Ed25519") {
+        return Err(AppError::invalid_param(format!(
+            "proof.alg `{alg}` not in {{EdDSA, Ed25519}}",
+        )));
+    }
     let verification_method = proof
         .get("verification_method")
         .and_then(Value::as_str)
@@ -633,7 +721,11 @@ fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Valu
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
         "recovery_session_id": record.recovery_session_id,
+        "ssk_generation": record.ssk_generation,
         "challenge": record.challenge,
+        // created_at is the SESSION creation/signing time (not proof time), per
+        // recovery-session.schema.json $defs/principal_signing_transcript.
+        "created_at": record.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         "expires_at": record.expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     })
 }
