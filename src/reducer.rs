@@ -2725,7 +2725,7 @@ fn augment_repair_winner_value(
 }
 
 fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
-    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    contrix_sdk::canonical::format_timestamp_canonical(now)
 }
 
 fn realm_organization_space_id_from_cell(cell_id: &str) -> Option<String> {
@@ -5495,7 +5495,7 @@ impl ProjectionState {
                     };
                 }
                 Some(id) => {
-                    if crate::ids::RealmId::parse(id).is_err() {
+                    if contrix_sdk::RealmId::new(id).is_err() {
                         return ProjectionEffect::Rejected {
                             reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                         };

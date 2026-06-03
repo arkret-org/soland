@@ -15,7 +15,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use contrix_sdk::{DeviceId, Did, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
-use sha2::{Digest, Sha256};
 
 use crate::ids;
 // ── HTTP helpers ────────────────────────────────────────────────────────────
@@ -141,10 +140,12 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 // ── Crypto helpers ──────────────────────────────────────────────────────────
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
+///
+/// Thin re-export of the SDK [`contrix_sdk::canonical::sha256_hex`] so soland
+/// shares the single canonical hash primitive instead of a local
+/// reimplementation.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    contrix_sdk::canonical::sha256_hex(bytes)
 }
 
 // ── Token / digest validators ───────────────────────────────────────────────

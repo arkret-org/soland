@@ -807,12 +807,15 @@ pub fn appeal_self_review_check(
 
 /// SHA-256 of canonical-JSON encoded value. Helper used by the
 /// moderation-appeal reducer to derive the appeal cell digest.
+///
+/// Delegates to the SDK [`contrix_sdk::canonical::canonical_sha256`] which
+/// hashes the canonical JSON byte stream and emits the wire `sha256:<hex>`
+/// form. There is no non-canonical fallback: a canonicalization failure is
+/// surfaced as an `Err` instead of silently hashing an empty/non-canonical
+/// byte stream.
 #[allow(dead_code)]
-pub fn canonical_sha256_hex(value: &Value) -> String {
-    use sha2::Digest;
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).unwrap_or_default();
-    let digest = sha2::Sha256::digest(&bytes);
-    format!("sha256:{:x}", digest)
+pub fn canonical_sha256_hex(value: &Value) -> contrix_sdk::Result<String> {
+    contrix_sdk::canonical::canonical_sha256(value)
 }
 
 #[cfg(test)]

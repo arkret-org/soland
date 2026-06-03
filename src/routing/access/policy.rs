@@ -383,7 +383,7 @@ async fn policy_check(
         "resource": resource_value,
         "request_canonical_digest": body.request_canonical_digest,
     });
-    let auth_state_digest = canonical_sha256_hex(&auth_state_value);
+    let auth_state_digest = canonical_sha256_hex(&auth_state_value)?;
 
     let mut policy_doc_ids: Vec<String> = state
         .persistence
@@ -402,7 +402,7 @@ async fn policy_check(
         .collect();
     policy_doc_ids.sort();
     let policy_frontier_value = json!({ "policy_documents": policy_doc_ids });
-    let policy_frontier_digest = canonical_sha256_hex(&policy_frontier_value);
+    let policy_frontier_digest = canonical_sha256_hex(&policy_frontier_value)?;
 
     let membership_frontier_value = if let Some(realm_id) = body.realm_id.as_deref() {
         let mut members = collect_realm_member_dids(state, realm_id);
@@ -412,7 +412,7 @@ async fn policy_check(
         let empty: Vec<String> = Vec::new();
         json!({ "realm_id": Value::Null, "members": empty })
     };
-    let membership_frontier_digest = canonical_sha256_hex(&membership_frontier_value);
+    let membership_frontier_digest = canonical_sha256_hex(&membership_frontier_value)?;
 
     let binding_expires_at = now() + chrono::Duration::hours(1);
     let bound_to = PolicyBinding {
@@ -481,14 +481,16 @@ async fn policy_check(
     })
 }
 
-/// Canonical-JSON sha256 hex digest helper used to build each of the
-/// four `PolicyBinding` frontier hashes. Falls back to `serde_json`
-/// serialization if canonicalization fails (should not happen for the
-/// well-typed JSON shapes built inside `policy_check`).
-fn canonical_sha256_hex(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
-        .unwrap_or_else(|_| serde_json::to_vec(value).unwrap_or_default());
-    sha256_hex(&bytes)
+/// Canonical-JSON sha256 digest helper used to build each of the four
+/// `PolicyBinding` frontier hashes. Delegates to the SDK
+/// [`contrix_sdk::canonical::canonical_sha256`] so the digest is computed over
+/// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
+/// **no** non-canonical fallback: if canonicalization fails the error is
+/// surfaced to the caller rather than silently hashing a non-canonical
+/// `serde_json::to_vec` byte stream.
+fn canonical_sha256_hex(value: &Value) -> Result<String, AppError> {
+    contrix_sdk::canonical::canonical_sha256(value)
+        .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))
 }
 
 /// Snapshot the current member DID list for `realm_id`. Returns an

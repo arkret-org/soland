@@ -15,7 +15,8 @@
 //! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
-//! - `validate_rfc3339_utc_z` — UTC-Z timestamp shape.
+//! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated
+//!   via the SDK `contrix_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
 //! Spec items still pending here are tracked in `_todos.md` (notably
@@ -2962,7 +2963,9 @@ pub fn validate_canonical_json_value_inner(
             for (key, value) in object {
                 if key.ends_with("_at") {
                     if let Some(s) = value.as_str() {
-                        validate_rfc3339_utc_z(s)?;
+                        contrix_sdk::canonical::validate_timestamp_canonical(s).map_err(|_| {
+                            "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)"
+                        })?;
                     }
                 }
             }
@@ -2972,32 +2975,6 @@ pub fn validate_canonical_json_value_inner(
     // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
     if root && contrix_sdk::canonical::canonical_json_bytes(value).is_err() {
         return Err("value fails canonical JSON byte serialization");
-    }
-    Ok(())
-}
-
-pub fn validate_rfc3339_utc_z(s: &str) -> Result<(), &'static str> {
-    // Must end with 'Z' (UTC) and contain 'T' separator.
-    if !s.ends_with('Z') {
-        return Err("timestamp must use UTC 'Z' suffix");
-    }
-    if !s.contains('T') {
-        return Err("timestamp must use 'T' date-time separator");
-    }
-    // Basic structural validation: YYYY-MM-DDTHH:MM:SS...Z
-    let date_part = &s[..s.find('T').unwrap()];
-    let time_part = &s[s.find('T').unwrap() + 1..s.len() - 1];
-    let date_segments: Vec<&str> = date_part.split('-').collect();
-    if date_segments.len() != 3 {
-        return Err("timestamp date must be YYYY-MM-DD");
-    }
-    if date_segments[0].len() != 4 || date_segments[1].len() != 2 || date_segments[2].len() != 2 {
-        return Err("timestamp date segments must be zero-padded");
-    }
-    // Time must have at least HH:MM:SS.
-    let time_segments: Vec<&str> = time_part.split(':').collect();
-    if time_segments.len() < 3 {
-        return Err("timestamp time must be HH:MM:SS[Z]");
     }
     Ok(())
 }

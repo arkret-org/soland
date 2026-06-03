@@ -842,6 +842,13 @@ pub struct AppState {
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: AuthzEngine,
     pub realms: Arc<Mutex<RealmDirectoryIndex>>,
+    /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
+    /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
+    /// projector when `cx.cross_signing.publish` lands, and read when verifying
+    /// a `cx.device.authorize` `cross_signing_binding`. In-memory like the other
+    /// reducer projections; durable rehydration rides on the durable event
+    /// store (control-realm Phase 3).
+    pub cross_signing: Arc<Mutex<contrix_sdk::DeviceManager>>,
     /// In-memory handle release ledger. Records `released_handle → released_at`
     /// for every handle vacated by `claim_handle` / `transfer_handle`; new
     /// claims for a handle still inside `HANDLE_GRACE_PERIOD_SECONDS` are
@@ -1900,6 +1907,7 @@ impl AppState {
             persistence,
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
+            cross_signing: Arc::new(Mutex::new(contrix_sdk::DeviceManager::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),

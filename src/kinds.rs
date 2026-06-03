@@ -3,43 +3,43 @@ use serde_json::Value;
 
 use crate::artifacts;
 
-pub const CX_MESSAGE_CREATE: &str = "cx.message.create";
-pub const CX_MESSAGE_REVISE: &str = "cx.message.revise";
-pub const CX_MESSAGE_REDACT: &str = "cx.message.redact";
-pub const CX_REACTION_ADD: &str = "cx.reaction.add";
-pub const CX_REACTION_REMOVE: &str = "cx.reaction.remove";
-pub const CX_RELATION_CREATE: &str = "cx.relation.create";
-pub const CX_RELATION_UPDATE: &str = "cx.relation.update";
-pub const CX_RELATION_DELETE: &str = "cx.relation.tombstone";
-pub const CX_VIEW_CREATE: &str = "cx.view.create";
-pub const CX_VIEW_UPDATE: &str = "cx.view.update";
-pub const CX_VIEW_RECONCILE: &str = "cx.view.reconcile";
+pub use contrix_sdk::events::kinds::MESSAGE_CREATE as CX_MESSAGE_CREATE;
+pub use contrix_sdk::events::kinds::MESSAGE_REVISE as CX_MESSAGE_REVISE;
+pub use contrix_sdk::events::kinds::MESSAGE_REDACT as CX_MESSAGE_REDACT;
+pub use contrix_sdk::events::kinds::REACTION_ADD as CX_REACTION_ADD;
+pub use contrix_sdk::events::kinds::REACTION_REMOVE as CX_REACTION_REMOVE;
+pub use contrix_sdk::events::kinds::RELATION_CREATE as CX_RELATION_CREATE;
+pub use contrix_sdk::events::kinds::RELATION_UPDATE as CX_RELATION_UPDATE;
+pub use contrix_sdk::events::kinds::RELATION_TOMBSTONE as CX_RELATION_DELETE;
+pub use contrix_sdk::events::kinds::VIEW_CREATE as CX_VIEW_CREATE;
+pub use contrix_sdk::events::kinds::VIEW_UPDATE as CX_VIEW_UPDATE;
+pub use contrix_sdk::events::kinds::VIEW_RECONCILE as CX_VIEW_RECONCILE;
 // Space-container lifecycle (`cx.space.*`). Spec
 // `contrix-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
 // container, distinct from the `cx.realm.*` security boundary below.
-pub const CX_SPACE_CONTAINER_CREATE: &str = "cx.space.create";
-pub const CX_SPACE_CONTAINER_UPDATE: &str = "cx.space.update";
-pub const CX_SPACE_CONTAINER_PARENT: &str = "cx.space.parent";
-pub const CX_SPACE_CONTAINER_ARCHIVE: &str = "cx.space.archive";
-pub const CX_SPACE_CONTAINER_RESTORE: &str = "cx.space.restore";
-pub const CX_SPACE_CONTAINER_TOMBSTONE: &str = "cx.space.tombstone";
+pub use contrix_sdk::events::kinds::SPACE_CREATE as CX_SPACE_CONTAINER_CREATE;
+pub use contrix_sdk::events::kinds::SPACE_UPDATE as CX_SPACE_CONTAINER_UPDATE;
+pub use contrix_sdk::events::kinds::SPACE_PARENT as CX_SPACE_CONTAINER_PARENT;
+pub use contrix_sdk::events::kinds::SPACE_ARCHIVE as CX_SPACE_CONTAINER_ARCHIVE;
+pub use contrix_sdk::events::kinds::SPACE_RESTORE as CX_SPACE_CONTAINER_RESTORE;
+pub use contrix_sdk::events::kinds::SPACE_TOMBSTONE as CX_SPACE_CONTAINER_TOMBSTONE;
 // Flow lifecycle (round 13 — Flow projection state machine). spec
 // `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
 // Flow has no dedicated `cx.flow.tombstone` event (terminal state reached
 // via `cx.redaction`); only archive/restore are state-machine transitions
 // here.
-pub const CX_FLOW_CREATE: &str = "cx.flow.create";
-pub const CX_FLOW_UPDATE: &str = "cx.flow.update";
-pub const CX_FLOW_ARCHIVE: &str = "cx.flow.archive";
-pub const CX_FLOW_RESTORE: &str = "cx.flow.restore";
+pub use contrix_sdk::events::kinds::FLOW_CREATE as CX_FLOW_CREATE;
+pub use contrix_sdk::events::kinds::FLOW_UPDATE as CX_FLOW_UPDATE;
+pub use contrix_sdk::events::kinds::FLOW_ARCHIVE as CX_FLOW_ARCHIVE;
+pub use contrix_sdk::events::kinds::FLOW_RESTORE as CX_FLOW_RESTORE;
 // Round 14 — Flow position events. Not state-machine transitions; they
 // write to the `cx.component.flow.position.v1` cell family keyed by
 // (board_space_id, flow_id). The Event-Envelope path only validates
 // payload shape and bumps the Flow's updated_at/by; the cell write
 // happens on the Move/Anchor pipeline (out of scope for the reducer's
 // structured cache).
-pub const CX_FLOW_MOVE: &str = "cx.flow.move";
-pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
+pub use contrix_sdk::events::kinds::FLOW_MOVE as CX_FLOW_MOVE;
+pub use contrix_sdk::events::kinds::FLOW_REORDER as CX_FLOW_REORDER;
 // Round 16 — Flow watch subscription event. Writes the
 // `cx.component.flow.watch.v1` cas-register cell keyed by
 // (flow_id, watcher_actor_id). Spec:
@@ -48,14 +48,14 @@ pub const CX_FLOW_REORDER: &str = "cx.flow.reorder";
 // shape; cell write happens on the Move/Anchor pipeline. The Flow
 // projection's updated_at is NOT bumped — watch is a per-(flow, actor)
 // subscription that does not represent a Flow state mutation.
-pub const CX_FLOW_WATCH_SET: &str = "cx.flow.watch.set";
+pub use contrix_sdk::events::kinds::FLOW_WATCH_SET as CX_FLOW_WATCH_SET;
 // Unified Flow tracks update event. `payload.patch` uses `cx.patch.v1`
 // against the `Flow.tracks` map; atomic across multiple tracks. soland's
 // wire validator enforces payload shape (flow_id + patch | tracks) and
 // the spec common-fields.md §5.1 update-on-non-active state guard.
 // FlowProjection doesn't carry `tracks` server-side; the touch just
 // bumps `updated_at` (mirror of cx.flow.move/reorder pattern).
-pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
+pub use contrix_sdk::events::kinds::FLOW_TRACKS_UPDATE as CX_FLOW_TRACKS_UPDATE;
 // CXP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
 // active durable kinds registered in
 // `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
@@ -66,13 +66,12 @@ pub const CX_FLOW_TRACKS_UPDATE: &str = "cx.flow.tracks.update";
 // the Circle's profile cadence) and MUST NOT be submitted directly via
 // `cx.events.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
-pub const CX_CIRCLE_CREATE: &str = "cx.circle.create";
-pub const CX_CIRCLE_UPDATE: &str = "cx.circle.update";
-pub const CX_CIRCLE_ARCHIVE: &str = "cx.circle.archive";
-pub const CX_CIRCLE_RESTORE: &str = "cx.circle.restore";
-pub const CX_CIRCLE_TOMBSTONE: &str = "cx.circle.tombstone";
-pub const CX_CIRCLE_MEMBER_STATE: &str = "cx.circle.member.state";
-pub const CX_CIRCLE_ANCHOR_COMMIT: &str = "cx.circle.anchor_commit";
+pub use contrix_sdk::events::kinds::CIRCLE_CREATE as CX_CIRCLE_CREATE;
+pub use contrix_sdk::events::kinds::CIRCLE_UPDATE as CX_CIRCLE_UPDATE;
+pub use contrix_sdk::events::kinds::CIRCLE_ARCHIVE as CX_CIRCLE_ARCHIVE;
+pub use contrix_sdk::events::kinds::CIRCLE_RESTORE as CX_CIRCLE_RESTORE;
+pub use contrix_sdk::events::kinds::CIRCLE_TOMBSTONE as CX_CIRCLE_TOMBSTONE;
+pub use contrix_sdk::events::kinds::CIRCLE_MEMBER_STATE as CX_CIRCLE_MEMBER_STATE;
 
 // CXP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
 // Realm-default scope) to a "narrow discussion" Flow bound to a
@@ -82,10 +81,10 @@ pub const CX_CIRCLE_ANCHOR_COMMIT: &str = "cx.circle.anchor_commit";
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
-pub const CX_MORPH_CREATE: &str = "cx.morph.create";
-pub const CX_MORPH_UPDATE: &str = "cx.morph.update";
-pub const CX_MORPH_ARCHIVE: &str = "cx.morph.archive";
-pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
+pub use contrix_sdk::events::kinds::MORPH_CREATE as CX_MORPH_CREATE;
+pub use contrix_sdk::events::kinds::MORPH_UPDATE as CX_MORPH_UPDATE;
+pub use contrix_sdk::events::kinds::MORPH_ARCHIVE as CX_MORPH_ARCHIVE;
+pub use contrix_sdk::events::kinds::MORPH_RESTORE as CX_MORPH_RESTORE;
 // `cx.field.position.move` and `cx.field.position.reorder` were removed in
 // revision 0a5ab85 (see contrix-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
@@ -93,12 +92,10 @@ pub const CX_MORPH_RESTORE: &str = "cx.morph.restore";
 // lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
 // generic unknown-event-kind path in `event_log::submit_event` already
 // rejects them because they no longer appear in `active_durable_event_kinds`.
-pub const CX_CONTAINER_MOVE_ITEM: &str = "cx.container.move_item";
-pub const CX_CONTAINER_REBALANCE: &str = "cx.container.rebalance";
-pub const CX_INVITE_CREATE: &str = "cx.invite.create";
-pub const CX_INVITE_ACCEPT: &str = "cx.invite.accept";
-pub const CX_INVITE_CANCEL: &str = "cx.invite.cancel";
-pub const CX_MEMBER_STATE: &str = "cx.member.state";
+pub use contrix_sdk::events::kinds::CONTAINER_MOVE_ITEM as CX_CONTAINER_MOVE_ITEM;
+pub use contrix_sdk::events::kinds::CONTAINER_REBALANCE as CX_CONTAINER_REBALANCE;
+pub use contrix_sdk::events::kinds::INVITE_CREATE as CX_INVITE_CREATE;
+pub use contrix_sdk::events::kinds::MEMBER_STATE as CX_MEMBER_STATE;
 // R3.1 spec-sync (2026-05-27, contrix-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
 // `cx.component.member.identity.v1`; lattice `ordered_log`; bottom
@@ -106,8 +103,8 @@ pub const CX_MEMBER_STATE: &str = "cx.member.state";
 // `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
 // is in `state::MemberIdentityRegistry`.
-pub const CX_MEMBER_IDENTITY_UPDATE: &str = "cx.member.identity.update";
-pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
+pub use contrix_sdk::events::kinds::MEMBER_IDENTITY_UPDATE as CX_MEMBER_IDENTITY_UPDATE;
+pub use contrix_sdk::events::kinds::READ_CURSOR_ADVANCE as CX_READ_MARKER;
 // Realm security-boundary lifecycle (`cx.realm.*`). Spec
 // `contrix-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
 //
@@ -115,50 +112,50 @@ pub const CX_READ_MARKER: &str = "cx.read_cursor.advance";
 // freezes the Realm and triggers the erasure-receipt fanout chain via
 // `cx.audit.erasure_receipt`. Distinct from `cx.realm.destroy`, which
 // is the GDPR-grade hard-delete request that retains a `retained_stub_digest`.
-pub const CX_REALM_CREATE: &str = "cx.realm.create";
-pub const CX_REALM_UPDATE: &str = "cx.realm.update";
-pub const CX_REALM_DESTROY: &str = "cx.realm.destroy";
-pub const CX_REALM_TOMBSTONE: &str = "cx.realm.tombstone";
-pub const CX_REALM_MODERATION_POLICY: &str = "cx.realm.moderation_policy";
-pub const CX_REALM_HISTORY_VISIBILITY: &str = "cx.realm.history_visibility";
-pub const CX_REALM_HISTORY_SHARING_POLICY: &str = "cx.realm.history_sharing_policy";
-pub const CX_REALM_PREVIEW_POLICY: &str = "cx.realm.preview_policy";
-pub const CX_REALM_KEY_SHARE: &str = "cx.realm_key.share";
+pub use contrix_sdk::events::kinds::REALM_CREATE as CX_REALM_CREATE;
+pub use contrix_sdk::events::kinds::REALM_UPDATE as CX_REALM_UPDATE;
+pub use contrix_sdk::events::kinds::REALM_DESTROY as CX_REALM_DESTROY;
+pub use contrix_sdk::events::kinds::REALM_TOMBSTONE as CX_REALM_TOMBSTONE;
+pub use contrix_sdk::events::kinds::REALM_MODERATION_POLICY as CX_REALM_MODERATION_POLICY;
+pub use contrix_sdk::events::kinds::REALM_HISTORY_VISIBILITY as CX_REALM_HISTORY_VISIBILITY;
+pub use contrix_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY as CX_REALM_HISTORY_SHARING_POLICY;
+pub use contrix_sdk::events::kinds::REALM_PREVIEW_POLICY as CX_REALM_PREVIEW_POLICY;
+pub use contrix_sdk::events::kinds::REALM_KEY_SHARE as CX_REALM_KEY_SHARE;
 pub const CX_CONFLICT_REPAIR: &str = "cx.conflict.repair";
-pub const CX_AUDIT_ERASURE_RECEIPT: &str = "cx.audit.erasure_receipt";
-pub const CX_REDACTION: &str = "cx.redaction";
+pub use contrix_sdk::events::kinds::AUDIT_ERASURE_RECEIPT as CX_AUDIT_ERASURE_RECEIPT;
+pub use contrix_sdk::events::kinds::REDACTION as CX_REDACTION;
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
 // `extensions/applet-integration.md`. soland's role at this layer is to
 // validate wire shape + persist + dispatch; applet bridge state machine
 // lives client-side (yougen) and at the applet service itself.
-pub const CX_APPLET_REGISTRATION: &str = "cx.applet.registration";
-pub const CX_APPLET_DISCOVERY: &str = "cx.applet.discovery";
-pub const CX_APPLET_PROTOCOL_SESSION_START: &str = "cx.applet.protocol_session.start";
-pub const CX_APPLET_PROTOCOL_SESSION_STATUS: &str = "cx.applet.protocol_session.status";
-pub const CX_APPLET_BRIDGE_ERROR: &str = "cx.applet.bridge_error";
+pub use contrix_sdk::events::kinds::APPLET_REGISTRATION as CX_APPLET_REGISTRATION;
+pub use contrix_sdk::events::kinds::APPLET_DISCOVERY as CX_APPLET_DISCOVERY;
+pub use contrix_sdk::events::kinds::APPLET_PROTOCOL_SESSION_START as CX_APPLET_PROTOCOL_SESSION_START;
+pub use contrix_sdk::events::kinds::APPLET_PROTOCOL_SESSION_STATUS as CX_APPLET_PROTOCOL_SESSION_STATUS;
+pub use contrix_sdk::events::kinds::APPLET_BRIDGE_ERROR as CX_APPLET_BRIDGE_ERROR;
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
-pub const CX_AGENT_ENDPOINT: &str = "cx.agent.endpoint";
+pub use contrix_sdk::events::kinds::AGENT_ENDPOINT as CX_AGENT_ENDPOINT;
 pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "cx.agent.protocol_session.start";
-pub const CX_AGENT_PROTOCOL_SESSION_STATUS: &str = "cx.agent.protocol_session.status";
-pub const CX_AGENT_PROTOCOL_SESSION_RESULT: &str = "cx.agent.protocol_session.result";
+pub use contrix_sdk::events::kinds::AGENT_PROTOCOL_SESSION_STATUS as CX_AGENT_PROTOCOL_SESSION_STATUS;
+pub use contrix_sdk::events::kinds::AGENT_PROTOCOL_SESSION_RESULT as CX_AGENT_PROTOCOL_SESSION_RESULT;
 
 // R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — agent lifecycle FSM
 // event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
 // (REDU-1).
-pub const CX_AGENT_PAUSE: &str = "cx.agent.pause";
-pub const CX_AGENT_RESUME: &str = "cx.agent.resume";
-pub const CX_AGENT_DEACTIVATE: &str = "cx.agent.deactivate";
+pub use contrix_sdk::events::kinds::AGENT_PAUSE as CX_AGENT_PAUSE;
+pub use contrix_sdk::events::kinds::AGENT_RESUME as CX_AGENT_RESUME;
+pub use contrix_sdk::events::kinds::AGENT_DEACTIVATE as CX_AGENT_DEACTIVATE;
 
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the anchor frontier / actor_seq). Wire-accepted only.
-pub const CX_AGENT_DRAFT_PROPOSE: &str = "cx.agent.draft.propose";
-pub const CX_AGENT_ACTION_REQUEST: &str = "cx.agent.action_request";
-pub const CX_AGENT_ACTION_APPROVE: &str = "cx.agent.action_approve";
-pub const CX_AGENT_ACTION_REJECT: &str = "cx.agent.action_reject";
+pub use contrix_sdk::events::kinds::AGENT_DRAFT_PROPOSE as CX_AGENT_DRAFT_PROPOSE;
+pub use contrix_sdk::events::kinds::AGENT_ACTION_REQUEST as CX_AGENT_ACTION_REQUEST;
+pub use contrix_sdk::events::kinds::AGENT_ACTION_APPROVE as CX_AGENT_ACTION_APPROVE;
+pub use contrix_sdk::events::kinds::AGENT_ACTION_REJECT as CX_AGENT_ACTION_REJECT;
 
 // Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
 // `.v1` suffix from these audit event kinds. Wire schema versioning now
@@ -171,8 +168,7 @@ pub const CX_AGENT_ACTION_REJECT: &str = "cx.agent.action_reject";
 // a UI banner. Reducer-level validation lives in `src/reducer.rs` under
 // `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
 // (still TODO stubs pending full attestation-chain verification).
-pub const CX_AUDIT_EPOCH_KEY_DESTRUCTION: &str = "cx.audit.epoch_key_destruction";
-pub const CX_REALM_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgrade";
+pub use contrix_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CX_REALM_AUDIT_POLICY_DOWNGRADE;
 
 // REDU-8 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — the
 // `cx.audit.epoch_destruction_failsafe` event cannot serve as a delayed
@@ -187,7 +183,6 @@ pub const CX_REALM_AUDIT_POLICY_DOWNGRADE: &str = "cx.realm.audit_policy_downgra
 // `cx.audit.epoch_key_destruction` is missing from the same batch with
 // `audit_agent_destruction_proof_missing` / the canonical attested-
 // hardware reason; do NOT silently accept it as remediation.
-pub const CX_AUDIT_EPOCH_DESTRUCTION_FAILSAFE: &str = "cx.audit.epoch_destruction_failsafe";
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
@@ -202,9 +197,7 @@ pub const CX_AUDIT_EPOCH_DESTRUCTION_FAILSAFE: &str = "cx.audit.epoch_destructio
 // `cx.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
-pub const CX_IDENTITY_ACCOUNTABILITY_GRANT: &str = "cx.identity.accountability_grant";
-pub const CX_MORPH_SCHEMA_MIGRATE: &str = "cx.morph.schema_migrate";
-pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_completeness";
+pub use contrix_sdk::events::kinds::MORPH_SCHEMA_MIGRATE as CX_MORPH_SCHEMA_MIGRATE;
 
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
 // governance + per-device push route binding.
@@ -225,9 +218,9 @@ pub const CX_ATTESTATION_RANGE_COMPLETENESS: &str = "cx.attestation.range_comple
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-pub const CX_REALM_DELIVERY_BINDING_POLICY: &str = "cx.realm.delivery_binding_policy";
+pub use contrix_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY as CX_REALM_DELIVERY_BINDING_POLICY;
 // `cx.device.push_route` is device-scoped.
-pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
+pub use contrix_sdk::events::kinds::DEVICE_PUSH_ROUTE as CX_DEVICE_PUSH_ROUTE;
 
 // Realm graph + capability derivation event kinds. Reducer dispatch
 // (`apply_realm_link` / `apply_realm_inheritance_policy` /
@@ -243,13 +236,13 @@ pub const CX_DEVICE_PUSH_ROUTE: &str = "cx.device.push_route";
 // `/api/v1/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
-pub const CX_REALM_LINK: &str = "cx.realm.link";
+pub use contrix_sdk::events::kinds::REALM_LINK as CX_REALM_LINK;
 // `cx.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
 // Reducer maintains a `cx.component.realm.inheritance_policy.v1`
 // cas-register cell; capability derivation runs against the projected
 // chain alongside `cx.capability.derived`.
-pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
+pub use contrix_sdk::events::kinds::REALM_INHERITANCE_POLICY as CX_REALM_INHERITANCE_POLICY;
 // `cx.capability.derived` (capability / reducer_input): records a
 // capability derived from a parent Realm's policy + a child Realm's
 // inheritance declaration. Reducer projects into
@@ -258,14 +251,13 @@ pub const CX_REALM_INHERITANCE_POLICY: &str = "cx.realm.inheritance_policy";
 // remaining cross-Realm derivation gaps are tracked as
 // TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
 // derivation under audited-high-risk policies.
-pub const CX_CAPABILITY_DERIVED: &str = "cx.capability.derived";
+pub use contrix_sdk::events::kinds::CAPABILITY_DERIVED as CX_CAPABILITY_DERIVED;
 
 // G3.S2 — `cx.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
 // `cx.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
-pub const CX_REALM_POLICY_SERVER: &str = "cx.realm.policy_server";
-pub const CX_ORGANIZATION_MODERATION_POLICY: &str = "cx.organization.moderation_policy";
+pub use contrix_sdk::events::kinds::REALM_POLICY_SERVER as CX_REALM_POLICY_SERVER;
 
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
@@ -294,12 +286,10 @@ pub const CX_ORGANIZATION_MODERATION_POLICY: &str = "cx.organization.moderation_
 // frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
-pub const CX_MLS_KEYPACKAGE: &str = "cx.mls.keypackage";
-pub const CX_MLS_WELCOME: &str = "cx.mls.welcome";
-pub const CX_MLS_COMMIT: &str = "cx.mls.commit";
-pub const CX_MLS_PROPOSAL: &str = "cx.mls.proposal";
-pub const CX_MLS_GENESIS: &str = "cx.mls.genesis";
-pub const CX_MLS_COMMIT_FAILED: &str = "cx.mls.commit_failed";
+pub use contrix_sdk::events::kinds::MLS_KEYPACKAGE as CX_MLS_KEYPACKAGE;
+pub use contrix_sdk::events::kinds::MLS_WELCOME as CX_MLS_WELCOME;
+pub use contrix_sdk::events::kinds::MLS_COMMIT as CX_MLS_COMMIT;
+pub use contrix_sdk::events::kinds::MLS_GENESIS as CX_MLS_GENESIS;
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
@@ -441,8 +431,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
         CX_CONTAINER_REBALANCE => Some(CX_CONTAINER_REBALANCE),
         CX_INVITE_CREATE => Some(CX_INVITE_CREATE),
-        CX_INVITE_ACCEPT => Some(CX_INVITE_ACCEPT),
-        CX_INVITE_CANCEL => Some(CX_INVITE_CANCEL),
         CX_READ_MARKER => Some(CX_READ_MARKER),
         CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE => {
             Some(match object_type {
@@ -485,15 +473,10 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // Tier-0 S6 audit kinds (C44 wire-valid, C45 renamed off `.v1`).
         // Projection is currently `Ignored` pending full attestation-chain
         // verification.
-        CX_AUDIT_EPOCH_KEY_DESTRUCTION => Some(CX_AUDIT_EPOCH_KEY_DESTRUCTION),
         CX_REALM_AUDIT_POLICY_DOWNGRADE => Some(CX_REALM_AUDIT_POLICY_DOWNGRADE),
         // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
-        // (accountability_grant strips unverified DIDs from accountable_principal_ids;
-        // morph.schema_migrate enforces capability + compatibility_class
-        // gate; range_completeness is non-reducer audit-side evidence).
-        CX_IDENTITY_ACCOUNTABILITY_GRANT => Some(CX_IDENTITY_ACCOUNTABILITY_GRANT),
+        // (morph.schema_migrate enforces capability + compatibility_class gate).
         CX_MORPH_SCHEMA_MIGRATE => Some(CX_MORPH_SCHEMA_MIGRATE),
-        CX_ATTESTATION_RANGE_COMPLETENESS => Some(CX_ATTESTATION_RANGE_COMPLETENESS),
         // Round C46 — delivery binding governance + push route binding.
         // Wire-valid; reducer projection is TODO pending full policy /
         // push registration plumbing.
@@ -507,7 +490,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
         // G3.S2 — policy server declaration.
         CX_REALM_POLICY_SERVER => Some(CX_REALM_POLICY_SERVER),
-        CX_ORGANIZATION_MODERATION_POLICY => Some(CX_ORGANIZATION_MODERATION_POLICY),
         _ => Some(object_type),
     }
 }
@@ -607,7 +589,7 @@ pub fn is_membership_kind(kind: &str) -> bool {
 }
 
 pub fn is_invite_kind(kind: &str) -> bool {
-    matches!(kind, CX_INVITE_CREATE | CX_INVITE_ACCEPT | CX_INVITE_CANCEL)
+    matches!(kind, CX_INVITE_CREATE | "cx.invite.accept" | "cx.invite.cancel")
 }
 
 pub fn is_realm_lifecycle_kind(kind: &str) -> bool {

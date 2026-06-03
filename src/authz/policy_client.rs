@@ -522,7 +522,7 @@ fn policy_decision_transcript_bytes(
 }
 
 fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    ts.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    contrix_sdk::canonical::format_timestamp_canonical(*ts)
 }
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
