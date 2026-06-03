@@ -4,8 +4,8 @@
 //! state without re-implementing the Move/Anchor pipeline.
 //!
 //! Endpoints:
-//! - `GET /admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
+//! - `GET /_soland/admin/cells/{cell_id}` — return one cell's resolved state.
+//! - `GET /_soland/admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
 //!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
@@ -19,9 +19,9 @@
 //! so the sentinel only affects diagnostic logging — TODO: thread real
 //! space_id through once cell_registry per-Space scoping lands).
 
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::state_res::{CellRegistry, CellStore};
-use contrix_sdk::{CellRef, SpaceId};
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::state_res::{CellRegistry, CellStore};
+use cokret_sdk::{CellRef, SpaceId};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ pub(super) fn router() -> Router {
 /// per-Space lookup hook (currently inert for the in-memory backend).
 const SENTINEL_SPACE_SCOPE: &str = "ck:space:00000000-0000-7000-8000-000000000000";
 
-/// Response body for `GET /admin/cells/{cell_id}`.
+/// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellStateResponse {
     /// Canonical wire form of the cell id (`ck:cell:<family>:<subject>`).
@@ -69,7 +69,7 @@ pub struct AdminCellStateResponse {
     pub bottom_policy: String,
 }
 
-/// Response body for `GET /admin/cells?...` (list).
+/// Response body for `GET /_soland/admin/cells?...` (list).
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellListResponse {
     pub cells: Vec<AdminCellStateResponse>,
@@ -121,7 +121,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
         });
     }
     // Best-effort: subject of `cx.component.space.*` cells is the space id.
-    if let Ok(parsed) = contrix_sdk::CellId::parse(cell_id.as_str())
+    if let Ok(parsed) = cokret_sdk::CellId::parse(cell_id.as_str())
         && parsed.subject().starts_with("ck:space:")
     {
         if let Ok(space) = SpaceId::new(parsed.subject().to_owned()) {
@@ -136,7 +136,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
     })
 }
 
-/// `GET /admin/cells/{cell_id}` — fetch one cell's state.
+/// `GET /_soland/admin/cells/{cell_id}` — fetch one cell's state.
 ///
 /// `cell_id` is the URL-encoded canonical wire form
 /// (`ck:cell:<family>:<subject>`). Salvo decodes path segments before
@@ -174,7 +174,7 @@ async fn admin_get_cell(
     // Reject syntactically valid CellRef strings that fail the stricter
     // `ck:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
-    let _ = contrix_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
+    let _ = cokret_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("cell_id is not a parseable ck:cell:<family>:<subject>: {e}"),
@@ -197,8 +197,8 @@ async fn admin_get_cell(
         })?;
     let lattice_kind = binding.lattice.kind().as_wire_str();
     let bottom_policy = match binding.bottom_mode {
-        contrix_sdk::state_res::BottomMode::Reject => "reject",
-        contrix_sdk::state_res::BottomMode::Expose => "expose",
+        cokret_sdk::state_res::BottomMode::Reject => "reject",
+        cokret_sdk::state_res::BottomMode::Expose => "expose",
     };
 
     let cell_state_opt = state
@@ -228,7 +228,7 @@ async fn admin_get_cell(
     ))
 }
 
-/// `GET /admin/cells?space_id=...&prefix=...&limit=...&offset=...`
+/// `GET /_soland/admin/cells?space_id=...&prefix=...&limit=...&offset=...`
 /// — list cells matching the filter.
 ///
 /// Filters:
@@ -294,7 +294,7 @@ async fn admin_list_cells(
         let Some(prefix_str) = prefix.as_deref() else {
             return true;
         };
-        contrix_sdk::CellId::parse(cell.as_str())
+        cokret_sdk::CellId::parse(cell.as_str())
             .map(|cid| cid.component().starts_with(prefix_str))
             .unwrap_or(false)
     };
@@ -334,8 +334,8 @@ async fn admin_list_cells(
         };
         let lattice_kind = binding.lattice.kind().as_wire_str();
         let bottom_policy = match binding.bottom_mode {
-            contrix_sdk::state_res::BottomMode::Reject => "reject",
-            contrix_sdk::state_res::BottomMode::Expose => "expose",
+            cokret_sdk::state_res::BottomMode::Reject => "reject",
+            cokret_sdk::state_res::BottomMode::Expose => "expose",
         };
         cells_out.push(state_response_from(
             &cell,

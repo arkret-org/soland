@@ -11,7 +11,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use contrix_sdk::{CrossSigningPublishContent, DeviceId, DeviceTrustBinding, Did};
+use cokret_sdk::{CrossSigningPublishContent, DeviceId, DeviceTrustBinding, Did};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
 
@@ -107,7 +107,7 @@ pub async fn validate_cross_signing_reset(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), &'static str> {
-    let content: contrix_sdk::CrossSigningResetContent =
+    let content: cokret_sdk::CrossSigningResetContent =
         serde_json::from_value(payload.clone()).map_err(|_| "cross_signing_reset_malformed")?;
     content
         .validate_structure()
@@ -128,7 +128,7 @@ pub async fn validate_cross_signing_reset(
     }
 
     match &content.proof {
-        contrix_sdk::CrossSigningResetProof::PrincipalSigning {
+        cokret_sdk::CrossSigningResetProof::PrincipalSigning {
             verification_method,
             signature,
             ..
@@ -153,7 +153,7 @@ pub async fn validate_cross_signing_reset(
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub fn project_cross_signing_reset(state: &AppState, payload: &Value) {
-    let content: contrix_sdk::CrossSigningResetContent = match serde_json::from_value(payload.clone())
+    let content: cokret_sdk::CrossSigningResetContent = match serde_json::from_value(payload.clone())
     {
         Ok(content) => content,
         Err(error) => {

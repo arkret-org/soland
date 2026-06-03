@@ -6,7 +6,7 @@
 //! - the query API filters by direction + link_kind_allow
 //! - schema validation rejects bad kinds / self-references / bad status
 
-use contrix_sdk::{Operation, RealmLinkDirection};
+use cokret_sdk::{Operation, RealmLinkDirection};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -17,8 +17,8 @@ const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::RealmId::new(space_id).unwrap(),
+        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )
@@ -164,7 +164,7 @@ fn realm_link_cell_value_persisted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let cell_id = contrix_sdk::CellRef::new(format!(
+    let cell_id = cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
     ))
     .unwrap();

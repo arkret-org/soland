@@ -6,7 +6,7 @@
 //! - `GET  /api/v1/read-cursors` — list the actor's read markers, optionally filtered by
 //!   `?space_id=...`.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;

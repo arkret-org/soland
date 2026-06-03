@@ -12,7 +12,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::{DeviceId, Did, SpaceId};
+use cokret_sdk::{DeviceId, Did, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 
@@ -28,7 +28,7 @@ pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message:
     let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(
-        contrix_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
+        cokret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id),
     ));
 }
 
@@ -49,7 +49,7 @@ pub fn render_error_with_detail(
     let request_id = ids::generate_request_id();
     res.status_code(status);
     res.render(Json(
-        contrix_sdk::ErrorEnvelope::new(code, message)
+        cokret_sdk::ErrorEnvelope::new(code, message)
             .with_request_id(request_id)
             .with_detail(
                 "reason_detail",
@@ -141,11 +141,11 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
 ///
-/// Thin re-export of the SDK [`contrix_sdk::canonical::sha256_hex`] so soland
+/// Thin re-export of the SDK [`cokret_sdk::canonical::sha256_hex`] so soland
 /// shares the single canonical hash primitive instead of a local
 /// reimplementation.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    contrix_sdk::canonical::sha256_hex(bytes)
+    cokret_sdk::canonical::sha256_hex(bytes)
 }
 
 // ── Token / digest validators ───────────────────────────────────────────────
@@ -228,7 +228,7 @@ pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
 /// CXP R3 spec-sync (2026-05-27, cokret-spec b47ff6ec): the wire-level
 /// canonical comparison MUST run through NFC + UTS#39 confusable folding +
 /// script-mix rejection. We delegate that to the SDK helper
-/// (`contrix_core::model::handle::normalize_handle_localpart`) so any
+/// (`cokret_core::model::handle::normalize_handle_localpart`) so any
 /// script-mixed or homograph-confusable handle is rejected with the
 /// `handle_homograph_forbidden` reason code before the ASCII allow-list
 /// kicks in. See `_before_todos.md §0.14` for the normative wording.
@@ -258,7 +258,7 @@ pub fn classify_handle(handle: &str) -> Result<(), (&'static str, &'static str)>
     // UTS#39 confusable skeleton + script-mix reject. Any failure here
     // is surfaced as `handle_homograph_forbidden` so call sites can
     // distinguish from the plain ASCII allow-list reject below.
-    if contrix_sdk::model::normalize_handle_localpart(localpart).is_err() {
+    if cokret_sdk::model::normalize_handle_localpart(localpart).is_err() {
         return Err((
             "handle_homograph_forbidden",
             "handle localpart fails NFC + UTS#39 confusable skeleton + script-mixed reject",

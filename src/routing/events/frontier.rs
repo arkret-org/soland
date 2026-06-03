@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use contrix_sdk::{
+use cokret_sdk::{
     Did, EventId, EventsFrontierAccountClientResponse, EventsFrontierAnonymousHealthResponse,
     EventsFrontierFederationPeerResponse, EventsFrontierResponse, FederationServiceBindingRef,
     FrontierPeerRole, Hash, RealmId, SpaceId, canonical,
@@ -250,7 +250,7 @@ pub(crate) fn sign_frontier_root(
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
-    let jws = contrix_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
+    let jws = cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
         .map_err(|error| error.to_string())?;
 
     Ok(json!({
@@ -301,7 +301,7 @@ fn fallback_federation_frontier_binding(
 
 #[cfg(test)]
 mod tests {
-    use contrix_sdk::TypedTrustDomainId;
+    use cokret_sdk::TypedTrustDomainId;
 
     use super::*;
 

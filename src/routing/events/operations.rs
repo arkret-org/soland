@@ -16,7 +16,7 @@
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated
-//!   via the SDK `contrix_sdk::canonical::validate_timestamp_canonical`.
+//!   via the SDK `cokret_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
 //! Spec items still pending here are tracked in `_todos.md` (notably
@@ -24,8 +24,8 @@
 //! encrypted-attachment `key_ref` shape, and the operation-schema gaps
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
-use contrix_sdk::schema::event_payload_validator_catalog;
-use contrix_sdk::{Hash, Operation};
+use cokret_sdk::schema::event_payload_validator_catalog;
+use cokret_sdk::{Hash, Operation};
 use serde_json::Value;
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
@@ -38,7 +38,7 @@ const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_viola
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
-    contrix_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
+    cokret_sdk::error::REASON_CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR;
 const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "cx.message.mention.broadcast";
 const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
     "effective_scope_members",
@@ -610,12 +610,12 @@ fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<()
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
-        return Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED);
+        return Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED);
     };
     if target.starts_with("ck:message:") || target.starts_with("ck:event:") {
         Ok(())
     } else {
-        Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED)
+        Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED)
     }
 }
 
@@ -828,7 +828,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     // ed25519 verification key, and verify `sig` over the
                     // canonical-json bytes of the binding payload.
                     let scheme = binding.get("scheme").and_then(|v| v.as_str());
-                    if scheme != Some(contrix_sdk::PARTICIPANT_BINDING_SCHEMA) {
+                    if scheme != Some(cokret_sdk::PARTICIPANT_BINDING_SCHEMA) {
                         return Err(
                             "participant_binding_invalid: participant_binding.scheme must be \
                              cx.media.participant_binding.v1",
@@ -1701,7 +1701,7 @@ fn validate_nonempty_unique_string_array(
 }
 
 fn validate_cross_signing_reset_payload(operation: &Operation) -> Result<(), &'static str> {
-    let reset: contrix_sdk::crypto_protocol::CrossSigningResetContent =
+    let reset: cokret_sdk::crypto_protocol::CrossSigningResetContent =
         serde_json::from_value(operation.payload.clone())
             .map_err(|_| "cross_signing reset payload violates reset profile")?;
     reset
@@ -1750,7 +1750,7 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
     if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
-        || message == contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH
+        || message == cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
         (salvo::http::StatusCode::PRECONDITION_FAILED, "failed_precondition")
     } else {
@@ -1848,7 +1848,7 @@ fn validate_reaction_scope_policy(
     if realm_ids_match(operation.realm_id.as_str(), &target_realm) {
         Ok(())
     } else {
-        Err(contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
+        Err(cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
     }
 }
 
@@ -2031,8 +2031,8 @@ async fn validate_message_edit_redact_window_policy(
 fn message_window_permits(
     is_redact: bool,
     age: chrono::Duration,
-    message_edit_window: Option<&contrix_sdk::authz::ConstraintDuration>,
-    message_redact_window: Option<&contrix_sdk::authz::ConstraintDuration>,
+    message_edit_window: Option<&cokret_sdk::authz::ConstraintDuration>,
+    message_redact_window: Option<&cokret_sdk::authz::ConstraintDuration>,
     allow_redact_after_window: bool,
 ) -> bool {
     if is_redact {
@@ -2059,7 +2059,7 @@ fn message_window_permits(
 /// `true` when `age` is within the constraint window (mirror of the SDK
 /// `max_age_contains` helper). Unknown units fail closed.
 fn duration_covers_age(
-    window: &contrix_sdk::authz::ConstraintDuration,
+    window: &cokret_sdk::authz::ConstraintDuration,
     age: chrono::Duration,
 ) -> bool {
     let allowed = match window.unit.as_str() {
@@ -2372,7 +2372,7 @@ async fn realm_owner_and_members(
         .lock()
         .ok()
         .map(|realms| {
-            if let Some(realm) = contrix_sdk::RealmId::new(realm_id.to_owned())
+            if let Some(realm) = cokret_sdk::RealmId::new(realm_id.to_owned())
                 .ok()
                 .and_then(|id| realms.get(&id))
             {
@@ -2380,7 +2380,7 @@ async fn realm_owner_and_members(
             }
             realm_id
                 .strip_prefix("ck:realm:")
-                .and_then(|suffix| contrix_sdk::RealmId::new(format!("ck:space:{suffix}")).ok())
+                .and_then(|suffix| cokret_sdk::RealmId::new(format!("ck:space:{suffix}")).ok())
                 .and_then(|id| realms.get(&id))
                 .map(|realm| realm.members.iter().map(ToString::to_string).collect())
                 .unwrap_or_default()
@@ -3017,7 +3017,7 @@ pub fn validate_canonical_json_value_inner(
             for (key, value) in object {
                 if key.ends_with("_at") {
                     if let Some(s) = value.as_str() {
-                        contrix_sdk::canonical::validate_timestamp_canonical(s).map_err(|_| {
+                        cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(|_| {
                             "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)"
                         })?;
                     }
@@ -3027,7 +3027,7 @@ pub fn validate_canonical_json_value_inner(
         _ => {}
     }
     // At the top level, attempt a canonical byte roundtrip to ensure full compliance.
-    if root && contrix_sdk::canonical::canonical_json_bytes(value).is_err() {
+    if root && cokret_sdk::canonical::canonical_json_bytes(value).is_err() {
         return Err("value fails canonical JSON byte serialization");
     }
     Ok(())
@@ -3035,9 +3035,9 @@ pub fn validate_canonical_json_value_inner(
 
 /// Compute a canonical SHA-256 digest of a JSON value using SDK canonical encoding.
 pub fn canonical_json_digest(value: &serde_json::Value) -> Result<Hash, String> {
-    contrix_sdk::canonical::canonical_sha256(value)
+    cokret_sdk::canonical::canonical_sha256(value)
         .and_then(|digest| {
-            Hash::new(digest).map_err(|e| contrix_sdk::Error::Protocol(e.to_string()))
+            Hash::new(digest).map_err(|e| cokret_sdk::Error::Protocol(e.to_string()))
         })
         .map_err(|e| e.to_string())
 }
@@ -3154,16 +3154,16 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
 
 #[cfg(test)]
 mod flow_tracks_update_tests {
-    use contrix_sdk::Operation;
+    use cokret_sdk::Operation;
     use serde_json::json;
 
     use super::*;
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kinds::CX_FLOW_TRACKS_UPDATE,
             payload,
         )
@@ -3345,9 +3345,9 @@ mod flow_tracks_update_tests {
 
     fn flow_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3398,9 +3398,9 @@ mod flow_tracks_update_tests {
 
     fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c7")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c7")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3466,16 +3466,16 @@ mod flow_tracks_update_tests {
 
 #[cfg(test)]
 mod message_projection_schema_tests {
-    use contrix_sdk::Operation;
+    use cokret_sdk::Operation;
     use serde_json::json;
 
     use super::*;
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3515,16 +3515,16 @@ mod message_projection_schema_tests {
 
 #[cfg(test)]
 mod spec_sync_validator_tests {
-    use contrix_sdk::Operation;
+    use cokret_sdk::Operation;
     use serde_json::json;
 
     use super::*;
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3677,16 +3677,16 @@ mod spec_sync_validator_tests {
 
 #[cfg(test)]
 mod sdk_artifact_schema_tests {
-    use contrix_sdk::Operation;
+    use cokret_sdk::Operation;
     use serde_json::json;
 
     use super::*;
 
     fn cross_signing_reset(payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "cx.cross_signing.reset",
             payload,
         )
@@ -3921,16 +3921,16 @@ pub fn validate_encrypted_payload_envelope(
 
 #[cfg(test)]
 mod reaction_and_window_policy_tests {
-    use contrix_sdk::Operation;
+    use cokret_sdk::Operation;
     use serde_json::json;
 
     use super::*;
 
     fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3968,7 +3968,7 @@ mod reaction_and_window_policy_tests {
             let op = reaction_op(kinds::CX_REACTION_ADD, json!({ "target_ref": target }));
             assert_eq!(
                 validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op),
-                Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
+                Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
         }
@@ -3993,8 +3993,8 @@ mod reaction_and_window_policy_tests {
         assert!(!realm_ids_match("ck:realm:abc", "ck:realm:def"));
     }
 
-    fn dur(value: u64, unit: &str) -> contrix_sdk::authz::ConstraintDuration {
-        contrix_sdk::authz::ConstraintDuration { value, unit: unit.to_owned() }
+    fn dur(value: u64, unit: &str) -> cokret_sdk::authz::ConstraintDuration {
+        cokret_sdk::authz::ConstraintDuration { value, unit: unit.to_owned() }
     }
 
     #[test]
@@ -4056,7 +4056,7 @@ mod reaction_and_window_policy_tests {
             "failed_precondition"
         );
         assert_eq!(
-            operation_policy_reason_code(contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH).1,
+            operation_policy_reason_code(cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH).1,
             "failed_precondition"
         );
         assert_eq!(
@@ -4075,16 +4075,16 @@ mod reaction_and_window_policy_tests {
 /// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
 /// forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
-    let parsed: contrix_sdk::ConsentRevokePayload = serde_json::from_value(payload.clone())
+    let parsed: cokret_sdk::ConsentRevokePayload = serde_json::from_value(payload.clone())
         .map_err(|err| {
             (
-                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                 format!("cx.consent.revoke payload shape is invalid: {err}"),
             )
         })?;
     parsed.validate_minimal().map_err(|err| {
         (
-            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
             format!("cx.consent.revoke payload invariant violation: {err}"),
         )
     })?;
@@ -4117,7 +4117,7 @@ pub fn cross_signing_publish_cas_check(
     }
     if new_generation != current_generation.saturating_add(1) {
         return Err((
-            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
             format!(
                 "cross_signing.publish new_generation={new_generation} must equal \
                  current_generation+1 ({})",
@@ -4131,8 +4131,8 @@ pub fn cross_signing_publish_cas_check(
 /// Spec B1.10 — build the CAS-register cell_subject string for
 /// `cx.cross_signing.publish`. Delegates to the SDK helper.
 #[allow(dead_code)]
-pub fn publish_cell_subject(principal_id: &contrix_sdk::Did, expected_previous_generation: u64) -> String {
-    contrix_sdk::cross_signing_publish_cell_subject(principal_id, expected_previous_generation)
+pub fn publish_cell_subject(principal_id: &cokret_sdk::Did, expected_previous_generation: u64) -> String {
+    cokret_sdk::cross_signing_publish_cell_subject(principal_id, expected_previous_generation)
 }
 
 /// Spec B1.11 — request body for `/api/v1/blob/presign`. The `realm_id`
@@ -4161,7 +4161,7 @@ pub fn verify_blob_presign_realm_binding(
         (None, None) => Ok(()),
         (Some(req), Some(meta)) if req == meta => Ok(()),
         (None, Some(meta)) => Err((
-            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
             format!("/blob/presign request MUST carry realm_id={meta:?} for Realm-owned blob"),
         )),
         (Some(req), None) => Err((
@@ -4181,24 +4181,24 @@ pub fn verify_blob_presign_realm_binding(
 /// `cx.component.flow.metadata.v1` with CAS-register semantics and
 /// `bottom=reject`. The subject is the flow_id.
 #[allow(dead_code)]
-pub fn flow_update_subject(flow_id: &contrix_sdk::FlowId) -> String {
-    contrix_sdk::flow_update_cell_subject(flow_id)
+pub fn flow_update_subject(flow_id: &cokret_sdk::FlowId) -> String {
+    cokret_sdk::flow_update_cell_subject(flow_id)
 }
 
 /// Spec B1.15 — cell_subject for `cx.flow.tracks_patch`. Same cell family
 /// as `cx.flow.update` — they compete via CAS.
 #[allow(dead_code)]
-pub fn flow_tracks_patch_subject(flow_id: &contrix_sdk::FlowId) -> String {
-    contrix_sdk::flow_tracks_patch_cell_subject(flow_id)
+pub fn flow_tracks_patch_subject(flow_id: &cokret_sdk::FlowId) -> String {
+    cokret_sdk::flow_tracks_patch_cell_subject(flow_id)
 }
 
 /// Spec B1.17 — accept an `agent_id` value. Must be a DID
 /// (`did:webvh:...` etc.). Returns the typed DID on success.
 #[allow(dead_code)]
-pub fn validate_agent_id(value: &str) -> Result<contrix_sdk::Did, (&'static str, String)> {
-    contrix_sdk::Did::new(value.to_owned()).map_err(|err| {
+pub fn validate_agent_id(value: &str) -> Result<cokret_sdk::Did, (&'static str, String)> {
+    cokret_sdk::Did::new(value.to_owned()).map_err(|err| {
         (
-            contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
             format!("agent_id must be a DID: {err}"),
         )
     })
@@ -4209,18 +4209,18 @@ pub fn validate_agent_id(value: &str) -> Result<contrix_sdk::Did, (&'static str,
 /// wrapper on success.
 pub fn validate_applet_id(
     value: &str,
-) -> Result<contrix_sdk::AppletIdentifier, (&'static str, String)> {
+) -> Result<cokret_sdk::AppletIdentifier, (&'static str, String)> {
     // The SDK's `AppletIdentifier` is `enum { Did(Did), Cx(AppletId) }`.
     // We attempt the DID form first (covers `did:webvh:applet.example`
     // and similar), then fall back to the typed `ck:applet:` form.
-    if let Ok(did) = contrix_sdk::Did::new(value.to_owned()) {
-        return Ok(contrix_sdk::AppletIdentifier::Did(did));
+    if let Ok(did) = cokret_sdk::Did::new(value.to_owned()) {
+        return Ok(cokret_sdk::AppletIdentifier::Did(did));
     }
-    if let Ok(applet) = contrix_sdk::AppletId::new(value.to_owned()) {
-        return Ok(contrix_sdk::AppletIdentifier::Cx(applet));
+    if let Ok(applet) = cokret_sdk::AppletId::new(value.to_owned()) {
+        return Ok(cokret_sdk::AppletIdentifier::Cx(applet));
     }
     Err((
-        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+        cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
         format!("applet_id must be a DID or ck:applet:<uuidv7>: got {value:?}"),
     ))
 }
@@ -4240,7 +4240,7 @@ mod wire_payload_tests {
             "observed_dots": [],
         }))
         .unwrap_err();
-        assert_eq!(err.0, contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
     }
 
     #[test]
@@ -4296,7 +4296,7 @@ mod wire_payload_tests {
     #[test]
     fn flow_cell_subject_helpers_return_flow_id() {
         let flow =
-            contrix_sdk::FlowId::new("ck:flow:01904100-0000-7000-8000-000000000001").unwrap();
+            cokret_sdk::FlowId::new("ck:flow:01904100-0000-7000-8000-000000000001").unwrap();
         assert_eq!(flow_update_subject(&flow), flow.as_str());
         assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
     }
@@ -4311,9 +4311,9 @@ mod wire_payload_tests {
             "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
         });
         let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
-            contrix_sdk::Operation::create(
-                contrix_sdk::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
-                contrix_sdk::RealmId::new(realm.to_owned()).unwrap(),
+            cokret_sdk::Operation::create(
+                cokret_sdk::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
+                cokret_sdk::RealmId::new(realm.to_owned()).unwrap(),
                 kind,
                 payload,
             )

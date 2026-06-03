@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use contrix_sdk::Operation;
+use cokret_sdk::Operation;
 use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid,
 };
@@ -8771,7 +8771,7 @@ mod tests {
     // surface itself.
 
     fn make_test_operation(operation_id: &str, realm_id: &str) -> Operation {
-        use contrix_sdk::{OperationId, RealmId};
+        use cokret_sdk::{OperationId, RealmId};
         let mut op = Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(realm_id.to_owned()).unwrap(),

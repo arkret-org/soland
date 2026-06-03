@@ -16,7 +16,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use ed25519_dalek::Signer;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -437,7 +437,7 @@ async fn policy_check(
         },
         "obligations": obligations,
     });
-    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(&to_sign)
+    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&to_sign)
         .unwrap_or_else(|_| serde_json::to_vec(&to_sign).unwrap_or_default());
     let protected_header =
         br#"{"alg":"EdDSA","typ":"cx.policy.check.binding.v1","b64":false,"crit":["b64"]}"#;
@@ -483,13 +483,13 @@ async fn policy_check(
 
 /// Canonical-JSON sha256 digest helper used to build each of the four
 /// `PolicyBinding` frontier hashes. Delegates to the SDK
-/// [`contrix_sdk::canonical::canonical_sha256`] so the digest is computed over
+/// [`cokret_sdk::canonical::canonical_sha256`] so the digest is computed over
 /// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
 fn canonical_sha256_hex(value: &Value) -> Result<String, AppError> {
-    contrix_sdk::canonical::canonical_sha256(value)
+    cokret_sdk::canonical::canonical_sha256(value)
         .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))
 }
 

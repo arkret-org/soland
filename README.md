@@ -359,7 +359,7 @@ soland exposes the canonical Cokret v1 routes (~180 routes total). Highlights:
 - `GET /api/v1/sync`, `GET /api/v1/identity/*`, `GET /api/v1/directory/*`
 - `POST /api/v1/auth/dev-login` (development_mode only)
 
-A complete list lives in the OpenAPI document above; `/admin/{resource}`
+A complete list lives in the OpenAPI document above; `/_soland/admin/{resource}`
 and `/api/v1/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Development
@@ -382,7 +382,7 @@ just check
 just test
 ```
 
-The OpenAPI snapshot test (`contrix_openapi_spec_contains_facet_projection_contracts`
+The OpenAPI snapshot test (`cokret_openapi_spec_contains_facet_projection_contracts`
 in `tests/http_api.rs`) locks the operation-id surface at the framework level;
 `tests/http_api.rs` covers protocol behaviors. See the root `../_todos.md` `F5/F6`
 entries for the known pre-existing test failures.

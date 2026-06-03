@@ -9,7 +9,7 @@
 //! suite and out-of-tree signers; not all are wired into a soland route yet.
 #![allow(dead_code)]
 
-use contrix_sdk::compute_policy_frontier_digest;
+use cokret_sdk::compute_policy_frontier_digest;
 use serde_json::Value;
 
 /// Spec T13 — compute the four-field policy frontier hash for an

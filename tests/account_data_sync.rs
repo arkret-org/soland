@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use contrix_sdk::{Did, RealmId};
+use cokret_sdk::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -85,7 +85,7 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
 }
 
 async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> String {
-    let realm_id = contrix_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -148,7 +148,7 @@ async fn send_plaintext_message(
         "content": {"kind": "cx.content.text", "body": body}
     });
     let mut event = json!({
-        "event_id": contrix_sdk::new_prefixed_uuid7("ck:event:"),
+        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
         "kind": "cx.message.create",
         "schema_id": "cx.schema.message.v1",
         "actor_id": actor,
@@ -186,7 +186,7 @@ async fn send_plaintext_message(
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{:x}", hasher.finalize())

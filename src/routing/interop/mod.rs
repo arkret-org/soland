@@ -38,6 +38,6 @@ pub fn well_known_router() -> Router {
     mimi::well_known_router()
 }
 
-pub fn contrix_router() -> Router {
-    webrtc::contrix_router()
+pub fn cokret_router() -> Router {
+    webrtc::cokret_router()
 }

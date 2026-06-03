@@ -336,7 +336,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     );
     let mut signed_payload = ice.clone();
     signed_payload.as_object_mut().unwrap().remove("signature");
-    let payload_bytes = contrix_sdk::canonical::canonical_json_bytes(&signed_payload).unwrap();
+    let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&signed_payload).unwrap();
     assert_eq!(
         ice["signature"]["payload_digest"],
         format!("sha256:{:x}", Sha256::digest(&payload_bytes))

@@ -73,7 +73,7 @@ editing `Cargo.toml`.
   this is the F3 migration path.
 - Keep handlers as `#[endpoint]` (Salvo OpenAPI variant). When you add a new
   route, mount it in [`src/lib.rs`](src/lib.rs) and ensure
-  `contrix_openapi_spec_contains_facet_projection_contracts` still passes.
+  `cokret_openapi_spec_contains_facet_projection_contracts` still passes.
 - Don't introduce new `serde_json::Value` blobs at the wire boundary if a
   typed `wire::*` shape would do — the OpenAPI doc improves alongside this.
 
@@ -82,7 +82,7 @@ editing `Cargo.toml`.
 - Unit tests live next to the code (`src/<module>.rs::tests`).
 - HTTP integration tests live in `tests/http_api.rs`; the file is large and
   scheduled for split (`_todos.md` Q7).
-- The OpenAPI doc test (`contrix_openapi_spec_contains_facet_projection_contracts`)
+- The OpenAPI doc test (`cokret_openapi_spec_contains_facet_projection_contracts`)
   is load-bearing — adding or removing routes that the test enumerates needs
   a corresponding update.
 

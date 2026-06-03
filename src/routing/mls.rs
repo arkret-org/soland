@@ -35,7 +35,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};

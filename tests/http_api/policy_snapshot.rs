@@ -187,7 +187,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let chunk_count = head["chunk_count"].as_u64().unwrap();
     let tree_size = chunk_count as usize;
     let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
-    let root = contrix_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     for chunk_id in 0..chunk_count {
         let chunk: Value = TestClient::get(format!(
             "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
@@ -198,15 +198,15 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
         .await
         .unwrap();
         assert_eq!(chunk["chunk_id"], chunk_id);
-        let leaf = contrix_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
-        let audit_path: Vec<contrix_sdk::Hash> = chunk["audit_path"]
+        let leaf = cokret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<cokret_sdk::Hash> = chunk["audit_path"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|h| contrix_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .map(|h| cokret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
             .collect();
         assert!(
-            contrix_sdk::SnapshotMerkleTree::verify(
+            cokret_sdk::SnapshotMerkleTree::verify(
                 &root,
                 &leaf,
                 chunk_id as usize,
@@ -300,7 +300,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     // For each chunk, audit_path MUST be non-empty (multi-chunk case)
     // AND reconstruct to merkle_root via SnapshotMerkleTree::verify.
     let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
-    let root = contrix_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
+    let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     let tree_size = chunk_count as usize;
     let mut any_non_empty_path = false;
     for chunk_id in 0..chunk_count {
@@ -312,18 +312,18 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
         .take_json()
         .await
         .unwrap();
-        let leaf = contrix_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
-        let audit_path: Vec<contrix_sdk::Hash> = chunk["audit_path"]
+        let leaf = cokret_sdk::Hash::new(chunk["digest"].as_str().unwrap().to_owned()).unwrap();
+        let audit_path: Vec<cokret_sdk::Hash> = chunk["audit_path"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|h| contrix_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
+            .map(|h| cokret_sdk::Hash::new(h.as_str().unwrap().to_owned()).unwrap())
             .collect();
         if !audit_path.is_empty() {
             any_non_empty_path = true;
         }
         assert!(
-            contrix_sdk::SnapshotMerkleTree::verify(
+            cokret_sdk::SnapshotMerkleTree::verify(
                 &root,
                 &leaf,
                 chunk_id as usize,

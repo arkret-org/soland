@@ -89,7 +89,7 @@ fn b64(bytes: &[u8]) -> String {
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     format!("sha256:{:x}", Sha256::digest(&bytes))
 }

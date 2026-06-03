@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
-use contrix_sdk::{
+use cokret_sdk::{
     Did, Ed25519MoveSigner, LinkType, MoveSigner, RealmRef, TargetDescriptor, canonical,
     parse_address, target_digest,
 };
@@ -356,7 +356,7 @@ async fn resolve_target(
 
 async fn resolve_space_for_address(
     state: &AppState,
-    parsed: &contrix_sdk::ParsedAddress,
+    parsed: &cokret_sdk::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
         let spaces = state.realms.lock().expect("spaces lock");
@@ -372,7 +372,7 @@ async fn resolve_space_for_address(
     })
 }
 
-fn target_kind_for_address(parsed: &contrix_sdk::ParsedAddress) -> &'static str {
+fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> &'static str {
     if parsed.message.is_some() {
         "message"
     } else if parsed.flow.is_some() {
@@ -468,7 +468,7 @@ fn member_count_bucket(count: usize) -> &'static str {
     }
 }
 
-fn object_preview_for_address(parsed: &contrix_sdk::ParsedAddress) -> Option<Value> {
+fn object_preview_for_address(parsed: &cokret_sdk::ParsedAddress) -> Option<Value> {
     let flow_id = parsed.flow.as_deref().map(|flow| format!("ck:flow:{flow}"));
     let message_id = parsed
         .message
@@ -487,7 +487,7 @@ fn object_preview_for_address(parsed: &contrix_sdk::ParsedAddress) -> Option<Val
 
 async fn preview_token_matches_policy(
     state: &AppState,
-    parsed: &contrix_sdk::ParsedAddress,
+    parsed: &cokret_sdk::ParsedAddress,
     realm_id: &str,
     token: &str,
     session: Option<&SessionRecord>,
@@ -552,7 +552,7 @@ async fn preview_token_matches_policy(
 
 fn optional_structured_token_target_matches(
     token: &str,
-    parsed: &contrix_sdk::ParsedAddress,
+    parsed: &cokret_sdk::ParsedAddress,
     realm_id: &str,
     effective_link_type: LinkType,
 ) -> bool {
@@ -567,7 +567,7 @@ fn optional_structured_token_target_matches(
 
 fn token_target_matches_claim(
     claim: &Value,
-    parsed: &contrix_sdk::ParsedAddress,
+    parsed: &cokret_sdk::ParsedAddress,
     realm_id: &str,
     effective_link_type: LinkType,
 ) -> bool {

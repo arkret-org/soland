@@ -17,7 +17,7 @@
 //! 5. `cx.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
 
-use contrix_sdk::{Did, Operation, OperationId, RealmId};
+use cokret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{

@@ -10,8 +10,8 @@
 //!     and the cargo-runnable bin.
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- \ --space-id <id> --dry-run`.
 
-use contrix_sdk::state_res::{AnchorStore, MoveStore};
-use contrix_sdk::{Move, MoveId, SpaceId};
+use cokret_sdk::state_res::{AnchorStore, MoveStore};
+use cokret_sdk::{Move, MoveId, SpaceId};
 
 use crate::state::AppState;
 

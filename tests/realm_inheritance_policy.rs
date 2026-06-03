@@ -1,8 +1,8 @@
 //! Reducer-level tests for `cx.realm.inheritance_policy` +
 //! `cx.capability.derived` (R3.2).
 
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::{Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -51,7 +51,7 @@ fn seed_source_grant(
     actions: &[&str],
     bundles: &[&str],
 ) {
-    let cell_id = contrix_sdk::CellRef::new(format!(
+    let cell_id = cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.capability.grant.v1:{grant_ref}"
     ))
     .unwrap();
@@ -108,7 +108,7 @@ fn inheritance_policy_projects_cell_and_cache() {
     assert_eq!(cached.max_depth, 1);
 
     // Cell projection.
-    let cell_id = contrix_sdk::CellRef::new(format!(
+    let cell_id = cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.realm.inheritance_policy.v1:{REALM_CHILD}"
     ))
     .unwrap();

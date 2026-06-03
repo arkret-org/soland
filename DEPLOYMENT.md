@@ -406,7 +406,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   `cargo run --bin soland-rotate-drill --release` (see
   `src/bin/soland-rotate-drill.rs`) against a staging replica. The
   drill mints a fresh seed, posts it through the live
-  `/admin/anchorer/rotate-signing-key` path, and verifies the
+  `/_soland/admin/anchorer/rotate-signing-key` path, and verifies the
   hot-swap completed without dropping concurrent signing passes.
 - **Production rotation**: stage the new seed in the secret manager,
   call the rotate-signing-key admin endpoint on each replica in turn,

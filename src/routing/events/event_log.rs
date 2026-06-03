@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use contrix_sdk::{
+use cokret_sdk::{
     EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
     canonical,
 };
@@ -588,7 +588,7 @@ async fn events_frontier(
     // ResBody wire shape (consumers that haven't migrated to the typed
     // `events_frontier` field yet), but the typed variant is the
     // canonical shape per spec a77b995.
-    use contrix_sdk::Did as SdkDid;
+    use cokret_sdk::Did as SdkDid;
     let service_did = SdkDid::new(state.config.service_did.clone())
         .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
     let latest_realm_event_ids = realm_frontier.iter().filter_map(|(realm, entry)| {
@@ -605,7 +605,7 @@ async fn events_frontier(
         .and_then(|value| RealmId::new(value.to_owned()).ok());
     let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let federation_signature = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer)
+    let federation_signature = if matches!(peer_role, cokret_sdk::FrontierPeerRole::FederationPeer)
     {
         let signing_key = state.anchorer_signing_key();
         Some(
@@ -621,7 +621,7 @@ async fn events_frontier(
     } else {
         None
     };
-    let federation_binding = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer) {
+    let federation_binding = if matches!(peer_role, cokret_sdk::FrontierPeerRole::FederationPeer) {
         let binding_realm = selected_realm_id.clone().unwrap_or_else(|| {
             RealmId::new("ck:realm:00000000-0000-7000-8000-000000000000".to_owned())
                 .expect("built-in fallback realm id is valid")
@@ -653,9 +653,9 @@ async fn events_frontier(
     // typed builder already does this; we mirror it onto the legacy
     // `frontier` envelope for back-compat.
     let peer_role_str = match peer_role {
-        contrix_sdk::FrontierPeerRole::AccountClient => "account_client",
-        contrix_sdk::FrontierPeerRole::FederationPeer => "federation_peer",
-        contrix_sdk::FrontierPeerRole::AnonymousHealth => "anonymous_health",
+        cokret_sdk::FrontierPeerRole::AccountClient => "account_client",
+        cokret_sdk::FrontierPeerRole::FederationPeer => "federation_peer",
+        cokret_sdk::FrontierPeerRole::AnonymousHealth => "anonymous_health",
     };
     let mut frontier = json!({
         "storage": state.db.mode(),
@@ -664,7 +664,7 @@ async fn events_frontier(
         "events_frontier": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
     });
     match peer_role {
-        contrix_sdk::FrontierPeerRole::FederationPeer => {
+        cokret_sdk::FrontierPeerRole::FederationPeer => {
             if let Some(obj) = frontier.as_object_mut() {
                 obj.insert(
                     "frontier_root".to_owned(),
@@ -680,7 +680,7 @@ async fn events_frontier(
                 );
             }
         }
-        contrix_sdk::FrontierPeerRole::AnonymousHealth => {
+        cokret_sdk::FrontierPeerRole::AnonymousHealth => {
             // Strip everything that would leak per-tenant state.
             if let Some(obj) = frontier.as_object_mut() {
                 obj.insert(
@@ -700,7 +700,7 @@ async fn events_frontier(
                 frontier,
             });
         }
-        contrix_sdk::FrontierPeerRole::AccountClient => {}
+        cokret_sdk::FrontierPeerRole::AccountClient => {}
     }
     crate::result::json_ok(EventsFrontierResBody {
         actor_frontier,
@@ -1833,7 +1833,7 @@ fn projected_mls_governance_binding_covers_policy_root(
         if !is_mls_cell {
             continue;
         }
-        let contrix_sdk::lattice::CellState::Value(value) = cell_state else {
+        let cokret_sdk::lattice::CellState::Value(value) = cell_state else {
             continue;
         };
         if !value_targets_realm(value, realm_id) {
@@ -2500,7 +2500,7 @@ fn validate_event_schema_and_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
     if !state.config.development_mode {
-        let registry = contrix_sdk::schema::schema_registry_from_default_spec_artifacts()
+        let registry = cokret_sdk::schema::schema_registry_from_default_spec_artifacts()
             .map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -2549,7 +2549,7 @@ fn validate_event_schema_and_payload(
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    contrix_sdk::schema::event_payload_validator_catalog()
+    cokret_sdk::schema::event_payload_validator_catalog()
         .validate_payload(kind, payload)
         .map_err(|error| {
             event_validation_error(
@@ -2615,7 +2615,7 @@ fn validate_member_identity_proof(
             "identity_payload must carry member_identity or encrypted_payload",
         ));
     };
-    let identity: contrix_sdk::MemberIdentity =
+    let identity: cokret_sdk::MemberIdentity =
         serde_json::from_value(member_identity_value.clone()).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -2658,7 +2658,7 @@ fn validate_member_identity_proof(
     }
     if !matches!(
         identity.proof.signature_algorithm,
-        contrix_sdk::MemberIdentitySignatureAlgorithm::Ed25519
+        cokret_sdk::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
         return Err(event_validation_error(
             StatusCode::NOT_IMPLEMENTED,
@@ -3204,7 +3204,7 @@ async fn member_join_accepts_pending_invite(
 /// `cx.realm.create` bootstrap path so a duplicate-create attempt (where
 /// the Realm already has members) falls back to the normal member check.
 fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
-    let Ok(space_id_typed) = contrix_sdk::RealmId::new(space_id.to_owned()) else {
+    let Ok(space_id_typed) = cokret_sdk::RealmId::new(space_id.to_owned()) else {
         return false;
     };
     state
@@ -3230,11 +3230,11 @@ async fn bootstrap_realm_member_index(
     actor: &str,
     object: &serde_json::Map<String, Value>,
 ) {
-    let Ok(space_id_typed) = contrix_sdk::RealmId::new(space_id.to_owned()) else {
+    let Ok(space_id_typed) = cokret_sdk::RealmId::new(space_id.to_owned()) else {
         tracing::warn!(%space_id, "bootstrap_realm_member_index: invalid realm_id shape");
         return;
     };
-    let Ok(actor_typed) = contrix_sdk::Did::new(actor.to_owned()) else {
+    let Ok(actor_typed) = cokret_sdk::Did::new(actor.to_owned()) else {
         tracing::warn!(%actor, "bootstrap_realm_member_index: invalid actor DID");
         return;
     };
@@ -3319,7 +3319,7 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
 }
 
 /// CXP-0007 — recursively scan `value` for the first key listed in the SDK's
-/// [`contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
+/// [`cokret_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
 /// set. Receivers MUST refuse the legacy field names outright. Returns the
 /// offending field name when one is present, otherwise `None`.
 ///
@@ -3332,11 +3332,11 @@ fn first_forbidden_wire_field(value: Option<&Value>) -> Option<&'static str> {
         match value {
             Value::Object(map) => {
                 for (key, child) in map {
-                    if contrix_sdk::forbidden_wire_fields::is_forbidden_wire_field(key) {
+                    if cokret_sdk::forbidden_wire_fields::is_forbidden_wire_field(key) {
                         // Translate the wire key back to the SDK's canonical
                         // &'static str so the caller's error message uses a
                         // stable identifier.
-                        return contrix_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS
+                        return cokret_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS
                             .iter()
                             .copied()
                             .find(|name| *name == key.as_str());
@@ -3948,7 +3948,7 @@ pub async fn effective_read_receipt_policy_for_space(
     // `cx.component.space.read_receipt_policy.v1` along with the event
     // kind.)
     if let Ok(proj) = state.projection.lock() {
-        let cell_id = contrix_sdk::CellRef::new(format!(
+        let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
@@ -4030,7 +4030,7 @@ pub enum EventsSubmitRequest {
     /// fields validated.
     Federation(EventsSubmitFederationRequest),
     /// Batch form — multiple envelopes, optional `idempotency_key`.
-    Batch(contrix_sdk::EventsSubmitBatchRequest),
+    Batch(cokret_sdk::EventsSubmitBatchRequest),
     /// Single Event Envelope (legacy / dominant shape).
     Single(Value),
 }
@@ -4070,7 +4070,7 @@ impl EventsSubmitRequest {
             for entry in frontier {
                 if !seen.insert(entry.as_str()) {
                     return Err((
-                        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                        cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                         format!("{name} contains duplicate entry {:?}", entry.as_str()),
                     ));
                 }
@@ -4078,7 +4078,7 @@ impl EventsSubmitRequest {
         }
         if binding.destination_service_type.trim().is_empty() {
             return Err((
-                contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
+                cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                 "service_binding_ref.destination_service_type MUST be a non-empty string"
                     .to_owned(),
             ));
@@ -4094,7 +4094,7 @@ impl EventsSubmitRequest {
 /// rejected; returns `None` when the kind is fine to forward to the
 /// existing durable-event validator pipeline.
 pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
-    if contrix_sdk::events::is_ephemeral_kind(kind) {
+    if cokret_sdk::events::is_ephemeral_kind(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via cx.schema.ephemeral_envelope.v1 \
@@ -4102,7 +4102,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              (cx.key.verification.* to-device); not durable cx.events.submit",
         ));
     }
-    if contrix_sdk::events::is_receipt_object_only(kind) {
+    if cokret_sdk::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,
             "cx.event_batch_receipt is a receipt object only; \
@@ -4181,7 +4181,7 @@ pub fn cross_signing_reset_replay_check(
                     .to_owned(),
             )
         })?;
-    if contrix_sdk::EventId::new(payload_reset_event_id).is_err() {
+    if cokret_sdk::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.reset_event_id must be a ck:event:<uuidv7>".to_owned(),
@@ -4216,13 +4216,13 @@ pub fn realm_policy_components_check(
         .and_then(Value::as_u64)
     {
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
-        if contrix_sdk::validate_relaxed_window_ms(window_u32).is_err() {
+        if cokret_sdk::validate_relaxed_window_ms(window_u32).is_err() {
             return Err((
                 ErrorCode::RelaxedWindowExceedsCeiling,
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
-                    contrix_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                    cokret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
                 ),
             ));
         }
@@ -4411,26 +4411,26 @@ mod admission_tests {
     #[test]
     fn federation_binding_rejects_duplicate_frontier_entries() {
         let req = EventsSubmitFederationRequest {
-            service_binding_ref: contrix_sdk::FederationServiceBindingRef {
+            service_binding_ref: cokret_sdk::FederationServiceBindingRef {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-                space_policy_hash: contrix_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+                space_policy_hash: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                     .unwrap(),
                 membership_frontier: vec![
-                    contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
+                    cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
                         .unwrap(),
-                    contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
+                    cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
                         .unwrap(),
                 ],
                 delivery_binding_frontier: Vec::new(),
                 destination_service_type: "principal_server".to_owned(),
-                reducer_profile_digest: contrix_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
+                reducer_profile_digest: cokret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
                     .unwrap(),
             },
             events: Vec::new(),
             idempotency_key: None,
         };
         let err = EventsSubmitRequest::validate_federation_binding(&req).unwrap_err();
-        assert_eq!(err.0, contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+        assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
     }
 }
 
@@ -4534,30 +4534,30 @@ mod proof_strictness_tests {
         let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
         let verification_method = format!("{did}#{did_key_fragment}");
         let realm_id =
-            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
                 .unwrap();
-        let actor_id = contrix_sdk::Did::new(did.clone()).unwrap();
+        let actor_id = cokret_sdk::Did::new(did.clone()).unwrap();
         let subject_id = actor_id.clone();
-        let zero_hash = contrix_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        let mut identity = contrix_sdk::MemberIdentity::new(
+        let zero_hash = cokret_sdk::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        let mut identity = cokret_sdk::MemberIdentity::new(
             realm_id.clone(),
             actor_id.clone(),
             subject_id,
-            contrix_sdk::DisplayProfile {
+            cokret_sdk::DisplayProfile {
                 display_name: "Alice".to_owned(),
                 avatar_blob_ref: None,
             },
             chrono::Utc::now(),
-            contrix_sdk::MemberIdentityProof {
+            cokret_sdk::MemberIdentityProof {
                 verification_method,
-                signature_algorithm: contrix_sdk::MemberIdentitySignatureAlgorithm::Ed25519,
+                signature_algorithm: cokret_sdk::MemberIdentitySignatureAlgorithm::Ed25519,
                 payload_digest: zero_hash,
                 signature: "AA".to_owned(),
             },
         );
         let canonical_bytes = identity.canonical_payload_bytes().unwrap();
         identity.proof.payload_digest =
-            contrix_sdk::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
+            cokret_sdk::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
         identity.proof.signature =
             URL_SAFE_NO_PAD.encode(signing_key.sign(&canonical_bytes).to_bytes());
         let payload = json!({
@@ -4692,11 +4692,11 @@ mod proof_strictness_tests {
         {
             let mut projection = state.projection.lock().unwrap();
             projection.cells.insert(
-                contrix_sdk::CellRef::new(
+                cokret_sdk::CellRef::new(
                     "ck:cell:cx.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
                 )
                 .unwrap(),
-                contrix_sdk::lattice::CellState::Value(json!({
+                cokret_sdk::lattice::CellState::Value(json!({
                     "realm_id": realm_id,
                     "epoch": 7,
                     "governance_binding": {
@@ -4890,11 +4890,11 @@ mod proof_strictness_tests {
 
     #[test]
     fn event_payload_validator_catalog_covers_active_standard_durable_events() {
-        let catalog = contrix_sdk::schema::event_payload_validator_catalog();
+        let catalog = cokret_sdk::schema::event_payload_validator_catalog();
         let event_kinds = artifacts::active_durable_event_kinds()
             .iter()
             .map(String::as_str)
-            .filter(|kind| contrix_sdk::events::is_standard_event_kind(kind))
+            .filter(|kind| cokret_sdk::events::is_standard_event_kind(kind))
             .collect::<Vec<_>>();
         let missing = catalog.missing_payload_validators_for(event_kinds.iter().copied());
         assert!(
@@ -4909,7 +4909,7 @@ mod proof_strictness_tests {
 
     #[test]
     fn event_payload_validator_enforces_object_patch_family_schema() {
-        let catalog = contrix_sdk::schema::event_payload_validator_catalog();
+        let catalog = cokret_sdk::schema::event_payload_validator_catalog();
         let object_patch_kinds = [
             "cx.realm.update",
             "cx.flow.update",
@@ -5127,17 +5127,17 @@ mod proof_strictness_tests {
     /// inherit the same fail-closed semantics they get inline today.
     #[test]
     fn soland_dev_proof_gate_matches_sdk_production_verifier() {
-        use contrix_sdk::signatures::{ProductionVerifier, build_proof_envelope};
-        use contrix_sdk::{Audience, Hash};
+        use cokret_sdk::signatures::{ProductionVerifier, build_proof_envelope};
+        use cokret_sdk::{Audience, Hash};
 
         struct Noop;
-        impl contrix_sdk::signatures::EventVerifier for Noop {
+        impl cokret_sdk::signatures::EventVerifier for Noop {
             fn verify(
                 &self,
                 _: &[u8],
                 _: &[u8],
-                _: &contrix_sdk::signatures::PublicKeyMaterial,
-            ) -> std::result::Result<(), contrix_sdk::signatures::VerifierError> {
+                _: &cokret_sdk::signatures::PublicKeyMaterial,
+            ) -> std::result::Result<(), cokret_sdk::signatures::VerifierError> {
                 Ok(())
             }
             fn algorithm(&self) -> &str {
@@ -5162,13 +5162,13 @@ mod proof_strictness_tests {
             .expect_err("SDK ProductionVerifier must reject dev-kind proof");
         assert!(matches!(
             sdk_err,
-            contrix_sdk::signatures::VerifierError::DevProofRejected(_)
+            cokret_sdk::signatures::VerifierError::DevProofRejected(_)
         ));
 
         // A proof with kind="detached_jws" — SDK accepts the kind
         // (signature still has to verify separately).
         let prod = build_proof_envelope(
-            contrix_sdk::signatures::detached_jws_kind(),
+            cokret_sdk::signatures::detached_jws_kind(),
             "EdDSA",
             "did:web:alice.example#k1",
             Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")

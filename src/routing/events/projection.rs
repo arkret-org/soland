@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use contrix_sdk::{Did, Operation, OperationId, RealmId};
+use cokret_sdk::{Did, Operation, OperationId, RealmId};
 use diesel::sql_types::{Jsonb, Nullable, Text, Timestamptz, Uuid as SqlUuid};
 use diesel::{QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
@@ -227,8 +227,8 @@ fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
 }
 
 fn canonical_value_digest(value: &Value) -> Option<String> {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).ok()?;
-    Some(contrix_sdk::canonical::sha256_digest(bytes))
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).ok()?;
+    Some(cokret_sdk::canonical::sha256_digest(bytes))
 }
 
 fn is_valid_history_visibility(value: &str) -> bool {
@@ -1772,7 +1772,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // Synthesize a CellState::Value at the canonical cell ref. This lets
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
-    let cell_id = match contrix_sdk::CellRef::new(format!(
+    let cell_id = match cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
@@ -1786,7 +1786,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     });
     if let Ok(mut proj) = state.projection.lock() {
         proj.cells
-            .insert(cell_id, contrix_sdk::lattice::CellState::Value(value));
+            .insert(cell_id, cokret_sdk::lattice::CellState::Value(value));
     }
 }
 
@@ -2107,8 +2107,8 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         );
         return;
     };
-    let payload_digest = match contrix_sdk::canonical::canonical_json_bytes(identity_payload) {
-        Ok(bytes) => contrix_sdk::canonical::sha256_digest(bytes),
+    let payload_digest = match cokret_sdk::canonical::canonical_json_bytes(identity_payload) {
+        Ok(bytes) => cokret_sdk::canonical::sha256_digest(bytes),
         Err(err) => {
             tracing::warn!(
                 %err,

@@ -1,19 +1,19 @@
 //! Stream H' admin surface — anchorer cell, Bottom diagnostics, Anchor DAG.
 //!
 //! Endpoints:
-//! - `GET  /admin/spaces/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
+//! - `GET  /_soland/admin/spaces/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
-//! - `POST /admin/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
+//! - `POST /_soland/admin/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
 //!   writes the new anchorer cell value (cas-register on
 //!   `ck:cell:cx.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
-//! - `GET  /admin/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
+//! - `GET  /_soland/admin/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
-//! - `GET  /admin/bottom` — global cross-space list.
-//! - `POST /admin/spaces/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
+//! - `GET  /_soland/admin/bottom` — global cross-space list.
+//! - `POST /_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
 //!   manual) repair Move.
-//! - `GET  /admin/spaces/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
-//! - `POST /admin/spaces/{realm_id}/anchor-dag/compact` — trigger a signed compaction
+//! - `GET  /_soland/admin/spaces/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
+//! - `POST /_soland/admin/spaces/{realm_id}/anchor-dag/compact` — trigger a signed compaction
 //!   Anchor.
 //!
 //! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
@@ -35,10 +35,10 @@
 
 use std::collections::BTreeSet;
 
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
-use contrix_sdk::state_res::{AnchorStore, CellStore, MoveStore};
-use contrix_sdk::{
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
+use cokret_sdk::state_res::{AnchorStore, CellStore, MoveStore};
+use cokret_sdk::{
     AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, SpaceId,
     ThresholdAggregator, UnsignedMove,
 };
@@ -55,7 +55,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
 
-/// `GET /admin/spaces/{realm_id}/anchorer` response.
+/// `GET /_soland/admin/spaces/{realm_id}/anchorer` response.
 ///
 /// Shape mirrors sodmin's `AnchorerValue`. `kind_raw` is one of
 /// `single_did|threshold|open_set|mixed`; only the fields relevant to
@@ -638,7 +638,7 @@ fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<Bot
 
 // ── Endpoints ────────────────────────────────────────────────────────────
 
-/// `GET /admin/spaces/{realm_id}/anchorer` — read current
+/// `GET /_soland/admin/spaces/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.anchorer.get",
@@ -667,7 +667,7 @@ pub(super) async fn admin_get_anchorer(
     ))
 }
 
-/// `POST /admin/spaces/{realm_id}/anchorer/reconfigure` —
+/// `POST /_soland/admin/spaces/{realm_id}/anchorer/reconfigure` —
 /// submit a reconfig Move that writes the new anchorer cell value.
 ///
 /// Builds a Move signed by the service admin signer
@@ -707,7 +707,7 @@ pub(super) async fn admin_reconfigure_anchorer(
         state,
         req,
         &admin_session,
-        contrix_sdk::admin_scopes::ANCHORER_RECONFIGURE,
+        cokret_sdk::admin_scopes::ANCHORER_RECONFIGURE,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -831,7 +831,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     }
 }
 
-/// `GET /admin/spaces/{realm_id}/bottom` — list bottom cells in
+/// `GET /_soland/admin/spaces/{realm_id}/bottom` — list bottom cells in
 /// this Space.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.bottom.list",
@@ -854,7 +854,7 @@ pub(super) async fn admin_list_space_bottom(
     json_ok(collect_bottom_entries_for_space(state, &realm_id))
 }
 
-/// `GET /admin/bottom` — global cross-space bottom entries.
+/// `GET /_soland/admin/bottom` — global cross-space bottom entries.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.bottom.list_global",
     tags("admin", "bottom"),
@@ -883,7 +883,7 @@ pub(super) async fn admin_list_bottom_global(
     json_ok(out)
 }
 
-/// `POST /admin/spaces/{realm_id}/bottom/{cell_id}/repair` —
+/// `POST /_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair` —
 /// submit a repair Move.
 ///
 /// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
@@ -918,7 +918,7 @@ pub(super) async fn admin_repair_bottom(
         state,
         req,
         &admin_session,
-        contrix_sdk::admin_scopes::BOTTOM_REPAIR,
+        cokret_sdk::admin_scopes::BOTTOM_REPAIR,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -958,18 +958,18 @@ pub(super) async fn admin_repair_bottom(
                     issuer_seq: None,
                 },
             };
-            let recovery_ref = contrix_sdk::move_event::SemanticRef {
+            let recovery_ref = cokret_sdk::move_event::SemanticRef {
                 id: head.move_id.clone(),
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
             let anchor_ref = pick_admin_anchor_ref(state, &space);
-            let state_witness_ref = contrix_sdk::move_event::SemanticRef {
+            let state_witness_ref = cokret_sdk::move_event::SemanticRef {
                 id: anchor_ref.as_str().to_owned(),
                 role: "state_witness".to_owned(),
                 critical: true,
             };
-            let inclusion_proof_ref = contrix_sdk::move_event::SemanticRef {
+            let inclusion_proof_ref = cokret_sdk::move_event::SemanticRef {
                 id: format!("ck:proof:bottom-repair:{}", head.move_id),
                 role: "inclusion_proof".to_owned(),
                 critical: true,
@@ -1103,7 +1103,7 @@ pub(super) async fn admin_repair_bottom(
     }
 }
 
-/// `GET /admin/spaces/{realm_id}/anchor-dag` — leaves + frontier
+/// `GET /_soland/admin/spaces/{realm_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
     operation_id = "cx.extension.soland.admin.spaces.anchor_dag.get",
@@ -1150,13 +1150,13 @@ pub(super) async fn admin_get_anchor_dag(
             continue;
         };
         let signers: Vec<String> = match &anchor.anchorer_signature {
-            contrix_sdk::AnchorerSig::Single(sig) => vec![sig.verification_method.clone()],
-            contrix_sdk::AnchorerSig::Multi(multi) => multi
+            cokret_sdk::AnchorerSig::Single(sig) => vec![sig.verification_method.clone()],
+            cokret_sdk::AnchorerSig::Multi(multi) => multi
                 .signatures
                 .iter()
                 .map(|s| s.verification_method.clone())
                 .collect(),
-            contrix_sdk::AnchorerSig::Threshold(threshold) => threshold
+            cokret_sdk::AnchorerSig::Threshold(threshold) => threshold
                 .signers
                 .iter()
                 .map(|d| d.as_str().to_owned())
@@ -1187,7 +1187,7 @@ pub(super) async fn admin_get_anchor_dag(
     })
 }
 
-/// `POST /admin/spaces/{realm_id}/anchor-dag/compact` — trigger
+/// `POST /_soland/admin/spaces/{realm_id}/anchor-dag/compact` — trigger
 /// a signed compaction Anchor.
 ///
 /// v1 implementation: reuse the in-process anchorer worker to fold any
@@ -1218,7 +1218,7 @@ pub(super) async fn admin_compact_anchor_dag(
         state,
         req,
         &admin_session,
-        contrix_sdk::admin_scopes::ANCHOR_COMPACT,
+        cokret_sdk::admin_scopes::ANCHOR_COMPACT,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -1261,7 +1261,7 @@ pub(super) async fn admin_compact_anchor_dag(
         )
         .with_status(StatusCode::CONFLICT));
     }
-    let view = contrix_sdk::effective_anchor_view(
+    let view = cokret_sdk::effective_anchor_view(
         &leaves,
         &space,
         state.anchor_store.as_ref(),
@@ -1280,13 +1280,13 @@ pub(super) async fn admin_compact_anchor_dag(
     // operator attribution (falls back to the service signer when no
     // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = contrix_sdk::Anchor::sign_single_kind(
+    let compaction = cokret_sdk::Anchor::sign_single_kind(
         space.clone(),
         view.predecessor_refs.clone(),
         view.frontier.clone(),
         view.state_root.clone(),
         fresh_hlc(state)?,
-        contrix_sdk::AnchorKind::Compaction,
+        cokret_sdk::AnchorKind::Compaction,
         &signer,
     )
     .map_err(|e| {
@@ -1297,7 +1297,7 @@ pub(super) async fn admin_compact_anchor_dag(
     })?;
 
     let verifier = crate::routing::federation::move_anchor::select_jws_verifier(state);
-    let effect = contrix_sdk::apply_anchor(
+    let effect = cokret_sdk::apply_anchor(
         &compaction,
         state.move_store.as_ref(),
         state.anchor_store.as_ref(),
@@ -1320,9 +1320,9 @@ pub(super) async fn admin_compact_anchor_dag(
     })
 }
 
-/// `POST /admin/spaces/{realm_id}/anchor-dag/prune` — evaluate a
+/// `POST /_soland/admin/spaces/{realm_id}/anchor-dag/prune` — evaluate a
 /// historical Anchor for prune-eligibility against
-/// [`contrix_sdk::CompactionPolicy`] and, when eligible, remove it via
+/// [`cokret_sdk::CompactionPolicy`] and, when eligible, remove it via
 /// [`AnchorStore::prune_predecessor`].
 ///
 /// Gates the structural prune walk on the operator's configured policy
@@ -1352,7 +1352,7 @@ pub(super) async fn admin_prune_anchor_dag(
         state,
         req,
         &admin_session,
-        contrix_sdk::admin_scopes::ANCHOR_PRUNE,
+        cokret_sdk::admin_scopes::ANCHOR_PRUNE,
     )
     .await?;
     let realm_id_str = realm_id.into_inner();
@@ -1458,7 +1458,7 @@ pub(super) async fn admin_prune_anchor_dag(
         None => 0,
     };
 
-    let prune_candidate = contrix_sdk::PruneCandidate {
+    let prune_candidate = cokret_sdk::PruneCandidate {
         candidate: &candidate,
         age_seconds,
         compaction_witnesses,
@@ -1469,12 +1469,12 @@ pub(super) async fn admin_prune_anchor_dag(
     let policy = state.config.compaction_policy();
     let eligibility = policy.is_eligible(&prune_candidate);
     let eligibility_wire = match &eligibility {
-        contrix_sdk::PruneEligibility::Eligible => "eligible",
-        contrix_sdk::PruneEligibility::TooYoung { .. } => "too_young",
-        contrix_sdk::PruneEligibility::InsufficientWitnesses { .. } => "insufficient_witnesses",
-        contrix_sdk::PruneEligibility::PreservedGenesis => "preserved_genesis",
-        contrix_sdk::PruneEligibility::ForkPoint { .. } => "fork_point",
-        contrix_sdk::PruneEligibility::CompactionItself => "compaction_itself",
+        cokret_sdk::PruneEligibility::Eligible => "eligible",
+        cokret_sdk::PruneEligibility::TooYoung { .. } => "too_young",
+        cokret_sdk::PruneEligibility::InsufficientWitnesses { .. } => "insufficient_witnesses",
+        cokret_sdk::PruneEligibility::PreservedGenesis => "preserved_genesis",
+        cokret_sdk::PruneEligibility::ForkPoint { .. } => "fork_point",
+        cokret_sdk::PruneEligibility::CompactionItself => "compaction_itself",
     };
     let kind_wire = if candidate.kind.is_compaction() {
         "compaction"
@@ -1529,11 +1529,11 @@ pub(super) async fn admin_prune_anchor_dag(
 
 // ── Multi-sig coordinator ────────────────────────────────────────────────
 //
-// `POST /admin/spaces/{realm_id}/multisig/{anchor_id}/partial` accepts
+// `POST /_soland/admin/spaces/{realm_id}/multisig/{anchor_id}/partial` accepts
 // partial Anchor signatures from peer anchorers; once the threshold is
 // reached, the aggregated `Anchor` is published.
 //
-// `GET /admin/spaces/{realm_id}/multisig/pending` lists the in-flight
+// `GET /_soland/admin/spaces/{realm_id}/multisig/pending` lists the in-flight
 // anchors awaiting threshold so the admin UI can render them.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -1567,7 +1567,7 @@ pub struct MultisigPendingResponse {
     pub entries: Vec<MultisigPendingEntry>,
 }
 
-/// `POST /admin/spaces/{realm_id}/multisig/{anchor_id}/partial`.
+/// `POST /_soland/admin/spaces/{realm_id}/multisig/{anchor_id}/partial`.
 ///
 /// MAL-11: persistent multisig buffer wire-in. Stores each partial in the
 /// `multisig_pending` Postgres table (or in-memory equivalent). When the
@@ -1694,7 +1694,7 @@ pub(super) async fn admin_submit_multisig_partial(
     })
 }
 
-/// `GET /admin/spaces/{realm_id}/multisig/pending`.
+/// `GET /_soland/admin/spaces/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
     operation_id = "cx.extension.soland.admin.multisig.pending",
     tags("admin", "multisig")
@@ -1745,7 +1745,7 @@ pub(super) async fn admin_list_multisig_pending(
     json_ok(MultisigPendingResponse { entries })
 }
 
-/// `POST /admin/spaces/{realm_id}/anchorer/rotate-signing-key` —
+/// `POST /_soland/admin/spaces/{realm_id}/anchorer/rotate-signing-key` —
 /// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
 /// `state.config.use_keystore` is true), hot-swap the AnchorerWorker key
 /// via `AppState::rotate_anchorer_signing_key`, return `{kid, did, rotated_at}`.
@@ -1802,7 +1802,7 @@ pub(super) async fn admin_rotate_signing_key(
         state,
         req,
         &admin_session,
-        contrix_sdk::admin_scopes::ANCHORER_ROTATE_SIGNING_KEY,
+        cokret_sdk::admin_scopes::ANCHORER_ROTATE_SIGNING_KEY,
     )
     .await?;
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a
@@ -1827,7 +1827,7 @@ pub(super) async fn admin_rotate_signing_key(
             "cokret:signer:soland-anchorer:{}",
             state.config.service_did
         );
-        let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+        let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {
                 keystore_persisted = true;
@@ -1938,7 +1938,7 @@ fn sha256_hex_for(bytes: &[u8]) -> String {
 
 // ── MAL-13 GC candidates admin endpoint ──────────────────────────────────
 
-/// `GET /admin/spaces/{realm_id}/gc-candidates` response.
+/// `GET /_soland/admin/spaces/{realm_id}/gc-candidates` response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidatesResponse {
     pub realm_id: String,
@@ -1946,7 +1946,7 @@ pub struct GcCandidatesResponse {
     pub total: usize,
 }
 
-/// `GET /admin/spaces/{realm_id}/gc-candidates` — list Moves that
+/// `GET /_soland/admin/spaces/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
     operation_id = "cx.extension.soland.admin.spaces.gc_candidates",

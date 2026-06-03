@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use contrix_sdk::identity::CompositeDidResolver;
-use contrix_sdk::{Did, RealmId};
+use cokret_sdk::identity::CompositeDidResolver;
+use cokret_sdk::{Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -818,8 +818,8 @@ fn canonical_digest(
     actor_id: &str,
     label: &str,
 ) -> Option<String> {
-    match contrix_sdk::canonical::canonical_json_bytes(projection) {
-        Ok(bytes) => Some(contrix_sdk::canonical::sha256_digest(bytes)),
+    match cokret_sdk::canonical::canonical_json_bytes(projection) {
+        Ok(bytes) => Some(cokret_sdk::canonical::sha256_digest(bytes)),
         Err(err) => {
             tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
             None
@@ -848,7 +848,7 @@ pub struct AppState {
     /// a `cx.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
-    pub cross_signing: Arc<Mutex<contrix_sdk::DeviceManager>>,
+    pub cross_signing: Arc<Mutex<cokret_sdk::DeviceManager>>,
     /// In-memory handle release ledger. Records `released_handle → released_at`
     /// for every handle vacated by `claim_handle` / `transfer_handle`; new
     /// claims for a handle still inside `HANDLE_GRACE_PERIOD_SECONDS` are
@@ -933,10 +933,10 @@ pub struct AppState {
     /// In-memory backends from the SDK; production deployments will
     /// swap these for Pg-backed implementations behind the same trait
     /// surface (`MoveStore` / `AnchorStore` / `CellStore` / `CellRegistry`).
-    pub move_store: Arc<contrix_sdk::state_res::MemoryMoveStore>,
-    pub anchor_store: Arc<contrix_sdk::state_res::MemoryAnchorStore>,
-    pub cell_store: Arc<contrix_sdk::state_res::MemoryCellStore>,
-    pub cell_registry: Arc<contrix_sdk::state_res::MemoryCellRegistry>,
+    pub move_store: Arc<cokret_sdk::state_res::MemoryMoveStore>,
+    pub anchor_store: Arc<cokret_sdk::state_res::MemoryAnchorStore>,
+    pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
+    pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
     /// Live event notification channel for `cx.events.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
@@ -965,7 +965,7 @@ pub struct AppState {
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
     /// Swapped lock-free via [`ArcSwap`] so
-    /// the `POST /admin/spaces/{id}/anchorer/rotate-signing-key`
+    /// the `POST /_soland/admin/spaces/{id}/anchorer/rotate-signing-key`
     /// endpoint can publish a fresh ed25519 seed without tearing concurrent
     /// signing passes. Readers acquire the current key via `load_full()`
     /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
@@ -975,7 +975,7 @@ pub struct AppState {
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
-    /// [`contrix_sdk::AdminKeyStore`] keyed by the `application_id`
+    /// [`cokret_sdk::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_did>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
@@ -983,7 +983,7 @@ pub struct AppState {
     /// built via `admin_signer_for(state, admin_did)` — this replaces the
     /// service-wide `service_admin_signer` shortcut for endpoints that
     /// want operator attribution in the audit chain.
-    pub admin_keystore: Arc<contrix_sdk::AdminKeyStore>,
+    pub admin_keystore: Arc<cokret_sdk::AdminKeyStore>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "principal_server"` and additionally
@@ -1782,7 +1782,7 @@ impl AppState {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
                     let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
-                    let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+                    let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
                             let mut seed = [0u8; 32];
@@ -1861,13 +1861,13 @@ impl AppState {
         // without a provisioned key fall back to
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{}", config.service_did);
-        let admin_keystore_inner: Box<dyn contrix_sdk::KeyStore> = if config.use_keystore {
-            contrix_sdk::keystore::platform_default_keystore(&admin_app_id)
+        let admin_keystore_inner: Box<dyn cokret_sdk::KeyStore> = if config.use_keystore {
+            cokret_sdk::keystore::platform_default_keystore(&admin_app_id)
         } else {
-            Box::new(contrix_sdk::keystore::InMemoryKeyStore::new())
+            Box::new(cokret_sdk::keystore::InMemoryKeyStore::new())
         };
         let admin_keystore =
-            contrix_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
+            cokret_sdk::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {
             for did_str in &config.admin_principal_dids {
                 let Ok(did) = Did::new(did_str.clone()) else {
@@ -1907,7 +1907,7 @@ impl AppState {
             persistence,
             object_storage,
             realms: Arc::new(Mutex::new(realms)),
-            cross_signing: Arc::new(Mutex::new(contrix_sdk::DeviceManager::new())),
+            cross_signing: Arc::new(Mutex::new(cokret_sdk::DeviceManager::new())),
             handle_releases: Arc::new(Mutex::new(BTreeMap::new())),
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
@@ -1929,9 +1929,9 @@ impl AppState {
             organization_spaces: Arc::new(Mutex::new(BTreeMap::new())),
             space_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
-            move_store: Arc::new(contrix_sdk::state_res::MemoryMoveStore::default()),
-            anchor_store: Arc::new(contrix_sdk::state_res::MemoryAnchorStore::default()),
-            cell_store: Arc::new(contrix_sdk::state_res::MemoryCellStore::default()),
+            move_store: Arc::new(cokret_sdk::state_res::MemoryMoveStore::default()),
+            anchor_store: Arc::new(cokret_sdk::state_res::MemoryAnchorStore::default()),
+            cell_store: Arc::new(cokret_sdk::state_res::MemoryCellStore::default()),
             // Register all soland LatticeKind impls into the SDK cell
             // registry so the
             // Move/Anchor receive pipeline resolves every spec-declared
@@ -2504,8 +2504,8 @@ fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
 }
 
 fn canonical_value_digest(value: &Value) -> Option<String> {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).ok()?;
-    Some(contrix_sdk::canonical::sha256_digest(bytes))
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).ok()?;
+    Some(cokret_sdk::canonical::sha256_digest(bytes))
 }
 
 fn normalize_persisted_realm_id(id: &str) -> String {

@@ -19,7 +19,7 @@
 //! through the MIMI facade rather than as a native signed Move.
 
 use chrono::Duration;
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -143,7 +143,7 @@ async fn mimi_room_update(
         "binding_event_id": binding_event_id,
         "receipt": mimi_receipt(state, "cx.mimi.room_update", &body, json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id),
-            "truth_source": "contrix_signed_event_reducer",
+            "truth_source": "cokret_signed_event_reducer",
             "status": "projected",
             "binding_emitted": binding_event_id.is_some(),
         }))
@@ -357,9 +357,9 @@ async fn mimi_room_message(
             "target_format": "cx.message.create",
             "original_envelope_hash": original_hash,
             "mapped_operation_id": operation_id,
-            "contrix_event_id": event_id,
+            "cokret_event_id": event_id,
             "mimi_message_id": mimi_message_id,
-            "truth_source": "contrix_signed_event_reducer",
+            "truth_source": "cokret_signed_event_reducer",
             "reducer_chain": "wired",
             "status": mapped_content.status,
             "mimi_policy": mapped_content.policy.clone(),
@@ -388,7 +388,7 @@ async fn mimi_room_message(
         "status": mapped_content.status,
         "mimi_message_id": mimi_message_id,
         "mapped_operation_id": operation_id,
-        "contrix_event_id": event_id,
+        "cokret_event_id": event_id,
         "realm_id": realm_id,
         "receipt": receipt
     }))
@@ -417,7 +417,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
         "group_info": projection,
         "participants": mimi_room_participants(state, &realm_id),
         "receipt": mimi_receipt(state, "cx.mimi.group_info", &json!({"room_id": room_id}), json!({
-            "truth_source": "contrix_signed_event_reducer",
+            "truth_source": "cokret_signed_event_reducer",
             "projection_only": true
         }))
     }))
@@ -1126,7 +1126,7 @@ fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Valu
         "mls_group_id": format!("mls:{}", room_id),
         "policy_root": format!("sha256:{}", sha256_hex(format!("{realm_id}:{room_id}:policy").as_bytes())),
         "status": "accepted",
-        "canonical_truth": "contrix_signed_event_reducer"
+        "canonical_truth": "cokret_signed_event_reducer"
     })
 }
 

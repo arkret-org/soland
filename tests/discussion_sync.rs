@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use contrix_sdk::{Did, RealmId, new_prefixed_uuid7};
+use cokret_sdk::{Did, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -488,7 +488,7 @@ async fn submit_projection_event_status(
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{:x}", hasher.finalize())

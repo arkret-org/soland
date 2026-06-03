@@ -19,8 +19,8 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use contrix_sdk::state_res::{AnchorReject, apply_anchor, verify_move};
-use contrix_sdk::{Anchor, Move, SpaceId};
+use cokret_sdk::state_res::{AnchorReject, apply_anchor, verify_move};
+use cokret_sdk::{Anchor, Move, SpaceId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -347,7 +347,7 @@ async fn submit_anchor(
     //
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
-    let mls_epoch_cell = contrix_sdk::CellRef::new(format!(
+    let mls_epoch_cell = cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.mls.epoch.v1:{}",
         anchor.realm_id.as_str()
     ))
@@ -407,7 +407,7 @@ async fn submit_anchor(
     })
 }
 
-/// Request body for `POST /admin/anchors/sign`.
+/// Request body for `POST /_soland/admin/anchors/sign`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SignAnchorRequest {
     /// Space whose pending Moves should be batch-anchored.
@@ -508,12 +508,12 @@ async fn admin_sign_anchor(
 /// `&*` the Arc. (`MoveStore` trait already takes `&self`; this is just
 /// a syntactic convenience matching the rest of soland's store usage.)
 trait MoveStorePutVia {
-    fn put_pending_via_trait(&self, m: &Move) -> contrix_sdk::state_res::StoreResult<()>;
+    fn put_pending_via_trait(&self, m: &Move) -> cokret_sdk::state_res::StoreResult<()>;
 }
 
-impl MoveStorePutVia for contrix_sdk::state_res::MemoryMoveStore {
-    fn put_pending_via_trait(&self, m: &Move) -> contrix_sdk::state_res::StoreResult<()> {
-        use contrix_sdk::state_res::MoveStore;
+impl MoveStorePutVia for cokret_sdk::state_res::MemoryMoveStore {
+    fn put_pending_via_trait(&self, m: &Move) -> cokret_sdk::state_res::StoreResult<()> {
+        use cokret_sdk::state_res::MoveStore;
         self.put_pending(m)
     }
 }

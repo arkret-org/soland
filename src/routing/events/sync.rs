@@ -27,8 +27,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::{EphemeralSubmitResBody, RealmId};
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::{EphemeralSubmitResBody, RealmId};
 use ed25519_dalek::{Signature, Signer as _, Verifier as _};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
@@ -119,7 +119,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
             "max_timeline_events": 100,
             "offline_flush_endpoint": "/api/v1/events",
             "backfill_endpoint": "/api/v1/sync/backfill/gap",
-            "bottom_repair_endpoint": "/admin/spaces/{realm_id}/bottom/{cell_id}/repair"
+            "bottom_repair_endpoint": "/_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair"
         }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
     }));
@@ -316,7 +316,7 @@ fn parse_max_wait_ms(req: &mut Request) -> u64 {
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &contrix_sdk::model::SyncResBody) -> bool {
+fn delta_is_empty(response: &cokret_sdk::model::SyncResBody) -> bool {
     response.spaces.is_empty()
         && response.left_spaces.is_empty()
         && response.to_device.is_empty()
@@ -332,7 +332,7 @@ fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
     }
 }
 
-fn account_delta_frame(response: contrix_sdk::model::SyncResBody) -> Value {
+fn account_delta_frame(response: cokret_sdk::model::SyncResBody) -> Value {
     json!({
         "kind": "delta",
         "cursor": response.cursor,
@@ -429,7 +429,7 @@ async fn build_sync_snapshot(
     session: Option<&SessionRecord>,
     body: &ClientSyncRequest,
     after_cursor: &SyncCursor,
-) -> contrix_sdk::model::SyncResBody {
+) -> cokret_sdk::model::SyncResBody {
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
@@ -652,7 +652,7 @@ async fn build_sync_snapshot(
         Vec::new()
     };
 
-    contrix_sdk::model::SyncResBody {
+    cokret_sdk::model::SyncResBody {
         cursor: sync_token_for_client_sync(
             state,
             session,
@@ -797,7 +797,7 @@ fn roster_members_for_realm(
 struct RosterDisclosureContext<'a> {
     service_did: &'a str,
     realm_public: bool,
-    realm_members: &'a BTreeSet<contrix_sdk::Did>,
+    realm_members: &'a BTreeSet<cokret_sdk::Did>,
     caller: Option<&'a str>,
     audience: String,
     now: DateTime<Utc>,
@@ -822,7 +822,7 @@ impl<'a> RosterDisclosureContext<'a> {
 
     fn caller_is_realm_member(&self) -> bool {
         self.caller.is_some_and(|caller| {
-            contrix_sdk::Did::new(caller.to_owned())
+            cokret_sdk::Did::new(caller.to_owned())
                 .ok()
                 .is_some_and(|did| self.realm_members.contains(&did))
         })
@@ -1508,14 +1508,14 @@ pub(crate) fn sync_token_for_state(state: &AppState) -> String {
 }
 
 pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
     loop {
-        let handle = contrix_sdk::cursor::generate_cursor_handle()
+        let handle = cokret_sdk::cursor::generate_cursor_handle()
             .unwrap_or_else(|error| fallback_sync_cursor_handle(&error));
         let mut handles = state
             .sync_cursor_handles
@@ -1528,7 +1528,7 @@ fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
     }
 }
 
-fn fallback_sync_cursor_handle(error: &contrix_sdk::Error) -> String {
+fn fallback_sync_cursor_handle(error: &cokret_sdk::Error) -> String {
     let seed = format!(
         "soland-sync-cursor-fallback:{}:{:?}",
         Utc::now().timestamp_nanos_opt().unwrap_or_default(),
@@ -1589,7 +1589,7 @@ fn stateless_cursor_canonical_body(cursor: &Value) -> Result<Vec<u8>, SyncCursor
     };
     object.remove("_sig");
     object.remove("_mac");
-    contrix_sdk::canonical::canonical_json_bytes(&body)
+    cokret_sdk::canonical::canonical_json_bytes(&body)
         .map_err(|_| SyncCursorError::Integrity("stateless cursor canonical body is invalid"))
 }
 
@@ -2056,7 +2056,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let binding = json!({
         "filter": filter.unwrap_or(&empty_filter),
     });
-    contrix_sdk::canonical::canonical_sha256(&binding)
+    cokret_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
 }
 
@@ -2068,7 +2068,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 #[tracing::instrument(skip_all, fields(op = "cx.ephemeral.send"))]
 async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<contrix_sdk::EphemeralEnvelope>,
+    body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EphemeralSubmitResBody> {
@@ -2116,7 +2116,7 @@ async fn submit_ephemeral(
 }
 
 fn validate_ephemeral_envelope(
-    envelope: &contrix_sdk::EphemeralEnvelope,
+    envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
@@ -2130,7 +2130,7 @@ fn validate_ephemeral_envelope(
         .expires_at
         .signed_duration_since(envelope.sent_at)
         .num_milliseconds();
-    if window_ms <= 0 || (window_ms as u64) > contrix_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
+    if window_ms <= 0 || (window_ms as u64) > cokret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
     {
         return Err(crate::error::AppError::invalid_param(
             "ephemeral expires_at must be after sent_at and within the hard TTL ceiling",
@@ -2148,7 +2148,7 @@ async fn persist_ephemeral_typing(
     state: &AppState,
     actor: &str,
     realm_id: &str,
-    envelope: &contrix_sdk::EphemeralEnvelope,
+    envelope: &cokret_sdk::EphemeralEnvelope,
 ) {
     let typing = envelope
         .payload
@@ -2185,7 +2185,7 @@ async fn persist_ephemeral_typing(
 async fn persist_ephemeral_presence(
     state: &AppState,
     actor: &str,
-    envelope: &contrix_sdk::EphemeralEnvelope,
+    envelope: &cokret_sdk::EphemeralEnvelope,
 ) {
     let status = envelope
         .payload
@@ -2211,7 +2211,7 @@ async fn persist_ephemeral_presence(
 async fn admit_ephemeral_read_receipt(
     state: &AppState,
     realm_id: &str,
-    envelope: &contrix_sdk::EphemeralEnvelope,
+    envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<(), crate::error::AppError> {
     if envelope
         .payload
@@ -2502,7 +2502,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // Use the typed-id form (ck:cursor:<base64url>),
                             // not the cursor::Cursor struct.
                             let cursor_typed =
-                                contrix_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
+                                cokret_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
                             arm_subscribe_reconnect(
                                 &state,
                                 &subscribe_scope_key_for_stream,
@@ -2618,7 +2618,7 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     res.headers_mut()
         .insert(header::RETRY_AFTER, retry_after_seconds.into());
     res.render(Json(
-        contrix_sdk::ErrorEnvelope::new(
+        cokret_sdk::ErrorEnvelope::new(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
@@ -3303,11 +3303,11 @@ mod tests {
         entry.public = public;
         entry
             .members
-            .insert(contrix_sdk::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
+            .insert(cokret_sdk::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
         if include_caller {
             entry
                 .members
-                .insert(contrix_sdk::Did::new(ROSTER_CALLER.to_owned()).unwrap());
+                .insert(cokret_sdk::Did::new(ROSTER_CALLER.to_owned()).unwrap());
         }
         entry
     }
@@ -3320,8 +3320,8 @@ mod tests {
                 "display_profile": { "display_name": "Alice" }
             }
         });
-        let payload_digest = contrix_sdk::canonical::sha256_digest(
-            contrix_sdk::canonical::canonical_json_bytes(&identity_payload).unwrap(),
+        let payload_digest = cokret_sdk::canonical::sha256_digest(
+            cokret_sdk::canonical::canonical_json_bytes(&identity_payload).unwrap(),
         );
         state
             .member_identity
@@ -3414,8 +3414,8 @@ mod tests {
     }
 
     fn canonical_value_digest(value: &Value) -> String {
-        contrix_sdk::canonical::sha256_digest(
-            contrix_sdk::canonical::canonical_json_bytes(value).unwrap(),
+        cokret_sdk::canonical::sha256_digest(
+            cokret_sdk::canonical::canonical_json_bytes(value).unwrap(),
         )
     }
 
@@ -3765,7 +3765,7 @@ pub struct SubscribeFrameEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     #[serde(flatten)]
-    pub body: contrix_sdk::EventsSubscribeFrameBody,
+    pub body: cokret_sdk::EventsSubscribeFrameBody,
 }
 
 /// Spec B1.5 — when an implementation would emit a `Dropped` frame but
@@ -3774,22 +3774,22 @@ pub struct SubscribeFrameEnvelope {
 /// correct frame body from an optional cursor.
 ///
 /// Note: the cursor type expected by `EventsSubscribeFrameBody::Dropped`
-/// is the typed-id `contrix_identifiers::Cursor` (`ck:cursor:<base64url>`),
-/// NOT the `contrix_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
-/// The typed-id is exposed as `contrix_sdk::identifiers::Cursor`.
+/// is the typed-id `cokret_identifiers::Cursor` (`ck:cursor:<base64url>`),
+/// NOT the `cokret_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
+/// The typed-id is exposed as `cokret_sdk::identifiers::Cursor`.
 pub fn dropped_or_resync(
-    cursor: Option<contrix_sdk::identifiers::Cursor>,
+    cursor: Option<cokret_sdk::identifiers::Cursor>,
     reason: impl Into<String>,
     reconnect_after_ms: Option<u64>,
-) -> contrix_sdk::EventsSubscribeFrameBody {
+) -> cokret_sdk::EventsSubscribeFrameBody {
     let reason = reason.into();
     match cursor {
-        Some(cursor) => contrix_sdk::EventsSubscribeFrameBody::Dropped {
+        Some(cursor) => cokret_sdk::EventsSubscribeFrameBody::Dropped {
             cursor,
             reason,
             reconnect_after_ms,
         },
-        None => contrix_sdk::EventsSubscribeFrameBody::ResyncRequired {
+        None => cokret_sdk::EventsSubscribeFrameBody::ResyncRequired {
             reason,
             reconnect_after_ms,
         },
@@ -3831,13 +3831,13 @@ mod cursor_frame_tests {
         let body = dropped_or_resync(None, "broadcast_lag", Some(10_000));
         assert!(matches!(
             body,
-            contrix_sdk::EventsSubscribeFrameBody::ResyncRequired { .. }
+            cokret_sdk::EventsSubscribeFrameBody::ResyncRequired { .. }
         ));
-        let cursor = contrix_sdk::identifiers::Cursor::new("ck:cursor:resume").unwrap();
+        let cursor = cokret_sdk::identifiers::Cursor::new("ck:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
         assert!(matches!(
             body,
-            contrix_sdk::EventsSubscribeFrameBody::Dropped {
+            cokret_sdk::EventsSubscribeFrameBody::Dropped {
                 reconnect_after_ms: Some(10_000),
                 ..
             }

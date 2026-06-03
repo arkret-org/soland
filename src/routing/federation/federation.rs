@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
-use contrix_sdk::state_res::AnchorStore;
-use contrix_sdk::{Anchor, Did, Operation, RealmId, SpaceId};
+use cokret_sdk::state_res::AnchorStore;
+use cokret_sdk::{Anchor, Did, Operation, RealmId, SpaceId};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -59,10 +59,10 @@ struct FederationPeerTarget {
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.transaction"))]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
-    body: JsonBody<contrix_sdk::FederationTransactionReqBody>,
+    body: JsonBody<cokret_sdk::FederationTransactionReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<contrix_sdk::FederationTransactionResBody> {
+) -> JsonResult<cokret_sdk::FederationTransactionResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
@@ -82,7 +82,7 @@ pub(super) async fn federation_transaction(
             )
             .with_status(StatusCode::BAD_REQUEST)
         })?;
-    let expected_destination = contrix_sdk::TypedTrustDomainId::new(
+    let expected_destination = cokret_sdk::TypedTrustDomainId::new(
         state.config.trust_domain.clone(),
     )
     .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
@@ -174,7 +174,7 @@ pub(super) async fn federation_transaction(
             if request_signals_historical {
                 response_value = mark_response_historical_only(response_value);
             }
-            let response: contrix_sdk::FederationTransactionResBody =
+            let response: cokret_sdk::FederationTransactionResBody =
                 serde_json::from_value(response_value).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
@@ -211,7 +211,7 @@ pub(super) async fn federation_transaction(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    let response = contrix_sdk::FederationTransactionResBody {
+    let response = cokret_sdk::FederationTransactionResBody {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -250,10 +250,10 @@ pub(super) async fn federation_transaction(
     fields(op = "cx.extension.soland.federation.push_operations")
 )]
 pub(super) async fn federation_push_operations(
-    body: JsonBody<contrix_sdk::FederationPushOperationsReqBody>,
+    body: JsonBody<cokret_sdk::FederationPushOperationsReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<contrix_sdk::FederationPushOperationsResBody> {
+) -> JsonResult<cokret_sdk::FederationPushOperationsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
@@ -276,7 +276,7 @@ pub(super) async fn federation_push_operations(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    json_ok(contrix_sdk::FederationPushOperationsResBody {
+    json_ok(cokret_sdk::FederationPushOperationsResBody {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         quarantine: Vec::new(),
@@ -1067,7 +1067,7 @@ pub(super) async fn federation_pull_operations(
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationPullOperationsResBody> {
+) -> JsonResult<cokret_sdk::FederationPullOperationsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let space_id = space_id.into_inner();
     if validate_space_id(&space_id).is_err() {
@@ -1135,7 +1135,7 @@ pub(super) async fn federation_pull_operations(
         .last()
         .map(|operation| operation.operation_id.to_string())
         .or_else(|| Some(sync_token(state)));
-    json_ok(contrix_sdk::FederationPullOperationsResBody {
+    json_ok(cokret_sdk::FederationPullOperationsResBody {
         operations,
         snapshot_bootstrap,
         next_cursor,
@@ -1263,7 +1263,7 @@ pub(super) async fn federation_operation_frontier(
 pub(super) async fn federation_space_members(
     space_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<contrix_sdk::FederationSpaceMembersResBody> {
+) -> JsonResult<cokret_sdk::FederationSpaceMembersResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let space_id_value = RealmId::new(space_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -1276,14 +1276,14 @@ pub(super) async fn federation_space_members(
             space
                 .members
                 .iter()
-                .map(|principal_id| contrix_sdk::MemberRef {
+                .map(|principal_id| cokret_sdk::MemberRef {
                     principal_id: principal_id.clone(),
                     membership: json!({"membership": "join"}),
                 })
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(contrix_sdk::FederationSpaceMembersResBody {
+    json_ok(cokret_sdk::FederationSpaceMembersResBody {
         members,
         membership_frontier: sync_token(state),
         next_cursor: None,
@@ -1297,10 +1297,10 @@ pub(super) async fn federation_space_members(
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.verify_actor"))]
 pub(super) async fn federation_verify_actor(
-    body: JsonBody<contrix_sdk::FederationVerifyActorReqBody>,
+    body: JsonBody<cokret_sdk::FederationVerifyActorReqBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<contrix_sdk::FederationVerifyActorResBody> {
+) -> JsonResult<cokret_sdk::FederationVerifyActorResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
@@ -1310,7 +1310,7 @@ pub(super) async fn federation_verify_actor(
     validate_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
 
     if state.config.development_mode {
-        return json_ok(contrix_sdk::FederationVerifyActorResBody {
+        return json_ok(cokret_sdk::FederationVerifyActorResBody {
             valid: true,
             actor_id: body.actor_id.clone(),
             verified_key_id: None,
@@ -1332,7 +1332,7 @@ pub(super) async fn federation_verify_actor(
     let verification =
         verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
 
-    json_ok(contrix_sdk::FederationVerifyActorResBody {
+    json_ok(cokret_sdk::FederationVerifyActorResBody {
         valid: true,
         actor_id: body.actor_id.clone(),
         verified_key_id: Some(verification.verified_key_id),
@@ -1356,14 +1356,14 @@ fn validate_federation_request_binding(
             )
             .with_status(StatusCode::BAD_REQUEST)
         })?;
-    let expected_destination = contrix_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
+    let expected_destination = cokret_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_federation_headers(&headers, &expected_destination, request_hash)
 }
 
 fn validate_federation_headers(
     headers: &FederationTrustHeaders,
-    expected_destination: &contrix_sdk::TypedTrustDomainId,
+    expected_destination: &cokret_sdk::TypedTrustDomainId,
     request_hash: &str,
 ) -> Result<(), AppError> {
     headers
@@ -1389,7 +1389,7 @@ fn validate_federation_headers(
 fn verify_inbound_push_http_signature(
     state: &AppState,
     req: &Request,
-    body: &contrix_sdk::FederationPushOperationsReqBody,
+    body: &cokret_sdk::FederationPushOperationsReqBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -1409,7 +1409,7 @@ fn verify_inbound_push_http_signature(
 fn verify_inbound_transaction_http_signature(
     state: &AppState,
     req: &Request,
-    body: &contrix_sdk::FederationTransactionReqBody,
+    body: &cokret_sdk::FederationTransactionReqBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -1434,7 +1434,7 @@ fn verify_inbound_federation_http_signature(
     body_destination: &str,
     metric_label: &'static str,
 ) -> Result<(), AppError> {
-    let body_bytes = contrix_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
+    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body_value).map_err(|error| {
         AppError::new(
             crate::error::ErrorCode::SchemaViolation,
             format!("federation request body is not canonical JSON: {error}"),
@@ -1845,16 +1845,16 @@ fn signature_error(message: impl Into<String>) -> AppError {
 }
 
 fn federation_verify_actor_digest(
-    body: &contrix_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorReqBody,
 ) -> Result<String, &'static str> {
     let value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
-    contrix_sdk::canonical::canonical_sha256(&value)
+    cokret_sdk::canonical::canonical_sha256(&value)
         .map_err(|_| "federation verify-actor request must be canonical JSON")
 }
 
 fn federation_verify_actor_unsigned_digest(
-    body: &contrix_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorReqBody,
 ) -> Result<String, &'static str> {
     let mut value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
@@ -1862,7 +1862,7 @@ fn federation_verify_actor_unsigned_digest(
         return Err("federation verify-actor request must serialize to a JSON object");
     };
     object.remove("signature");
-    contrix_sdk::canonical::canonical_sha256(&value)
+    cokret_sdk::canonical::canonical_sha256(&value)
         .map_err(|_| "federation verify-actor unsigned request must be canonical JSON")
 }
 
@@ -1874,7 +1874,7 @@ fn federation_verify_actor_unsigned_digest(
 /// is populated after signing. The HTTP federation trust headers still bind
 /// the complete request body, including `signature`.
 fn federation_verify_actor_signature_transcript(
-    body: &contrix_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorReqBody,
     unsigned_request_digest: &str,
 ) -> Value {
     let scope_id = body.space_id.as_ref().map(|value| value.as_str());
@@ -1892,7 +1892,7 @@ fn federation_verify_actor_signature_transcript(
 struct VerifiedFederationActor {
     verified_key_id: String,
     did_document_ref: String,
-    key_log_head: contrix_sdk::Hash,
+    key_log_head: cokret_sdk::Hash,
 }
 
 struct FederationActorSignature {
@@ -1903,7 +1903,7 @@ struct FederationActorSignature {
 
 async fn verify_federation_actor_signature(
     state: &AppState,
-    body: &contrix_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorReqBody,
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = parse_federation_actor_signature(&body.signature)?;
@@ -1922,7 +1922,7 @@ async fn verify_federation_actor_signature(
     })?;
 
     let transcript = federation_verify_actor_signature_transcript(body, unsigned_request_digest);
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("verify-actor transcript failed: {error}")))?;
 
     if let Some(jws) = actor_signature.jws.as_deref() {
@@ -2071,7 +2071,7 @@ async fn pull_operations_page(
     space_id: &str,
     after_cursor: Option<&str>,
     limit: usize,
-) -> Result<contrix_sdk::FederationPullOperationsResBody, AppError> {
+) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
     let mut url = reqwest::Url::parse(&format!("{}/api/v1/federation/pull-operations", peer.url))
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
@@ -2103,7 +2103,7 @@ async fn pull_operations_page(
             "federation pull from {url} returned {status}: {text}"
         )));
     }
-    serde_json::from_str::<contrix_sdk::FederationPullOperationsResBody>(&text)
+    serde_json::from_str::<cokret_sdk::FederationPullOperationsResBody>(&text)
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
@@ -2125,7 +2125,7 @@ async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
         "realm_id": realm_id,
         "operation_ids": operation_ids,
     });
-    let frontier_digest = contrix_sdk::canonical::canonical_sha256(&digest_payload)
+    let frontier_digest = cokret_sdk::canonical::canonical_sha256(&digest_payload)
         .map(|digest| {
             if digest.starts_with("sha256:") {
                 digest
@@ -2208,7 +2208,7 @@ async fn enqueue_operation_push(
         return;
     };
 
-    let body = contrix_sdk::FederationPushOperationsReqBody {
+    let body = cokret_sdk::FederationPushOperationsReqBody {
         origin,
         destination,
         space_id,
@@ -2221,7 +2221,7 @@ async fn enqueue_operation_push(
     };
     let payload = match serde_json::to_value(&body)
         .ok()
-        .and_then(|value| contrix_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|value| cokret_sdk::canonical::canonical_json_bytes(&value).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
     {
         Some(payload) => payload,
@@ -2279,11 +2279,11 @@ fn is_valid_federation_txn_id(value: &str) -> bool {
 }
 
 fn federation_request_digest(
-    body: &contrix_sdk::FederationTransactionReqBody,
+    body: &cokret_sdk::FederationTransactionReqBody,
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
-    contrix_sdk::canonical::canonical_sha256(&value)
+    cokret_sdk::canonical::canonical_sha256(&value)
         .map_err(|_| "federation transaction must be canonical JSON")
 }
 
@@ -2516,7 +2516,7 @@ async fn enqueue_outbound_for(
     // signing path so the body bytes the dispatcher POSTs are identical
     // to what the signature transcript covers — important once full
     // RFC 9421 signing lands.
-    let payload_bytes = contrix_sdk::canonical::canonical_json_bytes(&payload)
+    let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&payload)
         .unwrap_or_else(|_| serde_json::to_vec(&payload).unwrap_or_default());
     let payload_json =
         String::from_utf8(payload_bytes.clone()).unwrap_or_else(|_| payload.to_string());
@@ -2691,7 +2691,7 @@ fn signed_fanout_intent_evidence(
     intent: &serde_json::Value,
     attempted_at: DateTime<Utc>,
 ) -> serde_json::Value {
-    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(intent)
+    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
     let payload_digest = format!("sha256:{}", sha256_hex(&canonical_bytes));
     let protected_header = br#"{"alg":"EdDSA","typ":"cx.federation.outbound_fanout.intent.v1"}"#;
@@ -3087,9 +3087,9 @@ mod tests {
         }
     }
 
-    fn verify_actor_body() -> contrix_sdk::FederationVerifyActorReqBody {
-        contrix_sdk::FederationVerifyActorReqBody {
-            actor_id: contrix_sdk::Did::new("did:web:alice.example").unwrap(),
+    fn verify_actor_body() -> cokret_sdk::FederationVerifyActorReqBody {
+        cokret_sdk::FederationVerifyActorReqBody {
+            actor_id: cokret_sdk::Did::new("did:web:alice.example").unwrap(),
             challenge: Some("challenge-1".to_owned()),
             signed_payload_digest: None,
             signature: serde_json::json!({
@@ -3102,15 +3102,15 @@ mod tests {
         }
     }
 
-    fn trust_domain(value: &str) -> contrix_sdk::TypedTrustDomainId {
-        contrix_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
+    fn trust_domain(value: &str) -> cokret_sdk::TypedTrustDomainId {
+        cokret_sdk::TypedTrustDomainId::new(value.to_owned()).unwrap()
     }
 
     fn federation_headers(digest: &str) -> FederationTrustHeaders {
         FederationTrustHeaders {
             source_trust_domain: trust_domain("ck:trust_domain:peer.example"),
             destination_trust_domain: trust_domain("ck:trust_domain:soland.local"),
-            request_canonical_digest: contrix_sdk::Hash::new(digest.to_owned()).unwrap(),
+            request_canonical_digest: cokret_sdk::Hash::new(digest.to_owned()).unwrap(),
         }
     }
 
@@ -3118,7 +3118,7 @@ mod tests {
     fn verify_actor_digest_uses_canonical_json() {
         let body = verify_actor_body();
         let value = serde_json::to_value(&body).unwrap();
-        let expected = contrix_sdk::canonical::canonical_sha256(&value).unwrap();
+        let expected = cokret_sdk::canonical::canonical_sha256(&value).unwrap();
 
         assert_eq!(federation_verify_actor_digest(&body).unwrap(), expected);
     }
@@ -3328,7 +3328,7 @@ mod tests {
         let state = AppState::new(cfg, Db { pool: None });
         let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000051").unwrap();
         let invite = Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000052")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000052")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_MEMBER_STATE,
@@ -3339,7 +3339,7 @@ mod tests {
             }),
         );
         let invite_create = Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000055")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000055")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_INVITE_CREATE,
@@ -3351,7 +3351,7 @@ mod tests {
             }),
         );
         let message = Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000053")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000053")
                 .unwrap(),
             realm_id,
             kinds::CX_MESSAGE_CREATE,
@@ -3458,14 +3458,14 @@ mod tests {
         let state = AppState::new(cfg, Db { pool: None });
         let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000061").unwrap();
         let first = Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000062")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000062")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_MESSAGE_CREATE,
             json!({"content": {"kind": "cx.content.text", "body": "one"}}),
         );
         let second = Operation::create(
-            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063")
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063")
                 .unwrap(),
             realm_id,
             kinds::CX_MESSAGE_CREATE,
@@ -3599,9 +3599,9 @@ mod tests {
 /// on every inbound federation request.
 #[derive(Debug, Clone)]
 pub(crate) struct FederationTrustHeaders {
-    pub source_trust_domain: contrix_sdk::TypedTrustDomainId,
-    pub destination_trust_domain: contrix_sdk::TypedTrustDomainId,
-    pub request_canonical_digest: contrix_sdk::Hash,
+    pub source_trust_domain: cokret_sdk::TypedTrustDomainId,
+    pub destination_trust_domain: cokret_sdk::TypedTrustDomainId,
+    pub request_canonical_digest: cokret_sdk::Hash,
 }
 
 impl FederationTrustHeaders {
@@ -3620,17 +3620,17 @@ impl FederationTrustHeaders {
                 .to_str()
                 .map_err(|_| HeaderViolation::Malformed(name.to_owned()))
         };
-        let source = header_value(contrix_sdk::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
-        let destination = header_value(contrix_sdk::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash = header_value(contrix_sdk::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
-        let source = contrix_sdk::TypedTrustDomainId::new(source).map_err(|_| {
-            HeaderViolation::Malformed(contrix_sdk::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
+        let source = header_value(cokret_sdk::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
+        let destination = header_value(cokret_sdk::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
+        let canonical_hash = header_value(cokret_sdk::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
+        let source = cokret_sdk::TypedTrustDomainId::new(source).map_err(|_| {
+            HeaderViolation::Malformed(cokret_sdk::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
         })?;
-        let destination = contrix_sdk::TypedTrustDomainId::new(destination).map_err(|_| {
-            HeaderViolation::Malformed(contrix_sdk::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
+        let destination = cokret_sdk::TypedTrustDomainId::new(destination).map_err(|_| {
+            HeaderViolation::Malformed(cokret_sdk::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
         })?;
-        let canonical_hash = contrix_sdk::Hash::new(canonical_hash).map_err(|_| {
-            HeaderViolation::Malformed(contrix_sdk::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
+        let canonical_hash = cokret_sdk::Hash::new(canonical_hash).map_err(|_| {
+            HeaderViolation::Malformed(cokret_sdk::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
         })?;
         Ok(Self {
             source_trust_domain: source,
@@ -3644,10 +3644,10 @@ impl FederationTrustHeaders {
     /// `cross_domain_replay_rejected`.
     pub(crate) fn verify_destination(
         &self,
-        expected: &contrix_sdk::TypedTrustDomainId,
+        expected: &cokret_sdk::TypedTrustDomainId,
     ) -> Result<(), &'static str> {
         if self.destination_trust_domain != *expected {
-            return Err(contrix_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED);
+            return Err(cokret_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED);
         }
         Ok(())
     }
@@ -3656,7 +3656,7 @@ impl FederationTrustHeaders {
     /// inclusion in the message-signature transcript. Delegates to the SDK
     /// helper to keep producer + consumer byte-for-byte identical.
     pub(crate) fn transcript_fragment(&self) -> String {
-        contrix_sdk::federation_trust_domain_transcript_fragment(
+        cokret_sdk::federation_trust_domain_transcript_fragment(
             &self.source_trust_domain,
             &self.destination_trust_domain,
             &self.request_canonical_digest,
@@ -3673,7 +3673,7 @@ pub(crate) enum HeaderViolation {
 
 impl HeaderViolation {
     pub(crate) fn error_code(&self) -> &'static str {
-        contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION
+        cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION
     }
 
     pub(crate) fn message(&self) -> String {
@@ -3701,7 +3701,7 @@ impl FederationIdempotencyKey {
     /// Strict key — equal to a cached entry only when ALL fields match,
     /// including the origin's current key state hash.
     pub(crate) fn strict(&self) -> String {
-        let canonical = contrix_sdk::canonical::canonical_json_bytes(&json!({
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
@@ -3716,7 +3716,7 @@ impl FederationIdempotencyKey {
     /// Canonical-replay key — drops `origin_key_state_digest`. Used to
     /// detect a replay AFTER the source service rotated its keys.
     pub(crate) fn canonical_replay(&self) -> String {
-        let canonical = contrix_sdk::canonical::canonical_json_bytes(&json!({
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
@@ -3751,7 +3751,7 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
     if let Some(object) = response.as_object_mut() {
         object.insert(
             "reason_code".to_owned(),
-            Value::String(contrix_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
+            Value::String(cokret_sdk::ERROR_CODE_HISTORICAL_ONLY.to_owned()),
         );
         object.insert(HISTORICAL_ONLY_MARKER.to_owned(), Value::Bool(true));
     }
@@ -3765,12 +3765,12 @@ pub(crate) fn mark_response_historical_only(mut response: Value) -> Value {
 #[allow(dead_code)]
 pub(crate) fn delivery_binding_stale_response(
     new_recipient_service_did: &Did,
-    handover_frontier: &[contrix_sdk::EventId],
+    handover_frontier: &[cokret_sdk::EventId],
 ) -> Value {
     json!({
         "ok": false,
         "error": {
-            "code": contrix_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
+            "code": cokret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE,
             "message": "delivery binding is stale; rebind to the new recipient service",
             "details": {
                 "new_recipient_service_did": new_recipient_service_did.as_str(),
@@ -3791,7 +3791,7 @@ pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_did: &
     json!({
         "ok": false,
         "error": {
-            "code": contrix_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
+            "code": cokret_sdk::ERROR_CODE_DELIVERY_BINDING_HANDED_OVER,
             "message": "delivery binding has already been handed over to the new recipient",
             "details": {
                 "new_recipient_service_did": new_recipient_service_did.as_str(),
@@ -3827,7 +3827,7 @@ mod federation_wire_tests {
         let response = mark_response_historical_only(json!({"ok": true}));
         assert_eq!(
             response.get("reason_code").and_then(Value::as_str),
-            Some(contrix_sdk::ERROR_CODE_HISTORICAL_ONLY)
+            Some(cokret_sdk::ERROR_CODE_HISTORICAL_ONLY)
         );
         assert_eq!(
             response.get("historical_only").and_then(Value::as_bool),
@@ -3839,11 +3839,11 @@ mod federation_wire_tests {
     fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         let response = delivery_binding_stale_response(
             &Did::new("did:web:bob.example").unwrap(),
-            &[contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap()],
+            &[cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap()],
         );
         assert_eq!(
             response.pointer("/error/code").and_then(Value::as_str),
-            Some(contrix_sdk::ERROR_CODE_DELIVERY_BINDING_STALE)
+            Some(cokret_sdk::ERROR_CODE_DELIVERY_BINDING_STALE)
         );
         assert_eq!(
             response

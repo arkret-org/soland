@@ -1,7 +1,7 @@
 //! Verifies that the typed `#[endpoint]` handlers in
 //! `src/routing/describe.rs` actually contribute their request/response
 //! schemas to the generated OpenAPI document. The original
-//! `contrix_openapi_spec_contains_facet_projection_contracts` test only
+//! `cokret_openapi_spec_contains_facet_projection_contracts` test only
 //! asserts on operationId presence; this one asserts the typed schema
 //! references that prove the conversion is real (not just metadata).
 

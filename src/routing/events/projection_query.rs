@@ -30,7 +30,7 @@
 //! default. Explicit `include_terminal=true` returns the full set for audit /
 //! debugging UIs.
 
-use contrix_sdk::{
+use cokret_sdk::{
     Did, FlowId, MorphId, ProjectionFlowRow, ProjectionFlowsResBody, ProjectionMorphRow,
     ProjectionMorphsResBody, ProjectionObjectState, ProjectionSpaceRow, ProjectionSpaceState,
     ProjectionSpacesResBody, RealmId, SpaceId,

@@ -50,13 +50,13 @@ pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
         // violation (other schema layers enforce presence where required).
         return Ok(());
     };
-    let did = contrix_sdk::Did::new(subject.to_owned()).map_err(|_| {
+    let did = cokret_sdk::Did::new(subject.to_owned()).map_err(|_| {
         WireRejection::new(
             reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID,
             format!("handle claim subject must be a holder/principal DID ({subject})"),
         )
     })?;
-    contrix_sdk::validate_handle_claim_subject(&did).map_err(|err| {
+    cokret_sdk::validate_handle_claim_subject(&did).map_err(|err| {
         WireRejection::new(
             reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID,
             err.to_string(),

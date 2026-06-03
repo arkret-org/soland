@@ -24,8 +24,8 @@ use std::sync::{Arc, Mutex};
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // `DelegationError`, and the chain-integrity / cascade / expiry helpers —
 // live in the SDK so yougen and sodmin admin can call them client-side. See
-// `contrix_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
-pub use contrix_sdk::authz::delegation::{
+// `cokret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
+pub use cokret_sdk::authz::delegation::{
     DelegationError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict, GrantReqBody,
     delegation_chain_intact, grant_effective_expiry, is_grant_expired, resource_within,
     revoke_with_cascade,
@@ -129,7 +129,7 @@ impl AuthzEngine {
     /// - delegated expiry MUST NOT exceed the parent's
     /// - resource MUST NOT widen the parent's scope
     ///
-    /// Thin wrapper around [`contrix_sdk::authz::delegation::create_delegated_grant`]:
+    /// Thin wrapper around [`cokret_sdk::authz::delegation::create_delegated_grant`]:
     /// the SDK helper does the pure validation work; this method snapshots the
     /// engine's grant table, runs the check, assigns a server-issued grant id,
     /// and persists. yougen / sodmin call the SDK helper directly for client-side
@@ -172,7 +172,7 @@ impl AuthzEngine {
             constraints,
             expires_at,
         };
-        let mut child = contrix_sdk::authz::delegation::create_delegated_grant(
+        let mut child = cokret_sdk::authz::delegation::create_delegated_grant(
             parent_grant_id,
             &request,
             &snapshot,
@@ -193,7 +193,7 @@ impl AuthzEngine {
     /// `revoked` as part of this call (does NOT include `grant_id` itself).
     ///
     /// The cascade *plan* (which ids would be revoked) comes from
-    /// [`contrix_sdk::authz::delegation::revoke_with_cascade`]; this method
+    /// [`cokret_sdk::authz::delegation::revoke_with_cascade`]; this method
     /// applies the resulting mutation to the engine's in-memory map.
     pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
         let mut grants = self.grants.lock().expect("grants lock");
@@ -653,16 +653,16 @@ fn evaluate_constraint(
 pub enum MergedAuthzDecision {
     Allowed {
         local: AuthzResult,
-        remote: Option<contrix_sdk::PolicyCheckResponse>,
+        remote: Option<cokret_sdk::PolicyCheckResponse>,
     },
     LocalDeny(AuthzResult),
     RemoteDeny {
         local: AuthzResult,
-        remote: contrix_sdk::PolicyCheckResponse,
+        remote: cokret_sdk::PolicyCheckResponse,
     },
     RemoteObligationFailed {
         local: AuthzResult,
-        remote: contrix_sdk::PolicyCheckResponse,
+        remote: cokret_sdk::PolicyCheckResponse,
         error: obligation_executor::ObligationError,
     },
 }
@@ -744,7 +744,7 @@ pub async fn check_with_policy_server(
         }
     };
 
-    use contrix_sdk::model::AuthzDecision;
+    use cokret_sdk::model::AuthzDecision;
     let allow = matches!(remote.decision, AuthzDecision::Allow);
     if !allow {
         return MergedAuthzDecision::RemoteDeny { local, remote };

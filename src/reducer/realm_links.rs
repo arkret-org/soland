@@ -344,7 +344,7 @@ pub fn check_realm_link_admissible(
     link_kind: &str,
     status: &str,
 ) -> Result<(), &'static str> {
-    if contrix_sdk::RealmLinkKind::parse(link_kind).is_none() {
+    if cokret_sdk::RealmLinkKind::parse(link_kind).is_none() {
         return Err("realm_link_kind_invalid");
     }
     if source_realm_id == target_realm_id {
@@ -364,7 +364,7 @@ pub fn check_realm_link_admissible(
 
 #[cfg(test)]
 mod tests {
-    use contrix_sdk::{Operation, OperationId, RealmId};
+    use cokret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;

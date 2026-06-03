@@ -117,7 +117,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
 }
 
 #[tokio::test]
-async fn framework_errors_use_contrix_error_envelope() {
+async fn framework_errors_use_cokret_error_envelope() {
     let not_found: Value = TestClient::get("http://server/api/v1/missing")
         .send(&app())
         .await

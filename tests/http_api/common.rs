@@ -11,7 +11,7 @@ pub(crate) use std::time::Duration;
 
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-pub(crate) use contrix_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use cokret_sdk::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
@@ -160,7 +160,7 @@ fn signed_federation_request_headers(
     target_uri: &str,
     body: &Value,
 ) -> Vec<(&'static str, String)> {
-    let body_bytes = contrix_sdk::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{:x}", Sha256::digest(&body_bytes));
     let source_trust_domain = trust_domain_from_service_did(origin);
@@ -425,7 +425,7 @@ pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value 
 }
 
 pub(crate) fn sha256_json(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -794,7 +794,7 @@ pub(crate) fn test_embedded_webvh_proof(
             Value::String(format!("1-{entry_hash}")),
         );
     }
-    let payload = contrix_sdk::canonical::canonical_json_bytes(&entry).unwrap();
+    let payload = cokret_sdk::canonical::canonical_json_bytes(&entry).unwrap();
     let signature = update_signing.sign(&payload);
     serde_json::json!({
         "type": "DataIntegrityProof",
@@ -818,7 +818,7 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 }
 
 pub(crate) fn test_scid(value: &Value) -> String {
-    let canonical = contrix_sdk::canonical::canonical_json_bytes(value).unwrap();
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(value).unwrap();
     test_sha256_multihash_multibase(&canonical)
 }
 
@@ -828,7 +828,7 @@ pub(crate) fn test_webvh_entry_hash(value: &Value) -> String {
         map.remove("proof");
         map.remove("versionId");
     }
-    let canonical = contrix_sdk::canonical::canonical_json_bytes(&clone).unwrap();
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&clone).unwrap();
     test_sha256_multihash_multibase(&canonical)
 }
 

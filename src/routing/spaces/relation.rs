@@ -10,7 +10,7 @@
 //! `_todos.md`); update-by-relation-id is reached via the canonical event
 //! submit endpoint instead.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::json;

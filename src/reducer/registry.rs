@@ -1,14 +1,14 @@
 //! Per-cell-family `LatticeKind` registry (SDK re-export shim).
 //!
 //! The trait + registry types and the spec-normative cell-family
-//! bindings moved to `contrix_sdk::lattice_registry` (SDK-8) so all
+//! bindings moved to `cokret_sdk::lattice_registry` (SDK-8) so all
 //! consumers (soland Move/Anchor pipeline, yougen Move pre-check,
 //! cotest fixtures) share one canonical registry. This module is a
 //! thin re-export shim — existing soland call sites such as
 //! `crate::reducer::registry::LatticeKind` keep working without
 //! changes.
 
-pub use contrix_sdk::lattice_registry::{
+pub use cokret_sdk::lattice_registry::{
     BottomPolicy, ComponentDescriptor, Criticality, LatticeKind, LatticeKindError, LatticeRegistry,
     StateCardinality,
 };
@@ -27,8 +27,8 @@ mod lattice_kind_scaffold_tests {
             fn cell_family(&self) -> &'static str {
                 "cx.component.consent.v1"
             }
-            fn lattice(&self) -> contrix_sdk::lattice::LatticeKind {
-                contrix_sdk::lattice::LatticeKind::OrSet
+            fn lattice(&self) -> cokret_sdk::lattice::LatticeKind {
+                cokret_sdk::lattice::LatticeKind::OrSet
             }
             fn bottom_policy(&self) -> BottomPolicy {
                 BottomPolicy::Reject
@@ -46,7 +46,7 @@ mod lattice_kind_scaffold_tests {
         registry.register(ConsentCell);
         assert_eq!(registry.len(), 1);
         let found = registry.lookup("cx.component.consent.v1").unwrap();
-        assert_eq!(found.lattice(), contrix_sdk::lattice::LatticeKind::OrSet);
+        assert_eq!(found.lattice(), cokret_sdk::lattice::LatticeKind::OrSet);
         assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
         assert_eq!(found.bottom_policy().as_str(), "reject");
         assert!(registry.lookup("cx.component.unknown.v1").is_none());

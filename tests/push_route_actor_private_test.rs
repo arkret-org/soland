@@ -13,7 +13,7 @@
 //! HTTP ingress that fans wire payloads into these reducer calls is
 //! out of scope for T4.2.
 
-use contrix_sdk::Operation;
+use cokret_sdk::Operation;
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
@@ -40,8 +40,8 @@ const GATEWAY_DID: &str = "did:web:gateway.example";
 
 fn op(payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::RealmId::new(PLACEHOLDER_REALM).unwrap(),
+        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::RealmId::new(PLACEHOLDER_REALM).unwrap(),
         soland::kinds::CX_DEVICE_PUSH_ROUTE,
         payload,
     )

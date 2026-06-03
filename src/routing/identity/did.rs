@@ -15,7 +15,7 @@
 //! `did_resolver` is still an in-process resolver chain. Production must move it onto a
 //! durable store (see todo F2) — currently in-memory.
 
-use contrix_sdk::identity::DidResolver;
+use cokret_sdk::identity::DidResolver;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
 use salvo::oapi::extract::JsonBody;
@@ -419,7 +419,7 @@ pub(super) async fn identity_resolve(
             method_evidence: record.method_evidence,
         });
     }
-    let sdk_did = contrix_sdk::Did::new(body.did.clone());
+    let sdk_did = cokret_sdk::Did::new(body.did.clone());
     let sdk_document = sdk_did.ok().and_then(|did| {
         state
             .did_resolver
@@ -1034,7 +1034,7 @@ fn derive_webvh_scid(skeleton: &Value) -> Result<String, String> {
             "inception log entry must contain {WEBVH_SCID_PLACEHOLDER} placeholders"
         ));
     }
-    let canonical = contrix_sdk::canonical::canonical_json_bytes(skeleton)
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(skeleton)
         .map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
@@ -1057,7 +1057,7 @@ fn substitute_webvh_scid(value: Value, scid: &str) -> Value {
 
 fn webvh_entry_hash_multibase(value: &Value) -> Result<String, String> {
     let canonical =
-        contrix_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
+        cokret_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
             .map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
@@ -1128,7 +1128,7 @@ fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
     if let Value::Object(map) = &mut canonical {
         map.remove("proof");
     }
-    let payload = contrix_sdk::canonical::canonical_json_bytes(&canonical)
+    let payload = cokret_sdk::canonical::canonical_json_bytes(&canonical)
         .map_err(|error| error.to_string())?;
     public_key
         .verify(&payload, &signature)

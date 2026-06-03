@@ -7,7 +7,7 @@
 //! Both routes validate a `cx.reaction.add` / `cx.reaction.remove` operation
 //! and project it through the canonical projection layer.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;

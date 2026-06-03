@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// - [`RealmId`] is the SDK `ck:realm:<UUIDv7>` security-boundary id.
 /// - [`SpaceContainerId`] is an alias for the SDK [`SpaceId`]
 ///   (`ck:space:` / `ck:realm:` strict-typed id) per the Realm/Space inversion.
-pub use contrix_sdk::{RealmId, SpaceId};
+pub use cokret_sdk::{RealmId, SpaceId};
 
 /// Space-container typed id. Alias for the SDK [`SpaceId`] newtype; the local
 /// `SpaceContainerId` struct was removed in favour of the shared SDK type.
@@ -26,10 +26,10 @@ pub type SpaceContainerId = SpaceId;
 /// Generate a new typed wire ID with the given kind prefix.
 ///
 /// Format: `ck:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
-/// [`contrix_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
+/// [`cokret_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    contrix_sdk::new_prefixed_uuid7(&format!("ck:{kind}:"))
+    cokret_sdk::new_prefixed_uuid7(&format!("ck:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {

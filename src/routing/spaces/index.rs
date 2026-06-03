@@ -15,7 +15,7 @@
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
 //! contract while the durable projection store lands.
 
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -562,7 +562,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
             }
             let registry_known = {
                 let registry = state.realms.lock().expect("spaces lock");
-                contrix_sdk::RealmId::new(space_id.clone())
+                cokret_sdk::RealmId::new(space_id.clone())
                     .ok()
                     .and_then(|id| registry.get(&id).cloned())
                     .is_some()

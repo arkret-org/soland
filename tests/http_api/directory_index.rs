@@ -249,7 +249,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "audiences": ["link_token_holder"],
         "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
     });
-    let policy_digest = contrix_sdk::canonical::canonical_sha256(&policy).unwrap();
+    let policy_digest = cokret_sdk::canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
         .persistence
         .realm_meta()
@@ -307,11 +307,11 @@ fn preview_token_for_address(
     realm_id: &str,
     preview_policy_digest: &str,
 ) -> String {
-    let parsed = contrix_sdk::parse_address(address).unwrap();
-    let mut descriptor = contrix_sdk::TargetDescriptor::from_parsed(&parsed);
+    let parsed = cokret_sdk::parse_address(address).unwrap();
+    let mut descriptor = cokret_sdk::TargetDescriptor::from_parsed(&parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = contrix_sdk::LinkType::Preview;
-    let target_digest = contrix_sdk::target_digest(&descriptor).unwrap();
+    descriptor.link_type = cokret_sdk::LinkType::Preview;
+    let target_digest = cokret_sdk::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
         "iss": state.config.service_did.clone(),
         "aud": "anonymous",
@@ -321,10 +321,10 @@ fn preview_token_for_address(
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
     });
-    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(&claim).unwrap();
-    let payload_digest = contrix_sdk::canonical::sha256_digest(&canonical_bytes);
+    let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&claim).unwrap();
+    let payload_digest = cokret_sdk::canonical::sha256_digest(&canonical_bytes);
     let signing_key = state.anchorer_signing_key();
-    let jws = contrix_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
+    let jws = cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
@@ -481,7 +481,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::get("http://server/admin/actors")
+    let unauthenticated = TestClient::get("http://server/_soland/admin/actors")
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
@@ -501,7 +501,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         ("media", "media"),
     ];
     for (resource, field) in collections {
-        let body: Value = TestClient::get(format!("http://server/admin/{resource}?limit=5"))
+        let body: Value = TestClient::get(format!("http://server/_soland/admin/{resource}?limit=5"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -520,7 +520,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         );
     }
 
-    let actors: Value = TestClient::get("http://server/admin/actors")
+    let actors: Value = TestClient::get("http://server/_soland/admin/actors")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -535,7 +535,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
             .any(|actor| { actor["did"] == "did:web:alice.example" && actor["kind"] == "actor" })
     );
 
-    let devices: Value = TestClient::get("http://server/admin/devices")
+    let devices: Value = TestClient::get("http://server/_soland/admin/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -547,7 +547,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
             && device["device_id"] == "ck:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
-    let unknown = TestClient::get("http://server/admin/not-real")
+    let unknown = TestClient::get("http://server/_soland/admin/not-real")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await;

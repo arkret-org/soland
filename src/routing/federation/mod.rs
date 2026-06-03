@@ -8,14 +8,14 @@ pub mod outbox;
 pub(crate) mod stubs;
 
 pub(crate) use federation::fanout_accepted_operations_to_peers;
-pub use stubs::well_known_contrix_router;
+pub use stubs::well_known_cokret_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sha256_hex, sync_token, validate_did, validate_space_id,
 };
 
-/// Operator anchor-signing endpoint (`POST /admin/anchors/sign`). Mounted
+/// Operator anchor-signing endpoint (`POST /_soland/admin/anchors/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
 /// (NOT under `/api/v1`), alongside the rest of the admin surface.
 pub fn admin_anchor_sign_router() -> Router {

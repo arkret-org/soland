@@ -371,7 +371,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
 }
 
 #[tokio::test]
-async fn contrix_openapi_spec_contains_facet_projection_contracts() {
+async fn cokret_openapi_spec_contains_facet_projection_contracts() {
     let mut response = TestClient::get("http://server/.well-known/cokret/openapi.yaml")
         .send(&app())
         .await;

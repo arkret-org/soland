@@ -378,12 +378,12 @@ pub async fn append_audit_log(
 /// produced by an out-of-tree signer using the old form MUST be re-issued.
 #[allow(dead_code)]
 pub fn compute_audit_policy_hash(
-    realm_id: &contrix_sdk::RealmId,
-    trust_domain: &contrix_sdk::TypedTrustDomainId,
+    realm_id: &cokret_sdk::RealmId,
+    trust_domain: &cokret_sdk::TypedTrustDomainId,
     audit_disclosure: &Value,
     audit_assurance: &Value,
 ) -> [u8; 32] {
-    contrix_sdk::compute_audit_policy_version_digest(
+    cokret_sdk::compute_audit_policy_version_digest(
         realm_id,
         trust_domain,
         audit_disclosure,
@@ -398,15 +398,15 @@ pub fn compute_audit_policy_hash(
 /// surface a typed builder for readability.
 #[allow(dead_code)]
 pub fn build_late_recovery_audit_payload(
-    realm_id: contrix_sdk::RealmId,
-    actor: contrix_sdk::Did,
-    original_event_id: contrix_sdk::EventId,
+    realm_id: cokret_sdk::RealmId,
+    actor: cokret_sdk::Did,
+    original_event_id: cokret_sdk::EventId,
     observed_at: chrono::DateTime<chrono::Utc>,
-) -> contrix_sdk::AuditPolicyAccessPayload {
-    contrix_sdk::AuditPolicyAccessPayload {
+) -> cokret_sdk::AuditPolicyAccessPayload {
+    cokret_sdk::AuditPolicyAccessPayload {
         realm_id,
         actor,
-        access_kind: contrix_sdk::AccessKind::E2EELateRecovery,
+        access_kind: cokret_sdk::AccessKind::E2EELateRecovery,
         late_recovery_original_event_id: Some(original_event_id),
         observed_at,
     }
@@ -418,14 +418,14 @@ mod audit_policy_tests {
 
     use super::*;
 
-    fn realm() -> contrix_sdk::RealmId {
-        contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap()
+    fn realm() -> cokret_sdk::RealmId {
+        cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap()
     }
-    fn td() -> contrix_sdk::TypedTrustDomainId {
-        contrix_sdk::TypedTrustDomainId::new("ck:trust_domain:soland.local").unwrap()
+    fn td() -> cokret_sdk::TypedTrustDomainId {
+        cokret_sdk::TypedTrustDomainId::new("ck:trust_domain:soland.local").unwrap()
     }
-    fn other_td() -> contrix_sdk::TypedTrustDomainId {
-        contrix_sdk::TypedTrustDomainId::new("ck:trust_domain:other.example").unwrap()
+    fn other_td() -> cokret_sdk::TypedTrustDomainId {
+        cokret_sdk::TypedTrustDomainId::new("ck:trust_domain:other.example").unwrap()
     }
 
     #[test]
@@ -449,13 +449,13 @@ mod audit_policy_tests {
     fn late_recovery_audit_payload_populates_event_id() {
         let payload = build_late_recovery_audit_payload(
             realm(),
-            contrix_sdk::Did::new("did:web:alice.example").unwrap(),
-            contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap(),
+            cokret_sdk::Did::new("did:web:alice.example").unwrap(),
+            cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap(),
             chrono::Utc::now(),
         );
         assert!(matches!(
             payload.access_kind,
-            contrix_sdk::AccessKind::E2EELateRecovery
+            cokret_sdk::AccessKind::E2EELateRecovery
         ));
         assert!(payload.late_recovery_original_event_id.is_some());
         payload.validate_minimal().unwrap();

@@ -1,5 +1,5 @@
 //! Soland thin wrapper over the canonical detached-JWS verifier in
-//! [`contrix_sdk::jws`].
+//! [`cokret_sdk::jws`].
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
 //! signature check, DID resolution, replay-window timing) live in the
@@ -20,8 +20,8 @@
 //!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
 
-use contrix_sdk::identity::{DidDocument, DidResolver};
-use contrix_sdk::{Did, Hash};
+use cokret_sdk::identity::{DidDocument, DidResolver};
+use cokret_sdk::{Did, Hash};
 use ed25519_dalek::VerifyingKey;
 
 use crate::state::AppState;
@@ -41,7 +41,7 @@ pub struct ResolvedVerificationKey {
 // sites in `anchorer.rs`, `compactor.rs`, `routing::admin::anchor.rs`,
 // `routing::federation::move_anchor.rs` and `routing::events::event_log.rs`
 // keep working unchanged.
-pub use contrix_sdk::jws::{
+pub use cokret_sdk::jws::{
     effective_window_for_move, physical_millis_from_hlc, verify_replay_window,
     verify_replay_window_at, verify_replay_window_for_move, verify_replay_window_for_move_at,
 };
@@ -49,7 +49,7 @@ pub use contrix_sdk::jws::{
 /// Production Ed25519 detached-JWS verifier.
 ///
 /// Soland-side adapter: locks `state.did_resolver` and dispatches to
-/// [`contrix_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
+/// [`cokret_sdk::jws::verify_jws_ed25519`]. See the SDK module docs for
 /// the full spec (RFC 7515 detached shape, alg=EdDSA, did:key /
 /// did:web / did:webvh resolution).
 pub fn verify_jws_ed25519(
@@ -63,7 +63,7 @@ pub fn verify_jws_ed25519(
         .did_resolver
         .lock()
         .map_err(|e| format!("DID resolver lock poisoned: {e}"))?;
-    contrix_sdk::jws::verify_jws_ed25519(
+    cokret_sdk::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
@@ -74,7 +74,7 @@ pub fn verify_jws_ed25519(
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState
 /// resolver chain. Adapter over
-/// [`contrix_sdk::jws::resolve_ed25519_pubkey`].
+/// [`cokret_sdk::jws::resolve_ed25519_pubkey`].
 pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
@@ -83,7 +83,7 @@ pub fn resolve_ed25519_pubkey(
         .did_resolver
         .lock()
         .map_err(|e| format!("DID resolver lock poisoned: {e}"))?;
-    contrix_sdk::jws::resolve_ed25519_pubkey(&*resolver as &dyn DidResolver, verification_method)
+    cokret_sdk::jws::resolve_ed25519_pubkey(&*resolver as &dyn DidResolver, verification_method)
 }
 
 /// Resolve and validate a DID-scoped Ed25519 verification method.
@@ -174,7 +174,7 @@ async fn did_document_key_log_head(
     }
     let value = serde_json::to_value(document)
         .map_err(|error| format!("DID document serialization failed: {error}"))?;
-    let digest = contrix_sdk::canonical::canonical_sha256(&value)
+    let digest = cokret_sdk::canonical::canonical_sha256(&value)
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }

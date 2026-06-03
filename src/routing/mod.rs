@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
@@ -110,30 +110,37 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(system::health_router())
         .push(interop::well_known_router())
         // Spec: B.3 — `/.well-known/cokret` server-description stub.
-        .push(federation::well_known_contrix_router())
+        .push(federation::well_known_cokret_router())
         .push(identity::embedded_webvh_public_router())
-        // Admin surface lives at the bare, deployment-local `/admin/*`
-        // namespace (NOT under the `/api/v1` protocol prefix), per
-        // cokret-spec `service-http-binding.md` §2.1. Three sibling
-        // sub-trees are resolved by salvo fallthrough; ordering matters
-        // only where paths overlap:
+        // Admin surface lives at the deployment-local `/_soland/admin/*`
+        // namespace (NOT under the `/api/v1` protocol prefix). Renamed from
+        // the historical bare `/admin/*` to `/_soland/admin/*` so the
+        // operator surface is unambiguously soland-local and cannot collide
+        // with application-level routes. The four admin sub-routers below
+        // still declare their paths relative to `admin/...`; the shared
+        // `_soland` parent prepends the new namespace segment in one place.
+        // Four sibling sub-trees are resolved by salvo fallthrough; ordering
+        // matters only where paths overlap:
         //   1. `spec_router`   — canonical `cx.admin.*` (server/status,
         //      accounts, devices, moderation/queue).
         //   2. `admin_router`  — operator surface (anchorer / multisig /
         //      bottom / anchor-dag / gc-candidates / delivery-binding /
-        //      moderation sub-actions). Registered BEFORE the collection
-        //      so the concrete `/admin/bottom` wins over `{resource}`.
-        //   3. `router`        — collection (`/admin/{resource}`), cells,
-        //      control-frames, retention.
-        .push(admin::spec_router())
-        .push(admin::admin_router())
-        .push(admin::router())
-        // `POST /admin/anchors/sign` — operator anchor-signing trigger,
-        // detached from the `/api/v1` federation router so it sits in the
-        // bare `/admin/*` namespace with the rest of the admin surface.
-        .push(federation::admin_anchor_sign_router())
+        //      moderation sub-actions). Registered BEFORE the collection so
+        //      the concrete `/_soland/admin/bottom` wins over `{resource}`.
+        //   3. `router`        — collection (`/_soland/admin/{resource}`),
+        //      cells, control-frames, retention.
+        //   4. `admin_anchor_sign_router` — `POST /_soland/admin/anchors/sign`
+        //      operator anchor-signing trigger, detached from the `/api/v1`
+        //      federation router so it sits in the admin namespace.
+        .push(
+            Router::with_path("_soland")
+                .push(admin::spec_router())
+                .push(admin::admin_router())
+                .push(admin::router())
+                .push(federation::admin_anchor_sign_router()),
+        )
         .push(api_v1_router())
-        .push(interop::contrix_router())
+        .push(interop::cokret_router())
         // `/cokret/v1/*` fallback: per `cokret-spec/spec/v1/zh/sync/
         // api-conventions.md` §10, any request under `/cokret/v1/...` that
         // doesn't match a known route MUST return the canonical
@@ -142,13 +149,13 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // `cokret/v1/...` routers above; salvo's child-iteration order
         // means it only fires when the concrete routes don't claim the
         // path. See `api_not_found` for the 405/Allow disambiguation.
-        .push(contrix_v1_fallback_router());
-    let doc = cached_contrix_openapi_doc(&router);
+        .push(cokret_v1_fallback_router());
+    let doc = cached_cokret_openapi_doc(&router);
     router
         .unshift(
             Router::with_path(".well-known/cokret/openapi.yaml")
                 .hoop(affix_state::inject(CokretOpenApiDoc(doc.clone())))
-                .get(contrix_openapi_yaml),
+                .get(cokret_openapi_yaml),
         )
         .unshift(doc.into_router(".well-known/cokret/openapi.json"))
         .unshift(Router::new().get(home_page))
@@ -210,17 +217,17 @@ fn api_v1_router() -> Router {
 /// concrete `cokret/v1/...` endpoints (currently `cokret/v1/ice-config`)
 /// are mounted as their own top-level child routers and run *before* this
 /// fallback because salvo iterates the root's children in registration order.
-fn contrix_v1_fallback_router() -> Router {
+fn cokret_v1_fallback_router() -> Router {
     Router::with_path("cokret/v1/{**rest}")
         .options(cors_preflight)
         .goal(api_not_found)
 }
 
-static CONTRIX_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
+static COKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
 
-fn cached_contrix_openapi_doc(router: &Router) -> OpenApi {
-    let doc = CONTRIX_OPENAPI_DOC
-        .get_or_init(|| contrix_openapi_doc(router))
+fn cached_cokret_openapi_doc(router: &Router) -> OpenApi {
+    let doc = COKRET_OPENAPI_DOC
+        .get_or_init(|| cokret_openapi_doc(router))
         .clone();
     // The same cached doc is also the source of truth for the
     // 404/405 known-routes table used by `api_not_found`.
@@ -228,7 +235,7 @@ fn cached_contrix_openapi_doc(router: &Router) -> OpenApi {
     doc
 }
 
-fn contrix_openapi_doc(router: &Router) -> OpenApi {
+fn cokret_openapi_doc(router: &Router) -> OpenApi {
     let mut doc = OpenApi::new("soland", "0.1.0")
         .add_extension(
             "x-operation-aliases",
@@ -618,84 +625,84 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "resolve realm",
     ),
     (
-        "/admin/actors",
+        "/_soland/admin/actors",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.actors",
         "admin actor snapshot",
     ),
     (
-        "/admin/spaces",
+        "/_soland/admin/spaces",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.spaces",
         "admin space snapshot",
     ),
     (
-        "/admin/devices",
+        "/_soland/admin/devices",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.devices",
         "admin device snapshot",
     ),
     (
-        "/admin/capabilities",
+        "/_soland/admin/capabilities",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.capabilities",
         "admin capability snapshot",
     ),
     (
-        "/admin/federation",
+        "/_soland/admin/federation",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.federation",
         "admin federation snapshot",
     ),
     (
-        "/admin/applets",
+        "/_soland/admin/applets",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.applets",
         "admin applet snapshot",
     ),
     (
-        "/admin/agents",
+        "/_soland/admin/agents",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.agents",
         "admin agent snapshot",
     ),
     (
-        "/admin/reports",
+        "/_soland/admin/reports",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.reports",
         "admin report snapshot",
     ),
     (
-        "/admin/invite-tokens",
+        "/_soland/admin/invite-tokens",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.invite_tokens",
         "admin invite token snapshot",
     ),
     (
-        "/admin/audit",
+        "/_soland/admin/audit",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.audit",
         "admin audit snapshot",
     ),
     (
-        "/admin/policy",
+        "/_soland/admin/policy",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.policy",
         "admin policy snapshot",
     ),
     (
-        "/admin/media",
+        "/_soland/admin/media",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.media",
@@ -1159,7 +1166,7 @@ async fn api_not_found(req: &mut Request, res: &mut Response) {
 
 /// Map of registered route patterns → supported HTTP methods. Populated
 /// once at startup from the cached OpenAPI doc (see
-/// [`cached_contrix_openapi_doc`]) so that [`api_not_found`] can decide
+/// [`cached_cokret_openapi_doc`]) so that [`api_not_found`] can decide
 /// whether to return 404 (`unrecognized_endpoint`) or 405
 /// (`method_not_allowed` + `Allow` header) for a given request path.
 ///
@@ -1363,8 +1370,8 @@ pub struct CokretOpenApiDoc(pub OpenApi);
 
 /// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_digest` /
 /// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
-/// [`contrix_sdk::SnapshotChunk`] partitions + a binary
-/// [`contrix_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
+/// [`cokret_sdk::SnapshotChunk`] partitions + a binary
+/// [`cokret_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
 /// generator proof. Receivers verify the proof first, then fetch chunks lazily
 /// and check each one against `merkle_root` via `SnapshotMerkleTree::verify`.
 pub(crate) struct SnapshotBundle {
@@ -1376,11 +1383,11 @@ pub(crate) struct SnapshotBundle {
     pub manifest: Value,
     pub frontier: Value,
     /// Deterministic chunk partition (SDK
-    /// [`contrix_sdk::SnapshotChunker::default`] @ 256 KiB).
-    pub chunks: Vec<contrix_sdk::SnapshotChunk>,
+    /// [`cokret_sdk::SnapshotChunker::default`] @ 256 KiB).
+    pub chunks: Vec<cokret_sdk::SnapshotChunk>,
     /// Merkle tree over `chunks[*].digest`. `tree.root()` is the
     /// `merkle_root` advertised in the snapshot head.
-    pub tree: contrix_sdk::SnapshotMerkleTree,
+    pub tree: cokret_sdk::SnapshotMerkleTree,
     pub chunk_count: u32,
     pub total_bytes: u64,
     pub chunk_bytes: u32,
@@ -1454,15 +1461,15 @@ pub(crate) async fn snapshot_bundle_for_space(
     // digests, and sign a GeneratorProof binding the tree root to
     // (generator_did, space_id, state_root). Receivers verify the proof
     // first, then fetch chunks lazily.
-    let chunker = contrix_sdk::SnapshotChunker::default();
+    let chunker = cokret_sdk::SnapshotChunker::default();
     let chunks = chunker.chunk(&chunk_bytes);
-    let tree = contrix_sdk::SnapshotMerkleTree::build(&chunks).ok()?;
+    let tree = cokret_sdk::SnapshotMerkleTree::build(&chunks).ok()?;
     let merkle_root = tree.root().clone();
     let chunk_count = chunks.len() as u32;
     let total_bytes: u64 = chunks.iter().map(|c| c.bytes.len() as u64).sum();
     let chunk_target_bytes = chunker.target_chunk_bytes as u32;
-    let state_root_hash = contrix_sdk::Hash::new(state_digest.clone()).ok()?;
-    let generator_did = contrix_sdk::Did::new(state.config.service_did.clone()).ok()?;
+    let state_root_hash = cokret_sdk::Hash::new(state_digest.clone()).ok()?;
+    let generator_did = cokret_sdk::Did::new(state.config.service_did.clone()).ok()?;
 
     let proof_body = json!({
         "generator_did": generator_did.to_string(),
@@ -1473,14 +1480,14 @@ pub(crate) async fn snapshot_bundle_for_space(
         "total_bytes": total_bytes,
         "chunk_bytes": chunk_target_bytes,
     });
-    let proof_body_bytes = contrix_sdk::canonical::canonical_json_bytes(&proof_body).ok()?;
+    let proof_body_bytes = cokret_sdk::canonical::canonical_json_bytes(&proof_body).ok()?;
     let signing_key = (*state.anchorer_signing_key()).clone();
-    let signer = contrix_sdk::Ed25519MoveSigner::new(
+    let signer = cokret_sdk::Ed25519MoveSigner::new(
         signing_key,
         generator_did.clone(),
         format!("{}#snapshot-key", state.config.service_did),
     );
-    let signature = contrix_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
+    let signature = cokret_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
     let generator_proof = json!({
         "generator_did": generator_did.to_string(),
         "realm_id": space_id,
@@ -1566,7 +1573,7 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
 
 #[cfg(test)]
 mod operation_conformance_tests {
-    use contrix_sdk::{Operation, OperationId};
+    use cokret_sdk::{Operation, OperationId};
     use serde_json::{Value, json};
 
     use super::*;
@@ -1653,7 +1660,7 @@ mod operation_conformance_tests {
         let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001".to_owned();
         Operation::create(
             OperationId::new(op_id).unwrap(),
-            contrix_sdk::RealmId::new(realm_id).unwrap(),
+            cokret_sdk::RealmId::new(realm_id).unwrap(),
             kind,
             payload,
         )
@@ -2088,7 +2095,7 @@ mod operation_conformance_tests {
 
 #[cfg(test)]
 mod canonical_conformance_vectors {
-    use contrix_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
+    use cokret_sdk::canonical::{canonical_json_bytes, canonical_json_string, canonical_sha256};
     use serde_json::json;
 
     use super::*;
@@ -2203,7 +2210,7 @@ mod canonical_conformance_vectors {
         let value = json!({"a": 1, "b": 2});
         assert!(validate_canonical_json_value(&value).is_ok());
         // Verify that the canonical form is compact and sorted.
-        let canonical = contrix_sdk::canonical::canonical_json_string(&value).unwrap();
+        let canonical = cokret_sdk::canonical::canonical_json_string(&value).unwrap();
         assert_eq!(canonical, r#"{"a":1,"b":2}"#);
     }
 
@@ -2311,7 +2318,7 @@ mod canonical_conformance_vectors {
 /// specifically [`pattern_matches_path`] and the supporting helpers.
 /// Salvo wiring (the actual HTTP shape returned by the catch-all router)
 /// is covered by the integration test
-/// `framework_errors_use_contrix_error_envelope` in `tests/http_api.rs`.
+/// `framework_errors_use_cokret_error_envelope` in `tests/http_api.rs`.
 #[cfg(test)]
 mod framework_error_routing_tests {
     use super::*;
@@ -2385,9 +2392,9 @@ mod framework_error_routing_tests {
     /// End-to-end check that `/cokret/v1/*` unrecognized paths return
     /// the canonical 404 + `unrecognized_endpoint` JSON envelope —
     /// matching the existing `/api/v1/*` contract (see
-    /// `tests/http_api.rs::framework_errors_use_contrix_error_envelope`).
+    /// `tests/http_api.rs::framework_errors_use_cokret_error_envelope`).
     #[tokio::test]
-    async fn contrix_v1_unknown_path_returns_unrecognized_endpoint() {
+    async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
         use salvo::test::{ResponseExt, TestClient};
 
         use crate::db::Db;
@@ -2496,8 +2503,8 @@ mod framework_error_routing_tests {
 }
 
 #[endpoint]
-#[tracing::instrument(skip_all, fields(op = "contrix_openapi_yaml"))]
-async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
+#[tracing::instrument(skip_all, fields(op = "cokret_openapi_yaml"))]
+async fn cokret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .obtain::<CokretOpenApiDoc>()
         .expect("openapi doc injected");

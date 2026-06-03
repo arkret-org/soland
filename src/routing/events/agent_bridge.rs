@@ -8,7 +8,7 @@
 //!    invocation.
 //! 2. `cx.agent.protocol_session.result` carrying the terminal payload plus an Ed25519-signed
 //!    `audit_binding` block (signature is computed by
-//!    `contrix_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
+//!    `cokret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
 //!    `{session_id, agent_principal_id, result.echo, actor}`).
 //!
 //! Dispatch rules:
@@ -71,7 +71,7 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_e
 pub async fn maybe_emit_echo_result_for_session_start(
     state: &AppState,
     origin: &str,
-    operation: &contrix_sdk::Operation,
+    operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
     if kind != kinds::CX_AGENT_PROTOCOL_SESSION_START {
@@ -354,7 +354,7 @@ async fn emit_agent_result_envelope(
     let result_payload = match error_block {
         None => {
             // Sign + emit the success/echo envelope.
-            let signed = contrix_sdk::agent_binding::sign_ed25519_audit_binding(
+            let signed = cokret_sdk::agent_binding::sign_ed25519_audit_binding(
                 signing_seed,
                 session_id,
                 agent_principal_id,
@@ -432,7 +432,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
 
-    use contrix_sdk::{Operation, OperationId, RealmId};
+    use cokret_sdk::{Operation, OperationId, RealmId};
 
     use super::*;
     use crate::config::AppConfig;
@@ -601,7 +601,7 @@ mod tests {
         let canonical_subject = binding["canonical_subject"]
             .as_str()
             .expect("canonical_subject");
-        let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+        let outcome = cokret_sdk::agent_binding::verify_ed25519_audit_binding(
             public_key_b64,
             session,
             agent_id,
@@ -612,7 +612,7 @@ mod tests {
         );
         assert_eq!(
             outcome,
-            contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+            cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
             "audit_binding signature must verify under the reference Ed25519 public key"
         );
     }
@@ -716,10 +716,10 @@ mod tests {
         let pk = binding["public_key_b64"].as_str().expect("pk");
         let subject = binding["canonical_subject"].as_str().expect("subj");
         assert_eq!(
-            contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+            cokret_sdk::agent_binding::verify_ed25519_audit_binding(
                 pk, session, agent_id, &echo, actor, sig, subject,
             ),
-            contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
+            cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid
         );
         // Reference public key MUST NOT verify the deployment signature.
         use ed25519_dalek::SigningKey;

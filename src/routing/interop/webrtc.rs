@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -42,7 +42,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("calls/{call_id}/ice-config/refresh").post(refresh_ice_config))
         .push(Router::with_path("calls/{call_id}/recording/start").post(start_recording))
         // CXP-0010 (R3 spec-sync) — media token exchange. Spec-canonical
-        // wire-path is `POST /rtc/token` (mounted via `contrix_router`)
+        // wire-path is `POST /rtc/token` (mounted via `cokret_router`)
         // but `/api/v1/rtc/token` is also accepted as a deployment-local
         // alias so admin UIs that namespace everything under `/api/v1/`
         // can reach the handler without a separate ingress rule.
@@ -56,16 +56,16 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("webrtc/sessions/{session_id}").delete(delete_webrtc_session))
 }
 
-pub(super) fn contrix_router() -> Router {
+pub(super) fn cokret_router() -> Router {
     Router::new()
-        .push(Router::with_path("cokret/v1/ice-config").post(contrix_ice_config))
+        .push(Router::with_path("cokret/v1/ice-config").post(cokret_ice_config))
         // CXP-0010 — `POST /rtc/token` per CXP-0010 / cokret-spec
         // b47ff6ec. Spec path lives at the deployment root (not under
         // `/cokret/v1/`); both shapes are mounted so deployments behind
         // an ingress that strips the `/cokret/v1/` prefix can still
         // reach the handler.
-        .push(Router::with_path("rtc/token").post(contrix_rtc_token))
-        .push(Router::with_path("cokret/v1/rtc/token").post(contrix_rtc_token))
+        .push(Router::with_path("rtc/token").post(cokret_rtc_token))
+        .push(Router::with_path("cokret/v1/rtc/token").post(cokret_rtc_token))
 }
 
 #[endpoint(
@@ -74,7 +74,7 @@ pub(super) fn contrix_router() -> Router {
     summary = "Issue signed ICE config"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.media.ice_config"))]
-async fn contrix_ice_config(
+async fn cokret_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -276,13 +276,13 @@ fn turn_credential(
 }
 
 fn ice_config_payload_digest(payload: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
 fn ice_config_signature(state: &AppState, payload: &Value) -> String {
-    let payload = contrix_sdk::canonical::canonical_json_bytes(payload)
+    let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     let mut signing_input = Vec::with_capacity(
         b"soland-media-ice-config-v1".len() + state.config.service_did.len() + payload.len() + 2,
@@ -694,7 +694,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "cokret-native" | "contrix_native" => Ok(Self::CokretNative),
+            "cokret-native" | "cokret_native" => Ok(Self::CokretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -925,7 +925,7 @@ async fn handle_rtc_token(
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
         .ttl_seconds
-        .clamp(1, contrix_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
+        .clamp(1, cokret_sdk::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -958,7 +958,7 @@ async fn handle_rtc_token(
     let _token_issuer_reason: &str = crate::error::reasons::TOKEN_ISSUER_UNAUTHORISED;
     let issuer_kid = focus.issuer_kid.clone();
     let binding_payload = json!({
-        "scheme": contrix_sdk::PARTICIPANT_BINDING_SCHEMA,
+        "scheme": cokret_sdk::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": issuer_kid.clone(),
         "realm_id": body.realm_id,
         "call_id": body.call_id,
@@ -968,7 +968,7 @@ async fn handle_rtc_token(
         "participant_identity": participant_identity,
         "expires_at": expires_at,
     });
-    let binding_bytes = contrix_sdk::canonical::canonical_json_bytes(&binding_payload)
+    let binding_bytes = cokret_sdk::canonical::canonical_json_bytes(&binding_payload)
         .unwrap_or_else(|_| binding_payload.to_string().into_bytes());
     let mut signing_input =
         Vec::with_capacity(b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1);
@@ -993,7 +993,7 @@ async fn handle_rtc_token(
     );
 
     let participant_binding = ParticipantBindingResBody {
-        scheme: contrix_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
         realm_id: body.realm_id,
@@ -1087,7 +1087,7 @@ fn media_service_epoch_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let cell_id = contrix_sdk::CellRef::new(format!(
+    let cell_id = cokret_sdk::CellRef::new(format!(
         "ck:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
@@ -1153,7 +1153,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .or_else(|| focus_value.get("token_ttl_seconds"))
             .or_else(|| config.get("ttl_seconds"))
             .and_then(Value::as_u64)
-            .unwrap_or(contrix_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
+            .unwrap_or(cokret_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
             .or_else(|| focus_value.get("sfu_endpoint"))
@@ -1309,7 +1309,7 @@ fn issue_signed_backend_token(
         "exp": request.expires_at,
         "nonce": nonce,
     });
-    let token_bytes = contrix_sdk::canonical::canonical_json_bytes(&token_payload)
+    let token_bytes = cokret_sdk::canonical::canonical_json_bytes(&token_payload)
         .unwrap_or_else(|_| token_payload.to_string().into_bytes());
     let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
     let signing_input = format!(
@@ -1385,7 +1385,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
     status_codes(200, 400, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.call.media.token_exchange"))]
-async fn contrix_rtc_token(
+async fn cokret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<MediaTokenExchangeReqBody>,
     depot: &mut Depot,

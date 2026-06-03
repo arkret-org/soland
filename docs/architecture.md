@@ -25,7 +25,7 @@ A successful `POST /api/v1/events` walks the following stages:
 
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
-   `contrix_sdk::events::EventEnvelope`, rejects forbidden wire fields
+   `cokret_sdk::events::EventEnvelope`, rejects forbidden wire fields
    (`is_forbidden_wire_field`, see `tests/conformance_gates.rs`), and binds
    the envelope to the authenticated principal.
 

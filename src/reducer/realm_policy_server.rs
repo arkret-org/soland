@@ -15,8 +15,8 @@
 //!
 //! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::{CellRef, Operation};
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::{CellRef, Operation};
 use serde_json::Value;
 
 use crate::reducer::{ProjectionEffect, ProjectionState, RealmPolicyServerConfig};
@@ -149,7 +149,7 @@ pub fn apply_realm_policy_server(
 
 #[cfg(test)]
 mod tests {
-    use contrix_sdk::{Operation, OperationId, RealmId};
+    use cokret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;

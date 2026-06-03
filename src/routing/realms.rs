@@ -16,7 +16,7 @@
 //!   `cx.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -131,7 +131,7 @@ async fn list_realm_links(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let direction_str = direction.into_inner().unwrap_or_else(|| "both".to_owned());
-    let direction_enum = contrix_sdk::RealmLinkDirection::parse(&direction_str)
+    let direction_enum = cokret_sdk::RealmLinkDirection::parse(&direction_str)
         .ok_or_else(|| AppError::invalid_param("direction MUST be one of outbound|inbound|both"))?;
     // `link_kind_allow` is a comma-separated list — keeps the query
     // surface dense and avoids repeated query params.
@@ -146,7 +146,7 @@ async fn list_realm_links(
     if let Some(values) = allow.as_ref() {
         // Reject unknown link_kinds eagerly with a clear error.
         for value in values {
-            if contrix_sdk::RealmLinkKind::parse(value).is_none() {
+            if cokret_sdk::RealmLinkKind::parse(value).is_none() {
                 return Err(AppError::invalid_param(format!(
                     "link_kind_allow contains unknown kind '{value}'"
                 )));
@@ -189,7 +189,7 @@ async fn post_realm_link(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let body = body.into_inner();
-    if contrix_sdk::RealmLinkKind::parse(&body.link_kind).is_none() {
+    if cokret_sdk::RealmLinkKind::parse(&body.link_kind).is_none() {
         return Err(AppError::invalid_param(format!(
             "link_kind '{}' is not a canonical RealmLinkKind",
             body.link_kind
@@ -278,7 +278,7 @@ async fn delete_realm_link(
     let link_kind = link_kind
         .into_inner()
         .unwrap_or_else(|| "governed_by".to_owned());
-    if contrix_sdk::RealmLinkKind::parse(&link_kind).is_none() {
+    if cokret_sdk::RealmLinkKind::parse(&link_kind).is_none() {
         return Err(AppError::invalid_param(format!(
             "link_kind '{link_kind}' is not a canonical RealmLinkKind"
         )));

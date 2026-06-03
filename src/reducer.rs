@@ -32,9 +32,9 @@ pub mod registry;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use contrix_sdk::lattice::CellState;
-use contrix_sdk::state_res::{CellRegistry, CellStore, StoreError};
-use contrix_sdk::{CellRef, Operation, SpaceId};
+use cokret_sdk::lattice::CellState;
+use cokret_sdk::state_res::{CellRegistry, CellStore, StoreError};
+use cokret_sdk::{CellRef, Operation, SpaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -146,7 +146,7 @@ pub struct ProjectionState {
     /// `extensions/applet-integration.md`). Populated by
     /// `cx.applet.registration` (initial registration / re-registration)
     /// and updated by `cx.applet.discovery` (manifest refresh). Used by
-    /// `GET /admin/applets` admin snapshot. Protocol-session
+    /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
     /// events (`cx.applet.protocol_session.{start,status}`,
     /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
@@ -321,7 +321,7 @@ pub struct RealmLinkState {
     pub realm_id: String,
     pub target_realm_id: String,
     /// Canonical link kind string (snake_case, one of the eight values
-    /// in `contrix_sdk::RealmLinkKind`).
+    /// in `cokret_sdk::RealmLinkKind`).
     pub link_kind: String,
     /// `active` / `rejected` / `tombstoned`.
     pub status: String,
@@ -734,7 +734,7 @@ impl AgentLifecycleState {
 }
 
 /// State enum shared by Flow and Morph projections (mirrors SDK
-/// `contrix_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
+/// `cokret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Flow / Morph use `Redacted` as their terminal
 /// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1821,7 +1821,7 @@ fn apply_member_identity_update_dispatch(
     }
     if segment != "member_identity" {
         return ProjectionEffect::Rejected {
-            reason: contrix_sdk::error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
+            reason: cokret_sdk::error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
         };
     }
     ProjectionEffect::MemberIdentityProjected {
@@ -2688,7 +2688,7 @@ fn conflict_heads_from_payload(payload: &Value) -> Vec<String> {
         .collect()
 }
 
-fn bottom_head_ids(bottom: &contrix_sdk::Bottom) -> BTreeSet<String> {
+fn bottom_head_ids(bottom: &cokret_sdk::Bottom) -> BTreeSet<String> {
     bottom
         .heads
         .iter()
@@ -2725,7 +2725,7 @@ fn augment_repair_winner_value(
 }
 
 fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
-    contrix_sdk::canonical::format_timestamp_canonical(now)
+    cokret_sdk::canonical::format_timestamp_canonical(now)
 }
 
 fn realm_organization_space_id_from_cell(cell_id: &str) -> Option<String> {
@@ -2818,7 +2818,7 @@ fn empty_push_route_cell() -> PushRouteCellValue {
 }
 
 fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
-    let cell_subject = contrix_sdk::composite_subject(&[
+    let cell_subject = cokret_sdk::composite_subject(&[
         subject.recipient_service_did.as_str(),
         subject.principal_id.as_str(),
         subject.device_id.as_str(),
@@ -3204,8 +3204,8 @@ fn document_version_from_operation(
         .and_then(Value::as_str)
         .unwrap_or(operation.operation_id.as_str())
         .to_owned();
-    let body_digest = contrix_sdk::canonical::canonical_sha256(&body)
-        .unwrap_or_else(|_| contrix_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
+    let body_digest = cokret_sdk::canonical::canonical_sha256(&body)
+        .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
     DocumentVersionProjection {
         version_id: format!("{morph_id}:version:{event_id}"),
         event_id,
@@ -3904,7 +3904,7 @@ impl ProjectionState {
                                     // add/remove on arrays — best-effort
                                     // shallow handling; reducer-side full
                                     // grammar lives in
-                                    // `contrix_core::model::patch::Patch`.
+                                    // `cokret_core::model::patch::Patch`.
                                     Some("add") => {
                                         if let Some(v) = op.get("value") {
                                             if let Some(arr) = obj
@@ -4405,7 +4405,7 @@ impl ProjectionState {
     fn apply_delivery_binding_policy(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
@@ -4423,7 +4423,7 @@ impl ProjectionState {
     ///
     /// Schema-level validation:
     /// - `link_kind` MUST be one of the eight canonical values declared on
-    ///   `contrix_sdk::RealmLinkKind`.
+    ///   `cokret_sdk::RealmLinkKind`.
     /// - `target_realm_id` is required and MUST be a Realm-shaped id.
     /// - `status` defaults to `active`; valid values are `active|rejected|tombstoned`.
     /// - Self-referential links (target == source) are rejected with `realm_link_self_reference`.
@@ -4447,7 +4447,7 @@ impl ProjectionState {
                 reason: "realm_link_kind_missing".to_owned(),
             };
         };
-        if contrix_sdk::RealmLinkKind::parse(link_kind).is_none() {
+        if cokret_sdk::RealmLinkKind::parse(link_kind).is_none() {
             return ProjectionEffect::Rejected {
                 reason: "realm_link_kind_invalid".to_owned(),
             };
@@ -4497,7 +4497,7 @@ impl ProjectionState {
         // Cell write — or_set keyed by composite subject. Encode subject
         // as `(realm, target, link_kind)` joined by `|` (cells store
         // strings; reducer-side decoders re-split).
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
         )) {
             let value = serde_json::json!({
@@ -4562,7 +4562,7 @@ impl ProjectionState {
                 reason: "realm_inheritance_source_missing".to_owned(),
             };
         };
-        if contrix_sdk::RealmId::new(source_realm_id).is_err() {
+        if cokret_sdk::RealmId::new(source_realm_id).is_err() {
             return ProjectionEffect::Rejected {
                 reason: "realm_inheritance_source_invalid".to_owned(),
             };
@@ -4587,7 +4587,7 @@ impl ProjectionState {
                 reason: "realm_inheritance_max_depth_zero".to_owned(),
             };
         }
-        if max_depth > contrix_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP {
+        if max_depth > cokret_sdk::RealmInheritancePolicy::MAX_DEPTH_CAP {
             return ProjectionEffect::Rejected {
                 reason: "realm_inheritance_max_depth_exceeded".to_owned(),
             };
@@ -4615,7 +4615,7 @@ impl ProjectionState {
             };
         }
 
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
@@ -4750,7 +4750,7 @@ impl ProjectionState {
             }
         };
 
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
@@ -4879,7 +4879,7 @@ impl ProjectionState {
             "recorded_at": now.to_rfc3339(),
             "operation_id": operation.operation_id.as_str(),
         });
-        if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{realm_id}"
         )) {
             let new_log = match self.cells.get(&cell_id) {
@@ -5039,7 +5039,7 @@ impl ProjectionState {
         // cell_subject is `actor_id` (per-actor), not (space_id, actor)
         // composite. The Space scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{member}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -5146,8 +5146,8 @@ impl ProjectionState {
                     security_class,
                     federation_policy,
                 );
-                let bottom = contrix_sdk::Bottom {
-                    kind: contrix_sdk::BottomKind::Conflict,
+                let bottom = cokret_sdk::Bottom {
+                    kind: cokret_sdk::BottomKind::Conflict,
                     cells: vec![cell_id.clone()],
                     move_ids: Vec::new(),
                     anchor_view: None,
@@ -5419,9 +5419,9 @@ impl ProjectionState {
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ck:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
-            if contrix_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
+            if cokret_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
-                    reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                 };
             }
             // Compare against any prior locked value. Any mismatch is a
@@ -5432,7 +5432,7 @@ impl ProjectionState {
                 && locked_td != new_td.as_str()
             {
                 return ProjectionEffect::Rejected {
-                    reason: contrix_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
+                    reason: cokret_sdk::ERROR_CODE_CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
                 };
             }
         }
@@ -5442,7 +5442,7 @@ impl ProjectionState {
         // projected federation_policy is computed by taking the payload
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
-            contrix_sdk::CellRef::new(format!(
+            cokret_sdk::CellRef::new(format!(
                 "ck:cell:cx.component.realm.organization.v1:{realm_id}"
             ))
             .ok()
@@ -5495,9 +5495,9 @@ impl ProjectionState {
                     };
                 }
                 Some(id) => {
-                    if contrix_sdk::RealmId::new(id).is_err() {
+                    if cokret_sdk::RealmId::new(id).is_err() {
                         return ProjectionEffect::Rejected {
-                            reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                            reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                         };
                     }
                     if id == realm_id {
@@ -5511,7 +5511,7 @@ impl ProjectionState {
         // cx.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
         if kind == crate::kinds::CX_REALM_DESTROY && payload_successor_realm_id.is_some() {
             return ProjectionEffect::Rejected {
-                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
 
@@ -5588,7 +5588,7 @@ impl ProjectionState {
                 // most Spaces there's exactly one create entry, but the
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
-                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:cx.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
@@ -5616,7 +5616,7 @@ impl ProjectionState {
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
-                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:cx.component.realm.organization.v1:{realm_id}"
                 )) {
                     // Start from the existing cell value so partial
@@ -5653,7 +5653,7 @@ impl ProjectionState {
                 // alone can distinguish the two terminal flavours.
                 // Bottom = reject (the structured-cache preflight above
                 // mirrors that).
-                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
@@ -5672,7 +5672,7 @@ impl ProjectionState {
             }
             k if k == crate::kinds::CX_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
-                if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
@@ -5816,7 +5816,7 @@ impl ProjectionState {
             Some(s) => s,
             None => {
                 return ProjectionEffect::Rejected {
-                    reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                    reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
                 };
             }
         };
@@ -5833,14 +5833,14 @@ impl ProjectionState {
         ];
         if !valid_outcomes.contains(&outcome.as_str()) {
             return ProjectionEffect::Rejected {
-                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
         // `scope` MUST be present per schema; we only require it to
         // be an object — the wire validator enforces the inner shape.
         let Some(scope) = payload.get("scope").and_then(Value::as_object) else {
             return ProjectionEffect::Rejected {
-                reason: contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
+                reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         };
         let storage_boundary = scope
@@ -7918,7 +7918,7 @@ impl ProjectionState {
     /// `cx.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
         let cell_id =
-            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{actor_did}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{actor_did}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
@@ -7932,7 +7932,7 @@ impl ProjectionState {
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
-        let cell_id = contrix_sdk::CellRef::new(format!(
+        let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
@@ -7946,7 +7946,7 @@ impl ProjectionState {
     /// `None` if no `cx.realm.update` event has landed for this realm, or
     /// if the cell is in `Bottom` (concurrent admin updates require recovery).
     pub fn space_organization_cell_value(&self, space_id: &str) -> Option<&Value> {
-        let cell_id = contrix_sdk::CellRef::new(format!(
+        let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.organization.v1:{space_id}"
         ))
         .ok()?;
@@ -7958,7 +7958,7 @@ impl ProjectionState {
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
         let cell_id =
-            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{space_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{space_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -7978,7 +7978,7 @@ impl ProjectionState {
     /// [`Self::space_is_in_terminal_state`] / [`SpaceState::terminal_state`].
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
         let Ok(cell_id) =
-            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.destroy.v1:{space_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.destroy.v1:{space_id}"))
         else {
             return false;
         };
@@ -8010,7 +8010,7 @@ impl ProjectionState {
     /// for delivery_binding_policy lands, switch this from the generic
     /// cells map to the structured cache.
     pub fn delivery_binding_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
-        let cell_id = contrix_sdk::CellRef::new(format!(
+        let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
         ))
         .ok()?;
@@ -8038,10 +8038,10 @@ impl ProjectionState {
     pub fn realm_links_query(
         &self,
         realm_id: &str,
-        direction: contrix_sdk::RealmLinkDirection,
+        direction: cokret_sdk::RealmLinkDirection,
         link_kind_allow: Option<&[String]>,
     ) -> Vec<RealmLinkState> {
-        use contrix_sdk::RealmLinkDirection;
+        use cokret_sdk::RealmLinkDirection;
         let filter = |row: &&RealmLinkState| {
             link_kind_allow
                 .map(|allow| allow.iter().any(|k| k == &row.link_kind))
@@ -8148,7 +8148,7 @@ impl ProjectionState {
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
         // First check the organization cell (cas-register, last write
         // wins; carries the most recent update).
-        if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
+        if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
@@ -8161,7 +8161,7 @@ impl ProjectionState {
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
-            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{realm_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{realm_id}"))
         {
             if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
                 if let Some(last) = arr.last() {
@@ -8179,7 +8179,7 @@ impl ProjectionState {
     /// back to the latest `cx.realm.create` log entry that carried an
     /// initial `federation_policy`.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
-        if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
+        if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
             "ck:cell:cx.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
@@ -8243,9 +8243,9 @@ mod tests {
 
     fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
+            cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
-            contrix_sdk::RealmId::new(realm_id).unwrap(),
+            cokret_sdk::RealmId::new(realm_id).unwrap(),
             object_type,
             payload,
         )
@@ -8626,7 +8626,7 @@ mod tests {
     #[test]
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
-        let cell_id = contrix_sdk::CellRef::new(
+        let cell_id = cokret_sdk::CellRef::new(
             "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
@@ -8636,16 +8636,16 @@ mod tests {
 
     #[test]
     fn cell_value_returns_none_for_bottom_state() {
-        use contrix_sdk::lattice::CellState;
+        use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
-        let cell_id = contrix_sdk::CellRef::new(
+        let cell_id = cokret_sdk::CellRef::new(
             "ck:cell:cx.component.space.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
                 .to_owned(),
         )
         .unwrap();
         // Manually insert a Bottom state — represents concurrent conflict.
-        let bottom = contrix_sdk::Bottom {
-            kind: contrix_sdk::BottomKind::Conflict,
+        let bottom = cokret_sdk::Bottom {
+            kind: cokret_sdk::BottomKind::Conflict,
             cells: vec![cell_id.clone()],
             move_ids: vec![],
             anchor_view: None,
@@ -9156,9 +9156,9 @@ mod tests {
 
     #[test]
     fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
-        use contrix_sdk::lattice::CellState;
+        use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
-        let cell_id = contrix_sdk::CellRef::new(
+        let cell_id = cokret_sdk::CellRef::new(
             "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();

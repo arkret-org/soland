@@ -100,7 +100,7 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use contrix_sdk::{Operation, OperationId, RealmId};
+    use cokret_sdk::{Operation, OperationId, RealmId};
     let op = Operation::create(
         OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),

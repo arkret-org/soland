@@ -35,9 +35,9 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::identity::DidResolver;
-use contrix_sdk::model::AuthzDecision;
-use contrix_sdk::{
+use cokret_sdk::identity::DidResolver;
+use cokret_sdk::model::AuthzDecision;
+use cokret_sdk::{
     Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
     PolicyCheckSource, RealmId,
 };
@@ -86,7 +86,7 @@ impl PolicyCheckRequestInput {
             "event_preview": self.event_preview,
             "auth_context": self.auth_context,
         });
-        let bytes = contrix_sdk::canonical::canonical_json_bytes(&canonical_input)
+        let bytes = cokret_sdk::canonical::canonical_json_bytes(&canonical_input)
             .unwrap_or_else(|_| Vec::new());
         let digest = blake3_or_sha256(&bytes);
         Hash::new(format!("sha256:{digest}"))
@@ -517,12 +517,12 @@ fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_deref(),
         obligations: &response.obligations,
     };
-    contrix_sdk::canonical::canonical_json_bytes(&transcript)
+    cokret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
 }
 
 fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    contrix_sdk::canonical::format_timestamp_canonical(*ts)
+    cokret_sdk::canonical::format_timestamp_canonical(*ts)
 }
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
@@ -657,7 +657,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use chrono::Utc;
-    use contrix_sdk::identity::{DidDocument, DidWebResolver};
+    use cokret_sdk::identity::{DidDocument, DidWebResolver};
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;

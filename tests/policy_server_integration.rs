@@ -22,9 +22,9 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
-use contrix_sdk::model::AuthzDecision;
-use contrix_sdk::{
+use cokret_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
+use cokret_sdk::model::AuthzDecision;
+use cokret_sdk::{
     Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
     PolicyCheckSource, RealmId,
 };
@@ -178,7 +178,7 @@ fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_deref(),
         obligations: &response.obligations,
     };
-    contrix_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
+    cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts

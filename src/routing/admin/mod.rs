@@ -103,7 +103,7 @@ pub fn audit_router() -> Router {
 /// `/api/v1` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
     Router::new()
-        .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
         .push(cells::router())
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
@@ -111,7 +111,7 @@ pub fn router() -> Router {
 }
 
 pub fn spec_router() -> Router {
-    spec::router().hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
+    spec::router().hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
 }
 
 pub fn admin_router() -> Router {
@@ -124,7 +124,7 @@ pub fn admin_router() -> Router {
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")
         .oapi_tag("admin")
-        .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor::admin_get_anchorer))
         .push(
             Router::with_path("spaces/{space_id}/anchorer/reconfigure")

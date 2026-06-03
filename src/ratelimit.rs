@@ -229,7 +229,7 @@ impl Handler for RateLimiterMiddleware {
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
             res.render(Json(
-                contrix_sdk::ErrorEnvelope::new(
+                cokret_sdk::ErrorEnvelope::new(
                     "rate_limited",
                     "Too many requests. Please try again later.",
                 )

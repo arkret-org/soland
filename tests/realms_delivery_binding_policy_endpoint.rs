@@ -4,7 +4,7 @@
 //! Pins the wire shape on the two paths the Realm/Space reversal
 //! introduced on the admin surface:
 //!
-//! - `GET /admin/realms/{realm_id}/delivery-binding-policy` returns 200 with the SDK-typed
+//! - `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` returns 200 with the SDK-typed
 //!   `RealmDeliveryBindingPolicy` envelope (sodmin's `RealmDeliveryBindingPolicy` DTO consumes
 //!   this).
 //!
@@ -105,7 +105,7 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
     let token = dev_token(&svc).await;
     let realm_id = "ck:space:01904100-0000-7000-8000-d00ddeadbeef";
     let body: Value = TestClient::get(format!(
-        "http://server/admin/realms/{realm_id}/delivery-binding-policy"
+        "http://server/_soland/admin/realms/{realm_id}/delivery-binding-policy"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&svc)
@@ -139,7 +139,7 @@ async fn realms_delivery_binding_policy_endpoint_rejects_invalid_id() {
     let svc = app();
     let token = dev_token(&svc).await;
     let response =
-        TestClient::get("http://server/admin/realms/not-a-typed-id/delivery-binding-policy")
+        TestClient::get("http://server/_soland/admin/realms/not-a-typed-id/delivery-binding-policy")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&svc)
             .await;

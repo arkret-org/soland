@@ -9,9 +9,9 @@
 //! local cache).
 //!
 //! Endpoints:
-//! - `POST /admin/events/resync-required` — emit a `resync_required` frame to all
+//! - `POST /_soland/admin/events/resync-required` — emit a `resync_required` frame to all
 //!   subscribers of one Space. Body: `{realm_id, reason}`.
-//! - `POST /admin/events/unauthorized` — emit an `unauthorized` frame; clients MUST close
+//! - `POST /_soland/admin/events/unauthorized` — emit an `unauthorized` frame; clients MUST close
 //!   the stream and re-auth.
 //!
 //! Both endpoints are gated by the shared `RequireAdmin` middleware before
@@ -66,7 +66,7 @@ pub struct AdminControlFrameResponse {
     pub kind: String,
 }
 
-/// `POST /admin/events/resync-required` — emit a
+/// `POST /_soland/admin/events/resync-required` — emit a
 /// `resync_required` mid-stream control frame to subscribers of one
 /// Space. Use cases:
 /// - Server-side compaction or recovery rewrote the Anchor DAG and client-cached cursors are no
@@ -122,7 +122,7 @@ async fn admin_emit_resync_required(
     })
 }
 
-/// `POST /admin/events/unauthorized` — emit an `unauthorized`
+/// `POST /_soland/admin/events/unauthorized` — emit an `unauthorized`
 /// mid-stream control frame to subscribers of one Space. Use cases:
 /// - Bulk session revocation (compromised refresh token, deleted account).
 /// - Capability lattice change demoted the subscriber's grant below the subscribe threshold

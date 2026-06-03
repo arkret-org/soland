@@ -1,7 +1,7 @@
 //! Dev-only admin collection surfaces.
 //!
 //! Surfaces:
-//! - `GET /admin/{resource}` — paginated dev snapshot of one of the builtin admin
+//! - `GET /_soland/admin/{resource}` — paginated dev snapshot of one of the builtin admin
 //!   collections (`actors`, `spaces`, `devices`, `capabilities`, `federation`, `applets`, `agents`,
 //!   `reports`, `invite-tokens`, `audit`, `policy`, `media`).
 //!
@@ -55,7 +55,7 @@ pub(super) async fn admin_collection(
             AppError::capability_denied(format!("admin scope check failed: {error}"))
                 .with_status(http)
         })?;
-    if !grant.has_admin_scope(contrix_sdk::admin_scopes::ADMIN_READ) {
+    if !grant.has_admin_scope(cokret_sdk::admin_scopes::ADMIN_READ) {
         return Err(AppError::capability_denied(
             "admin collection API requires admin.read scope",
         ));

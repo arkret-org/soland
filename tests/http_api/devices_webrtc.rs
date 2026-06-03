@@ -3,8 +3,8 @@
 //! Helpers live in [`super::common`]; pull them in via `use`.
 
 #![allow(unused_imports)]
-use contrix_sdk::CellRef;
-use contrix_sdk::lattice::CellState;
+use cokret_sdk::CellRef;
+use cokret_sdk::lattice::CellState;
 
 use super::common::*;
 

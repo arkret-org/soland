@@ -22,13 +22,13 @@
 //!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
 //!     (same election as threshold).
 //! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
-//!   detached-JWS construction to `contrix_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
+//!   detached-JWS construction to `cokret_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
 //!   `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker emits).
 //!   The signing key is sourced from `AppState::anchorer_signing_key()`, which loads from
 //!   `SOLAND_ANCHORER_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
 //!   `routing/move_anchor.rs`) still accepts both real and shape-only JWSes for local fixtures.
-//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /admin/anchors/sign`.
+//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /_soland/admin/anchors/sign`.
 //!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
 //!   shutdown handling under tokio).
 
@@ -38,12 +38,12 @@ use std::sync::OnceLock;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use contrix_sdk::lattice::{AnchoredOp, CellState};
-use contrix_sdk::state_res::{
+use cokret_sdk::lattice::{AnchoredOp, CellState};
+use cokret_sdk::state_res::{
     AnchorStore, CellRegistry, CellStore, MoveStore, StoreError, apply_anchor, compute_state_root,
     effective_anchor_view, verify_move,
 };
-use contrix_sdk::{
+use cokret_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
 };
 use ed25519_dalek::SigningKey;
@@ -172,7 +172,7 @@ impl AnchorerWorker {
         let verifier = select_jws_verifier(state);
         let replay_default = state.config.jws_replay_window_seconds;
         let replay_overrides = &state.config.jws_replay_window_per_family;
-        let ordered = contrix_sdk::state_res::deterministic_order(pending);
+        let ordered = cokret_sdk::state_res::deterministic_order(pending);
         let mut accepted: Vec<Move> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(MoveId, String)> = Vec::new();
         for m in ordered {
@@ -236,7 +236,7 @@ impl AnchorerWorker {
             // Normal frontier-advance anchor. Compaction anchors come
             // through `admin_compact_anchor_dag`, not the regular
             // anchorer pipeline.
-            kind: contrix_sdk::AnchorKind::Normal,
+            kind: cokret_sdk::AnchorKind::Normal,
         };
         let canonical_bytes = anchor
             .canonical_bytes_for_id()
@@ -543,7 +543,7 @@ impl AnchorerWorker {
     /// deployments fall back to an in-process random ephemeral key with a
     /// sticky-warn log line on every signing pass.
     ///
-    /// The JWS is constructed by `contrix_sdk::jws::sign_jws_ed25519`,
+    /// The JWS is constructed by `cokret_sdk::jws::sign_jws_ed25519`,
     /// the symmetric counterpart of `verify_jws_ed25519`. Both sides of
     /// the wire therefore agree on the protected header (`{"alg":"EdDSA"}`)
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
@@ -574,7 +574,7 @@ impl AnchorerWorker {
             warn_once_about_ephemeral_anchorer_key();
         }
 
-        let jws = contrix_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
+        let jws = cokret_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
             .map_err(|e| AnchorerError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
         Ok(MoveSignature {
@@ -599,7 +599,7 @@ impl AnchorerWorker {
             realm_id: realm_id.clone(),
             predecessor_refs: Vec::new(),
             frontier: Vec::new(),
-            state_root: Hash::new(contrix_sdk::EMPTY_STATE_ROOT.to_owned())
+            state_root: Hash::new(cokret_sdk::EMPTY_STATE_ROOT.to_owned())
                 .map_err(|e| AnchorerError::Construction(format!("empty state_root: {e}")))?,
             previous_state_root: None,
             previous_digest_algorithm: None,
@@ -607,7 +607,7 @@ impl AnchorerWorker {
             anchored_at: chrono::Utc::now(),
             hlc: Hlc::new(state.hlc.now())
                 .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?,
-            kind: contrix_sdk::AnchorKind::Normal,
+            kind: cokret_sdk::AnchorKind::Normal,
         };
         let canonical_bytes = anchor
             .canonical_bytes_for_id()

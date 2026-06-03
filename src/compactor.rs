@@ -3,7 +3,7 @@
 //! A tokio background task that wakes every
 //! [`AppConfig::compaction_prune_walk_interval_seconds`] seconds, walks
 //! every live Space's anchor DAG, evaluates each candidate Anchor against
-//! [`contrix_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
+//! [`cokret_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
 //! ones via [`AnchorStore::prune_predecessor`]. Bounded per-Space by
 //! [`AppConfig::compaction_prune_walk_per_space_limit`] so a single tick
 //! never tries to prune a huge backlog at once — further candidates land
@@ -14,7 +14,7 @@
 //! Disabled by default (`SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0`).
 //! Enable when the deployment observes anchor-DAG growth or Pg dead-tuple
 //! pressure on the `anchors` table; the explicit `POST
-//! /admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+//! /_soland/admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
 //! endpoint remains the operator-driven path either way and continues to
 //! work whether or not the worker is running.
 //!
@@ -36,8 +36,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use contrix_sdk::state_res::AnchorStore;
-use contrix_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, SpaceId};
+use cokret_sdk::state_res::AnchorStore;
+use cokret_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, SpaceId};
 
 use crate::state::AppState;
 

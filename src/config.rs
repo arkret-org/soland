@@ -147,7 +147,7 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
-    /// Default page size for `GET /admin/cells` and the rest of
+    /// Default page size for `GET /_soland/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
     pub admin_default_page_limit: usize,
@@ -156,7 +156,7 @@ pub struct AppConfig {
     /// against a misbehaving client exhausting in-memory projection state.
     /// Env: `SOLAND_ADMIN_MAX_PAGE_LIMIT` (default `1000`).
     pub admin_max_page_limit: usize,
-    /// Principal DIDs allowed to call `GET /admin/{resource}` and the
+    /// Principal DIDs allowed to call `GET /_soland/admin/{resource}` and the
     /// other production-gated admin read surfaces when `development_mode` is
     /// false. Empty (default) keeps the previous "dev-mode only" posture for
     /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
@@ -194,7 +194,7 @@ pub struct AppConfig {
     /// MAL-11 compaction prune walk: interval between background prune
     /// passes, in seconds. Zero (or unset) disables the worker entirely —
     /// MAL-11 prune then runs only via the explicit
-    /// `POST /admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+    /// `POST /_soland/admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
     /// endpoint. When enabled, the worker walks every live Space's
     /// anchor DAG, evaluates each candidate against
     /// [`compaction_policy`], and prunes eligible Anchors up to
@@ -674,9 +674,9 @@ impl AppConfig {
 
     /// MAL-11 compaction policy assembled from the four env-driven config
     /// fields. Callers use this when evaluating prune candidates via
-    /// [`contrix_sdk::CompactionPolicy::is_eligible`].
-    pub fn compaction_policy(&self) -> contrix_sdk::CompactionPolicy {
-        contrix_sdk::CompactionPolicy {
+    /// [`cokret_sdk::CompactionPolicy::is_eligible`].
+    pub fn compaction_policy(&self) -> cokret_sdk::CompactionPolicy {
+        cokret_sdk::CompactionPolicy {
             min_anchor_age_seconds: self.compaction_min_anchor_age_seconds,
             min_compaction_witnesses: self.compaction_min_witnesses,
             preserve_genesis: self.compaction_preserve_genesis,
@@ -912,13 +912,13 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///
 /// Order of resolution:
 /// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ck:trust_domain:<scope>` per SDK
-///    [`contrix_sdk::TypedTrustDomainId`]).
+///    [`cokret_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ck:trust_domain:`.
 fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
-        contrix_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
+        cokret_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ck:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
@@ -942,7 +942,7 @@ fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     };
     let candidate = format!("ck:trust_domain:{scope}");
     // Final safety check.
-    contrix_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
+    cokret_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(
             "derived trust_domain from service_did {service_did:?} failed validation: {e}"
         )

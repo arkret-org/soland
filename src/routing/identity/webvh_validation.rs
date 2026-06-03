@@ -16,7 +16,7 @@
 //!    configured witnesses may only remain in `degraded_no_witness` for 24h. Rotation entries fail
 //!    closed immediately when quorum is missing.
 //!
-//! Canonical JSON uses `contrix_sdk::canonical::canonical_json_bytes`
+//! Canonical JSON uses `cokret_sdk::canonical::canonical_json_bytes`
 //! (`encoding.md` §2 — deterministic, integer-only number profile) — the
 //! same helper the embedded provider uses to derive the SCID and entry
 //! hashes, so validation and production stay in lockstep.
@@ -323,7 +323,7 @@ pub fn derive_scid_from_genesis(genesis: &WebvhLogEntry) -> Result<String, Webvh
             reason,
         }
     })?;
-    let canonical = contrix_sdk::canonical::canonical_json_bytes(&skeleton).map_err(|error| {
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&skeleton).map_err(|error| {
         WebvhValidationError::MalformedEntry {
             at_index: 0,
             reason: error.to_string(),
@@ -505,7 +505,7 @@ fn verify_one_witness_proof(
         map.remove("proof");
     }
     let payload =
-        contrix_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
+        cokret_sdk::canonical::canonical_json_bytes(&canonical_entry).map_err(|error| {
             WebvhValidationError::WitnessSignatureInvalid {
                 reason: error.to_string(),
             }
@@ -630,7 +630,7 @@ fn webvh_entry_hash(entry: &Value) -> Result<String, String> {
         // the embedded provider's `strip_webvh_entry_for_hash` in
         // `did.rs` does the same — keeping the two paths aligned.
     }
-    let canonical = contrix_sdk::canonical::canonical_json_bytes(&stripped)
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&stripped)
         .map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
@@ -735,7 +735,7 @@ mod tests {
 
     fn witness_proof(entry_without_witness: &Value, signer: &SigningKey) -> Value {
         let canonical =
-            contrix_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
+            cokret_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
         let signature = signer.sign(&canonical);
         let public_key = encode_pubkey_multibase(&signer.verifying_key());
         json!({
@@ -761,7 +761,7 @@ mod tests {
                 "id": format!("did:webvh:{WEBVH_SCID_PLACEHOLDER}:test.example:webvh:alice"),
             },
         });
-        let canonical = contrix_sdk::canonical::canonical_json_bytes(&skeleton).unwrap();
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&skeleton).unwrap();
         let scid = sha256_multihash_multibase(&canonical);
         // 2) Substitute the real SCID back in everywhere.
         let text = serde_json::to_string(&skeleton).unwrap();
@@ -869,7 +869,7 @@ mod tests {
         });
         // Sign canonical bytes of entry_body (without `witness`) with
         // the forger key; attach as if it were the witness's signature.
-        let canonical = contrix_sdk::canonical::canonical_json_bytes(&entry_body).unwrap();
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(&entry_body).unwrap();
         let forged_sig = forger.sign(&canonical);
         let mut payload = entry_body;
         if let Value::Object(map) = &mut payload {

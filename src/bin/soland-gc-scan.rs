@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     let candidates = match space_id.as_deref() {
         Some(id) => {
-            let space = contrix_sdk::SpaceId::new(id.to_owned())
+            let space = cokret_sdk::SpaceId::new(id.to_owned())
                 .map_err(|e| anyhow::anyhow!("invalid --space-id: {e}"))?;
             gc::scan_gc_candidates(&state, &space)
         }

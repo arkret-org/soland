@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
-use contrix_sdk::RealmId;
+use cokret_sdk::RealmId;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ async fn moderation_report(
     // `ModerationQueueItem` cell so admins can prioritise / route /
     // assign reviewers. We default to `status=submitted`,
     // `visibility=metadata_only`, `priority=normal` — sodmin can update
-    // via `POST /admin/moderation/queue/{id}/{assign,prioritise}`.
+    // via `POST /_soland/admin/moderation/queue/{id}/{assign,prioritise}`.
     let queue_item_ref = ids::generate("modq");
     let queue_item = json!({
         "id": queue_item_ref,
@@ -580,7 +580,7 @@ async fn moderation_appeal_submit(
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
         "created_at": Utc::now().to_rfc3339(),
-        "event_kind": contrix_sdk::events::MODERATION_APPEAL_SUBMIT,
+        "event_kind": cokret_sdk::events::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });
     if let Err(error) = state.persistence.moderation().append_appeal(event).await {

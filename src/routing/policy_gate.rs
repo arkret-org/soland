@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contrix_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
-use contrix_sdk::{Did, Error as SdkError, Hash, Operation, RealmId};
+use cokret_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
+use cokret_sdk::{Did, Error as SdkError, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -58,7 +58,7 @@ impl DidResolver for SharedDidResolver {
             .unwrap_or(false)
     }
 
-    fn resolve_did(&self, did: &Did) -> contrix_sdk::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> cokret_sdk::Result<DidDocument> {
         let resolver = self
             .inner
             .lock()

@@ -13,7 +13,7 @@
 //!
 //! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -192,7 +192,7 @@ async fn delete_realm_policy_server(
             "no cx.realm.policy_server to tombstone for this realm",
         ));
     }
-    if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
+    if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
         "ck:cell:cx.component.realm.policy_server.v1:{realm_id}"
     )) {
         projection.cells.remove(&cell_id);

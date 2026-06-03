@@ -692,7 +692,7 @@ fn key_backup_delete_proof_canonical_bytes(
         action: "DELETE /api/v1/keys/backups/{backup_id}",
         audience: "soland.key_backup.delete",
     };
-    contrix_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+    cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
         AppError::internal(format!(
             "key backup delete proof transcript failed: {error}"
         ))
@@ -1291,7 +1291,7 @@ mod tests {
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
-            contrix_sdk::canonical::sha256_digest(&canonical),
+            cokret_sdk::canonical::sha256_digest(&canonical),
             "sha256:45b12aa842a30b12869c571c4fd4d70089c02ffa47b1cf68f55c99bbf35ffb06"
         );
     }

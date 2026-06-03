@@ -145,7 +145,7 @@ async fn revoke_cell(
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(value)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);

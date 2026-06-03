@@ -25,11 +25,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use contrix_sdk::identity::{
+use cokret_sdk::identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
     DidWebvhResolver,
 };
-use contrix_sdk::{Did, Error};
+use cokret_sdk::{Did, Error};
 use serde_json::Value;
 
 use crate::config::AppConfig;
@@ -265,8 +265,8 @@ fn valid_trust_domain(value: &str) -> bool {
 mod tests {
     use std::net::SocketAddr;
 
-    use contrix_sdk::Did;
-    use contrix_sdk::identity::DidResolver;
+    use cokret_sdk::Did;
+    use cokret_sdk::identity::DidResolver;
     use serde_json::json;
 
     use super::*;

@@ -61,7 +61,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
 pub async fn maybe_emit_echo_status_for_session_start(
     state: &AppState,
     origin: &str,
-    operation: &contrix_sdk::Operation,
+    operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
     if kind != kinds::CX_APPLET_PROTOCOL_SESSION_START {

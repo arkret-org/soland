@@ -228,7 +228,7 @@ fn run_export_only(args: &Args) -> Result<(), DrillError> {
         .as_deref()
         .ok_or_else(|| DrillError::Io("--export-only requires --output".to_owned()))?;
     let (app_id, key_id) = keystore_id(&args.service_did);
-    let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+    let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
     let bytes = store
         .load(&key_id)
         .map_err(|e| DrillError::Io(format!("KeyStore::load({key_id}): {e}")))?;
@@ -284,7 +284,7 @@ fn run_import_only(args: &Args) -> Result<(), DrillError> {
         )));
     }
     let (app_id, key_id) = keystore_id(&args.service_did);
-    let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+    let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
     store
         .store(&key_id, &seed_bytes)
         .map_err(|e| DrillError::Io(format!("KeyStore::store({key_id}): {e}")))?;
@@ -323,7 +323,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     // This is later used to verify that an "old key" signature is
     // *rejected* by the in-process verifier after rotation.
     let (app_id, key_id) = keystore_id(&args.service_did);
-    let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
+    let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
     let old_seed_bytes = store
         .load(&key_id)
         .map_err(|e| DrillError::Io(format!("snapshot old seed: {e}")))?;
@@ -339,7 +339,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
 
     // ── 2. POST the rotate-signing-key endpoint ────────────────────────
     let url = format!(
-        "{}/admin/spaces/{}/anchorer/rotate-signing-key",
+        "{}/_soland/admin/spaces/{}/anchorer/rotate-signing-key",
         target.trim_end_matches('/'),
         space_id
     );

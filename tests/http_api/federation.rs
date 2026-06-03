@@ -505,7 +505,7 @@ fn signed_verify_actor_body(
     }
     let unsigned_digest = verify_actor_unsigned_digest(&body);
     let transcript = verify_actor_signature_transcript(&body, &unsigned_digest);
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap();
     let signature = signing.sign(&transcript_bytes);
     body["signature"] = serde_json::json!({
         "kid": verification_method,
@@ -520,7 +520,7 @@ fn verify_actor_unsigned_digest(body: &Value) -> String {
     if let Value::Object(object) = &mut unsigned {
         object.remove("signature");
     }
-    contrix_sdk::canonical::canonical_sha256(&unsigned).unwrap()
+    cokret_sdk::canonical::canonical_sha256(&unsigned).unwrap()
 }
 
 fn verify_actor_signature_transcript(body: &Value, unsigned_digest: &str) -> Value {
@@ -560,7 +560,7 @@ async fn post_verify_actor_error(state: AppState, body: Value) -> (u16, String) 
 }
 
 fn verify_actor_headers(body: &Value) -> Vec<(&'static str, String)> {
-    let digest = contrix_sdk::canonical::canonical_sha256(body).unwrap();
+    let digest = cokret_sdk::canonical::canonical_sha256(body).unwrap();
     vec![
         (
             "source-trust-domain",

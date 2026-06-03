@@ -23,7 +23,7 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use contrix_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;

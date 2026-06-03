@@ -24,7 +24,7 @@
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
 
-use contrix_sdk::Operation;
+use cokret_sdk::Operation;
 use serde_json::{Map, Value};
 
 use super::{
@@ -557,7 +557,7 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use chrono::{TimeZone, Utc};
-    use contrix_sdk::{Operation, OperationId, RealmId};
+    use cokret_sdk::{Operation, OperationId, RealmId};
     use serde_json::json;
 
     use super::*;

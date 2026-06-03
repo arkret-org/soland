@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use chrono::Utc;
-use contrix_sdk::{
+use cokret_sdk::{
     Anchor, AnchorId, Did, Hash, Hlc, MoveId, PartialSignature, SpaceId, ThresholdAggregator,
 };
 
@@ -333,7 +333,7 @@ fn aggregate_and_publish(
 
     let _multi = aggregator
         .aggregate(&canonical_bytes, |partial, bytes| {
-            verify_ed25519_partial(state, partial, bytes).map_err(contrix_sdk::Error::Protocol)
+            verify_ed25519_partial(state, partial, bytes).map_err(cokret_sdk::Error::Protocol)
         })
         .map_err(|e| format!("aggregate: {e}"))?;
 

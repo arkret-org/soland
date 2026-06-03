@@ -96,7 +96,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     assert_eq!(resp["status"], "accepted");
 
     // `admin/applets` now reports the registered applet with the manifest.
-    let applets_body: Value = TestClient::get("http://server/admin/applets?limit=10")
+    let applets_body: Value = TestClient::get("http://server/_soland/admin/applets?limit=10")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -117,7 +117,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     );
 
     // `admin/agents` reports the registered agent.
-    let agents_body: Value = TestClient::get("http://server/admin/agents?limit=10")
+    let agents_body: Value = TestClient::get("http://server/_soland/admin/agents?limit=10")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -358,7 +358,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         .as_str()
         .expect("canonical_subject");
     let echo_value = result_event["payload"]["result"]["echo"].clone();
-    let outcome = contrix_sdk::agent_binding::verify_ed25519_audit_binding(
+    let outcome = cokret_sdk::agent_binding::verify_ed25519_audit_binding(
         public_key_b64,
         session_id,
         agent_id,
@@ -369,7 +369,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     );
     assert_eq!(
         outcome,
-        contrix_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
+        cokret_sdk::agent_binding::Ed25519AuditBindingVerifyOutcome::Valid,
         "audit_binding Ed25519 signature must verify under the carried public key"
     );
 }
@@ -636,7 +636,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
 
     // The admin agents collection should also surface endpoint_url so
     // sodmin operators see it.
-    let admin_agents: Value = TestClient::get("http://server/admin/agents")
+    let admin_agents: Value = TestClient::get("http://server/_soland/admin/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await

@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use contrix_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
+use cokret_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -252,7 +252,7 @@ fn erasure_push_payload(
     let origin = Did::new(state.config.service_did.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let space_id = SpaceId::new(operation.realm_id.to_string()).ok()?;
-    let body = contrix_sdk::FederationPushOperationsReqBody {
+    let body = cokret_sdk::FederationPushOperationsReqBody {
         origin,
         destination,
         space_id,
@@ -265,7 +265,7 @@ fn erasure_push_payload(
     };
     serde_json::to_value(&body)
         .ok()
-        .and_then(|value| contrix_sdk::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|value| cokret_sdk::canonical::canonical_json_bytes(&value).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 

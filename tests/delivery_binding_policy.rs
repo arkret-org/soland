@@ -7,7 +7,7 @@
 //! Move/Anchor pipeline. The HTTP wire path that feeds these reducer
 //! calls is exercised separately in `tests/http_api.rs`.
 
-use contrix_sdk::Operation;
+use cokret_sdk::Operation;
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
@@ -16,8 +16,8 @@ const SPACE_A: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        contrix_sdk::RealmId::new(space_id).unwrap(),
+        cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        cokret_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
     )

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use contrix_sdk::{ClaimedProfileEntry, ServerDescription};
+use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -1531,7 +1531,7 @@ pub struct DeviceMessagesSendResBody {
 
 // ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Mirrors `MediaTokenResponse` /
-// `ParticipantBinding` in `contrix_sdk::media`; soland mints the
+// `ParticipantBinding` in `cokret_sdk::media`; soland mints the
 // soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1925,7 +1925,7 @@ pub fn describe(
             .parse()
             .expect("trust_domain must be ck:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
-        protocol_version: contrix_sdk::PROTOCOL_VERSION.to_owned(),
+        protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
                 "cx.profile.core_event_store.v1".to_owned(),
@@ -1937,7 +1937,7 @@ pub fn describe(
             // advertise `cx.profile.media_service_binding.v1` whenever the
             // server exposes the `cx.call.media.token_exchange` handler.
             // soland mounts the handler unconditionally (see
-            // `routing::interop::webrtc::contrix_router`), so the claim is
+            // `routing::interop::webrtc::cokret_router`), so the claim is
             // unconditional too.
             profiles.push("cx.profile.media_service_binding.v1".to_owned());
             // PROF-1 — `cx.profile.accountable_principals.strict_reject.v1` is
@@ -1958,7 +1958,7 @@ pub fn describe(
         compat_surfaces,
         development_mode,
         rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
-        egress_network_policy: Some(contrix_sdk::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
             "account.register".to_owned(),
             "account.me".to_owned(),
@@ -2077,7 +2077,7 @@ pub fn describe(
                         "identifiers": "draft-kohbrok-mimi-identifiers-01"
                     },
                     "not_replaced": [
-                        "contrix_signed_event_reducer",
+                        "cokret_signed_event_reducer",
                         "space_id",
                         "did",
                         "hlc",
@@ -2106,7 +2106,7 @@ pub fn sync_token() -> String {
         "x": expires_at.timestamp_millis(),
         "h": format!("wire:{}", now.timestamp_micros())
     });
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }

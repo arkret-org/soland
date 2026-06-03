@@ -20,8 +20,8 @@ use crate::state::AppState;
 /// existing `/.well-known/cokret/openapi.json` entry; salvo routes the
 /// exact-match path here and falls through to the openapi router for
 /// the `/openapi.{json,yaml}` siblings.
-pub fn well_known_contrix_router() -> Router {
-    Router::with_path(".well-known/cokret").get(well_known_contrix)
+pub fn well_known_cokret_router() -> Router {
+    Router::with_path(".well-known/cokret").get(well_known_cokret)
 }
 
 #[endpoint(
@@ -30,7 +30,7 @@ pub fn well_known_contrix_router() -> Router {
     summary = "Server description for federation discovery"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.well_known.cokret"))]
-async fn well_known_contrix(depot: &mut Depot) -> JsonResult<Value> {
+async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
     // of identifiers a peer needs before opening an authenticated

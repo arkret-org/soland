@@ -1,6 +1,6 @@
 //! Admin-facing moderation endpoints powering the sodmin triage UI.
 //!
-//! Mounted under `/admin/moderation/...`:
+//! Mounted under `/_soland/admin/moderation/...`:
 //!
 //! ### Queue
 //! - `GET /queue` — canonical queue read (`cx.admin.get_moderation_queue`)
@@ -48,7 +48,7 @@ use crate::state::AppState;
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
         // `GET queue` (canonical `cx.admin.get_moderation_queue`) is owned
-        // by `super::spec` to keep the single `/admin/moderation/queue` URL
+        // by `super::spec` to keep the single `/_soland/admin/moderation/queue` URL
         // bound to exactly one handler; only the sub-paths live here.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
         .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))
@@ -63,7 +63,7 @@ pub(super) fn router() -> Router {
 
 // ── Queue ────────────────────────────────────────────────────────────
 //
-// The canonical `GET /admin/moderation/queue` read
+// The canonical `GET /_soland/admin/moderation/queue` read
 // (`cx.admin.get_moderation_queue`) lives in `super::spec`; the queue
 // sub-actions (assign / priority) are below.
 
@@ -230,7 +230,7 @@ async fn issue_decision(
     let decision_id = ids::generate("event");
     let decision = json!({
         "decision_id": decision_id,
-        "event_kind": contrix_sdk::events::MODERATION_DECISION,
+        "event_kind": cokret_sdk::events::MODERATION_DECISION,
         "target_ref": body.target_ref,
         "realm_id": body.realm_id,
         "action": body.action,
@@ -317,7 +317,7 @@ async fn lift_decision(
         .flatten()
         .ok_or_else(|| AppError::not_found("decision"))?;
     let lift = json!({
-        "event_kind": contrix_sdk::events::MODERATION_DECISION_LIFT,
+        "event_kind": cokret_sdk::events::MODERATION_DECISION_LIFT,
         "decision_id": decision_id,
         "lifted_by": session.actor,
         "lifted_at": Utc::now().to_rfc3339(),
@@ -485,7 +485,7 @@ async fn review_appeal(
     }
     let event = json!({
         "appeal_id": appeal_id,
-        "event_kind": contrix_sdk::events::MODERATION_APPEAL_REVIEW,
+        "event_kind": cokret_sdk::events::MODERATION_APPEAL_REVIEW,
         "reviewer": session.actor,
         "reviewed_at": Utc::now().to_rfc3339(),
         "notes_ref": body.into_inner().notes_ref,
@@ -623,7 +623,7 @@ async fn decide_appeal(
     }
     let event = json!({
         "appeal_id": appeal_id,
-        "event_kind": contrix_sdk::events::MODERATION_APPEAL_DECISION,
+        "event_kind": cokret_sdk::events::MODERATION_APPEAL_DECISION,
         "reviewer": session.actor,
         "verdict": body.verdict,
         "reason_text_ref": body.reason_text_ref,
@@ -683,7 +683,7 @@ async fn close_appeal(
     }
     let event = json!({
         "appeal_id": appeal_id,
-        "event_kind": contrix_sdk::events::MODERATION_APPEAL_CLOSE,
+        "event_kind": cokret_sdk::events::MODERATION_APPEAL_CLOSE,
         "closer": session.actor,
         "closed_at": Utc::now().to_rfc3339(),
         "auto_closed": body.auto_closed,
@@ -793,14 +793,14 @@ pub fn appeal_self_review_check(
 /// SHA-256 of canonical-JSON encoded value. Helper used by the
 /// moderation-appeal reducer to derive the appeal cell digest.
 ///
-/// Delegates to the SDK [`contrix_sdk::canonical::canonical_sha256`] which
+/// Delegates to the SDK [`cokret_sdk::canonical::canonical_sha256`] which
 /// hashes the canonical JSON byte stream and emits the wire `sha256:<hex>`
 /// form. There is no non-canonical fallback: a canonicalization failure is
 /// surfaced as an `Err` instead of silently hashing an empty/non-canonical
 /// byte stream.
 #[allow(dead_code)]
-pub fn canonical_sha256_hex(value: &Value) -> contrix_sdk::Result<String> {
-    contrix_sdk::canonical::canonical_sha256(value)
+pub fn canonical_sha256_hex(value: &Value) -> cokret_sdk::Result<String> {
+    cokret_sdk::canonical::canonical_sha256(value)
 }
 
 #[cfg(test)]

@@ -31,9 +31,9 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
         .push(Router::with_path("devices/{device_id}/revoke").post(revoke_device))
-        // `GET /admin/moderation/queue` (`cx.admin.get_moderation_queue`)
+        // `GET /_soland/admin/moderation/queue` (`cx.admin.get_moderation_queue`)
         // is the canonical queue read. The operator moderation suite in
-        // `moderation.rs` owns the remaining `/admin/moderation/*`
+        // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
         // sub-paths (queue/{id}/assign, decision, appeals) and
         // deliberately does NOT re-bind the bare `queue` GET to avoid
         // double-binding the single canonical URL.

@@ -1,5 +1,5 @@
 //! Per-scope admin gating via SDK
-//! [`contrix_sdk::SessionGrantIntrospection`].
+//! [`cokret_sdk::SessionGrantIntrospection`].
 //!
 //! The SDK provides a typed view of an OAuth-style introspection
 //! response carrying `(principal_id, admin_scopes, expires_at,
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use contrix_sdk::SessionGrantIntrospection;
+use cokret_sdk::SessionGrantIntrospection;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
 
@@ -75,7 +75,7 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 /// is configured. Grants every well-known admin scope to any DID listed
 /// in `admin_principal_dids` (or any DID in development_mode).
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
-    use contrix_sdk::admin_scopes::*;
+    use cokret_sdk::admin_scopes::*;
     let scopes = vec![
         ANCHORER_RECONFIGURE.to_owned(),
         ANCHORER_ROTATE_SIGNING_KEY.to_owned(),
@@ -84,12 +84,12 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_id = contrix_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
+    let principal_id = cokret_sdk::Did::new(session.actor.clone()).unwrap_or_else(|_| {
         // Fallback: synthesize a stable did:key when the actor isn't
         // a valid DID. This only kicks in for dev-login tokens whose
         // actor field is a handle, not a DID — production sessions
         // always carry a DID.
-        contrix_sdk::Did::new(format!("did:web:{}", state.config.service_did))
+        cokret_sdk::Did::new(format!("did:web:{}", state.config.service_did))
             .expect("service_did is a valid DID")
     });
     SessionGrantIntrospection {

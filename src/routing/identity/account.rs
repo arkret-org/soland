@@ -1001,12 +1001,12 @@ async fn erase_account(
 /// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
-    let actor_did = match contrix_sdk::Did::new(actor.to_owned()) {
+    let actor_did = match cokret_sdk::Did::new(actor.to_owned()) {
         Ok(did) => did,
         Err(_) => return 0,
     };
     let mut realms = state.realms.lock().expect("realms lock");
-    let realm_ids: Vec<contrix_sdk::RealmId> = realms
+    let realm_ids: Vec<cokret_sdk::RealmId> = realms
         .entries_iter()
         .filter(|(_id, entry)| entry.members.contains(&actor_did))
         .map(|(id, _entry)| id.clone())
@@ -1147,15 +1147,15 @@ fn realm_erasure_receipt(
     })
 }
 
-fn erasure_receipt_operation(receipt: Value) -> Option<contrix_sdk::Operation> {
+fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
     let realm_id = receipt
         .get("scope")
         .and_then(Value::as_object)
         .and_then(|scope| scope.get("realm_id"))
         .and_then(Value::as_str)?;
-    let operation_id = contrix_sdk::OperationId::new(crate::ids::generate_operation_id()).ok()?;
-    let realm_id = contrix_sdk::RealmId::new(realm_id.to_owned()).ok()?;
-    Some(contrix_sdk::Operation::create(
+    let operation_id = cokret_sdk::OperationId::new(crate::ids::generate_operation_id()).ok()?;
+    let realm_id = cokret_sdk::RealmId::new(realm_id.to_owned()).ok()?;
+    Some(cokret_sdk::Operation::create(
         operation_id,
         realm_id,
         crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
@@ -1164,13 +1164,13 @@ fn erasure_receipt_operation(receipt: Value) -> Option<contrix_sdk::Operation> {
 }
 
 fn erasure_receipt_payload_digest(payload: &Value) -> String {
-    let bytes = contrix_sdk::canonical::canonical_json_bytes(payload)
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
 fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String {
-    let payload = contrix_sdk::canonical::canonical_json_bytes(payload)
+    let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
     let mut signing_input = Vec::with_capacity(
         b"soland-erasure-receipt-proof-v1".len()
@@ -1542,7 +1542,7 @@ fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> 
         .lock()
         .ok()
         .and_then(|projection| {
-            contrix_sdk::CellRef::new(cell_id)
+            cokret_sdk::CellRef::new(cell_id)
                 .ok()
                 .and_then(|cell| projection.cell_value(&cell).cloned())
         })

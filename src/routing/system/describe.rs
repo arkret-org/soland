@@ -285,15 +285,15 @@ pub(crate) fn apply_claim_level_partition(
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
-        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
-        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
-        contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
-        contrix_sdk::ClaimedProfileEntry {
+        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
+        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
+        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
+        cokret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..contrix_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
@@ -312,14 +312,14 @@ pub(crate) fn apply_claim_level_partition(
         std::env::var("SOLAND_SOVEREIGN_ENCLAVE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
     ) {
-        claimed_profiles.push(contrix_sdk::ClaimedProfileEntry {
+        claimed_profiles.push(cokret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "Sovereign enclave profile: outbound federation disabled, \
                  outbound HTTP allow-list enforced. See \
                  zh/sync/sovereign-deployment.md §2–§6."
                     .to_owned(),
             ),
-            ..contrix_sdk::ClaimedProfileEntry::self_claimed(
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed(
                 crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
             )
         });
@@ -344,7 +344,7 @@ pub(crate) fn apply_claim_level_partition(
     // the `claimed_profiles[]` built above. Entries that fail the
     // cross-check are dropped with a warn — we never advertise a verified
     // profile we don't also self-claim.
-    let verified_profiles: Vec<contrix_sdk::VerifiedProfileEntry> = if development_mode {
+    let verified_profiles: Vec<cokret_sdk::VerifiedProfileEntry> = if development_mode {
         if !loaded_verified.is_empty() {
             tracing::warn!(
                 target: "verified_profiles",
@@ -366,9 +366,9 @@ pub(crate) fn apply_claim_level_partition(
                     );
                     return None;
                 }
-                Some(contrix_sdk::VerifiedProfileEntry {
+                Some(cokret_sdk::VerifiedProfileEntry {
                     profile_id: entry.profile_id.clone(),
-                    claim_kind: contrix_sdk::CotestVerifiedKind::CotestVerified,
+                    claim_kind: cokret_sdk::CotestVerifiedKind::CotestVerified,
                     cotest_run_id: entry.cotest_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
@@ -746,7 +746,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "admin_bottom_manual_repair".to_owned(),
                 method: "POST".to_owned(),
-                path: "/admin/spaces/{space_id}/bottom/{cell_id}/repair".to_owned(),
+                path: "/_soland/admin/spaces/{space_id}/bottom/{cell_id}/repair".to_owned(),
                 contract: "cokret.rest.admin.bottom_repair.v1".to_owned(),
                 stability: "unsupported_signing_path".to_owned(),
                 todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),

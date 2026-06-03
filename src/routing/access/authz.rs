@@ -115,7 +115,7 @@ async fn authz_check(
             .flatten()
             .map(|m| m.owner);
         let spaces = state.realms.lock().expect("spaces lock");
-        let members = contrix_sdk::RealmId::new(realm_id.clone())
+        let members = cokret_sdk::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| spaces.get(&realm_id))
             .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())

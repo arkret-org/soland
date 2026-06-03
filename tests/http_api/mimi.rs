@@ -96,7 +96,7 @@ async fn mimi_provider_facade_contracts_work() {
     );
     assert_eq!(
         group_info["group_info"]["canonical_truth"],
-        "contrix_signed_event_reducer"
+        "cokret_signed_event_reducer"
     );
 
     let identifier: Value = TestClient::post("http://server/api/v1/mimi/identifiers/query")
@@ -246,9 +246,9 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         msg_resp["receipt"]["extra"]["reducer_chain"], "wired",
         "submit_message receipt should announce reducer-chain wire-up"
     );
-    let contrix_event_id = msg_resp["contrix_event_id"]
+    let cokret_event_id = msg_resp["cokret_event_id"]
         .as_str()
-        .expect("contrix_event_id missing");
+        .expect("cokret_event_id missing");
 
     // Step 3: query /api/v1/events against the bound space and
     // verify both the room_binding event and the message event are
@@ -278,7 +278,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     let message_event = list
         .iter()
-        .find(|e| e["event_id"] == contrix_event_id)
+        .find(|e| e["event_id"] == cokret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
     assert_eq!(message_event["event_kind"], "cx.message.create");
     assert_eq!(message_event["sender"], "did:web:remote.example");
@@ -473,7 +473,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         downgrade_resp["receipt"]["extra"]["mimi_policy"]["e2ee_boundary"],
         "explicit_downgrade"
     );
-    let downgrade_event_id = downgrade_resp["contrix_event_id"]
+    let downgrade_event_id = downgrade_resp["cokret_event_id"]
         .as_str()
         .expect("downgrade event id")
         .to_owned();
@@ -507,7 +507,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         transcript_resp["receipt"]["extra"]["mimi_policy"]["e2ee_boundary"],
         "transcript_bound"
     );
-    let transcript_event_id = transcript_resp["contrix_event_id"]
+    let transcript_event_id = transcript_resp["cokret_event_id"]
         .as_str()
         .expect("transcript event id")
         .to_owned();
@@ -539,7 +539,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         quarantine_resp["receipt"]["extra"]["quarantine"]["unknown_content_kind"],
         "m.location.share.live"
     );
-    let quarantine_event_id = quarantine_resp["contrix_event_id"]
+    let quarantine_event_id = quarantine_resp["cokret_event_id"]
         .as_str()
         .expect("quarantine event id")
         .to_owned();

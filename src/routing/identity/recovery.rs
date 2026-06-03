@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
-use contrix_sdk::Did;
+use cokret_sdk::Did;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -338,7 +338,7 @@ fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<Value> {
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
     let transcript = recovery_proof_transcript(record, kind);
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(&transcript_bytes);
     let proof_digest = format!("sha256:{}", hex_lower(&hasher.finalize()));
@@ -705,7 +705,7 @@ async fn verify_principal_signing_proof(
     })?;
 
     let transcript = recovery_proof_transcript(record, "principal_signing");
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery proof transcript failed: {error}")))?;
 
     let signature_b64 = proof
@@ -1595,7 +1595,7 @@ async fn verify_recovery_receipt_device_signature(
         payload,
     )?;
     let transcript = recovery_signature_transcript(RECEIPT_SIGNATURE_TYPE, payload, &signed_fields);
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery receipt transcript failed: {error}")))?;
     let signature_b64 = auth_data
         .get("signature")
@@ -1680,7 +1680,7 @@ async fn verify_recovery_auth_signature(
 
     let signed_fields = parse_signed_fields(auth_data, allowed_fields, required_fields, payload)?;
     let transcript = recovery_signature_transcript(transcript_type, payload, &signed_fields);
-    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data
