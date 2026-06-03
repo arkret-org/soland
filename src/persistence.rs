@@ -68,8 +68,8 @@ pub trait SessionStore: Send + Sync {
 
 /// Trait for actor-private account data storage.
 ///
-/// `data_type` is the canonical wire key (e.g. `cx.contacts.actor.<did>`,
-/// `cx.contacts.space.<realm_id>`, `cx.read_receipt.preferences`). The
+/// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
+/// `cx.contacts.space.<realm_id>`, `ck.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
 ///
@@ -349,7 +349,7 @@ pub trait ModerationStore: Send + Sync {
     #[allow(dead_code)]
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
 
-    /// Append a `cx.moderation.decision` record. The JSON must carry at
+    /// Append a `ck.moderation.decision` record. The JSON must carry at
     /// least `decision_id`, `target_ref`, `action`, `decided_by`,
     /// `decided_at`. Idempotent on `decision_id`.
     async fn append_decision(&self, _decision: Value) -> PersistenceResult<()> {
@@ -364,7 +364,7 @@ pub trait ModerationStore: Send + Sync {
         Ok(None)
     }
     /// Mark a decision as lifted (used when an appeal verdict=overturn
-    /// is paired with `cx.moderation.decision.lift`). Stores the lift
+    /// is paired with `ck.moderation.decision.lift`). Stores the lift
     /// record verbatim; readers MUST join against `list_decisions` to
     /// determine the current active state.
     async fn append_decision_lift(&self, _lift: Value) -> PersistenceResult<()> {
@@ -8465,10 +8465,10 @@ mod tests {
     async fn memory_push_bridge_cache_store_crud() {
         let store = MemoryPushBridgeCacheStore::new();
         let now = Utc::now();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
         let record = OutboundPushBridgeCacheRecord {
             push_gateway_url: "https://floria.example".to_owned(),
-            service_base_url: "https://floria.example/api/v1/push".to_owned(),
+            service_base_url: "https://floria.example/_cokret/edge/push".to_owned(),
             bridge_describe_url: url.to_owned(),
             fetch_state: "fresh".to_owned(),
             cache_state: "valid".to_owned(),
@@ -8520,7 +8520,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
 
         // First snapshot: pending trust → stored, but verify rejects as Unknown.
         store
@@ -8557,7 +8557,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_match() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -8572,7 +8572,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -8591,7 +8591,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_stale_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -8620,7 +8620,7 @@ mod tests {
         let store = MemoryPushBridgeCacheStore::new();
         let result = store
             .verify_contract_freshness(
-                "https://never-seen.example/api/v1/push/bridge/describe",
+                "https://never-seen.example/_cokret/edge/push/bridge/describe",
                 "sha256:abc",
                 chrono::Duration::hours(24),
             )
@@ -8636,7 +8636,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/api/v1/push/bridge/describe";
+        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -8746,7 +8746,7 @@ mod tests {
             actor_id: actor.to_owned(),
             actor_seq: seq,
             realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
-            kind: "cx.message.create".to_owned(),
+            kind: "ck.message.create".to_owned(),
             schema_id: "cx.schema.event.message.v1".to_owned(),
             canonical_digest: "sha256:abc".to_owned(),
             canonical_bytes: b"canonical-bytes".to_vec(),
@@ -8775,7 +8775,7 @@ mod tests {
         let mut op = Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(realm_id.to_owned()).unwrap(),
-            "cx.message.create",
+            "ck.message.create",
             serde_json::json!({"sender": "did:web:alice", "thread_id": "ck:flow:1"}),
         );
         op.created_at = Utc::now();

@@ -1,19 +1,19 @@
 //! Realm governance HTTP surface (R3.1 + G3.S5).
 //!
 //! Surfaces:
-//! - `GET /api/v1/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...` —
-//!   list the typed cross-Realm links projected from `cx.realm.link` events. Powered by
+//! - `GET /_cokret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...` —
+//!   list the typed cross-Realm links projected from `ck.realm.link` events. Powered by
 //!   [`crate::reducer::ProjectionState::realm_links_query`].
-//! - `POST /api/v1/realms/{realm_id}/links` — write a `cx.realm.link` Move from `realm_id →
+//! - `POST /_cokret/self/realms/{realm_id}/links` — write a `ck.realm.link` Move from `realm_id →
 //!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
 //!   (G3.S5); a rejected payload comes back as HTTP 422 with the spec reason code (e.g.
 //!   `realm_link_cycle`, `realm_link_self_reference`).
-//! - `DELETE /api/v1/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
-//!   `cx.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
+//! - `DELETE /_cokret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
+//!   `ck.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
 //!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
-//! - `GET /api/v1/realms/{realm_id}/effective-policy` — return the merged effective policy after
+//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — return the merged effective policy after
 //!   walking `governed_by` / `inherits_policy_from` ancestors per the realm's
-//!   `cx.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
+//!   `ck.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.
 
 use cokret_sdk::{Operation, OperationId, RealmId};
@@ -64,7 +64,7 @@ pub struct ListRealmLinksResponse {
     pub links: Vec<RealmLinkResponseEntry>,
 }
 
-/// POST body for creating / updating a `cx.realm.link`.
+/// POST body for creating / updating a `ck.realm.link`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRealmLinkRequest {
     pub target_realm_id: String,
@@ -93,7 +93,7 @@ pub struct EffectivePolicyResponse {
     pub effective_policy: Value,
     pub inheritance_chain: Vec<String>,
     /// `"explicit"` when the realm has projected a
-    /// `cx.realm.inheritance_policy`; `"none"` otherwise (spec §5
+    /// `ck.realm.inheritance_policy`; `"none"` otherwise (spec §5
     /// forbids implicit inheritance).
     pub inheritance_mode: String,
 }
@@ -116,7 +116,7 @@ impl From<&RealmLinkState> for RealmLinkResponseEntry {
 #[endpoint(
     operation_id = "cx.realms.links.list",
     tags("realms"),
-    summary = "List typed cross-Realm links projected from cx.realm.link"
+    summary = "List typed cross-Realm links projected from ck.realm.link"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.links.list"))]
 async fn list_realm_links(
@@ -168,14 +168,14 @@ async fn list_realm_links(
     })
 }
 
-/// G3.S5 — POST a new `cx.realm.link` Move. Builds an `Operation` for
+/// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for
 /// `CX_REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
 #[endpoint(
     operation_id = "cx.realms.links.create",
     tags("realms"),
-    summary = "Submit a cx.realm.link Move (G3.S5)"
+    summary = "Submit a ck.realm.link Move (G3.S5)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.links.create"))]
 async fn post_realm_link(
@@ -249,7 +249,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
         .with_wire_code(reason)
 }
 
-/// G3.S5 — DELETE a `cx.realm.link`. Writes a `tombstoned`-status
+/// G3.S5 — DELETE a `ck.realm.link`. Writes a `tombstoned`-status
 /// Move for the `(realm_id, target_realm_id, link_kind)` triple. The
 /// underlying cell is or_set keyed on the triple, so the tombstone
 /// flip replaces the previous status in place (spec §4).
@@ -260,7 +260,7 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 #[endpoint(
     operation_id = "cx.realms.links.delete",
     tags("realms"),
-    summary = "Tombstone a cx.realm.link (G3.S5)"
+    summary = "Tombstone a ck.realm.link (G3.S5)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.links.delete"))]
 async fn delete_realm_link(
@@ -330,7 +330,7 @@ async fn delete_realm_link(
 /// ```
 ///
 /// Per spec `realm-links.md §5`, `inheritance_mode = "none"` when the
-/// realm has not projected a `cx.realm.inheritance_policy` — the
+/// realm has not projected a `ck.realm.inheritance_policy` — the
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(

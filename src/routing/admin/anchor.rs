@@ -5,7 +5,7 @@
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
 //! - `POST /_soland/admin/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
 //!   writes the new anchorer cell value (cas-register on
-//!   `ck:cell:cx.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
+//!   `ck:cell:ck.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
 //! - `GET  /_soland/admin/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
@@ -432,7 +432,7 @@ fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 
 /// Build the canonical anchorer cell ref for a Space.
 fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("ck:cell:cx.component.anchorer.v1:{realm_id}")).map_err(|e| {
+    CellRef::new(format!("ck:cell:ck.component.anchorer.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })
@@ -2067,7 +2067,7 @@ mod tests {
         });
         let entry = bottom_entry_from(
             "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
-            "ck:cell:cx.component.member.state.v1:did.web.alice",
+            "ck:cell:ck.component.member.state.v1:did.web.alice",
             &bottom,
         );
         assert_eq!(entry.kind, "invalid_transition");
@@ -2133,7 +2133,7 @@ mod tests {
         let cell = anchorer_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
         assert_eq!(
             cell.as_str(),
-            "ck:cell:cx.component.anchorer.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
+            "ck:cell:ck.component.anchorer.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
         );
     }
 

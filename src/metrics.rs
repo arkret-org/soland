@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn metrics_render_required_http_series() {
-        let op = "GET /api/v1/events/{id}/metrics-test";
+        let op = "GET /_cokret/self/events/{id}/metrics-test";
         record_http_request(op, 200, Duration::from_millis(25));
         let rendered = render_http_metrics();
 
@@ -507,9 +507,9 @@ mod tests {
     fn path_ids_are_normalized_for_operation_label() {
         assert_eq!(
             normalize_path_for_metrics(
-                "/api/v1/realms/ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb/events"
+                "/_cokret/self/realms/ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb/events"
             ),
-            "/api/v1/realms/{id}/events"
+            "/_cokret/self/realms/{id}/events"
         );
     }
 }

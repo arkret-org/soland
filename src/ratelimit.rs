@@ -5,10 +5,10 @@
 //! a peer's quota across the rest of the API surface. We currently
 //! recognize three endpoint classes:
 //!
-//! - `auth`   — `/api/v1/auth/*` (strict, low ceiling): bearer-issuing surface, must be hardened
-//!   against credential-stuffing.
-//! - `api`    — every other `/api/v1/*` request (moderate ceiling).
-//! - `other`  — anything outside `/api/v1/*` (default ceiling).
+//! - `auth`   — `/_cokret/gate/auth/*` (strict, low ceiling): bearer-issuing surface, must be
+//!   hardened against credential-stuffing.
+//! - `api`    — every other `/_cokret/*` request (moderate ceiling).
+//! - `other`  — anything outside `/_cokret/*` (default ceiling).
 //!
 //! Each class can carry its own quota; absent overrides fall back to the
 //! default (`max_requests` / `window`).
@@ -32,17 +32,17 @@ pub struct RateLimiterConfig {
     pub max_requests: u32,
     /// Window duration.
     pub window: Duration,
-    /// Strict ceiling for `/api/v1/auth/*` requests; defaults to a low
-    /// value to harden against credential-stuffing.
+    /// Strict ceiling for `/_cokret/gate/auth/*` requests; defaults to a
+    /// low value to harden against credential-stuffing.
     pub auth_max_requests: u32,
-    /// Moderate ceiling for the rest of `/api/v1/*`.
+    /// Moderate ceiling for the rest of `/_cokret/*`.
     pub api_max_requests: u32,
 }
 
 impl Default for RateLimiterConfig {
     fn default() -> Self {
         // Match the `per_minute: 600` quota soland advertises in its
-        // `cx.server.describe` response (`wire::describe`). Wire +
+        // `ck.server.describe` response (`wire::describe`). Wire +
         // enforcement MUST agree, otherwise clients budget under the
         // advertised quota and trip 429 in normal long-poll loops.
         Self {
@@ -52,7 +52,7 @@ impl Default for RateLimiterConfig {
             // OAuth refresh cycle, but tight enough to stall a guessing
             // loop.
             auth_max_requests: 60,
-            // Moderate for the rest of /api/v1/*. Lower than the
+            // Moderate for the rest of /_cokret/*. Lower than the
             // advertised `per_minute: 600` so a single endpoint cannot
             // burn the entire IP-wide budget on its own.
             api_max_requests: 300,
@@ -72,9 +72,9 @@ enum EndpointClass {
 
 impl EndpointClass {
     fn classify(path: &str) -> Self {
-        if path.starts_with("/api/v1/auth/") {
+        if path.starts_with("/_cokret/gate/auth/") {
             Self::Auth
-        } else if path.starts_with("/api/v1/") {
+        } else if path.starts_with("/_cokret/") {
             Self::Api
         } else {
             Self::Other

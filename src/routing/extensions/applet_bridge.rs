@@ -552,7 +552,7 @@ fn portal_message_payload(payload: &Value) -> Result<Option<Value>, AppError> {
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or("message");
-    if kind != "message" && kind != "cx.content.text" {
+    if kind != "message" && kind != "ck.content.text" {
         return Ok(None);
     }
     let text = payload
@@ -562,7 +562,7 @@ fn portal_message_payload(payload: &Value) -> Result<Option<Value>, AppError> {
         .map(str::to_owned)
         .ok_or_else(|| AppError::invalid_param("payload.text is required"))?;
     Ok(Some(json!({
-        "kind": "cx.content.text",
+        "kind": "ck.content.text",
         "body": text,
     })))
 }

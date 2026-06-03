@@ -1,7 +1,7 @@
 //! Holder-private consent cell routes.
 //!
 //! This is the G3.S4 minimal reducer surface for
-//! `cx.component.consent.grant.v1`: the in-process projection stores one
+//! `ck.component.consent.grant.v1`: the in-process projection stores one
 //! OR-set-like cell per `(holder_did, peer_did, scope)`, and contact
 //! requests consult that projection before opening or accepting a request.
 
@@ -75,8 +75,8 @@ pub struct ConsentUpdateBody {
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
     let kind = crate::kinds::canonical_kind_string(operation);
     let projected = match kind.as_str() {
-        "cx.consent.grant" => project_consent_grant_operation(state, operation).await,
-        "cx.consent.revoke" => project_consent_revoke_operation(state, operation).await,
+        "ck.consent.grant" => project_consent_grant_operation(state, operation).await,
+        "ck.consent.revoke" => project_consent_revoke_operation(state, operation).await,
         _ => return,
     };
     if let Err(error) = projected {
@@ -584,14 +584,14 @@ fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
 
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
-    format!("ck:cell:cx.component.consent.grant.v1:{}", &digest[..32])
+    format!("ck:cell:ck.component.consent.grant.v1:{}", &digest[..32])
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
     if consent_id.starts_with("ck:cell:") {
         consent_id.to_owned()
     } else {
-        format!("ck:cell:cx.component.consent.grant.v1:{consent_id}")
+        format!("ck:cell:ck.component.consent.grant.v1:{consent_id}")
     }
 }
 

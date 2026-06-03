@@ -1,4 +1,4 @@
-//! Stream-F (Wave 2C) — `cx.audit.erasure_receipt` cross-Principal-
+//! Stream-F (Wave 2C) — `ck.audit.erasure_receipt` cross-Principal-
 //! Server fanout.
 //!
 //! Spec: `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.2.
@@ -6,10 +6,10 @@
 //! ## Surface
 //!
 //! - [`fanout_erasure_receipt`] — called from the projection write path after a
-//!   `cx.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
+//!   `ck.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
 //!   (currently `config.federation_peers` — the full peer set acts as the conservative super-set of
 //!   "peers that have received content from the Realm"; once per-Realm membership tracking ships
-//!   this scopes down), enqueues one outbound `cx.audit.erasure_receipt` envelope per peer into the
+//!   this scopes down), enqueues one outbound `ck.audit.erasure_receipt` envelope per peer into the
 //!   federation outbox, and seeds the receipt's `peer_status` map.
 //! - [`sweep_erasure_fanout_timeouts`] — called from the periodic timeout job
 //!   (`crate::routing::federation::erasure_fanout_worker`). Scans
@@ -23,7 +23,7 @@
 //!
 //! Real outbox enqueue per peer. Real per-peer `sent_at` stamping.
 //! Real 7-day default timeout window with `incomplete` flip. The peer
-//! ACK path (inbound `cx.audit.erasure_receipt` referencing the same
+//! ACK path (inbound `ck.audit.erasure_receipt` referencing the same
 //! `receipt_id`) is wired up but currently relies on the reducer
 //! observing a follow-up receipt — full inbound-ACK correlation lands
 //! when the federation inbound handler grows a typed
@@ -50,7 +50,7 @@ pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 
 /// other audit event; the receiving reducer dispatches on the canonical
 /// kind string and lands the receipt in its own `erasure_receipts`
 /// projection.
-const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/api/v1/federation/push-operations";
+const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_cokret/peer/federation/push-operations";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ErasurePeerTarget {
@@ -59,7 +59,7 @@ struct ErasurePeerTarget {
 }
 
 /// Stream-F (Wave 2C) — federation fanout for a freshly-recorded
-/// `cx.audit.erasure_receipt`. Enqueues one outbox row per
+/// `ck.audit.erasure_receipt`. Enqueues one outbox row per
 /// federation peer and seeds the receipt's `peer_status` map. No-op
 /// when the receipt has no `scope.realm_id` (account-private scope)
 /// or when `config.federation_peers` is empty.
@@ -105,7 +105,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     fanout_erasure_receipt_operation(state, &operation).await;
 }
 
-/// Fan out a durable `cx.audit.erasure_receipt` operation through the normal
+/// Fan out a durable `ck.audit.erasure_receipt` operation through the normal
 /// federation push batch wire shape.
 pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Operation) {
     if state.config.federation_peers.is_empty() {
@@ -455,7 +455,7 @@ mod tests {
                 recorded_at: Utc::now(),
                 payload: json!({
                     "receipt_id": "r1",
-                    "schema": "cx.schema.erasure_receipt.v1",
+                    "schema": "ck.schema.erasure_receipt.v1",
                     "subject": {"kind": "principal", "ref": "did:web:alice.example"},
                     "outcome": "completed",
                     "scope": {

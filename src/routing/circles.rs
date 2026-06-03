@@ -1,23 +1,23 @@
 //! CXP-0007 — Circle administration HTTP surface.
 //!
-//! Hosts the canonical `/api/v1/circles/*` admin/CRUD layer. Each handler
+//! Hosts the canonical `/_cokret/self/circles/*` admin/CRUD layer. Each handler
 //! builds a `cx.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
 //! to events arriving over the wire.
 //!
-//! Routes (mirror of `/api/v1/realms` / `/api/v1/spaces` style):
+//! Routes (mirror of `/_cokret/self/realms` / `/_cokret/self/spaces` style):
 //!
-//! - `POST   /api/v1/circles`                              create Circle
-//! - `GET    /api/v1/circles`                              list Circles (filtered by `realm_id`
+//! - `POST   /_cokret/self/circles`                              create Circle
+//! - `GET    /_cokret/self/circles`                              list Circles (filtered by `realm_id`
 //!   query)
-//! - `GET    /api/v1/circles/{circle_id}`                  read Circle
-//! - `POST   /api/v1/circles/{circle_id}/members`          add member
-//! - `DELETE /api/v1/circles/{circle_id}/members/{actor}`  remove member
-//! - `POST   /api/v1/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
-//! - `POST   /api/v1/circles/{circle_id}/archive`          archive Circle
-//! - `POST   /api/v1/circles/{circle_id}/tombstone`        tombstone Circle
+//! - `GET    /_cokret/self/circles/{circle_id}`                  read Circle
+//! - `POST   /_cokret/self/circles/{circle_id}/members`          add member
+//! - `DELETE /_cokret/self/circles/{circle_id}/members/{actor}`  remove member
+//! - `POST   /_cokret/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
+//! - `POST   /_cokret/self/circles/{circle_id}/archive`          archive Circle
+//! - `POST   /_cokret/self/circles/{circle_id}/tombstone`        tombstone Circle
 //!
 //! `scope-rotate` intentionally returns `501 unsupported_feature` until the
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
@@ -110,7 +110,7 @@ pub struct CreateCircleRequest {
 pub struct CircleMemberRequest {
     pub actor_id: String,
     /// Optional explicit member state. Defaults to `"active"`. Spec
-    /// `cx.circle.member.state` enum: invited / active / removed / banned / left.
+    /// `ck.circle.member.state` enum: invited / active / removed / banned / left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
 }
@@ -205,7 +205,7 @@ async fn get_circle(
 #[endpoint(
     operation_id = "cx.circles.create",
     tags("circles"),
-    summary = "Create a Circle (cx.circle.create)"
+    summary = "Create a Circle (ck.circle.create)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.circles.create"))]
 async fn post_circle(
@@ -249,7 +249,7 @@ async fn post_circle(
 #[endpoint(
     operation_id = "cx.circles.members.add",
     tags("circles"),
-    summary = "Add or change a Circle member (cx.circle.member.state)"
+    summary = "Add or change a Circle member (ck.circle.member.state)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.circles.members.add"))]
 async fn post_circle_member(
@@ -287,7 +287,7 @@ async fn post_circle_member(
 #[endpoint(
     operation_id = "cx.circles.members.remove",
     tags("circles"),
-    summary = "Remove a Circle member (cx.circle.member.state → removed)"
+    summary = "Remove a Circle member (ck.circle.member.state → removed)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.circles.members.remove"))]
 async fn delete_circle_member(
@@ -351,7 +351,7 @@ async fn post_scope_rotate(
 #[endpoint(
     operation_id = "cx.circles.archive",
     tags("circles"),
-    summary = "Archive a Circle (cx.circle.archive)"
+    summary = "Archive a Circle (ck.circle.archive)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.circles.archive"))]
 async fn post_circle_archive(
@@ -366,7 +366,7 @@ async fn post_circle_archive(
 #[endpoint(
     operation_id = "cx.circles.tombstone",
     tags("circles"),
-    summary = "Tombstone a Circle (cx.circle.tombstone)"
+    summary = "Tombstone a Circle (ck.circle.tombstone)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.circles.tombstone"))]
 async fn post_circle_tombstone(

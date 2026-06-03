@@ -17,7 +17,7 @@ use super::{
 
 /// Operator anchor-signing endpoint (`POST /_soland/admin/anchors/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
-/// (NOT under `/api/v1`), alongside the rest of the admin surface.
+/// (NOT under `/_cokret/...`), alongside the rest of the admin surface.
 pub fn admin_anchor_sign_router() -> Router {
     move_anchor::api_admin_router()
 }

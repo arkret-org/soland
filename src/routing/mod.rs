@@ -18,7 +18,7 @@ use crate::wire::now;
 
 mod access;
 mod admin;
-// CXP-0007 (P2A.3) — `/api/v1/circles/*` admin surface.
+// CXP-0007 (P2A.3) — `/_cokret/self/circles/*` admin surface.
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
@@ -113,8 +113,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(federation::well_known_cokret_router())
         .push(identity::embedded_webvh_public_router())
         // Admin surface lives at the deployment-local `/_soland/admin/*`
-        // namespace (NOT under the `/api/v1` protocol prefix). Renamed from
-        // the historical bare `/admin/*` to `/_soland/admin/*` so the
+        // namespace (NOT under the `/_cokret/...` protocol prefix). Renamed
+        // from the historical bare `/admin/*` to `/_soland/admin/*` so the
         // operator surface is unambiguously soland-local and cannot collide
         // with application-level routes. The four admin sub-routers below
         // still declare their paths relative to `admin/...`; the shared
@@ -130,8 +130,9 @@ pub fn router_with_rate_limiter_and_request_size_config(
         //   3. `router`        — collection (`/_soland/admin/{resource}`),
         //      cells, control-frames, retention.
         //   4. `admin_anchor_sign_router` — `POST /_soland/admin/anchors/sign`
-        //      operator anchor-signing trigger, detached from the `/api/v1`
-        //      federation router so it sits in the admin namespace.
+        //      operator anchor-signing trigger, detached from the
+        //      `/_cokret/peer/federation` router so it sits in the admin
+        //      namespace.
         .push(
             Router::with_path("_soland")
                 .push(admin::spec_router())
@@ -139,17 +140,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(admin::router())
                 .push(federation::admin_anchor_sign_router()),
         )
-        .push(api_v1_router())
-        .push(interop::cokret_router())
-        // `/cokret/v1/*` fallback: per `cokret-spec/spec/v1/zh/sync/
-        // api-conventions.md` §10, any request under `/cokret/v1/...` that
-        // doesn't match a known route MUST return the canonical
-        // `unrecognized_endpoint` / `method_not_allowed` JSON envelope
-        // (never an HTML salvo 404). Mounted as a sibling to the concrete
-        // `cokret/v1/...` routers above; salvo's child-iteration order
-        // means it only fires when the concrete routes don't claim the
-        // path. See `api_not_found` for the 405/Allow disambiguation.
-        .push(cokret_v1_fallback_router());
+        .push(api_v1_router());
     let doc = cached_cokret_openapi_doc(&router);
     router
         .unshift(
@@ -161,39 +152,68 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .unshift(Router::new().get(home_page))
 }
 
+/// Protocol surface, mounted under the negative-space root `/_cokret/...`.
+///
+/// API-URL trust-namespace migration: the historical `/api/v1/*` +
+/// `/cokret/v1/*` prefixes are gone. Every protocol path now lives under a
+/// single `/_cokret/` root with no version segment (version is negotiated
+/// via `*.describe` / `supported_operations`). The first path segment names
+/// the trust concentric circle (self/gate/root/find/peer/open/edge); the
+/// deployment-local operator surface stays separate at `/_soland/admin/*`.
+///
+/// Each module's `router()` declares its own trust segment in the paths it
+/// pushes (e.g. `events::router()` returns `self/events/...`), so the parent
+/// here only supplies the shared `_cokret` root.
 fn api_v1_router() -> Router {
-    Router::with_path("api/v1")
+    Router::with_path("_cokret")
         .oapi_tag("api")
         .hoop(wait_for_sync_token)
+        // `/_cokret/describe` (root meta) + `/_cokret/self/integration/describe`.
+        // (`system::router()` declares both the root-meta and the self-scoped
+        // path itself, so it is mounted directly at the `_cokret` root.)
         .push(system::router())
+        // root/identity/*, self/account*, self/keys*, gate/account/*, etc.
+        // (`identity::router()` declares its own trust segments.)
         .push(identity::router())
-        .push(spaces::router())
-        .push(realms::router())
-        // CXP-0007 — Circle administration (`/api/v1/circles/*`).
-        .push(circles::router())
-        .push(organizations::router())
-        .push(federation::router())
-        .push(events::router())
-        .push(access::router())
-        // Audit endpoints stay on the protocol surface at `/api/v1/audit/*`
-        // (they are not part of the deployment-local `/admin/*` namespace).
-        // The canonical admin ops and the admin collection/operator
-        // surfaces are mounted at the bare `/admin/*` namespace on the root
-        // router instead — see `router()` above.
-        .push(admin::audit_router())
+        // `self` — the principal's own authenticated session surface.
+        .push(
+            Router::with_path("self")
+                // self/spaces|directory|... (self-scoped collaboration surface).
+                .push(spaces::router())
+                // self/realms/*.
+                .push(realms::router())
+                // CXP-0007 — Circle administration (`/_cokret/self/circles/*`).
+                .push(circles::router())
+                .push(organizations::router())
+                // self/events/*.
+                .push(events::router())
+                // self/authz/* + self/policy/check.
+                .push(access::router())
+                // Audit endpoints stay on the protocol surface (NOT the
+                // deployment-local `/_soland/admin/*` operator namespace); as
+                // an authenticated session-scoped read surface they live under
+                // `self/audit/*`.
+                .push(admin::audit_router())
+                // self/conformance/* (deployment-local conformance harness).
+                .push(conformance::router())
+                // G3.S1: MLS / keys lifecycle — spec-canonical path is
+                // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
+                .push(mls::router())
+                // G3.S2: realm policy server (self/realms/{id}/policy-server).
+                .push(realm_policy::router()),
+        )
+        // `find` — directory discovery surface.
+        .push(Router::with_path("find").push(spaces::find_router()))
+        // `peer` — server↔server federation wire.
+        .push(Router::with_path("peer").push(federation::router()))
+        // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
+        // self/moderation/*, open/mimi/* — `interop::router()` declares its
+        // own trust segments.
         .push(interop::router())
-        .push(conformance::router())
-        // G3.S1: MLS / keys lifecycle — spec-canonical path is
-        // `/api/v1/keys/keypackages/*` (see `mls::router`). Appended at
-        // the end of the registry so parallel agents (G3.S2, G3.S5,
-        // G3.S9) editing this block don't collide.
-        .push(mls::router())
-        // G3.S9: extensions (applet manifest verifier, bot/ghost actor,
-        // TSP transport/route/audit)
+        // G3.S9: extensions — applet bridge (edge), bot/ghost actor + TSP +
+        // sovereign (self). `extensions::router()` declares its own segments.
         .push(extensions::router())
-        // G3.S2: realm policy server
-        .push(realm_policy::router())
-        // Catch-all so that anything under `/api/v1/...` that the typed
+        // Catch-all so that anything under `/_cokret/...` that the typed
         // routers above don't match returns the canonical Cokret JSON
         // error envelope. `cors_preflight` is registered as an OPTIONS
         // child so CORS preflight stays 204; every other method falls
@@ -210,17 +230,6 @@ fn api_v1_router() -> Router {
                 .options(cors_preflight)
                 .goal(api_not_found),
         )
-}
-
-/// Fallback router mounted at `/cokret/v1/*`. Mirror of the `/api/v1/*`
-/// catch-all above — same JSON envelope, same 404/405 disambiguation. The
-/// concrete `cokret/v1/...` endpoints (currently `cokret/v1/ice-config`)
-/// are mounted as their own top-level child routers and run *before* this
-/// fallback because salvo iterates the root's children in registration order.
-fn cokret_v1_fallback_router() -> Router {
-    Router::with_path("cokret/v1/{**rest}")
-        .options(cors_preflight)
-        .goal(api_not_found)
 }
 
 static COKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
@@ -240,10 +249,10 @@ fn cokret_openapi_doc(router: &Router) -> OpenApi {
         .add_extension(
             "x-operation-aliases",
             json!({
-                "events.submit": "cx.events.submit",
-                "events.query": "cx.events.query",
-                "events.subscribe": "cx.events.subscribe",
-                "account.subscribe": "cx.account.subscribe",
+                "events.submit": "ck.events.submit",
+                "events.query": "ck.events.query",
+                "events.subscribe": "ck.events.subscribe",
+                "account.subscribe": "ck.account.subscribe",
             }),
         )
         .add_extension(
@@ -315,313 +324,313 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "health and liveness",
     ),
     (
-        "/api/v1/account/register",
+        "/_cokret/self/account/register",
         PathItemType::Post,
         "account",
         "cx.extension.soland.account.register",
         "register account",
     ),
     (
-        "/api/v1/account/me",
+        "/_cokret/self/account/me",
         PathItemType::Get,
         "account",
         "cx.extension.soland.account.me",
         "get current account",
     ),
     (
-        "/api/v1/auth/session-grant/exchange",
+        "/_cokret/gate/auth/session-grant/exchange",
         PathItemType::Post,
         "auth",
         "cx.extension.soland.auth.exchange_session_grant",
         "exchange coauth session grant for principal bearer session",
     ),
     (
-        "/api/v1/auth/logout",
+        "/_cokret/gate/auth/logout",
         PathItemType::Post,
         "auth",
         "cx.extension.soland.auth.logout",
         "logout active session",
     ),
     (
-        "/api/v1/contacts/request",
+        "/_cokret/self/contacts/request",
         PathItemType::Post,
         "contacts",
         "cx.extension.soland.contacts.request",
         "request contact",
     ),
     (
-        "/api/v1/contacts/respond",
+        "/_cokret/self/contacts/respond",
         PathItemType::Post,
         "contacts",
         "cx.extension.soland.contacts.respond",
         "respond to contact request",
     ),
     (
-        "/api/v1/contacts",
+        "/_cokret/self/contacts",
         PathItemType::Get,
         "contacts",
         "cx.extension.soland.contacts.list",
         "list contacts",
     ),
     (
-        "/api/v1/server/describe",
+        "/_cokret/describe",
         PathItemType::Get,
         "server",
-        "cx.server.describe",
+        "ck.server.describe",
         "server feature description",
     ),
     // CXP-0007 (P2A.3) — Circle admin surface. Operation ids align with
     // `cx.circles.*` (sibling of `cx.realms.*` / `cx.spaces.*`).
     (
-        "/api/v1/circles",
+        "/_cokret/self/circles",
         PathItemType::Post,
         "circles",
         "cx.circles.create",
-        "create a Circle (cx.circle.create)",
+        "create a Circle (ck.circle.create)",
     ),
     (
-        "/api/v1/circles",
+        "/_cokret/self/circles",
         PathItemType::Get,
         "circles",
         "cx.circles.list",
         "list Circles for a Realm",
     ),
     (
-        "/api/v1/circles/{circle_id}",
+        "/_cokret/self/circles/{circle_id}",
         PathItemType::Get,
         "circles",
         "cx.circles.get",
         "fetch a Circle by id",
     ),
     (
-        "/api/v1/circles/{circle_id}/members",
+        "/_cokret/self/circles/{circle_id}/members",
         PathItemType::Post,
         "circles",
         "cx.circles.members.add",
         "add or change a Circle member",
     ),
     (
-        "/api/v1/circles/{circle_id}/members/{actor_id}",
+        "/_cokret/self/circles/{circle_id}/members/{actor_id}",
         PathItemType::Delete,
         "circles",
         "cx.circles.members.remove",
         "remove a Circle member",
     ),
     (
-        "/api/v1/circles/{circle_id}/scope-rotate",
+        "/_cokret/self/circles/{circle_id}/scope-rotate",
         PathItemType::Post,
         "circles",
         "cx.circles.scope_rotate",
         "rotate the Circle's bound MLS group",
     ),
     (
-        "/api/v1/circles/{circle_id}/archive",
+        "/_cokret/self/circles/{circle_id}/archive",
         PathItemType::Post,
         "circles",
         "cx.circles.archive",
-        "archive a Circle (cx.circle.archive)",
+        "archive a Circle (ck.circle.archive)",
     ),
     (
-        "/api/v1/circles/{circle_id}/tombstone",
+        "/_cokret/self/circles/{circle_id}/tombstone",
         PathItemType::Post,
         "circles",
         "cx.circles.tombstone",
-        "tombstone a Circle (cx.circle.tombstone)",
+        "tombstone a Circle (ck.circle.tombstone)",
     ),
     (
-        "/api/v1/events/describe",
+        "/_cokret/self/events/describe",
         PathItemType::Get,
         "events",
-        "cx.events.describe",
+        "ck.events.describe",
         "describe Event Envelope ingestion profile",
     ),
     (
-        "/api/v1/events",
+        "/_cokret/self/events",
         PathItemType::Post,
         "events",
-        "cx.events.submit",
+        "ck.events.submit",
         "submit one Event Envelope",
     ),
     (
-        "/api/v1/events/{event_id}",
+        "/_cokret/self/events/{event_id}",
         PathItemType::Get,
         "events",
-        "cx.events.get",
+        "ck.events.get",
         "get one Event Envelope",
     ),
     (
-        "/api/v1/events/resolve",
+        "/_cokret/self/events/resolve",
         PathItemType::Post,
         "events",
-        "cx.events.resolve",
+        "ck.events.resolve",
         "resolve Event Envelopes by id",
     ),
     (
-        "/api/v1/events",
+        "/_cokret/self/events",
         PathItemType::Get,
         "events",
-        "cx.events.query",
+        "ck.events.query",
         "query Event Envelopes (forward / backward)",
     ),
     (
-        "/api/v1/events/subscribe",
+        "/_cokret/self/events/subscribe",
         PathItemType::Get,
         "events",
-        "cx.events.subscribe",
+        "ck.events.subscribe",
         "subscribe to Event stream",
     ),
     (
-        "/api/v1/events/frontier",
+        "/_cokret/self/events/frontier",
         PathItemType::Get,
         "events",
-        "cx.events.frontier",
+        "ck.events.frontier",
         "get Event frontier",
     ),
     (
-        "/api/v1/projection/spaces",
+        "/_cokret/self/projection/spaces",
         PathItemType::Get,
         "projection",
-        "cx.projection.spaces",
+        "ck.projection.spaces",
         "Space lifecycle projection query",
     ),
     (
-        "/api/v1/projection/flows",
+        "/_cokret/self/projection/flows",
         PathItemType::Get,
         "projection",
-        "cx.projection.flows",
+        "ck.projection.flows",
         "Flow lifecycle projection query",
     ),
     (
-        "/api/v1/projection/morphs",
+        "/_cokret/self/projection/morphs",
         PathItemType::Get,
         "projection",
-        "cx.projection.morphs",
+        "ck.projection.morphs",
         "Morph lifecycle projection query",
     ),
     (
-        "/api/v1/index/describe",
+        "/_cokret/self/index/describe",
         PathItemType::Get,
         "index",
         "cx.extension.soland.index.describe",
         "describe index profile",
     ),
     (
-        "/api/v1/index/query",
+        "/_cokret/self/index/query",
         PathItemType::Post,
         "index",
         "cx.extension.soland.index.query",
         "query the projection index",
     ),
     (
-        "/api/v1/index/debug/reducer",
+        "/_cokret/self/index/debug/reducer",
         PathItemType::Get,
         "index",
         "cx.extension.soland.index.debug_reducer",
         "debug reducer frontier",
     ),
     (
-        "/api/v1/authz/effective-grants",
+        "/_cokret/self/authz/effective-grants",
         PathItemType::Get,
         "authz",
-        "cx.authz.get_effective_grants",
+        "ck.authz.get_effective_grants",
         "get effective grants",
     ),
     (
-        "/api/v1/authz/invites",
+        "/_cokret/self/authz/invites",
         PathItemType::Get,
         "authz",
-        "cx.authz.get_invites",
+        "ck.authz.get_invites",
         "list invites",
     ),
     (
-        "/api/v1/federation/transactions/{txn_id}",
+        "/_cokret/peer/federation/transactions/{txn_id}",
         PathItemType::Put,
         "federation",
         "cx.extension.soland.federation.transaction",
         "submit federation transaction",
     ),
     (
-        "/api/v1/federation/push-operations",
+        "/_cokret/peer/federation/push-operations",
         PathItemType::Post,
         "federation",
         "cx.extension.soland.federation.push_operations",
         "push federation operations",
     ),
     (
-        "/api/v1/federation/pull-operations",
+        "/_cokret/peer/federation/pull-operations",
         PathItemType::Get,
         "federation",
         "cx.extension.soland.federation.pull_operations",
         "pull federation operations",
     ),
     (
-        "/api/v1/federation/space-members",
+        "/_cokret/peer/federation/space-members",
         PathItemType::Get,
         "federation",
         "cx.extension.soland.federation.space_members",
         "list space memberships",
     ),
     (
-        "/api/v1/federation/verify-actor",
+        "/_cokret/peer/federation/verify-actor",
         PathItemType::Post,
         "federation",
         "cx.extension.soland.federation.verify_actor",
         "verify federation actor",
     ),
     (
-        "/api/v1/account/subscribe",
+        "/_cokret/self/account/subscribe",
         PathItemType::Get,
         "account",
-        "cx.account.subscribe",
+        "ck.account.subscribe",
         "account-aggregate subscribe",
     ),
     (
-        "/api/v1/account/describe",
+        "/_cokret/self/account/describe",
         PathItemType::Get,
         "account",
-        "cx.account.describe",
+        "ck.account.describe",
         "account aggregate describe",
     ),
     (
-        "/api/v1/sync/backfill/gap",
+        "/_cokret/self/sync/backfill/gap",
         PathItemType::Get,
         "sync",
         "cx.extension.soland.sync.backfill_gap",
         "sync gap backfill (deployment-local)",
     ),
     (
-        "/api/v1/snapshot/head",
+        "/_cokret/self/snapshot/head",
         PathItemType::Get,
         "snapshot",
-        "cx.snapshot.head",
+        "ck.snapshot.head",
         "snapshot head",
     ),
     (
-        "/api/v1/sync/snapshot-chunk",
+        "/_cokret/self/sync/snapshot-chunk",
         PathItemType::Get,
         "sync",
         "cx.extension.soland.sync.get_snapshot_chunk",
         "snapshot chunk",
     ),
     (
-        "/api/v1/directory/describe",
+        "/_cokret/find/directory/describe",
         PathItemType::Get,
         "directory",
-        "cx.directory.describe",
+        "ck.directory.describe",
         "directory describe",
     ),
     (
-        "/api/v1/directory/search-realms",
+        "/_cokret/find/directory/search-realms",
         PathItemType::Post,
         "directory",
-        "cx.directory.search_realms",
+        "ck.directory.search_realms",
         "search realms",
     ),
     (
-        "/api/v1/directory/resolve-realm",
+        "/_cokret/find/directory/resolve-realm",
         PathItemType::Post,
         "directory",
-        "cx.directory.resolve_realm",
+        "ck.directory.resolve_realm",
         "resolve realm",
     ),
     (
@@ -709,248 +718,248 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "admin media snapshot",
     ),
     (
-        "/api/v1/authz/check",
+        "/_cokret/self/authz/check",
         PathItemType::Post,
         "authz",
-        "cx.authz.check",
+        "ck.authz.check",
         "check authorization",
     ),
     (
-        "/api/v1/policies",
+        "/_cokret/self/policies",
         PathItemType::Get,
         "policy",
         "cx.extension.soland.policies.list",
         "list policies",
     ),
     (
-        "/api/v1/policies/{policy_id}",
+        "/_cokret/self/policies/{policy_id}",
         PathItemType::Get,
         "policy",
         "cx.extension.soland.policies.get",
         "get policy",
     ),
     (
-        "/api/v1/policies",
+        "/_cokret/self/policies",
         PathItemType::Post,
         "policy",
         "cx.extension.soland.policies.upsert",
         "upsert policy",
     ),
     (
-        "/api/v1/policies/{policy_id}",
+        "/_cokret/self/policies/{policy_id}",
         PathItemType::Delete,
         "policy",
         "cx.extension.soland.policies.delete",
         "delete policy",
     ),
     (
-        "/api/v1/push/register-device",
+        "/_cokret/edge/push/register-device",
         PathItemType::Post,
         "push",
-        "cx.push.register_device",
+        "ck.push.register_device",
         "register push device",
     ),
     (
-        "/api/v1/push/outbound/bridge/cache/export",
+        "/_cokret/edge/push/outbound/bridge/cache/export",
         PathItemType::Get,
         "push",
         "cx.extension.soland.push.outbound_bridge_cache_export",
         "export outbound push bridge cache snapshots",
     ),
     (
-        "/api/v1/push/outbound/bridge/cache/import",
+        "/_cokret/edge/push/outbound/bridge/cache/import",
         PathItemType::Post,
         "push",
         "cx.extension.soland.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
     ),
     (
-        "/api/v1/keys/backups/{backup_id}",
+        "/_cokret/self/keys/backups/{backup_id}",
         PathItemType::Put,
         "keys",
-        "cx.keys.backups.put",
+        "ck.keys.backups.put",
         "store encrypted key backup",
     ),
     (
-        "/api/v1/keys/backups/{backup_id}",
+        "/_cokret/self/keys/backups/{backup_id}",
         PathItemType::Get,
         "keys",
-        "cx.keys.backups.get",
+        "ck.keys.backups.get",
         "get encrypted key backup",
     ),
     (
-        "/api/v1/keys/backups/{backup_id}",
+        "/_cokret/self/keys/backups/{backup_id}",
         PathItemType::Delete,
         "keys",
-        "cx.keys.backups.delete",
+        "ck.keys.backups.delete",
         "delete encrypted key backup",
     ),
     (
-        "/api/v1/keys/backups",
+        "/_cokret/self/keys/backups",
         PathItemType::Get,
         "keys",
-        "cx.keys.backups.list",
+        "ck.keys.backups.list",
         "list encrypted key backups",
     ),
     (
-        "/api/v1/devices/pairing-challenge",
+        "/_cokret/self/devices/pairing-challenge",
         PathItemType::Post,
         "devices",
         "cx.extension.soland.devices.pairing_challenge",
         "create device pairing challenge",
     ),
     (
-        "/api/v1/devices/authorize-pairing",
+        "/_cokret/self/devices/authorize-pairing",
         PathItemType::Post,
         "devices",
         "cx.extension.soland.devices.authorize_pairing",
         "authorize device pairing",
     ),
     (
-        "/api/v1/push/unregister-device",
+        "/_cokret/edge/push/unregister-device",
         PathItemType::Post,
         "push",
-        "cx.push.unregister_device",
+        "ck.push.unregister_device",
         "unregister push device",
     ),
     (
-        "/api/v1/push/rules",
+        "/_cokret/edge/push/rules",
         PathItemType::Get,
         "push",
         "cx.extension.soland.push.rules",
         "list push rules",
     ),
     (
-        "/api/v1/push/notify",
+        "/_cokret/edge/push/notify",
         PathItemType::Post,
         "push",
-        "cx.push.notify",
+        "ck.push.notify",
         "send push notification",
     ),
     (
-        "/api/v1/blob/upload",
+        "/_cokret/self/blob/upload",
         PathItemType::Post,
         "blob",
-        "cx.blob.upload",
+        "ck.blob.upload",
         "upload blob bytes",
     ),
     (
-        "/api/v1/blob/get",
+        "/_cokret/self/blob/get",
         PathItemType::Head,
         "blob",
-        "cx.blob.head",
+        "ck.blob.head",
         "inspect blob metadata",
     ),
     (
-        "/api/v1/blob/get",
+        "/_cokret/self/blob/get",
         PathItemType::Get,
         "blob",
-        "cx.blob.get",
+        "ck.blob.get",
         "download blob bytes",
     ),
     (
-        "/api/v1/webrtc/sessions",
+        "/_cokret/self/webrtc/sessions",
         PathItemType::Post,
         "webrtc",
         "cx.extension.soland.webrtc.create_session",
         "create WebRTC session",
     ),
     (
-        "/api/v1/webrtc/sessions/{session_id}/signals",
+        "/_cokret/self/webrtc/sessions/{session_id}/signals",
         PathItemType::Post,
         "webrtc",
         "cx.extension.soland.webrtc.send_signal",
         "send WebRTC signal",
     ),
     (
-        "/api/v1/webrtc/sessions/{session_id}",
+        "/_cokret/self/webrtc/sessions/{session_id}",
         PathItemType::Delete,
         "webrtc",
         "cx.extension.soland.webrtc.close_session",
         "close WebRTC session",
     ),
     (
-        "/api/v1/moderation/report",
+        "/_cokret/self/moderation/report",
         PathItemType::Post,
         "moderation",
-        "cx.moderation.report",
+        "ck.moderation.report",
         "report moderation issue",
     ),
     (
-        "/api/v1/mimi/provider-directory",
+        "/_cokret/open/mimi/provider-directory",
         PathItemType::Get,
         "mimi",
-        "cx.mimi.provider_directory",
+        "ck.mimi.provider_directory",
         "MIMI provider directory",
     ),
     (
-        "/api/v1/mimi/key-material",
+        "/_cokret/open/mimi/key-material",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.key_material",
+        "ck.mimi.key_material",
         "MIMI key material",
     ),
     (
-        "/api/v1/mimi/flows/{room_id}/update",
+        "/_cokret/open/mimi/flows/{room_id}/update",
         PathItemType::Put,
         "mimi",
-        "cx.mimi.room_update",
+        "ck.mimi.room_update",
         "MIMI external room interop update",
     ),
     (
-        "/api/v1/mimi/flows/{room_id}/notify",
+        "/_cokret/open/mimi/flows/{room_id}/notify",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.notify",
+        "ck.mimi.notify",
         "MIMI external room interop notify",
     ),
     (
-        "/api/v1/mimi/flows/{room_id}/messages",
+        "/_cokret/open/mimi/flows/{room_id}/messages",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.submit_message",
+        "ck.mimi.submit_message",
         "MIMI external room interop submit message",
     ),
     (
-        "/api/v1/mimi/flows/{room_id}/group-info",
+        "/_cokret/open/mimi/flows/{room_id}/group-info",
         PathItemType::Get,
         "mimi",
-        "cx.mimi.group_info",
+        "ck.mimi.group_info",
         "MIMI external room interop group info",
     ),
     (
-        "/api/v1/mimi/consent/request",
+        "/_cokret/open/mimi/consent/request",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.request_consent",
+        "ck.mimi.request_consent",
         "MIMI request consent",
     ),
     (
-        "/api/v1/mimi/consent/update",
+        "/_cokret/open/mimi/consent/update",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.update_consent",
+        "ck.mimi.update_consent",
         "MIMI update consent",
     ),
     (
-        "/api/v1/mimi/identifiers/query",
+        "/_cokret/open/mimi/identifiers/query",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.identifier_query",
+        "ck.mimi.identifier_query",
         "MIMI identifier query",
     ),
     (
-        "/api/v1/mimi/report-abuse",
+        "/_cokret/open/mimi/report-abuse",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.report_abuse",
+        "ck.mimi.report_abuse",
         "MIMI report abuse",
     ),
     (
-        "/api/v1/mimi/proxy-download",
+        "/_cokret/open/mimi/proxy-download",
         PathItemType::Post,
         "mimi",
-        "cx.mimi.proxy_download",
+        "ck.mimi.proxy_download",
         "MIMI proxy download",
     ),
     // CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent + Sidecar
@@ -958,121 +967,114 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     // `routing::identity::agents`; the table here makes the operations
     // visible to the OpenAPI snapshot + the 404/405 disambiguator.
     (
-        "/api/v1/auth/account/agent-key-pair",
+        "/_cokret/gate/account/agent-key-pair",
         PathItemType::Post,
         "agents",
-        "cx.account.agent_key_pair",
+        "ck.account.agent_key_pair",
         "authorize an agent runtime key pair",
     ),
     (
-        "/api/v1/agents",
+        "/_cokret/self/agents",
         PathItemType::Post,
         "agents",
-        "cx.agent.provision",
+        "ck.agent.provision",
         "provision a personal agent",
     ),
     (
-        "/api/v1/agents",
+        "/_cokret/self/agents",
         PathItemType::Get,
         "agents",
-        "cx.agent.list",
+        "ck.agent.list",
         "list personal agents",
     ),
     (
-        "/api/v1/agents/{agent_id}",
+        "/_cokret/self/agents/{agent_id}",
         PathItemType::Get,
         "agents",
-        "cx.agent.get",
+        "ck.agent.get",
         "get a personal agent by id",
     ),
     (
-        "/api/v1/agents/{agent_id}/pause",
+        "/_cokret/self/agents/{agent_id}/pause",
         PathItemType::Post,
         "agents",
-        "cx.agent.pause",
+        "ck.agent.pause",
         "pause a personal agent",
     ),
     (
-        "/api/v1/agents/{agent_id}/resume",
+        "/_cokret/self/agents/{agent_id}/resume",
         PathItemType::Post,
         "agents",
-        "cx.agent.resume",
+        "ck.agent.resume",
         "resume a personal agent",
     ),
     (
-        "/api/v1/agents/{agent_id}/deactivate",
+        "/_cokret/self/agents/{agent_id}/deactivate",
         PathItemType::Post,
         "agents",
-        "cx.agent.deactivate",
+        "ck.agent.deactivate",
         "deactivate a personal agent",
     ),
     (
-        "/api/v1/agents/{agent_id}/rotate-key",
+        "/_cokret/self/agents/{agent_id}/rotate-key",
         PathItemType::Post,
         "agents",
-        "cx.agent.rotate_key",
+        "ck.agent.rotate_key",
         "rotate a personal agent key",
     ),
     (
-        "/api/v1/agents/{agent_id}/grants",
+        "/_cokret/self/agents/{agent_id}/grants",
         PathItemType::Post,
         "agents",
-        "cx.agent.grant.attach",
+        "ck.agent.grant.attach",
         "attach a capability grant to a personal agent",
     ),
     (
-        "/api/v1/agents/{agent_id}/grants/{grant_id}",
+        "/_cokret/self/agents/{agent_id}/grants/{grant_id}",
         PathItemType::Delete,
         "agents",
-        "cx.agent.grant.detach",
+        "ck.agent.grant.detach",
         "detach a capability grant from a personal agent",
     ),
     (
-        "/api/v1/agents/{agent_id}/sidecar-thread/ensure",
+        "/_cokret/self/agents/{agent_id}/sidecar-thread/ensure",
         PathItemType::Post,
         "agents",
-        "cx.agent.sidecar_thread.ensure",
+        "ck.agent.sidecar_thread.ensure",
         "idempotently ensure the controller<->agent sidecar Circle exists",
     ),
     // CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
-    // token exchange. `/rtc/token` is the spec-canonical wire path; the
-    // `/api/v1/rtc/token` alias is registered for deployments behind an
-    // ingress that strips the deployment-root namespace.
+    // token exchange + signed ICE config. Canonical wire paths now live on
+    // the `self` trust segment (`/_cokret/self/rtc/...`); the historical
+    // `/cokret/v1/...` and `/api/v1/...` aliases are gone.
     (
-        "/rtc/token",
+        "/_cokret/self/rtc/token",
         PathItemType::Post,
         "media",
-        "cx.call.media.token_exchange",
+        "ck.call.media.token_exchange",
         "exchange session-focus for backend media token + participant_binding",
     ),
     (
-        "/cokret/v1/rtc/token",
+        "/_cokret/self/rtc/ice-config",
         PathItemType::Post,
         "media",
-        "cx.call.media.token_exchange",
-        "exchange session-focus for backend media token (cokret/v1 alias)",
-    ),
-    (
-        "/api/v1/rtc/token",
-        PathItemType::Post,
-        "media",
-        "cx.extension.soland.calls.media.token_exchange",
-        "exchange session-focus for backend media token (api/v1 alias)",
+        "ck.media.ice_config",
+        "issue signed ICE config",
     ),
     // R3 spec-sync — recovery policy / receipt endpoints.
     (
-        "/api/v1/identity/recovery-policy",
+        "/_cokret/root/identity/recovery-policy",
         PathItemType::Post,
         "identity",
         "cx.extension.soland.identity.recovery_policy.put",
-        "submit a cx.schema.recovery_policy.v1 policy",
+        "submit a ck.schema.recovery_policy.v1 policy",
     ),
     (
-        "/api/v1/identity/recovery-receipt",
+        "/_cokret/root/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
         "cx.extension.soland.identity.recovery_receipt.put",
-        "submit a cx.schema.recovery_receipt.v1 receipt",
+        "submit a ck.schema.recovery_receipt.v1 receipt",
     ),
 ];
 
@@ -1124,7 +1126,7 @@ async fn cors_preflight(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-/// Catch-all handler under `/api/v1/*` and `/cokret/v1/*`.
+/// Catch-all handler under `/_cokret/*`.
 ///
 /// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10:
 /// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
@@ -1171,10 +1173,10 @@ async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// (`method_not_allowed` + `Allow` header) for a given request path.
 ///
 /// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
-/// `/api/v1/spaces/{space_id}`. Pattern→URI matching is segment-based
+/// `/_cokret/self/spaces/{space_id}`. Pattern→URI matching is segment-based
 /// (see [`pattern_matches_path`]) so concrete URIs like
-/// `/api/v1/spaces/ck:space:abc` resolve back to their declaring pattern
-/// without any regex compilation.
+/// `/_cokret/self/spaces/ck:space:abc` resolve back to their declaring
+/// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
 fn populate_known_routes(doc: &OpenApi) {
@@ -1182,14 +1184,14 @@ fn populate_known_routes(doc: &OpenApi) {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
         for (path, item) in doc.paths.iter() {
             // Only the protocol-bound HTTP surface participates in
-            // 404/405 disambiguation. `/api/v1/...` is soland's local
-            // surface and `/cokret/v1/...` is the cross-server federated
-            // surface; both are spec-mandated to return the canonical
-            // error envelope. Other prefixes (e.g. `/health`,
-            // `/.well-known/...`, `/admin/...`) are out of scope
-            // for the `unrecognized_endpoint` / `method_not_allowed`
-            // contract.
-            if !(path.starts_with("/api/v1/") || path.starts_with("/cokret/v1/")) {
+            // 404/405 disambiguation. The entire protocol surface now lives
+            // under the negative-space root `/_cokret/...` (trust segments
+            // self/gate/root/find/peer/open/edge); it is spec-mandated to
+            // return the canonical error envelope. Other prefixes (e.g.
+            // `/health`, `/.well-known/...`, `/_soland/admin/...`) are out
+            // of scope for the `unrecognized_endpoint` /
+            // `method_not_allowed` contract.
+            if !path.starts_with("/_cokret/") {
                 continue;
             }
             let methods: Vec<Method> = item
@@ -1438,7 +1440,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     let state_document = json!({
         "type": "cx.snapshot.realm_state.v1",
         "schema_profiles": ["cx.schema.core.v1"],
-        "reducer_profile": "cx.reducer.v1",
+        "reducer_profile": "ck.reducer.v1",
         "realm_id": space_id,
         "title": title,
         "category": category,
@@ -1508,7 +1510,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     let manifest = json!({
         "snapshot_ref": snapshot_ref,
         "schema_profiles": ["cx.schema.core.v1"],
-        "reducer_profile": "cx.reducer.v1",
+        "reducer_profile": "ck.reducer.v1",
         "covers_frontier": frontier,
         "chunk_digests": chunks.iter().map(|c| c.digest.as_str().to_owned()).collect::<Vec<_>>(),
         "chunk_count": chunk_count,
@@ -1678,14 +1680,14 @@ mod operation_conformance_tests {
                     "flow_id": "ck:flow:01904100-0000-7000-8000-6c663fa0205f",
                     "track_name": "discussion",
                     "sender": "did:web:alice.example",
-                    "content": {"kind": "cx.content.text", "body": "hello"}
+                    "content": {"kind": "ck.content.text", "body": "hello"}
                 }),
                 valid: true,
             },
             OperationVector {
                 name: "message revise",
                 kind: kinds::CX_MESSAGE_REVISE,
-                payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "cx.content.text", "body": "edited"}}),
+                payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
                 valid: true,
             },
             OperationVector {
@@ -1782,11 +1784,11 @@ mod operation_conformance_tests {
                 kind: kinds::CX_REALM_CREATE,
                 payload: json!({"object": {
                     "id": "ck:realm:0196419b-0000-7000-8000-000000000000",
-                    "schema": "cx.schema.realm.v1",
+                    "schema": "ck.schema.realm.v1",
                     "title": "Launch",
                     "trust_domain": "ck:trust_domain:local",
                     "created_by": "did:web:alice.example",
-                    "schema_refs": ["cx.schema.realm.v1"],
+                    "schema_refs": ["ck.schema.realm.v1"],
                     "default_discoverability": "invite",
                     "default_join_rule": "invite",
                     "history_visibility": "joined",
@@ -1916,7 +1918,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
-                payload: json!({"object": {"id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["cx.schema.morph.v1"]}}),
+                payload: json!({"object": {"id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["ck.schema.morph.v1"]}}),
                 valid: true,
             },
             OperationVector {
@@ -2291,7 +2293,7 @@ mod canonical_conformance_vectors {
 
     #[test]
     fn did_service_endpoint_accepts_path() {
-        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "/api/v1"}]});
+        let doc = json!({"service": [{"id": "s1", "type": "Test", "serviceEndpoint": "/_cokret"}]});
         assert!(validate_did_document_services("did:web:example.com", &doc, false).is_ok());
     }
 
@@ -2325,40 +2327,40 @@ mod framework_error_routing_tests {
 
     #[test]
     fn pattern_matches_concrete_path() {
-        assert!(pattern_matches_path("/api/v1/events", "/api/v1/events"));
-        assert!(!pattern_matches_path("/api/v1/events", "/api/v1/other"));
+        assert!(pattern_matches_path("/_cokret/self/events", "/_cokret/self/events"));
+        assert!(!pattern_matches_path("/_cokret/self/events", "/_cokret/self/other"));
     }
 
     #[test]
     fn pattern_matches_param_segment() {
         assert!(pattern_matches_path(
-            "/api/v1/spaces/{space_id}",
-            "/api/v1/spaces/ck:space:01"
+            "/_cokret/self/spaces/{space_id}",
+            "/_cokret/self/spaces/ck:space:01"
         ));
         // Different segment count → no match.
         assert!(!pattern_matches_path(
-            "/api/v1/spaces/{space_id}",
-            "/api/v1/spaces/ck:space:01/policy"
+            "/_cokret/self/spaces/{space_id}",
+            "/_cokret/self/spaces/ck:space:01/policy"
         ));
         // Param must be non-empty.
         assert!(!pattern_matches_path(
-            "/api/v1/spaces/{space_id}",
-            "/api/v1/spaces/"
+            "/_cokret/self/spaces/{space_id}",
+            "/_cokret/self/spaces/"
         ));
     }
 
     #[test]
     fn pattern_matches_multi_param_segments() {
         assert!(pattern_matches_path(
-            "/api/v1/events/{event_id}/refs/{ref_id}",
-            "/api/v1/events/ck:event:01/refs/ck:event:02"
+            "/_cokret/self/events/{event_id}/refs/{ref_id}",
+            "/_cokret/self/events/ck:event:01/refs/ck:event:02"
         ));
     }
 
     #[test]
     fn pattern_rejects_segment_mismatch() {
-        assert!(!pattern_matches_path("/api/v1/events", "/api/v1"));
-        assert!(!pattern_matches_path("/api/v1", "/api/v1/events"));
+        assert!(!pattern_matches_path("/_cokret/self/events", "/_cokret"));
+        assert!(!pattern_matches_path("/_cokret", "/_cokret/self/events"));
     }
 
     #[test]
@@ -2369,29 +2371,28 @@ mod framework_error_routing_tests {
         // the entire service router; the helper logic under test is
         // pattern-matching, not OpenAPI introspection.
         let _ = KNOWN_ROUTES.set(vec![
-            ("/api/v1/events".to_owned(), vec![Method::GET, Method::POST]),
-            ("/api/v1/spaces/{space_id}".to_owned(), vec![Method::GET]),
+            ("/_cokret/self/events".to_owned(), vec![Method::GET, Method::POST]),
+            ("/_cokret/self/spaces/{space_id}".to_owned(), vec![Method::GET]),
         ]);
 
         // Known path → returns the canonical method set (in
         // `METHOD_HEADER_ORDER`) so the `Allow` header is stable.
-        let methods = allow_methods_for_path("/api/v1/events")
-            .expect("/api/v1/events is registered with at least one method");
+        let methods = allow_methods_for_path("/_cokret/self/events")
+            .expect("/_cokret/self/events is registered with at least one method");
         assert_eq!(methods, vec![Method::GET, Method::POST]);
 
-        let methods = allow_methods_for_path("/api/v1/spaces/ck:space:abc")
-            .expect("/api/v1/spaces/{id} resolves with a concrete id");
+        let methods = allow_methods_for_path("/_cokret/self/spaces/ck:space:abc")
+            .expect("/_cokret/self/spaces/{id} resolves with a concrete id");
         assert_eq!(methods, vec![Method::GET]);
 
         // Unknown path → `None`, which is the cue for `api_not_found`
         // to emit `unrecognized_endpoint` instead of `method_not_allowed`.
-        assert!(allow_methods_for_path("/api/v1/does-not-exist").is_none());
-        assert!(allow_methods_for_path("/cokret/v1/does-not-exist").is_none());
+        assert!(allow_methods_for_path("/_cokret/self/does-not-exist").is_none());
+        assert!(allow_methods_for_path("/_cokret/peer/does-not-exist").is_none());
     }
 
-    /// End-to-end check that `/cokret/v1/*` unrecognized paths return
-    /// the canonical 404 + `unrecognized_endpoint` JSON envelope —
-    /// matching the existing `/api/v1/*` contract (see
+    /// End-to-end check that `/_cokret/*` unrecognized paths return
+    /// the canonical 404 + `unrecognized_endpoint` JSON envelope (see
     /// `tests/http_api.rs::framework_errors_use_cokret_error_envelope`).
     #[tokio::test]
     async fn cokret_v1_unknown_path_returns_unrecognized_endpoint() {
@@ -2403,7 +2404,7 @@ mod framework_error_routing_tests {
         let state = AppState::new(test_state_config(), Db { pool: None });
         let svc = crate::service(state);
 
-        let mut response = TestClient::get("http://server/cokret/v1/does-not-exist")
+        let mut response = TestClient::get("http://server/_cokret/does-not-exist")
             .send(&svc)
             .await;
         let status = response.status_code.unwrap();
@@ -2413,7 +2414,7 @@ mod framework_error_routing_tests {
         assert_eq!(body["error"]["code"], "unrecognized_endpoint");
     }
 
-    /// End-to-end check that hitting a known `/api/v1/*` path with the
+    /// End-to-end check that hitting a known `/_cokret/*` path with the
     /// wrong method returns 405 + the `method_not_allowed` JSON envelope
     /// AND populates the `Allow` response header per
     /// `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10.
@@ -2427,7 +2428,7 @@ mod framework_error_routing_tests {
         let state = AppState::new(test_state_config(), Db { pool: None });
         let svc = crate::service(state);
 
-        let mut response = TestClient::patch("http://server/api/v1/events")
+        let mut response = TestClient::patch("http://server/_cokret/self/events")
             .send(&svc)
             .await;
         let status = response.status_code.unwrap();
@@ -2441,7 +2442,7 @@ mod framework_error_routing_tests {
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"]["code"], "method_not_allowed");
-        // `/api/v1/events` supports POST (submit) + GET (query); the
+        // `/_cokret/self/events` supports POST (submit) + GET (query); the
         // `Allow` header must list them in canonical (`METHOD_HEADER_ORDER`)
         // order so it's stable across runs.
         assert_eq!(allow, "GET, POST", "got Allow: {allow}");

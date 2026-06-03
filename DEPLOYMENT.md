@@ -366,7 +366,7 @@ cosign attest-blob \
 2. `pg_dump` the database.
 3. Pull / install the new binary or container image.
 4. Restart soland; embedded migrations run on boot.
-5. Tail logs for at least one request cycle (`/health`, `/api/v1/server/describe`).
+5. Tail logs for at least one request cycle (`/health`, `/_cokret/describe`).
 
 Downgrades are **not** supported once a migration has run; restore from the
 pre-upgrade backup if you need to roll back.
@@ -457,7 +457,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   on the durable event log, so cross-replica consistency comes for free
   once the underlying Postgres replication is healthy. The
   `circle_member_must_be_realm_member` invariant is checked in-reducer; a
-  replica that hasn't replayed the parent Realm's latest `cx.member.state`
+  replica that hasn't replayed the parent Realm's latest `ck.member.state`
   events will fail-closed on Circle membership writes — the canonical fix
   is to gate writes behind the federation outbox acknowledgement.
 - **Metrics**: Prometheus text metrics are exposed on the separate
@@ -484,7 +484,7 @@ Run order (each migration is idempotent):
 3. `migrations/20260522_recovery_receipts.sql`
 4. `migrations/20260523_agent_fsm_cell_upgrade.sql`
 
-### `cx.realm.media_service.foci[]` shape
+### `ck.realm.media_service.foci[]` shape
 
 The v1.0 realm media-service shape exposed a single endpoint:
 
@@ -584,7 +584,7 @@ deployments don't carry that cell. Migration
 `20260523_agent_fsm_cell_upgrade.sql`:
 
 1. Iterates the existing `agent_principals` projection.
-2. For each row, inserts a synthetic `cx.agent.provision`-equivalent state
+2. For each row, inserts a synthetic `ck.agent.provision`-equivalent state
    marker into the cell store with state = `Active` and source =
    `migration:r3`.
 3. Sets `lattice = fsm, bottom = reject` on the cell metadata.

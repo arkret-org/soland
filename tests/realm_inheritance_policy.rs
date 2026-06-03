@@ -1,5 +1,5 @@
-//! Reducer-level tests for `cx.realm.inheritance_policy` +
-//! `cx.capability.derived` (R3.2).
+//! Reducer-level tests for `ck.realm.inheritance_policy` +
+//! `ck.capability.derived` (R3.2).
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::{Operation, OperationId, RealmId};
@@ -52,7 +52,7 @@ fn seed_source_grant(
     bundles: &[&str],
 ) {
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.capability.grant.v1:{grant_ref}"
+        "ck:cell:ck.component.capability.grant.v1:{grant_ref}"
     ))
     .unwrap();
     state.cells.insert(
@@ -109,7 +109,7 @@ fn inheritance_policy_projects_cell_and_cache() {
 
     // Cell projection.
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.inheritance_policy.v1:{REALM_CHILD}"
+        "ck:cell:ck.component.realm.inheritance_policy.v1:{REALM_CHILD}"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell present");

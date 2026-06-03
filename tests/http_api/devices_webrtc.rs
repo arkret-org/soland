@@ -13,13 +13,13 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+    let unauthenticated = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
         .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let challenge: Value = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+    let challenge: Value = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
@@ -42,7 +42,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         "device_pairing_proof_verification"
     );
 
-    let authorized: Value = TestClient::post("http://server/api/v1/devices/authorize-pairing")
+    let authorized: Value = TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "challenge_id": challenge["challenge_id"],
@@ -68,7 +68,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         authorized["production_gap"],
         "authorization_event_not_yet_in_operation_stream"
     );
-    let devices: Value = TestClient::get("http://server/api/v1/devices")
+    let devices: Value = TestClient::get("http://server/_cokret/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -110,7 +110,7 @@ async fn device_rename_updates_display_name() {
 
     // Register a sibling device to rename (current session device is
     // alice's own device; pairing gives us a second one).
-    let challenge: Value = TestClient::post("http://server/api/v1/devices/pairing-challenge")
+    let challenge: Value = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "device_id": sibling }))
         .send(&app_from_state(state.clone()))
@@ -118,7 +118,7 @@ async fn device_rename_updates_display_name() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/api/v1/devices/authorize-pairing")
+    let _: Value = TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "challenge_id": challenge["challenge_id"],
@@ -133,14 +133,14 @@ async fn device_rename_updates_display_name() {
         .unwrap();
 
     // Unauthenticated rename is rejected.
-    let unauth = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+    let unauth = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
         .json(&serde_json::json!({ "display_name": "Hacker" }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
 
     // Empty display_name is rejected.
-    let empty = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+    let empty = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "display_name": "   " }))
         .send(&app_from_state(state.clone()))
@@ -148,7 +148,7 @@ async fn device_rename_updates_display_name() {
     assert_eq!(empty.status_code, Some(StatusCode::BAD_REQUEST));
 
     // Over-long display_name (>128 chars) is rejected.
-    let too_long = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+    let too_long = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "display_name": "x".repeat(129) }))
         .send(&app_from_state(state.clone()))
@@ -157,7 +157,7 @@ async fn device_rename_updates_display_name() {
 
     // Renaming an unknown device is a 404.
     let unknown = TestClient::post(
-        "http://server/api/v1/devices/ck:device:01904100-0000-7000-8000-000000000404/rename",
+        "http://server/_cokret/self/devices/ck:device:01904100-0000-7000-8000-000000000404/rename",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "Ghost" }))
@@ -166,7 +166,7 @@ async fn device_rename_updates_display_name() {
     assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
 
     // Happy path: rename succeeds and the new name is returned + listed.
-    let renamed: Value = TestClient::post(format!("http://server/api/v1/devices/{sibling}/rename"))
+    let renamed: Value = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "display_name": "  Work Phone  " }))
         .send(&app_from_state(state.clone()))
@@ -177,7 +177,7 @@ async fn device_rename_updates_display_name() {
     assert_eq!(renamed["device_id"], sibling);
     assert_eq!(renamed["display_name"], "Work Phone");
 
-    let devices: Value = TestClient::get("http://server/api/v1/devices")
+    let devices: Value = TestClient::get("http://server/_cokret/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -210,7 +210,7 @@ async fn webrtc_signaling_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::post("http://server/api/v1/webrtc/sessions")
+    let unauthenticated = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .json(&serde_json::json!({
             "space_id": DEMO_REALM_ID
         }))
@@ -218,7 +218,7 @@ async fn webrtc_signaling_contracts_work() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": DEMO_REALM_ID,
@@ -239,7 +239,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(session["recording_policy"], "none");
     assert_eq!(session["call_state"], "ringing");
 
-    let ice: Value = TestClient::post("http://server/api/v1/calls/ice-config")
+    let ice: Value = TestClient::post("http://server/_cokret/self/calls/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": DEMO_REALM_ID,
@@ -263,7 +263,7 @@ async fn webrtc_signaling_contracts_work() {
     assert!(!turn_credential.is_empty());
 
     let refreshed: Value = TestClient::post(format!(
-        "http://server/api/v1/calls/{session_id}/ice-config/refresh"
+        "http://server/_cokret/self/calls/{session_id}/ice-config/refresh"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -284,7 +284,7 @@ async fn webrtc_signaling_contracts_work() {
     );
 
     let unsigned_signal = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -296,7 +296,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(unsigned_signal.status_code.unwrap().as_u16(), 400);
 
     let signal: Value = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -317,7 +317,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(signal["call_state"], "connecting");
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=0"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals?since=0"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -332,7 +332,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(events["call_state"], "connecting");
 
     let answer: Value = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -351,7 +351,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(answer["call_state"], "active");
 
     let hangup: Value = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -368,7 +368,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(hangup["call_state"], "ended");
 
     let mut denied_recording = TestClient::post(format!(
-        "http://server/api/v1/calls/{session_id}/recording/start"
+        "http://server/_cokret/self/calls/{session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({"space_id": DEMO_REALM_ID}))
@@ -382,7 +382,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(denied_body["error"]["code"], "recording_policy_violation");
 
     let empty_events: Value = TestClient::get(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals?since=3"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals?since=3"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -392,7 +392,7 @@ async fn webrtc_signaling_contracts_work() {
     .unwrap();
     assert!(empty_events["events"].as_array().unwrap().is_empty());
 
-    let recording_session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
+    let recording_session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": DEMO_REALM_ID,
@@ -410,7 +410,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(recording_session["recording_policy"], "allow");
     let recording_session_id = recording_session["session_id"].as_str().unwrap();
     let recording: Value = TestClient::post(format!(
-        "http://server/api/v1/calls/{recording_session_id}/recording/start"
+        "http://server/_cokret/self/calls/{recording_session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({"space_id": DEMO_REALM_ID}))
@@ -430,7 +430,7 @@ async fn webrtc_signaling_contracts_work() {
     );
 
     let closed: Value =
-        TestClient::delete(format!("http://server/api/v1/webrtc/sessions/{session_id}"))
+        TestClient::delete(format!("http://server/_cokret/self/webrtc/sessions/{session_id}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -440,7 +440,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(closed["ok"], true);
 
     let after_close = TestClient::get(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -456,7 +456,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
 
     let focus_signal: Value = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -474,7 +474,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(focus_signal["seq"], 1);
 
     let issued_before = chrono::Utc::now();
-    let token_response: Value = TestClient::post("http://server/api/v1/rtc/token")
+    let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -544,7 +544,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "ck:device:01904100-0000-7000-8000-a11ce0000001"
     );
 
-    let second_token_response: Value = TestClient::post("http://server/api/v1/rtc/token")
+    let second_token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -572,7 +572,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
 
     let _: Value = TestClient::post(format!(
-        "http://server/api/v1/webrtc/sessions/{session_id}/signals"
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -586,7 +586,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     .await
     .unwrap();
 
-    let mut focus_mismatch = TestClient::post("http://server/api/v1/rtc/token")
+    let mut focus_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -613,7 +613,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             }]
         }),
     );
-    let mut issuer_mismatch = TestClient::post("http://server/api/v1/rtc/token")
+    let mut issuer_mismatch = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -645,7 +645,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
     )
     .await;
 
-    let mut response = TestClient::post("http://server/api/v1/rtc/token")
+    let mut response = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -662,7 +662,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
 }
 
 async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {
-    let session: Value = TestClient::post("http://server/api/v1/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "space_id": DEMO_REALM_ID,
@@ -681,7 +681,7 @@ async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
     let cell_id = CellRef::new(format!(
-        "ck:cell:cx.component.realm.media_service.v1:{DEMO_REALM_ID}"
+        "ck:cell:ck.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().unwrap().cells.insert(

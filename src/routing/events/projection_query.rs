@@ -3,15 +3,15 @@
 //!
 //! These endpoints let yougen (and other clients) re-hydrate the
 //! optimistic Archive / Restore state after a page refresh, so a
-//! `cx.space.archive` accepted by the server doesn't appear "unarchived"
+//! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /api/v1/projection/spaces?realm_id=...` — canonical projection endpoint listing Space
+//! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing Space
 //!   containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /api/v1/projection/flows?realm_id=...` — same for Flows (state ∈ {active, archived,
+//! - `GET /_cokret/self/projection/flows?realm_id=...` — same for Flows (state ∈ {active, archived,
 //!   redacted}).
-//! - `GET /api/v1/projection/morphs?realm_id=...` — same for Morphs (same enum as Flows).
+//! - `GET /_cokret/self/projection/morphs?realm_id=...` — same for Morphs (same enum as Flows).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe
@@ -311,11 +311,11 @@ fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<
 // ── Handlers ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.projection.spaces",
+    operation_id = "ck.projection.spaces",
     tags("projection"),
     summary = "List Space lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.projection.spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ck.projection.spaces"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -384,11 +384,11 @@ async fn list_space_container_projections(
 }
 
 #[endpoint(
-    operation_id = "cx.projection.flows",
+    operation_id = "ck.projection.flows",
     tags("projection"),
     summary = "List Flow lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.projection.flows"))]
+#[tracing::instrument(skip_all, fields(op = "ck.projection.flows"))]
 async fn list_flow_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -449,11 +449,11 @@ async fn list_flow_projections(
 }
 
 #[endpoint(
-    operation_id = "cx.projection.morphs",
+    operation_id = "ck.projection.morphs",
     tags("projection"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.projection.morphs"))]
+#[tracing::instrument(skip_all, fields(op = "ck.projection.morphs"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

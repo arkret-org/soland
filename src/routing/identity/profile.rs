@@ -1,7 +1,7 @@
 //! Profile / presence handlers.
 //!
 //! Surfaces:
-//! - `GET /api/v1/profile/presence?did=…` — render the actor's current presence record together
+//! - `GET /_cokret/self/profile/presence?did=…` — render the actor's current presence record together
 //!   with display name and avatar.
 //!
 //! Production note: presence is currently in-memory (see

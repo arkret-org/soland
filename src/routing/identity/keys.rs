@@ -1,10 +1,10 @@
 //! E2EE key surfaces.
 //!
 //! Surfaces:
-//! - `POST /api/v1/keys/upload` - upload one-time / fallback prekeys with the current device
+//! - `POST /_cokret/self/keys/upload` - upload one-time / fallback prekeys with the current device
 //!   signature.
-//! - `POST /api/v1/keys/query` - fetch device key bundles for a peer set.
-//! - `POST /api/v1/keys/claim` - claim one-time keys, draining the per-device pool.
+//! - `POST /_cokret/self/keys/query` - fetch device key bundles for a peer set.
+//! - `POST /_cokret/self/keys/claim` - claim one-time keys, draining the per-device pool.
 
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -28,11 +28,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.keys.upload",
+    operation_id = "ck.keys.upload",
     tags("keys"),
     summary = "Upload device + one-time keys for the current session device"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.upload"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.upload"))]
 async fn keys_upload(
     aa: AuthArgs,
     body: JsonBody<KeysUploadReqBody>,
@@ -161,11 +161,11 @@ async fn keys_upload(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.query",
+    operation_id = "ck.keys.query",
     tags("keys"),
     summary = "Fetch device key bundles for a peer set"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.query"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryReqBody>,
@@ -197,11 +197,11 @@ async fn keys_query(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.claim",
+    operation_id = "ck.keys.claim",
     tags("keys"),
     summary = "Claim one-time keys, draining the per-device pool"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
     body: JsonBody<KeysClaimReqBody>,

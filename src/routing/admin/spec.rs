@@ -2,7 +2,7 @@
 //!
 //! Per cokret-spec `service-http-binding.md` §2.1 the admin surface is a
 //! deployment-local namespace served at the bare `/admin/*` path (NOT under
-//! the `/api/v1` protocol prefix). These canonical operations share that
+//! the `/_cokret/...` protocol prefix). These canonical operations share that
 //! `/admin/*` namespace with the soland operator infrastructure (anchor DAG,
 //! bottom-cell repair, multisig — see [`super::anchor`]) and the admin
 //! collection snapshot (see [`super::collection`]); salvo router fallthrough
@@ -31,7 +31,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
         .push(Router::with_path("devices/{device_id}/revoke").post(revoke_device))
-        // `GET /_soland/admin/moderation/queue` (`cx.admin.get_moderation_queue`)
+        // `GET /_soland/admin/moderation/queue` (`ck.admin.get_moderation_queue`)
         // is the canonical queue read. The operator moderation suite in
         // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
         // sub-paths (queue/{id}/assign, decision, appeals) and
@@ -41,12 +41,12 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.get_server_status",
+    operation_id = "ck.admin.get_server_status",
     tags("admin"),
     summary = "Read canonical service-admin status",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.admin.get_server_status"))]
+#[tracing::instrument(skip_all, fields(op = "ck.admin.get_server_status"))]
 async fn get_server_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -91,12 +91,12 @@ async fn get_server_status(
 }
 
 #[endpoint(
-    operation_id = "cx.admin.update_account_status",
+    operation_id = "ck.admin.update_account_status",
     tags("admin"),
     summary = "Set an account moderation status",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.admin.update_account_status"))]
+#[tracing::instrument(skip_all, fields(op = "ck.admin.update_account_status"))]
 async fn update_account_status(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -278,12 +278,12 @@ fn account_lifecycle_change_response(change: AccountLifecycleChange) -> Value {
 }
 
 #[endpoint(
-    operation_id = "cx.admin.revoke_device",
+    operation_id = "ck.admin.revoke_device",
     tags("admin"),
     summary = "Revoke a device as an administrator",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.admin.revoke_device"))]
+#[tracing::instrument(skip_all, fields(op = "ck.admin.revoke_device"))]
 async fn revoke_device(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -340,12 +340,12 @@ async fn revoke_device(
 }
 
 #[endpoint(
-    operation_id = "cx.admin.get_moderation_queue",
+    operation_id = "ck.admin.get_moderation_queue",
     tags("admin", "moderation"),
     summary = "List canonical moderation queue items",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.admin.get_moderation_queue"))]
+#[tracing::instrument(skip_all, fields(op = "ck.admin.get_moderation_queue"))]
 async fn get_moderation_queue(
     aa: AuthArgs,
     depot: &mut Depot,

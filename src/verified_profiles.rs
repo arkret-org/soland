@@ -328,7 +328,7 @@ mod tests {
             "run_id": "test-run",
             "verified": [
                  {
-                     "profile_id": "cx.profile.principal_server.v1",
+                     "profile_id": "ck.profile.principal_server.v1",
                      "service_role": "principal_server",
                      "test_count": 3,
                      "spec_file": "cotest/e2e/tests/conformance/profile-gates.spec.ts",
@@ -339,7 +339,7 @@ mod tests {
                      "expires_at": "2026-06-20T00:00:00Z"
                  },
                  {
-                     "profile_id": "cx.profile.auth_server.v1",
+                     "profile_id": "ck.profile.auth_server.v1",
                      "service_role": "auth_server",
                      "test_count": 1,
                      "spec_file": "cotest/e2e/tests/sync/service-surface-contract.spec.ts",
@@ -353,7 +353,7 @@ mod tests {
         f.write_all(payload.as_bytes()).unwrap();
         let v = load_from_path(&path);
         assert_eq!(v.len(), 1);
-        assert_eq!(v[0].profile_id, "cx.profile.principal_server.v1");
+        assert_eq!(v[0].profile_id, "ck.profile.principal_server.v1");
         assert_eq!(v[0].service_role, "principal_server");
         assert_eq!(v[0].cotest_run_id, "test-run");
         assert_eq!(

@@ -52,7 +52,7 @@ pub struct EventNotification {
 
 #[derive(Clone, Debug)]
 pub enum EventNotificationKind {
-    /// Ordinary projection event (one `cx.message.create` etc.).
+    /// Ordinary projection event (one `ck.message.create` etc.).
     Event {
         /// Stable cursor for the event — typically the canonical
         /// `event_id`. Clients use as resume position.
@@ -122,8 +122,8 @@ impl EventNotification {
     }
 }
 
-/// In-process reconnect gate for `cx.events.subscribe` and
-/// `cx.account.subscribe`. Keys are operation + caller identity + selector
+/// In-process reconnect gate for `ck.events.subscribe` and
+/// `ck.account.subscribe`. Keys are operation + caller identity + selector
 /// scope, and values are the earliest accepted reconnect time.
 #[derive(Clone, Debug, Default)]
 pub struct SubscribeReconnectGate {
@@ -164,11 +164,11 @@ mod subscribe_reconnect_gate_tests {
     fn reports_remaining_window_and_expires() {
         let mut gate = SubscribeReconnectGate::default();
         let now = Utc::now();
-        gate.arm("cx.events.subscribe|alice|realm-a", now, 10_000);
+        gate.arm("ck.events.subscribe|alice|realm-a", now, 10_000);
 
         let retry_after = gate
             .retry_after_ms(
-                "cx.events.subscribe|alice|realm-a",
+                "ck.events.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(2_500),
             )
             .expect("cooldown active");
@@ -176,7 +176,7 @@ mod subscribe_reconnect_gate_tests {
 
         assert!(
             gate.retry_after_ms(
-                "cx.events.subscribe|alice|realm-a",
+                "ck.events.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(10_000),
             )
             .is_none()
@@ -349,7 +349,7 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
 }
 
 /// R3.1/R3.2 (cokret-spec @ b56cab1) — Realm-scoped MemberIdentity event
-/// registry. Stores every accepted `cx.member.identity.update` event by
+/// registry. Stores every accepted `ck.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
 /// per the SDK helper `effective_identity_events`, and materializes both
 /// R3.2 digests: the `expected_state_digest` guard
@@ -392,7 +392,7 @@ pub struct MemberIdentitySubjectKey {
     pub segment: String,
 }
 
-/// One stored `cx.member.identity.update` event.
+/// One stored `ck.member.identity.update` event.
 #[derive(Clone, Debug)]
 pub struct MemberIdentityEventRecord {
     pub event_id: String,
@@ -844,8 +844,8 @@ pub struct AppState {
     pub realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
     /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
-    /// projector when `cx.cross_signing.publish` lands, and read when verifying
-    /// a `cx.device.authorize` `cross_signing_binding`. In-memory like the other
+    /// projector when `ck.cross_signing.publish` lands, and read when verifying
+    /// a `ck.device.authorize` `cross_signing_binding`. In-memory like the other
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
     pub cross_signing: Arc<Mutex<cokret_sdk::DeviceManager>>,
@@ -890,7 +890,7 @@ pub struct AppState {
     pub to_device_position_counter: Arc<AtomicI64>,
     /// Holder-private consent cell projection keyed by
     /// `(holder_did, peer_did, scope)`. This is the minimal G3.S4
-    /// reducer cache that backs `/api/v1/consent/cells/*` and the contact
+    /// reducer cache that backs `/_cokret/self/consent/cells/*` and the contact
     /// gate; durable Move/Anchor cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
@@ -937,7 +937,7 @@ pub struct AppState {
     pub anchor_store: Arc<cokret_sdk::state_res::MemoryAnchorStore>,
     pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
-    /// Live event notification channel for `cx.events.subscribe`
+    /// Live event notification channel for `ck.events.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
     /// `routing::federation::move_anchor::submit_anchor`,
@@ -993,7 +993,7 @@ pub struct AppState {
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
     /// MID-1..6 (R3.1 spec-sync 2026-05-27, cokret-spec @ 7157ee8) — in-
-    /// memory registry of `cx.member.identity.update` events. Reducer
+    /// memory registry of `ck.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
     /// projection (`SYNC-MEM-1..3`) both go through this. See
     /// [`MemberIdentityRegistry`] above for storage and effective-set
@@ -1034,7 +1034,7 @@ pub struct AccountRecord {
     pub handle: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /api/v1/account/profile` (operationId `cx.account.update_profile`);
+    /// `POST /_cokret/self/account/profile` (operationId `cx.account.update_profile`);
     /// rendered by `demo_actors` in directory search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
@@ -1101,7 +1101,7 @@ pub struct RecoveryReceiptRecord {
 /// policy snapshot + a server challenge, and transitions
 /// `pending -> verified -> completed` (or `rejected` / `expired`). Proof
 /// verification (C-P3) is what advances `pending -> verified`; completion
-/// (C-P4) emits a `cx.device.authorize` + receipt.
+/// (C-P4) emits a `ck.device.authorize` + receipt.
 #[derive(Clone, Debug)]
 pub struct RecoverySessionRecord {
     pub recovery_session_id: String,
@@ -1211,10 +1211,10 @@ pub struct ConsentCellRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Actor-private account data row (`cx.account_data.set` storage).
+/// Actor-private account data row (`ck.account_data.set` storage).
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
-/// (e.g. `cx.read_receipt.preferences`, `cx.contacts.actor.did:web:alice.example`,
+/// (e.g. `ck.read_receipt.preferences`, `cx.contacts.actor.did:web:alice.example`,
 /// `cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
@@ -1297,7 +1297,7 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub realm_id: String,
-    /// Canonical Cokret event kind (e.g. `cx.message.create`).
+    /// Canonical Cokret event kind (e.g. `ck.message.create`).
     pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
@@ -1366,8 +1366,9 @@ pub struct FederationOutboxRecord {
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: String,
-    /// Endpoint path on the peer, e.g. `/api/v1/federation/push-operations`
-    /// or `/api/v1/federation/anchors`.
+    /// Endpoint path on the peer, e.g.
+    /// `/_cokret/peer/federation/push-operations` or
+    /// `/_cokret/peer/federation/anchors`.
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
     /// deterministically from `(origin, resource_kind, resource_id)` so
@@ -1938,7 +1939,7 @@ impl AppState {
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
-            // Live event broadcast for cx.events.subscribe streaming.
+            // Live event broadcast for ck.events.subscribe streaming.
             // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
@@ -1958,7 +1959,7 @@ impl AppState {
 
     /// Touch the (now async) persistence store to finish boot:
     ///   * seed the demo account + Realm metadata when `seed_demo_data` is on,
-    ///   * hydrate the Realm directory from persisted `cx.realm.create` events,
+    ///   * hydrate the Realm directory from persisted `ck.realm.create` events,
     ///   * hydrate Space-container/Flow/Morph projections from durable rows.
     ///
     /// Extracted out of the synchronous `new` constructor so the DB work runs
@@ -2339,13 +2340,13 @@ async fn hydrate_realms_from_canonical_events(
         return;
     };
     for record in events {
-        if record.kind == "cx.realm.create" {
+        if record.kind == "ck.realm.create" {
             hydrate_realm_create_event(persistence, realms, &record).await;
         } else if matches!(
             record.kind.as_str(),
-            "cx.realm.history_visibility"
-                | "cx.realm.history_sharing_policy"
-                | "cx.realm.preview_policy"
+            "ck.realm.history_visibility"
+                | "ck.realm.history_sharing_policy"
+                | "ck.realm.preview_policy"
         ) {
             hydrate_realm_policy_event(persistence, &record).await;
         }
@@ -2469,18 +2470,18 @@ async fn hydrate_realm_policy_event(
         return;
     };
     match record.kind.as_str() {
-        "cx.realm.history_visibility" => {
+        "ck.realm.history_visibility" => {
             if let Some(value) = payload.get("value").and_then(Value::as_str) {
                 meta.history_visibility = value.to_owned();
             }
         }
-        "cx.realm.history_sharing_policy" => {
+        "ck.realm.history_sharing_policy" => {
             if let Some(value) = payload.get("value") {
                 meta.history_sharing_policy = Some(value.clone());
                 meta.history_sharing_policy_digest = canonical_value_digest(value);
             }
         }
-        "cx.realm.preview_policy" => {
+        "ck.realm.preview_policy" => {
             if let Some(value) = payload.get("value") {
                 meta.preview_policy = Some(value.clone());
                 meta.preview_policy_digest = canonical_value_digest(value);

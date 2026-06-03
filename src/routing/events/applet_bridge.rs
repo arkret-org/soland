@@ -1,9 +1,9 @@
 //! Applet bridge runtime.
 //!
-//! When a client emits `cx.applet.protocol_session.start` against an
-//! applet that has registered a `cx.applet.registration` row, the
+//! When a client emits `ck.applet.protocol_session.start` against an
+//! applet that has registered a `ck.applet.registration` row, the
 //! bridge layer surfaces a corresponding
-//! `cx.applet.protocol_session.status` event so the caller observes
+//! `ck.applet.protocol_session.status` event so the caller observes
 //! the lifecycle.
 //!
 //! Two dispatch modes:
@@ -52,7 +52,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
 }
 
 /// Inspect `operation` and, when it carries a
-/// `cx.applet.protocol_session.start` payload, dispatch the
+/// `ck.applet.protocol_session.start` payload, dispatch the
 /// invocation. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -151,7 +151,7 @@ enum AppletBridgeOutcome {
     /// 2xx response with a parseable JSON body.
     UpstreamSuccess { response_body: Value },
     /// Connection / HTTP / parse failure. Becomes a
-    /// `cx.applet.bridge_error` event.
+    /// `ck.applet.bridge_error` event.
     UpstreamFailure { code: String, message: String },
 }
 
@@ -227,8 +227,8 @@ async fn forward_to_applet_bridge(
     }
 }
 
-/// Emit either `cx.applet.protocol_session.status` (success) or
-/// `cx.applet.bridge_error` (failure) based on the outcome.
+/// Emit either `ck.applet.protocol_session.status` (success) or
+/// `ck.applet.bridge_error` (failure) based on the outcome.
 async fn emit_applet_outcome_event(
     state: &AppState,
     realm_id: &str,

@@ -2,18 +2,18 @@
 //! with events and device-message modules.
 //!
 //! Surfaces for the current sync/event wire layout:
-//! - `GET  /api/v1/account/describe`
-//! - `GET  /api/v1/account/subscribe`       — `cx.account.subscribe` (account-aggregate NDJSON:
+//! - `GET  /_cokret/self/account/describe`
+//! - `GET  /_cokret/self/account/subscribe`       — `ck.account.subscribe` (account-aggregate NDJSON:
 //!   timeline, presence, typing, to_device).
-//! - `POST /api/v1/ephemeral`               — `cx.ephemeral.send` (broadcast ephemeral)
-//! - `GET  /api/v1/events/subscribe`        — `cx.events.subscribe`. Multi-space / multi-actor
+//! - `POST /_cokret/self/ephemeral`               — `ck.ephemeral.send` (broadcast ephemeral)
+//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-space / multi-actor
 //!   stream; frame `kind` field replaces `type`.
-//! - `GET  /api/v1/events`                  — `cx.events.query` (replaces `cx.events.list` +
+//! - `GET  /_cokret/self/events`                  — `ck.events.query` (replaces `cx.events.list` +
 //!   `cx.sync.backfill` via `direction=forward|backward`).
-//! - `GET  /api/v1/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
+//! - `GET  /_cokret/self/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
 //!   spec)
-//! - `GET  /api/v1/snapshot/head`
-//! - `GET  /api/v1/sync/snapshot-chunk`
+//! - `GET  /_cokret/self/snapshot/head`
+//! - `GET  /_cokret/self/sync/snapshot-chunk`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -62,7 +62,7 @@ use crate::wire::{
 };
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
 const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 
@@ -109,7 +109,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
         "bottom_cell_repair".to_owned(),
     ];
     if is_stateless_cursor_profile_declared(state) {
-        supported_sync_profiles.push("cx.profile.stateless_cursor.v1".to_owned());
+        supported_sync_profiles.push("ck.profile.stateless_cursor.v1".to_owned());
     }
     res.render(Json(AccountDescribeResBody {
         service_did: state.config.service_did.clone(),
@@ -117,8 +117,8 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
         limits: json!({
             "max_spaces": 50,
             "max_timeline_events": 100,
-            "offline_flush_endpoint": "/api/v1/events",
-            "backfill_endpoint": "/api/v1/sync/backfill/gap",
+            "offline_flush_endpoint": "/_cokret/self/events",
+            "backfill_endpoint": "/_cokret/self/sync/backfill/gap",
             "bottom_repair_endpoint": "/_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair"
         }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
@@ -138,11 +138,11 @@ const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
 const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
 
 #[endpoint(
-    operation_id = "cx.account.subscribe",
+    operation_id = "ck.account.subscribe",
     tags("sync"),
     summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.account.subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.account.subscribe"))]
 async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
@@ -373,7 +373,7 @@ fn account_subscribe_scope_key(
     body: &ClientSyncRequest,
 ) -> String {
     format!(
-        "cx.account.subscribe|{}|filter={}",
+        "ck.account.subscribe|{}|filter={}",
         subscribe_subject(req, session),
         sync_filter_digest(body.filter.as_ref())
     )
@@ -423,7 +423,7 @@ fn presence_sync_event_json(record: PresenceRecord) -> Value {
 }
 
 /// Build one snapshot of the account-aggregate sync response for the next
-/// `cx.account.subscribe` delta frame.
+/// `ck.account.subscribe` delta frame.
 async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -438,7 +438,7 @@ async fn build_sync_snapshot(
     // handle_claims?, handle_claims_limited?}` — `handle` / display name MUST
     // NOT appear here. Identity is resolved by following
     // `identity_event_ids[]` into the separately delivered
-    // `cx.member.identity.update` event log; servers that lack the events for
+    // `ck.member.identity.update` event log; servers that lack the events for
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
     let candidate_spaces: Vec<RealmDirectoryEntry> = {
@@ -690,7 +690,7 @@ async fn build_sync_snapshot(
 /// / `handle_claims` / `handle_claims_limited`) MUST be omitted together
 /// unless `subject_id` is disclosed by Realm policy. Clients resolve
 /// identity by following `identity_event_ids[]` into the separately
-/// delivered `cx.member.identity.update` event log; SYNC-MEM-3 inlines the
+/// delivered `ck.member.identity.update` event log; SYNC-MEM-3 inlines the
 /// original envelopes only when `subject_id` is disclosed.
 ///
 /// MIU-SOL-4: the effective set is multi-valued (no last-writer-wins); ALL
@@ -1360,7 +1360,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     let flow_id = flow_id_from_space_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
-        "kind": "cx.message.create",
+        "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": super::message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
@@ -1549,7 +1549,7 @@ fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value,
         .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
 }
 
-/// CURSOR-1 — is `cx.profile.stateless_cursor.v1` declared by this
+/// CURSOR-1 — is `ck.profile.stateless_cursor.v1` declared by this
 /// deployment? Toggled by the `SOLAND_PROFILE_STATELESS_CURSOR` env var
 /// (mirrors the gating pattern used by `accountable_principals.strict_reject.v1`
 /// in `routing/events/operations.rs`). Default: stateful-only.
@@ -1831,7 +1831,7 @@ pub fn parse_and_validate_sync_cursor(
     }
     // CURSOR-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
     // core schema rejects stateless body fields unless the server
-    // declares `cx.profile.stateless_cursor.v1`. Stateless body markers
+    // declares `ck.profile.stateless_cursor.v1`. Stateless body markers
     // per `_before_todos.md §0.14`: `_mac`, `_sig`, `s`, `d`, `target`,
     // `issuer_kid`. Also keeps the existing `_ctx` / `_positions`
     // rejects which are soland-specific stateful-only fields.
@@ -1840,7 +1840,7 @@ pub fn parse_and_validate_sync_cursor(
     if has_stateless_marker && !stateless_cursor_declared {
         return Err(SyncCursorError::Integrity(
             "core cursor must use stateful handle form (stateless body \
-             requires cx.profile.stateless_cursor.v1)",
+             requires ck.profile.stateless_cursor.v1)",
         ));
     }
     if value.get("_ctx").is_some() || value.get("_positions").is_some() {
@@ -2061,11 +2061,11 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.ephemeral.send",
+    operation_id = "ck.ephemeral.send",
     tags("sync"),
     summary = "Send a broadcast ephemeral signal"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.ephemeral.send"))]
+#[tracing::instrument(skip_all, fields(op = "ck.ephemeral.send"))]
 async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
@@ -2097,8 +2097,8 @@ async fn submit_ephemeral(
             persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
         }
         "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
-        "cx.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
-        "cx.call.signal" => {}
+        "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
+        "ck.call.signal" => {}
         _ => {
             return Err(crate::error::AppError::invalid_param(
                 "unsupported ephemeral kind",
@@ -2120,7 +2120,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "cx.call.signal" | "cx.presence" | "cx.typing" | "cx.receipt.read"
+        "ck.call.signal" | "cx.presence" | "cx.typing" | "ck.receipt.read"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",
@@ -2221,7 +2221,7 @@ async fn admit_ephemeral_read_receipt(
         .is_none()
     {
         return Err(crate::error::AppError::invalid_param(
-            "cx.receipt.read payload requires event_id",
+            "ck.receipt.read payload requires event_id",
         ));
     }
 
@@ -2233,7 +2233,7 @@ async fn admit_ephemeral_read_receipt(
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::PolicyViolation,
             format!(
-                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; cx.receipt.read dropped"
+                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; ck.receipt.read dropped"
             ),
         )
         .with_status(StatusCode::FORBIDDEN));
@@ -2241,7 +2241,7 @@ async fn admit_ephemeral_read_receipt(
     Ok(())
 }
 
-/// `cx.events.subscribe` at `GET /api/v1/events/subscribe`. NDJSON
+/// `ck.events.subscribe` at `GET /_cokret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
@@ -2263,7 +2263,7 @@ async fn admit_ephemeral_read_receipt(
 #[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
 pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
-    // Spec-canonical param is `realms=` (cx.events.subscribe). Legacy
+    // Spec-canonical param is `realms=` (ck.events.subscribe). Legacy
     // `spaces=` is accepted as an alias through the Realm/Space rename
     // window so older clients don't break.
     let mut spaces = super::query_param_all(req, "realms");
@@ -2578,7 +2578,7 @@ fn events_subscribe_scope_key(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "cx.events.subscribe|{}|realms={realms}",
+        "ck.events.subscribe|{}|realms={realms}",
         subscribe_subject(req, session)
     )
 }
@@ -2683,9 +2683,9 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `cx.events.query` at `GET /api/v1/events`.
+/// `ck.events.query` at `GET /_cokret/self/events`.
 /// Reads from the projection layer so callers writing through
-/// `POST /api/v1/events` see their messages here.
+/// `POST /_cokret/self/events` see their messages here.
 ///
 /// Selector: `spaces[]` ∪ `actors[]` repeated query args (multi-value).
 /// Multi-space queries call `projected_event_page` per space and merge sorted
@@ -2696,11 +2696,11 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
 #[endpoint(
-    operation_id = "cx.events.query",
+    operation_id = "ck.events.query",
     tags("events"),
     summary = "Projection-aware events query (single- or multi-space merge; backward / forward direction)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.query"))]
 pub(super) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -2722,11 +2722,11 @@ pub(super) async fn events_query(
 }
 
 #[endpoint(
-    operation_id = "cx.events.query_post",
+    operation_id = "ck.events.query_post",
     tags("events"),
     summary = "Body-based projection-aware events query for large selectors"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.query_post"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.query_post"))]
 pub(super) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequest>,
     depot: &mut Depot,
@@ -3046,11 +3046,11 @@ async fn sync_gap_backfill(
 }
 
 #[endpoint(
-    operation_id = "cx.snapshot.head",
+    operation_id = "ck.snapshot.head",
     tags("sync"),
     summary = "Read the snapshot-v1 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.snapshot.head"))]
+#[tracing::instrument(skip_all, fields(op = "ck.snapshot.head"))]
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -3360,7 +3360,7 @@ mod tests {
         extra: Option<Value>,
     ) -> Value {
         let mut claim = json!({
-            "schema": "cx.schema.handle_claim.v1",
+            "schema": "ck.schema.handle_claim.v1",
             "handle": "alice:soland.local",
             "subject": ROSTER_SUBJECT,
             "issuer": issuer,

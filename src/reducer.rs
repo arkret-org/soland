@@ -12,8 +12,8 @@
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
 //! dispatcher to inline projection helpers.
 //!
-//! The Move/Anchor receive pipeline (`POST /api/v1/moves` /
-//! `POST /api/v1/anchors`) routes through [`registry::LatticeKind`] /
+//! The Move/Anchor receive pipeline (`POST /_cokret/peer/moves` /
+//! `POST /_cokret/peer/anchors`) routes through [`registry::LatticeKind`] /
 //! [`registry::LatticeRegistry`]. Concrete impls live in
 //! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
 //! the SDK's `verify_move` / `apply_anchor` pipeline. This is the
@@ -63,7 +63,7 @@ pub struct ProjectionState {
     /// Structured side-band cache keyed by
     /// `(space_id, actor_did)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
-    /// `cx.component.member.state.v1` FSM cell itself. Reads should go
+    /// `ck.component.member.state.v1` FSM cell itself. Reads should go
     /// through helpers like [`ProjectionState::members_of_space`] /
     /// [`ProjectionState::members_in_state`] / [`ProjectionState::member`]
     /// rather than touching this directly.
@@ -105,12 +105,12 @@ pub struct ProjectionState {
     ///     `cell_value`.
     ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
     ///     `members: BTreeMap<(String, String), MembershipState>` cache + per-actor
-    ///     `cx.component.member.state.v1` FSM cell.
+    ///     `ck.component.member.state.v1` FSM cell.
     ///   - `space_states` (mixed: ordered-log + cas-register) — kept as structured `space_states`
     ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
-    ///     `apply_space_lifecycle` now also writes one of: `cx.component.realm.create.v1`
-    ///     (ordered-log, append) / `cx.component.realm.organization.v1` (cas-register, latest
-    ///     metadata) / `cx.component.realm.destroy.v1` (cas-register, terminal). Helpers:
+    ///     `apply_space_lifecycle` now also writes one of: `ck.component.realm.create.v1`
+    ///     (ordered-log, append) / `ck.component.realm.organization.v1` (cas-register, latest
+    ///     metadata) / `ck.component.realm.destroy.v1` (cas-register, terminal). Helpers:
     ///     `space_create_log` / `space_organization_cell_value` / `space_is_destroyed` query cells
     ///     directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
@@ -122,11 +122,11 @@ pub struct ProjectionState {
     /// `cokret-spec/v1/zh/models/common-fields.md §5.1` for `cx.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
-    /// `cx.space.create` / update / parent / archive / restore / tombstone;
+    /// `ck.space.create` / update / parent / archive / restore / tombstone;
     /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Flow projection. Mirrors the canonical state-machine
-    /// for cx.flow.create / update / archive / restore. Unlike Place
+    /// for ck.flow.create / update / archive / restore. Unlike Place
     /// there is no dedicated `cx.flow.tombstone` event; terminal state
     /// is reached via `cx.redaction`. Mirror table is `projection_flows`
     /// (durable).
@@ -144,17 +144,17 @@ pub struct ProjectionState {
     /// Server-side Applet registry projection, keyed by `service_did`
     /// (the canonical applet identity per spec
     /// `extensions/applet-integration.md`). Populated by
-    /// `cx.applet.registration` (initial registration / re-registration)
-    /// and updated by `cx.applet.discovery` (manifest refresh). Used by
+    /// `ck.applet.registration` (initial registration / re-registration)
+    /// and updated by `ck.applet.discovery` (manifest refresh). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
     /// events (`cx.applet.protocol_session.{start,status}`,
-    /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
+    /// `ck.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
     /// Server-side Agent registry projection, keyed by `agent_id`.
-    /// Same shape as `applets`. Populated by `cx.agent.endpoint`.
+    /// Same shape as `applets`. Populated by `ck.agent.endpoint`.
     /// Protocol-session events for agents
-    /// (`cx.agent.protocol_session.{start,status,result}`) are also not
+    /// (`ck.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, AgentProjection>,
     /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
@@ -163,33 +163,33 @@ pub struct ProjectionState {
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
-    /// R3 spec-sync — `cx.call.state.session_focus` write-once projection
+    /// R3 spec-sync — `ck.call.state.session_focus` write-once projection
     /// keyed by `call_id`. Once a focus is committed for a call, the
     /// reducer rejects any subsequent write with
     /// `session_focus_already_committed` (REDU-3).
     pub call_session_focus: BTreeMap<String, String>,
     /// R3.1 — Realm-link projection. Outer key is the source
-    /// `realm_id` (the envelope `space_id` of a `cx.realm.link` event);
+    /// `realm_id` (the envelope `space_id` of a `ck.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has
     /// declared, including non-`active` status entries (so admin tooling
     /// can render `rejected` / `tombstoned` history). Cell-canonical
     /// values live in `cells` under
-    /// `cx.component.realm.link.v1` keyed by `(realm, target, link_kind)`;
+    /// `ck.component.realm.link.v1` keyed by `(realm, target, link_kind)`;
     /// this is the structured side-band cache used by the query API.
     pub realm_links: BTreeMap<String, Vec<RealmLinkState>>,
     /// R3.1 — inverse index of [`Self::realm_links`] keyed by the
     /// target `realm_id`. Lets the query API answer
     /// `direction=inbound` in O(1) without a full scan.
     pub realm_links_inbound: BTreeMap<String, Vec<RealmLinkState>>,
-    /// R3.2 — `cx.realm.inheritance_policy` projection, keyed by the
+    /// R3.2 — `ck.realm.inheritance_policy` projection, keyed by the
     /// child `realm_id` (the envelope `space_id`). Cas-register
     /// semantics — last write wins.
     pub realm_inheritance_policies: BTreeMap<String, RealmInheritancePolicyState>,
-    /// R3.2 — `cx.capability.derived` projection, keyed by
+    /// R3.2 — `ck.capability.derived` projection, keyed by
     /// `capability_id`. Cas-register semantics — last write wins per
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
-    /// R3.3 — `cx.realm.audit_policy_downgrade` audit log. Append-only
+    /// R3.3 — `ck.realm.audit_policy_downgrade` audit log. Append-only
     /// list of downgrade events per Realm.
     pub realm_audit_downgrades: BTreeMap<String, Vec<RealmAuditDowngradeEntry>>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
@@ -200,7 +200,7 @@ pub struct ProjectionState {
     /// `(recipient_actor_did, recipient_device_id)`; the inner Vec is
     /// the FIFO of pending Welcomes. Entries gain a non-None
     /// `delivered_at` when the recipient device drains them via
-    /// `GET /api/v1/mls/welcomes/pending`.
+    /// `GET /_cokret/self/keys/welcomes/pending`.
     pub mls_welcomes: BTreeMap<(String, String), Vec<MlsWelcome>>,
     /// G3.S1 — per-group MLS commit-epoch state. The reducer keeps the
     /// monotonic epoch counter in lockstep with `apply_commit_epoch`
@@ -209,12 +209,12 @@ pub struct ProjectionState {
     /// Anchor frontier covered by accepted MLS commits so E2EE message
     /// paths can gate plaintext fallback against stale epochs.
     pub mls_commit_epochs: BTreeMap<String, MlsCommitEpoch>,
-    /// G3.S2 — per-Realm `cx.realm.policy_server` projection. Cas-
+    /// G3.S2 — per-Realm `ck.realm.policy_server` projection. Cas-
     /// register semantics — last write wins. Org-level fallback (when
     /// a Realm has no row of its own) is resolved at query time by
     /// walking the `governed_by` link chain via [`Self::realm_links`].
     /// Cell-family canonical value lives in
-    /// `cx.component.realm.policy_server.v1`.
+    /// `ck.component.realm.policy_server.v1`.
     pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
     /// Device push-route projection keyed by the protocol composite
     /// `(recipient_service_did, principal_id, device_id, push_route)`.
@@ -222,10 +222,10 @@ pub struct ProjectionState {
     /// recipient Principal Server.
     pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
     /// Optional local Principal/Sync service DID. When set, incoming
-    /// `cx.device.push_route` writes whose `recipient_service_did` does
+    /// `ck.device.push_route` writes whose `recipient_service_did` does
     /// not match this service are rejected instead of cached.
     pub local_service_did: Option<String>,
-    /// Stream-F (Wave 1B) — `cx.audit.erasure_receipt` projection.
+    /// Stream-F (Wave 1B) — `ck.audit.erasure_receipt` projection.
     /// Append-only list of receipts the reducer has accepted. Spec
     /// `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
     /// Receipts are durable events; the projection cache here is used
@@ -243,12 +243,12 @@ pub struct PushRouteSubject {
 }
 
 /// Stream-F (Wave 2C) — per-peer fanout status for a single
-/// `cx.audit.erasure_receipt`. One row per federation peer that has
+/// `ck.audit.erasure_receipt`. One row per federation peer that has
 /// received content from the affected Realm.
 ///
 /// `sent_at` is stamped when the receipt is enqueued into the
 /// federation outbox. `acked_at` is stamped when the peer's own
-/// follow-up `cx.audit.erasure_receipt` lands back referencing the
+/// follow-up `ck.audit.erasure_receipt` lands back referencing the
 /// same `receipt_id`. `outcome` mirrors the peer's reported wire
 /// outcome (`completed` / `partially_completed` /
 /// `blocked_by_legal_hold` / `scheduled` / `failed`). Spec
@@ -260,8 +260,8 @@ pub struct FanoutPeerStatus {
     pub outcome: Option<String>,
 }
 
-/// Stream-F (Wave 1B) — `cx.audit.erasure_receipt` projection record.
-/// Mirrors a subset of the canonical `cx.schema.erasure_receipt.v1`
+/// Stream-F (Wave 1B) — `ck.audit.erasure_receipt` projection record.
+/// Mirrors a subset of the canonical `ck.schema.erasure_receipt.v1`
 /// payload (see
 /// `cokret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
 /// We only keep the fields the local audit / federation fanout layer
@@ -313,7 +313,7 @@ pub struct PushRouteCellValue {
 }
 
 /// R3.1 — structured cache row for a single directed Realm link.
-/// Mirrors the `cx.component.realm.link.v1` cell value plus envelope-
+/// Mirrors the `ck.component.realm.link.v1` cell value plus envelope-
 /// derived timestamps so the query API can render `created_at` /
 /// `updated_at` without re-reading the durable Event store.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,8 +331,8 @@ pub struct RealmLinkState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// G3.S2 — structured cache row for `cx.realm.policy_server`. Mirrors
-/// the canonical `cx.component.realm.policy_server.v1` cas-register
+/// G3.S2 — structured cache row for `ck.realm.policy_server`. Mirrors
+/// the canonical `ck.component.realm.policy_server.v1` cas-register
 /// payload. Per spec `authz/policy-server.md` §2 the wire payload also
 /// carries `applies_to[]` / `policy_sources[]` / `abuse_profile_ref` /
 /// `public_keys[]`; the runtime fields needed by the outbound
@@ -345,7 +345,7 @@ pub struct RealmPolicyServerConfig {
     /// DID of the policy decision service. Used to resolve the
     /// signature verification key and match against `bound_to.policy_server_id`.
     pub policy_server_did: String,
-    /// HTTPS endpoint that accepts `POST /api/v1/policy/check`.
+    /// HTTPS endpoint that accepts `POST /_cokret/self/policy/check`.
     pub policy_server_url: String,
     /// Decision cache TTL. Spec §2 default `300`. The outbound client
     /// uses this as the per-realm cap on the in-memory decision cache;
@@ -363,7 +363,7 @@ pub struct RealmPolicyServerConfig {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// R3.2 — structured cache row for `cx.realm.inheritance_policy`.
+/// R3.2 — structured cache row for `ck.realm.inheritance_policy`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmInheritancePolicyState {
     pub realm_id: String,
@@ -375,7 +375,7 @@ pub struct RealmInheritancePolicyState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// R3.2 — structured cache row for `cx.capability.derived`.
+/// R3.2 — structured cache row for `ck.capability.derived`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityDerivedState {
     pub capability_id: String,
@@ -441,7 +441,7 @@ pub struct MlsKeyPackage {
 ///
 /// The reducer's `apply_welcome_enqueue` appends one row per Welcome
 /// fanout target; the recipient device drains its queue via
-/// `GET /api/v1/mls/welcomes/pending`, which marks each delivered row
+/// `GET /_cokret/self/keys/welcomes/pending`, which marks each delivered row
 /// with `delivered_at = now()` so a re-poll won't redeliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
@@ -502,10 +502,10 @@ pub struct SpaceContainerProjection {
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stream-F (Wave 1B) — `realm_destroyed_orphan` flag set by the
-    /// `cx.realm.destroy` cascade when this container's home Realm is
+    /// `ck.realm.destroy` cascade when this container's home Realm is
     /// destroyed. Spec `realm-and-space.md` §2.5.1 ¶6: orphaned
     /// containers become read-only locked projections; no
-    /// `cx.flow.move` / `cx.space.parent` / `cx.space.update` may
+    /// `ck.flow.move` / `ck.space.parent` / `ck.space.update` may
     /// revive them. Defaults to `false`.
     pub orphaned: bool,
     /// Stream-F (Wave 2C) — cross-Realm `parent_ref` lazy-link lock.
@@ -572,7 +572,7 @@ pub struct FlowProjection {
 /// `20260526010000_add_circles`).
 ///
 /// `members` is the authoritative active-member set; the wire validator and
-/// the `cx.circle.member.state` handler use it to enforce the
+/// the `ck.circle.member.state` handler use it to enforce the
 /// `Circle.members ⊆ Realm.members` invariant
 /// (`circle_member_must_be_realm_member`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -600,7 +600,7 @@ pub struct CircleProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Active Circle members. Maintained by `cx.circle.member.state`
+    /// Active Circle members. Maintained by `ck.circle.member.state`
     /// transitions (`active` -> insert, `removed`/`banned`/`left` ->
     /// remove). Always a strict subset of the parent Realm's active
     /// member set.
@@ -611,7 +611,7 @@ pub struct CircleProjection {
 /// `state` enum (active / archived / tombstoned). Distinct from
 /// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used
 /// by Flow / Morph); Circle has no redaction path because the canonical
-/// terminal action is `cx.circle.tombstone`.
+/// terminal action is `ck.circle.tombstone`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CircleLifecycleState {
     #[default]
@@ -652,7 +652,7 @@ pub struct MorphProjection {
 /// Materialized version row for document-shaped Morphs.
 ///
 /// This is intentionally projection-side state: the canonical source remains
-/// the ordered `cx.morph.create` / `cx.morph.update` event stream, while the
+/// the ordered `ck.morph.create` / `ck.morph.update` event stream, while the
 /// read API exposes a compact version list for clients that need to hydrate a
 /// document view without replaying the whole history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,7 +666,7 @@ pub struct DocumentVersionProjection {
 }
 
 /// Server-side Applet registry entry. Populated by
-/// `cx.applet.registration` (creates) and `cx.applet.discovery` (refreshes
+/// `ck.applet.registration` (creates) and `ck.applet.discovery` (refreshes
 /// the manifest). Spec `extensions/applet-integration.md` doesn't pin
 /// down a state-machine for applet entries themselves (the bridge state
 /// machine is per-session and lives client-side), so this is a simple
@@ -677,24 +677,24 @@ pub struct AppletProjection {
     pub service_did: String,
     pub namespace: String,
     /// Optional snapshot of the most recent `manifest` (from the latest
-    /// `cx.applet.discovery` event). `None` if only registration has
+    /// `ck.applet.discovery` event). `None` if only registration has
     /// landed.
     pub manifest: Option<Value>,
-    /// Optional capability list from the latest `cx.applet.registration`.
+    /// Optional capability list from the latest `ck.applet.registration`.
     pub capabilities: Option<Value>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Server-side Agent registry entry. Populated by
-/// `cx.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
+/// `ck.agent.endpoint`. Spec `extensions/agent-integration.md` mirrors
 /// the applet family shape; same simple last-write-wins semantics.
 ///
 /// `endpoint_url` is the HTTPS URL the agent runtime listens on. It is
 /// OPTIONAL on the wire (older clients + DID-only agents that resolve
 /// via did:web service entry won't set it), but when present the
 /// reference bridge echoes it back in the
-/// `cx.agent.protocol_session.result` envelope's `detail.endpoint_url`
+/// `ck.agent.protocol_session.result` envelope's `detail.endpoint_url`
 /// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentProjection {
@@ -1071,7 +1071,7 @@ pub struct MembershipState {
     pub realm_id: String,
     /// Canonical FSM state value (one of `invite` / `join` / `leave` /
     /// `ban` / `knock`). Authoritative source is the
-    /// `cx.component.member.state.v1` cell in
+    /// `ck.component.member.state.v1` cell in
     /// [`ProjectionState::cells`]; this field is the structured-cache
     /// mirror updated on every membership transition.
     pub state: String,
@@ -1093,24 +1093,24 @@ pub struct SpaceState {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Round 4 (B1.2) — Realm trust domain. Captured and locked
-    /// immutable on the first `cx.realm.create`; subsequent events that
+    /// immutable on the first `ck.realm.create`; subsequent events that
     /// attempt to set a different trust domain MUST be rejected with
     /// `cross_domain_replay_rejected`. Stored as the canonical
     /// `ck:trust_domain:<scope>` string form.
     pub trust_domain: Option<String>,
     /// Stream-F (Wave 1B) — Realm terminal-state marker. Set by
-    /// `apply_realm_lifecycle` when a `cx.realm.tombstone` or
-    /// `cx.realm.destroy` event is projected. Possible values:
+    /// `apply_realm_lifecycle` when a `ck.realm.tombstone` or
+    /// `ck.realm.destroy` event is projected. Possible values:
     ///   - `None` — Realm is live.
-    ///   - `Some("tombstoned")` — `cx.realm.tombstone` accepted; the `successor_realm_id` field
+    ///   - `Some("tombstoned")` — `ck.realm.tombstone` accepted; the `successor_realm_id` field
     ///     carries the migration target.
-    ///   - `Some("destroyed")` — `cx.realm.destroy` accepted; no successor.
+    ///   - `Some("destroyed")` — `ck.realm.destroy` accepted; no successor.
     ///
     /// Both terminal states block non-audit writes via
     /// `routing::events::event_log::terminal_realm_check`. Spec
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
-    /// Stream-F (Wave 1B) — for `cx.realm.tombstone` only: the
+    /// Stream-F (Wave 1B) — for `ck.realm.tombstone` only: the
     /// `ck:realm:<uuid>` of the successor Realm that takes over child
     /// Space/Flow placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
@@ -1166,7 +1166,7 @@ pub enum ProjectionEffect {
         new_state: ObjectLifecycleState,
     },
     /// CXP-0007 — Circle lifecycle transition accepted. Reflects
-    /// `cx.circle.create` / `update` / `archive` / `restore` / `tombstone`
+    /// `ck.circle.create` / `update` / `archive` / `restore` / `tombstone`
     /// projection writes; new state is reflected in
     /// `ProjectionState::circles` (and the durable `projection_circles`
     /// mirror once persistence is wired).
@@ -1175,7 +1175,7 @@ pub enum ProjectionEffect {
         new_state: CircleLifecycleState,
     },
     /// CXP-0007 — Circle membership transition. `target_state` is the
-    /// `cx.circle.member.state` payload's `state` value (active / removed /
+    /// `ck.circle.member.state` payload's `state` value (active / removed /
     /// banned / left / invited). The reducer applies the membership write
     /// only after the strict-subset invariant
     /// (`Circle.members ⊆ Realm.members`) has been satisfied.
@@ -1201,14 +1201,14 @@ pub enum ProjectionEffect {
     AppletProjectionUpdated {
         service_did: String,
     },
-    /// R1.2 — `cx.realm.delivery_binding_policy` event was projected
-    /// into the canonical `cx.component.realm.delivery_binding_policy.v1`
+    /// R1.2 — `ck.realm.delivery_binding_policy` event was projected
+    /// into the canonical `ck.component.realm.delivery_binding_policy.v1`
     /// cas-register cell.
     DeliveryBindingPolicyProjected {
         realm_id: String,
     },
-    /// R3.1 — `cx.realm.link` event was projected into the
-    /// `cx.component.realm.link.v1` or_set cell + the `realm_links`
+    /// R3.1 — `ck.realm.link` event was projected into the
+    /// `ck.component.realm.link.v1` or_set cell + the `realm_links`
     /// structured cache.
     RealmLinkProjected {
         realm_id: String,
@@ -1216,19 +1216,19 @@ pub enum ProjectionEffect {
         link_kind: String,
         status: String,
     },
-    /// R3.2 — `cx.realm.inheritance_policy` event was projected into the
-    /// `cx.component.realm.inheritance_policy.v1` cas-register cell.
+    /// R3.2 — `ck.realm.inheritance_policy` event was projected into the
+    /// `ck.component.realm.inheritance_policy.v1` cas-register cell.
     RealmInheritancePolicyProjected {
         realm_id: String,
         source_realm_id: String,
     },
-    /// R3.2 — `cx.capability.derived` event was projected into the
-    /// `cx.component.capability.derived.v1` cas-register cell.
+    /// R3.2 — `ck.capability.derived` event was projected into the
+    /// `ck.component.capability.derived.v1` cas-register cell.
     CapabilityDerivedProjected {
         capability_id: String,
         realm_id: String,
     },
-    /// R3.3 — `cx.realm.audit_policy_downgrade` event was appended to
+    /// R3.3 — `ck.realm.audit_policy_downgrade` event was appended to
     /// the `cx.component.realm.audit_policy_downgrade.v1` ordered-log
     /// audit cell + the structured side-band cache.
     RealmAuditPolicyDowngradeProjected {
@@ -1256,8 +1256,8 @@ pub enum ProjectionEffect {
         event_id: String,
     },
     /// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) —
-    /// `cx.member.identity.update` accepted into the ordered-log
-    /// `cx.component.member.identity.v1` cell. The actual replacement-edge
+    /// `ck.member.identity.update` accepted into the ordered-log
+    /// `ck.component.member.identity.v1` cell. The actual replacement-edge
     /// filter + per-actor effective-set / `member_display_state_digest`
     /// materialization live on the `MemberIdentityRegistry`
     /// (`AppState::member_identity`) because they span cells; this effect
@@ -1273,14 +1273,14 @@ pub enum ProjectionEffect {
     /// so the routing layer can dispatch on `MlsEffect` without
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
-    /// G3.S2 — `cx.realm.policy_server` projected into the
-    /// `cx.component.realm.policy_server.v1` cas-register cell + the
+    /// G3.S2 — `ck.realm.policy_server` projected into the
+    /// `ck.component.realm.policy_server.v1` cas-register cell + the
     /// `realm_policy_servers` structured cache.
     RealmPolicyServerProjected {
         realm_id: String,
         policy_server_did: String,
     },
-    /// `cx.device.push_route` actor-private state projected into the
+    /// `ck.device.push_route` actor-private state projected into the
     /// per-recipient Principal Server push-route cell cache.
     PushRouteUpdated {
         subject: PushRouteSubject,
@@ -1785,7 +1785,7 @@ fn apply_agent_action_reject_dispatch(
     }
 }
 /// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) — reducer-side dispatch for
-/// `cx.member.identity.update`. The full ordered-log projection +
+/// `ck.member.identity.update`. The full ordered-log projection +
 /// per-actor effective-set / `member_display_state_digest` materialization
 /// happens on `AppState::member_identity` (see
 /// `routing::events::projection::project_member_identity_update`);
@@ -1832,9 +1832,9 @@ fn apply_member_identity_update_dispatch(
     }
 }
 
-/// R1.2 — dispatch for `cx.realm.delivery_binding_policy`. Renamed from
+/// R1.2 — dispatch for `ck.realm.delivery_binding_policy`. Renamed from
 /// the pre-rename `cx.space.delivery_binding_policy`; cell family is
-/// `cx.component.realm.delivery_binding_policy.v1`.
+/// `ck.component.realm.delivery_binding_policy.v1`.
 fn apply_delivery_binding_policy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1871,7 +1871,7 @@ fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
     v.get("id").and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
-const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:cx.component.capability.grant.v1:";
+const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:ck.component.capability.grant.v1:";
 
 #[derive(Clone, Debug)]
 struct CapabilityGrantSnapshot {
@@ -1939,7 +1939,7 @@ fn has_active_realm_link_to_source(
 
 fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
     CellRef::new(format!(
-        "ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+        "ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
     ))
     .ok()
 }
@@ -1949,7 +1949,7 @@ fn inheritance_policy_ref_matches(
     realm_id: &str,
     policy_ref: &str,
 ) -> bool {
-    let cell_ref_string = format!("ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}");
+    let cell_ref_string = format!("ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}");
     if policy_ref == cell_ref_string {
         return true;
     }
@@ -2349,8 +2349,8 @@ fn validate_derived_capability(
     })
 }
 
-/// R3.1 — dispatch for `cx.realm.link`. Projects the typed link payload
-/// into the `cx.component.realm.link.v1` or_set cell + structured
+/// R3.1 — dispatch for `ck.realm.link`. Projects the typed link payload
+/// into the `ck.component.realm.link.v1` or_set cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
 fn apply_realm_link_dispatch(
     s: &mut ProjectionState,
@@ -2360,7 +2360,7 @@ fn apply_realm_link_dispatch(
     s.apply_realm_link(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `cx.realm.inheritance_policy`. Projects the
+/// R3.2 — dispatch for `ck.realm.inheritance_policy`. Projects the
 /// cas-register cell + structured cache; validates parent grant bounds
 /// when the relevant parent grant cells are available.
 fn apply_realm_inheritance_policy_dispatch(
@@ -2371,7 +2371,7 @@ fn apply_realm_inheritance_policy_dispatch(
     s.apply_realm_inheritance_policy(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `cx.capability.derived`. Projects the cas-
+/// R3.2 — dispatch for `ck.capability.derived`. Projects the cas-
 /// register cell + structured cache after reducer-side derive evaluation.
 fn apply_capability_derived_dispatch(
     s: &mut ProjectionState,
@@ -2381,7 +2381,7 @@ fn apply_capability_derived_dispatch(
     s.apply_capability_derived(op, op.created_at)
 }
 
-/// R3.3 — dispatch for `cx.realm.audit_policy_downgrade`. Appends the
+/// R3.3 — dispatch for `ck.realm.audit_policy_downgrade`. Appends the
 /// downgrade entry to the ordered-log audit cell + the structured
 /// side-band cache.
 fn apply_realm_audit_policy_downgrade_dispatch(
@@ -2400,10 +2400,10 @@ fn apply_realm_audit_policy_downgrade_dispatch(
 //
 // Canonical event kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
-// `cx.mls.keypackage` kind covers both publish and claim. The reducer
+// `ck.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
-// `cx.keys.keypackages.upload` vs `cx.keys.keypackages.claim`).
+// `ck.keys.keypackages.upload` vs `ck.keys.keypackages.claim`).
 
 fn apply_mls_keypackage_dispatch(
     s: &mut ProjectionState,
@@ -2446,9 +2446,9 @@ fn apply_mls_commit_dispatch(
     mls::apply_commit_epoch(s, op)
 }
 
-/// R1.2 — pure validation for a `cx.member.state{join,routable}`
+/// R1.2 — pure validation for a `ck.member.state{join,routable}`
 /// `delivery_binding` against a projected
-/// `cx.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
+/// `ck.realm.delivery_binding_policy` payload. Returns `Ok(())` when the
 /// binding is admissible; `Err(reason_code)` otherwise. Reason codes
 /// mirror the spec join-policy.md §5.1 catalogue.
 fn enforce_delivery_binding_policy(
@@ -2546,8 +2546,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
     m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
     // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
-    // `cx.member.identity.update`. Cell family
-    // `cx.component.member.identity.v1`, lattice `ordered_log`, bottom
+    // `ck.member.identity.update`. Cell family
+    // `ck.component.member.identity.v1`, lattice `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,
     // member_display_state_digest materialization) lives on
     // `AppState::member_identity`
@@ -2605,7 +2605,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_MORPH_ARCHIVE, apply_morph_archive_dispatch);
     m.insert(CX_MORPH_RESTORE, apply_morph_restore_dispatch);
     // CXP-0007 — Circle lifecycle / membership dispatch. The seventh
-    // active kind, `cx.circle.anchor_commit`, is reducer-derived (sub-
+    // active kind, `ck.circle.anchor_commit`, is reducer-derived (sub-
     // anchor on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
@@ -2631,7 +2631,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
     m.insert(CX_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
     // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
-    // `cx.realm.*` with cell_family `cx.component.realm.delivery_binding_policy.v1`.
+    // `cx.realm.*` with cell_family `ck.component.realm.delivery_binding_policy.v1`.
     m.insert(
         CX_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
@@ -2656,7 +2656,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
     // via `action ∈ {"publish","claim"}`; the event log itself stores
-    // only the canonical `cx.mls.keypackage` kind.
+    // only the canonical `ck.mls.keypackage` kind.
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
     m.insert(CX_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
@@ -2730,12 +2730,12 @@ fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
 
 fn realm_organization_space_id_from_cell(cell_id: &str) -> Option<String> {
     cell_id
-        .strip_prefix("ck:cell:cx.component.realm.organization.v1:")
+        .strip_prefix("ck:cell:ck.component.realm.organization.v1:")
         .filter(|space_id| space_id.starts_with("ck:realm:"))
         .map(ToOwned::to_owned)
 }
 
-// G3.S2: dispatch adapter for `cx.realm.policy_server`. The reducer
+// G3.S2: dispatch adapter for `ck.realm.policy_server`. The reducer
 // helper lives in the dedicated `reducer::realm_policy_server` module;
 // this adapter normalises its `(state, op) -> effect` signature to the
 // registry's `(state, op, hlc) -> effect` shape.
@@ -2826,7 +2826,7 @@ fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
     ])
     .ok()?;
     CellRef::new(format!(
-        "ck:cell:cx.component.device.push_route.v1:{cell_subject}"
+        "ck:cell:ck.component.device.push_route.v1:{cell_subject}"
     ))
     .ok()
 }
@@ -2872,13 +2872,13 @@ fn flow_position_from_create_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Option<(String, String, Option<String>)> {
     let board_space_id = object_field_string(object, "board_space_id").or_else(|| {
-        component_field_string(payload, "cx.component.flow.position.v1", "board_space_id")
+        component_field_string(payload, "ck.component.flow.position.v1", "board_space_id")
     })?;
     let list_space_id = object_field_string(object, "list_space_id").or_else(|| {
-        component_field_string(payload, "cx.component.flow.position.v1", "list_space_id")
+        component_field_string(payload, "ck.component.flow.position.v1", "list_space_id")
     })?;
     let rank = object_field_string(object, "rank")
-        .or_else(|| component_field_string(payload, "cx.component.flow.position.v1", "rank"));
+        .or_else(|| component_field_string(payload, "ck.component.flow.position.v1", "rank"));
     Some((board_space_id, list_space_id, rank))
 }
 
@@ -3101,7 +3101,7 @@ fn apply_flow_fields_patch(
     }
 }
 
-/// Apply a `cx.flow.update`-style patch to a Morph's `fields` map. Unlike Flow
+/// Apply a `ck.flow.update`-style patch to a Morph's `fields` map. Unlike Flow
 /// (whose profile fields moved under `metadata.fields` in spec 9dabf26), the
 /// Morph object keeps `fields` at the object root (morph.schema.json), so its
 /// patch paths are root-level `fields` / `fields.<name>`.
@@ -3610,8 +3610,8 @@ impl ProjectionState {
     /// "cell-state-only event reached the inline cache by mistake"
     /// branch.
     ///
-    /// All cell-state events (cx.realm.policy / cx.realm.read_receipt_policy /
-    /// cx.consent.* / cx.member.state / cx.realm.* facets) are routed via
+    /// All cell-state events (ck.realm.policy / ck.realm.read_receipt_policy /
+    /// cx.consent.* / ck.member.state / cx.realm.* facets) are routed via
     /// the Move/Anchor pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
@@ -3723,7 +3723,7 @@ impl ProjectionState {
             .unwrap_or_else(|| operation.payload.get("encrypted_content").is_some());
 
         match content_kind(&content) {
-            Some("cx.content.poll.response") => {
+            Some("ck.content.poll.response") => {
                 return self.apply_poll_response(&content, &sender, now);
             }
             Some("cx.content.poll.close") => {
@@ -3732,7 +3732,7 @@ impl ProjectionState {
             _ => {}
         }
 
-        let is_poll_create = content_kind(&content) == Some("cx.content.poll");
+        let is_poll_create = content_kind(&content) == Some("ck.content.poll");
         let state = MessageState {
             event_id: event_id.clone(),
             realm_id: operation.realm_id.to_string(),
@@ -3878,7 +3878,7 @@ impl ProjectionState {
             revised.revision_of = Some(original_id.clone());
             revised.created_at = now;
             revised.operation_id = operation.operation_id.to_string();
-            // Spec form: `payload.patch` (cx.schema.patch.v1) carrying
+            // Spec form: `payload.patch` (ck.schema.patch.v1) carrying
             // shallow set/unset entries on the message's content body.
             // The reducer accepts both shapes — legacy `payload.content`
             // (full replace) and the new `payload.patch` (delta) — so
@@ -3963,7 +3963,7 @@ impl ProjectionState {
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
     /// Space containers are intentionally excluded — they have no Redacted
-    /// terminal, and removal routes through `cx.space.tombstone` only.
+    /// terminal, and removal routes through `ck.space.tombstone` only.
     fn apply_redaction(&mut self, operation: &Operation) -> ProjectionEffect {
         let target = operation
             .payload
@@ -4397,8 +4397,8 @@ impl ProjectionState {
         ProjectionEffect::RelationCreated(state.clone())
     }
 
-    /// R1.2 — project a `cx.realm.delivery_binding_policy` event into the
-    /// `cx.component.realm.delivery_binding_policy.v1` cas-register cell.
+    /// R1.2 — project a `ck.realm.delivery_binding_policy` event into the
+    /// `ck.component.realm.delivery_binding_policy.v1` cas-register cell.
     /// The payload is taken whole as the cell value so downstream readers
     /// (`delivery_binding_policy_cell_value` + the `apply_membership`
     /// validation path) can inspect each policy field directly.
@@ -4406,20 +4406,20 @@ impl ProjectionState {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ck:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
-    /// R3.1 — project a `cx.realm.link` event.
+    /// R3.1 — project a `ck.realm.link` event.
     ///
-    /// Writes to the canonical `cx.component.realm.link.v1` cell (or_set
+    /// Writes to the canonical `ck.component.realm.link.v1` cell (or_set
     /// lattice, cell_subject = `(realm_id, target_realm_id, link_kind)`)
     /// AND mirrors into the structured `realm_links` /
     /// `realm_links_inbound` caches consumed by the
-    /// `/api/v1/realms/{id}/links` query API.
+    /// `/_cokret/self/realms/{id}/links` query API.
     ///
     /// Schema-level validation:
     /// - `link_kind` MUST be one of the eight canonical values declared on
@@ -4498,7 +4498,7 @@ impl ProjectionState {
         // as `(realm, target, link_kind)` joined by `|` (cells store
         // strings; reducer-side decoders re-split).
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
+            "ck:cell:ck.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
         )) {
             let value = serde_json::json!({
                 "realm_id": realm_id,
@@ -4540,9 +4540,9 @@ impl ProjectionState {
         }
     }
 
-    /// R3.2 — project a `cx.realm.inheritance_policy` event.
+    /// R3.2 — project a `ck.realm.inheritance_policy` event.
     ///
-    /// Cell family: `cx.component.realm.inheritance_policy.v1` (cas-register).
+    /// Cell family: `ck.component.realm.inheritance_policy.v1` (cas-register).
     /// Rejects payloads with `max_depth > 1` (current wire cap), rejects
     /// inheritance through an already-active non-capability-bearing Realm
     /// link, and verifies requested policies / bundles against projected
@@ -4616,7 +4616,7 @@ impl ProjectionState {
         }
 
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+            "ck:cell:ck.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
                 "operation_id": operation.operation_id.as_str(),
@@ -4648,9 +4648,9 @@ impl ProjectionState {
         }
     }
 
-    /// R3.2 — project a `cx.capability.derived` event.
+    /// R3.2 — project a `ck.capability.derived` event.
     ///
-    /// Cell family: `cx.component.capability.derived.v1` (cas-register,
+    /// Cell family: `ck.component.capability.derived.v1` (cas-register,
     /// keyed by `capability_id`). Schema-level required fields:
     /// `capability_id`, `source_grant_ref`, `source_realm_inheritance_policy_ref`,
     /// `causal_frontier`. The reducer verifies the current inheritance
@@ -4751,7 +4751,7 @@ impl ProjectionState {
         };
 
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.capability.derived.v1:{capability_id}"
+            "ck:cell:ck.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
             value.insert(
@@ -4836,11 +4836,11 @@ impl ProjectionState {
         }
     }
 
-    /// R3.3 — project a `cx.realm.audit_policy_downgrade` event into the
+    /// R3.3 — project a `ck.realm.audit_policy_downgrade` event into the
     /// `cx.component.realm.audit_policy_downgrade.v1` ordered-log cell
     /// + the `realm_audit_downgrades` audit cache.
     ///
-    /// Full audit closure (notify `cx.realm.notification.audit` holder,
+    /// Full audit closure (notify `ck.realm.notification.audit` holder,
     /// trigger UI banner) is TODO(realm-rework) — see
     /// `kinds.rs::CX_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
     /// attestation-chain pipeline that drives this downgrade.
@@ -4962,7 +4962,7 @@ impl ProjectionState {
                         );
                         return ProjectionEffect::Ignored;
                     };
-                    // R1.2 — `cx.realm.delivery_binding_policy` enforcement.
+                    // R1.2 — `ck.realm.delivery_binding_policy` enforcement.
                     // Without a projected policy cell, fail-closed for
                     // routable joins per spec join-policy.md §5.1.3 —
                     // there is no DID Document fallback path.
@@ -5035,11 +5035,11 @@ impl ProjectionState {
         );
 
         // Synthesize the FSM cell state. Cell ref shape per spec
-        // `ck:cell:cx.component.member.state.v1:<actor_did>` — note the
+        // `ck:cell:ck.component.member.state.v1:<actor_did>` — note the
         // cell_subject is `actor_id` (per-actor), not (space_id, actor)
         // composite. The Space scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{member}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -5056,7 +5056,7 @@ impl ProjectionState {
 
     fn realm_organization_cell_id(space_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "ck:cell:cx.component.realm.organization.v1:{space_id}"
+            "ck:cell:ck.component.realm.organization.v1:{space_id}"
         ))
         .ok()
     }
@@ -5288,9 +5288,9 @@ impl ProjectionState {
     /// Apply a `cx.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former `apply_space_lifecycle`: the function is now
     /// restricted to the four canonical Realm lifecycle kinds
-    /// (`cx.realm.create`, `cx.realm.update`, `cx.realm.tombstone`,
-    /// `cx.realm.destroy`). Space-container lifecycle
-    /// (`cx.space.create` / `update` / `parent` / `archive` / `restore`
+    /// (`ck.realm.create`, `ck.realm.update`, `ck.realm.tombstone`,
+    /// `ck.realm.destroy`). Space-container lifecycle
+    /// (`ck.space.create` / `update` / `parent` / `archive` / `restore`
     /// / `tombstone`) is handled by `apply_space_container_*`
     /// in this same impl block — they were already separate methods
     /// before this rename, so no extraction was needed.
@@ -5324,10 +5324,10 @@ impl ProjectionState {
         //
         // Per spec event-kind-registry, each cx.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
-        //   cx.realm.create     → cx.component.realm.create.v1  (ordered-log, singleton)
-        //   cx.realm.update     → cx.component.realm.organization.v1 (cas-register, singleton)
-        //   cx.realm.tombstone  → cx.component.realm.destroy.v1 (cas-register, singleton)
-        //   cx.realm.destroy    → cx.component.realm.destroy.v1 (cas-register, singleton)
+        //   ck.realm.create     → ck.component.realm.create.v1  (ordered-log, singleton)
+        //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
+        //   ck.realm.tombstone  → ck.component.realm.destroy.v1 (cas-register, singleton)
+        //   ck.realm.destroy    → ck.component.realm.destroy.v1 (cas-register, singleton)
         //
         // Stream-F (Wave 1B): tombstone and destroy write the SAME cell
         // family — both are terminal — but with different value shapes
@@ -5443,7 +5443,7 @@ impl ProjectionState {
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
             cokret_sdk::CellRef::new(format!(
-                "ck:cell:cx.component.realm.organization.v1:{realm_id}"
+                "ck:cell:ck.component.realm.organization.v1:{realm_id}"
             ))
             .ok()
             .and_then(|c| self.cell_value(&c).cloned())
@@ -5477,7 +5477,7 @@ impl ProjectionState {
             };
         }
 
-        // Stream-F (Wave 1B): cx.realm.tombstone preconditions. The
+        // Stream-F (Wave 1B): ck.realm.tombstone preconditions. The
         // event MUST carry a syntactically valid `successor_realm_id`
         // pointing at a `ck:realm:<UUIDv7>` distinct from the
         // terminating Realm. Absent → `missing_successor`; malformed →
@@ -5508,7 +5508,7 @@ impl ProjectionState {
                 }
             }
         }
-        // cx.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
+        // ck.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
         if kind == crate::kinds::CX_REALM_DESTROY && payload_successor_realm_id.is_some() {
             return ProjectionEffect::Rejected {
                 reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
@@ -5544,7 +5544,7 @@ impl ProjectionState {
                 terminal_state: None,
                 successor_realm_id: None,
             });
-        // Lock trust_domain on first observation (cx.realm.create). The
+        // Lock trust_domain on first observation (ck.realm.create). The
         // mismatch case is already rejected above; here we only set the
         // value when it has not yet been captured.
         if space.trust_domain.is_none()
@@ -5589,7 +5589,7 @@ impl ProjectionState {
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:cx.component.realm.create.v1:{realm_id}"
+                    "ck:cell:ck.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
@@ -5617,7 +5617,7 @@ impl ProjectionState {
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:cx.component.realm.organization.v1:{realm_id}"
+                    "ck:cell:ck.component.realm.organization.v1:{realm_id}"
                 )) {
                     // Start from the existing cell value so partial
                     // updates retain previously-set fields.
@@ -5654,7 +5654,7 @@ impl ProjectionState {
                 // Bottom = reject (the structured-cache preflight above
                 // mirrors that).
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
+                    "ck:cell:ck.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
@@ -5673,7 +5673,7 @@ impl ProjectionState {
             k if k == crate::kinds::CX_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-                    "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
+                    "ck:cell:ck.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
@@ -5693,7 +5693,7 @@ impl ProjectionState {
         ProjectionEffect::SpaceLifecycle { realm_id, action }
     }
 
-    /// Stream-F (Wave 1B + Wave 2C) — `cx.realm.destroy` child-cascade.
+    /// Stream-F (Wave 1B + Wave 2C) — `ck.realm.destroy` child-cascade.
     /// Spec `realm-and-space.md` §2.5.1:
     ///   ¶6 child Space-container placement (same Realm) → mark
     ///      `realm_destroyed_orphan` (locked read-only projection).
@@ -5772,7 +5772,7 @@ impl ProjectionState {
         }
 
         // CXP-0007: no cross-Realm discussion edges to sever — Circles
-        // are intra-Realm and `cx.realm.destroy` already tombstones their
+        // are intra-Realm and `ck.realm.destroy` already tombstones their
         // parent Realm; further Circle writes fall under the terminal
         // admission check in `event_log::validate_event_envelope`.
 
@@ -5785,7 +5785,7 @@ impl ProjectionState {
     }
 
     /// Stream-F (Wave 1B + Wave 2C) — apply a
-    /// `cx.audit.erasure_receipt` event. Stores the receipt in
+    /// `ck.audit.erasure_receipt` event. Stores the receipt in
     /// [`ProjectionState::erasure_receipts`] with validated `outcome` +
     /// `scope.storage_boundary` + `fanout_status` fields. The receipt
     /// is durable; this projection cache backs the
@@ -5926,7 +5926,7 @@ impl ProjectionState {
     /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit
     /// HTTP admission with a 412 failed_precondition instead of letting
     /// the reducer accept-then-reject after persistence. Unknown Space container
-    /// (no prior cx.space.create projected) returns Ok — causal /
+    /// (no prior ck.space.create projected) returns Ok — causal /
     /// backfill ordering is allowed; the reducer also tolerates it.
     pub fn check_space_container_lifecycle_transition(
         &self,
@@ -5938,13 +5938,13 @@ impl ProjectionState {
             None => return Ok(()),
         };
 
-        // `cx.space.create` is unconditional (only constraint is that no
+        // `ck.space.create` is unconditional (only constraint is that no
         // existing Space container with the same id — but LWW overwrite is fine
         // per the reducer's existing `insert`).
-        // `cx.space.update` / `cx.space.parent` require Active source.
-        // `cx.space.archive` requires Active.
-        // `cx.space.restore` requires Archived.
-        // `cx.space.tombstone` requires {Active, Archived}.
+        // `ck.space.update` / `ck.space.parent` require Active source.
+        // `ck.space.archive` requires Active.
+        // `ck.space.restore` requires Archived.
+        // `ck.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
             CX_SPACE_CONTAINER_CREATE => return Ok(()),
             CX_SPACE_CONTAINER_UPDATE | CX_SPACE_CONTAINER_PARENT => {
@@ -5982,7 +5982,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `cx.space.create` — populate the Space-container projection from
+    /// Apply `ck.space.create` — populate the Space-container projection from
     /// the wire `object` field. Idempotent: re-create with the same id
     /// overwrites the existing entry per LWW.
     fn apply_space_container_create(
@@ -6081,7 +6081,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.space.update` — patch title / rank / fields on an
+    /// Apply `ck.space.update` — patch title / rank / fields on an
     /// existing Space container. Per common-fields.md §5.1 ("update on non-active
     /// object MUST fail"): rejects with the legacy `place_not_active` reason
     /// code if the target is not in Active state. Unknown Space container is
@@ -6125,7 +6125,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.space.parent` — update parent_ref. State-machine guard
+    /// Apply `ck.space.parent` — update parent_ref. State-machine guard
     /// (`parent on non-active MUST fail`) follows the same rule as
     /// `apply_space_container_update`.
     fn apply_space_container_parent(
@@ -6172,10 +6172,10 @@ impl ProjectionState {
         }
     }
 
-    /// Apply a `cx.space.archive` / `cx.space.restore` / `cx.space.tombstone`
+    /// Apply a `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone`
     /// event with the canonical state-machine guard from
     /// `common-fields.md §5.1`. Unknown Space container (no prior
-    /// cx.space.create in the projection) is tolerated — returns `Ignored` so causal /
+    /// ck.space.create in the projection) is tolerated — returns `Ignored` so causal /
     /// backfill ordering doesn't get flagged as invalid. Invalid source
     /// state returns `Rejected { reason }` with the spec reason_code;
     /// `event_log::submit_event` maps that to HTTP 412.
@@ -6219,7 +6219,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         {
             let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
-                // Unknown Space container — likely the cx.space.create has not yet
+                // Unknown Space container — likely the ck.space.create has not yet
                 // been projected (causal / backfill window). Tolerate
                 // silently per the spec convention (common-fields.md §5.1
                 // unknown-object tolerance).
@@ -6382,10 +6382,10 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        // `cx.flow.create` is unconditional (no current state to validate).
-        // `cx.flow.update` requires Active source.
-        // `cx.flow.archive` requires Active source.
-        // `cx.flow.restore` requires Archived source.
+        // `ck.flow.create` is unconditional (no current state to validate).
+        // `ck.flow.update` requires Active source.
+        // `ck.flow.archive` requires Active source.
+        // `ck.flow.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
             CX_FLOW_CREATE => return Ok(()),
             CX_FLOW_UPDATE => (&[ObjectLifecycleState::Active], "flow_not_active"),
@@ -6466,7 +6466,7 @@ impl ProjectionState {
     /// terminal source MUST `failed_precondition` with
     /// `<kind>_already_terminal`. Unknown object tolerated (causal /
     /// backfill window). Space containers are excluded — spec routes their
-    /// removal through `cx.space.tombstone` only.
+    /// removal through `ck.space.tombstone` only.
     pub fn check_redaction_target_transition(
         &self,
         operation: &Operation,
@@ -6523,10 +6523,10 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `cx.flow.create` — populate the `flows` projection from
+    /// Apply `ck.flow.create` — populate the `flows` projection from
     /// the wire `object` field. Spec: common-fields.md §5 + flow schema.
     /// Idempotent: re-create with same id overwrites the existing entry
-    /// (LWW), but the preflight will accept it since `cx.flow.create` has
+    /// (LWW), but the preflight will accept it since `ck.flow.create` has
     /// no source-state guard.
     fn apply_flow_create(
         &mut self,
@@ -6631,7 +6631,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.flow.update` — patch title / summary on an existing Flow.
+    /// Apply `ck.flow.update` — patch title / summary on an existing Flow.
     /// Spec common-fields.md §5.1: update on non-active object MUST fail
     /// with `flow_not_active`. Unknown Flow tolerated.
     fn apply_flow_update(
@@ -6683,7 +6683,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.flow.archive` / `cx.flow.restore`. Spec
+    /// Apply `ck.flow.archive` / `ck.flow.restore`. Spec
     /// `common-fields.md §5.1` + `event-payload.schema.json`
     /// `object_lifecycle_payload`. Unknown Flow tolerated. The target id is
     /// carried by `target_ref` per spec; `object_ref` and the legacy
@@ -6740,7 +6740,7 @@ impl ProjectionState {
         }
     }
 
-    /// Read-only preflight for `cx.flow.tracks.update`. Spec
+    /// Read-only preflight for `ck.flow.tracks.update`. Spec
     /// common-fields.md §5.1 update-on-non-active rule: track mutations
     /// are a kind of update; parent Flow MUST be Active or the admission
     /// MUST `failed_precondition` with `flow_not_active` before
@@ -6771,9 +6771,9 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Apply `cx.flow.move` / `cx.flow.reorder`. These events
+    /// Apply `ck.flow.move` / `ck.flow.reorder`. These events
     /// don't affect Flow lifecycle state — they write to the
-    /// `cx.component.flow.position.v1` cell family on the Move/Anchor
+    /// `ck.component.flow.position.v1` cell family on the Move/Anchor
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
     /// `updated_by` on the Flow projection so read-after-write sees the
     /// touch. Unknown Flow is tolerated (causal / backfill).
@@ -6820,7 +6820,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.flow.tracks.update` server-side. State guard runs in
+    /// Apply `ck.flow.tracks.update` server-side. State guard runs in
     /// `check_flow_tracks_transition` preflight; by the time this reducer
     /// fires, the parent Flow is known to be Active (or unknown, in which
     /// case the touch is a no-op). The actual track membership lives in
@@ -6866,8 +6866,8 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.flow.watch.set`. Writes the watch cell on the
-    /// Move/Anchor pipeline (cas-register `cx.component.flow.watch.v1`);
+    /// Apply `ck.flow.watch.set`. Writes the watch cell on the
+    /// Move/Anchor pipeline (cas-register `ck.component.flow.watch.v1`);
     /// the soland projection records the materialised value into
     /// `projection_flow_watches` via `ProjectionEffect::FlowWatchUpdated`.
     /// The Flow's `updated_at` is NOT bumped — watch is a per-(flow, actor)
@@ -6875,7 +6875,7 @@ impl ProjectionState {
     /// / backfill).
     ///
     /// Reducer invariant: `payload.watcher_actor_id == operation.sender` unless
-    /// the writer is gated by `cx.flow.watch.set.others` (capability
+    /// the writer is gated by `ck.flow.watch.set.others` (capability
     /// check happens at the routing layer; this projection only records).
     fn apply_flow_watch_set(
         &mut self,
@@ -6924,7 +6924,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.morph.create`. Mirror of `apply_flow_create`.
+    /// Apply `ck.morph.create`. Mirror of `apply_flow_create`.
     fn apply_morph_create(
         &mut self,
         operation: &Operation,
@@ -7010,7 +7010,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.morph.update`. Mirror of `apply_flow_update`.
+    /// Apply `ck.morph.update`. Mirror of `apply_flow_update`.
     fn apply_morph_update(
         &mut self,
         operation: &Operation,
@@ -7066,7 +7066,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `cx.morph.archive` / `cx.morph.restore`. Mirror of
+    /// Apply `ck.morph.archive` / `ck.morph.restore`. Mirror of
     /// `apply_flow_lifecycle`.
     fn apply_morph_lifecycle(
         &mut self,
@@ -7123,7 +7123,7 @@ impl ProjectionState {
     // Spec source: `cokret-spec/spec/v1/zh/models/circle.md` +
     // `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
     // reducer-input kinds are dispatched here (the seventh,
-    // `cx.circle.anchor_commit`, is reducer-derived and emitted by the
+    // `ck.circle.anchor_commit`, is reducer-derived and emitted by the
     // anchorer cadence, not accepted as a submitted event).
 
     fn apply_circle_create(
@@ -7325,9 +7325,9 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         };
         // CXP-0007 transition matrix:
-        //   active -> archived   (cx.circle.archive)
-        //   archived -> active   (cx.circle.restore)
-        //   active | archived -> tombstoned   (cx.circle.tombstone)
+        //   active -> archived   (ck.circle.archive)
+        //   archived -> active   (ck.circle.restore)
+        //   active | archived -> tombstoned   (ck.circle.tombstone)
         let allowed = match target {
             CircleLifecycleState::Archived => circle.state == CircleLifecycleState::Active,
             CircleLifecycleState::Active => circle.state == CircleLifecycleState::Archived,
@@ -7490,7 +7490,7 @@ impl ProjectionState {
 
     /// CXP-0007 read helper — return the Circle projection for `circle_id`,
     /// or `None` when the Circle is unknown or already tombstoned. Used by
-    /// `/api/v1/circles/*` route handlers and by `scope_circle_id`
+    /// `/_cokret/self/circles/*` route handlers and by `scope_circle_id`
     /// validators that need to confirm the Circle is alive before allowing
     /// Flow / Space / Morph writes against it.
     pub fn circle(&self, circle_id: &str) -> Option<&CircleProjection> {
@@ -7527,7 +7527,7 @@ impl ProjectionState {
             .filter(|scope| scope.starts_with("ck:circle:"))
     }
 
-    /// Apply `cx.applet.registration`. Upserts the
+    /// Apply `ck.applet.registration`. Upserts the
     /// AppletProjection keyed by `service_did`. Re-registration with
     /// the same DID is allowed (replace capabilities + bump
     /// updated_at), matching the spec convention that registration is
@@ -7575,7 +7575,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Apply `cx.applet.discovery`. Updates the manifest
+    /// Apply `ck.applet.discovery`. Updates the manifest
     /// on an existing AppletProjection. If the applet hasn't registered
     /// yet (causal / backfill window), creates a stub entry with the
     /// manifest and empty namespace; subsequent registration will fill
@@ -7612,7 +7612,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Apply `cx.agent.endpoint`. Upserts the AgentProjection keyed by
+    /// Apply `ck.agent.endpoint`. Upserts the AgentProjection keyed by
     /// `agent_id`. If the payload carries an endpoint URL field it
     /// is captured into the projection so the bridge can echo it back
     /// on `protocol_session.result`.
@@ -7681,9 +7681,9 @@ impl ProjectionState {
     /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — apply
     /// an `cx.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
-    ///   - Active → Paused                 via `cx.agent.pause`
-    ///   - Paused → Active                 via `cx.agent.resume`
-    ///   - {Active,Paused} → Deactivated   via `cx.agent.deactivate`
+    ///   - Active → Paused                 via `ck.agent.pause`
+    ///   - Paused → Active                 via `ck.agent.resume`
+    ///   - {Active,Paused} → Deactivated   via `ck.agent.deactivate`
     ///
     /// `Deactivated` is terminal — any further transition (including a
     /// resume) is rejected.
@@ -7915,10 +7915,10 @@ impl ProjectionState {
     /// Read the FSM state of a member directly from the cells map.
     /// Returns `None` if the cell hasn't been written or is in `Bottom`
     /// state. The cell_subject is the actor_did per spec
-    /// `cx.component.member.state.v1` cell_family declaration.
+    /// `ck.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
         let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{actor_did}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor_did}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
@@ -7941,24 +7941,24 @@ impl ProjectionState {
 
     // ── Space lifecycle cell helpers ──
 
-    /// Read the effective `cx.component.realm.organization.v1` cas-register
+    /// Read the effective `ck.component.realm.organization.v1` cas-register
     /// value (mutable Realm metadata: owner, title, updated_at). Returns
-    /// `None` if no `cx.realm.update` event has landed for this realm, or
+    /// `None` if no `ck.realm.update` event has landed for this realm, or
     /// if the cell is in `Bottom` (concurrent admin updates require recovery).
     pub fn space_organization_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.organization.v1:{space_id}"
+            "ck:cell:ck.component.realm.organization.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
     }
 
-    /// Read the `cx.component.realm.create.v1` ordered-log entries for the
+    /// Read the `ck.component.realm.create.v1` ordered-log entries for the
     /// realm's genesis history. Returns `None` for realms with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
         let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{space_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{space_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -7966,19 +7966,19 @@ impl ProjectionState {
         }
     }
 
-    /// True when the `cx.component.realm.destroy.v1` cell has a Value
+    /// True when the `ck.component.realm.destroy.v1` cell has a Value
     /// (any non-Bottom value indicates a terminal-state commit landed).
     /// Equivalent to checking `space_states[space_id].deleted` but reads
     /// from the protocol-canonical cells map source.
     ///
     /// Stream-F (Wave 1B) note: this returns true for BOTH
-    /// `cx.realm.tombstone` and `cx.realm.destroy` because they share
-    /// the same cell family (`cx.component.realm.destroy.v1`). Callers
+    /// `ck.realm.tombstone` and `ck.realm.destroy` because they share
+    /// the same cell family (`ck.component.realm.destroy.v1`). Callers
     /// that need to distinguish the two should consult
     /// [`Self::space_is_in_terminal_state`] / [`SpaceState::terminal_state`].
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
         let Ok(cell_id) =
-            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.destroy.v1:{space_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.destroy.v1:{space_id}"))
         else {
             return false;
         };
@@ -8002,7 +8002,7 @@ impl ProjectionState {
         self.space_is_destroyed(space_id)
     }
 
-    /// Read the projected `cx.component.realm.delivery_binding_policy.v1`
+    /// Read the projected `ck.component.realm.delivery_binding_policy.v1`
     /// cas-register value, if any. R1.2 introduced a structured cache
     /// for this cell so the wire-validation path in
     /// `apply_membership` can fail-closed on routable joins when policy
@@ -8011,14 +8011,14 @@ impl ProjectionState {
     /// cells map to the structured cache.
     pub fn delivery_binding_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
+            "ck:cell:ck.component.realm.delivery_binding_policy.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
     }
 
     /// Read the `policy_frontier` declared on the most recent
-    /// `cx.realm.delivery_binding_policy` event for this realm. TODO
+    /// `ck.realm.delivery_binding_policy` event for this realm. TODO
     /// (realm-rework): wire this up to a structured cache so the
     /// reducer can emit `delivery_binding_stale` rejections.
     pub fn delivery_binding_policy_frontier(&self, space_id: &str) -> Option<&str> {
@@ -8073,19 +8073,19 @@ impl ProjectionState {
         out
     }
 
-    /// R3.2 — read the most-recent `cx.realm.inheritance_policy`
+    /// R3.2 — read the most-recent `ck.realm.inheritance_policy`
     /// projection for a child Realm, if any.
     pub fn realm_inheritance_policy(&self, realm_id: &str) -> Option<&RealmInheritancePolicyState> {
         self.realm_inheritance_policies.get(realm_id)
     }
 
-    /// R3.2 — read the most-recent `cx.capability.derived` projection
+    /// R3.2 — read the most-recent `ck.capability.derived` projection
     /// for a capability id, if any.
     pub fn capability_derived_state(&self, capability_id: &str) -> Option<&CapabilityDerivedState> {
         self.capability_derived.get(capability_id)
     }
 
-    /// G3.S2 — read the most-recent `cx.realm.policy_server` projection
+    /// G3.S2 — read the most-recent `ck.realm.policy_server` projection
     /// for a Realm, walking up the `governed_by` link chain when the
     /// realm itself has no row of its own (org-level fallback). Returns
     /// `None` if neither the realm nor any ancestor declared a policy
@@ -8117,7 +8117,7 @@ impl ProjectionState {
     }
 
     /// R3.3 — read the ordered audit log of
-    /// `cx.realm.audit_policy_downgrade` entries for a Realm.
+    /// `ck.realm.audit_policy_downgrade` entries for a Realm.
     pub fn realm_audit_downgrades(&self, realm_id: &str) -> &[RealmAuditDowngradeEntry] {
         self.realm_audit_downgrades
             .get(realm_id)
@@ -8126,7 +8126,7 @@ impl ProjectionState {
     }
 
     /// Read the create-locked Realm encryption profile from the genesis
-    /// create-log. `cx.realm.update` must never mutate this value.
+    /// create-log. `ck.realm.update` must never mutate this value.
     pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
         self.space_create_log(realm_id)
             .and_then(|entries| entries.last())
@@ -8142,14 +8142,14 @@ impl ProjectionState {
     }
 
     /// R3.4 — read the projected Realm `security_class` (from the
-    /// `cx.component.realm.organization.v1` cas-register cell). Returns
+    /// `ck.component.realm.organization.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer
     /// `standard` per spec default.
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
         // First check the organization cell (cas-register, last write
         // wins; carries the most recent update).
         if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.organization.v1:{realm_id}"
+            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
                 .cell_value(&org_cell)
@@ -8161,7 +8161,7 @@ impl ProjectionState {
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
-            cokret_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{realm_id}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.create.v1:{realm_id}"))
         {
             if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
                 if let Some(last) = arr.last() {
@@ -8176,11 +8176,11 @@ impl ProjectionState {
 
     /// R3.4 — read the effective Realm federation policy. The mutable
     /// organization cas-register wins; when no update has landed, fall
-    /// back to the latest `cx.realm.create` log entry that carried an
+    /// back to the latest `ck.realm.create` log entry that carried an
     /// initial `federation_policy`.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
         if let Ok(org_cell) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.organization.v1:{realm_id}"
+            "ck:cell:ck.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
                 .cell_value(&org_cell)
@@ -8202,7 +8202,7 @@ impl ProjectionState {
 }
 
 /// Spec T07 — federation fanout window for erasure receipts emitted by
-/// `cx.realm.destroy`. Spec: 30 days.
+/// `ck.realm.destroy`. Spec: 30 days.
 pub const REALM_DESTROY_FANOUT_WINDOW_DAYS: i64 = 30;
 
 /// Extract the operator-supplied human reason from a redaction payload,
@@ -8262,7 +8262,7 @@ mod tests {
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "ck:flow:1",
-                "content": {"kind": "cx.content.text", "body": "hello"}
+                "content": {"kind": "ck.content.text", "body": "hello"}
             }),
         );
         let effect = state.apply(&op, &hlc);
@@ -8289,7 +8289,7 @@ mod tests {
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "ck:flow:1",
-                    "content": {"kind": "cx.content.text", "body": "hello"}
+                    "content": {"kind": "ck.content.text", "body": "hello"}
                 }),
             ),
             &hlc,
@@ -8345,7 +8345,7 @@ mod tests {
                     "event_id": event_id,
                     "sender": "did:web:alice",
                     "thread_id": "ck:flow:1",
-                    "content": {"kind": "cx.content.text", "body": "hello"}
+                    "content": {"kind": "ck.content.text", "body": "hello"}
                 }),
             ),
             hlc,
@@ -8535,7 +8535,7 @@ mod tests {
         // `membership=join` MUST carry `delivery_status` per
         // cokret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
         // We use `unroutable` so the projection write path does not
-        // additionally require a projected `cx.realm.delivery_binding_policy`
+        // additionally require a projected `ck.realm.delivery_binding_policy`
         // cell (`routable` joins are exercised by the delivery-binding
         // suite).
         state.apply(
@@ -8590,7 +8590,7 @@ mod tests {
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
                     "thread_id": "ck:flow:1",
-                    "content": {"kind": "cx.content.text", "body": "original"}
+                    "content": {"kind": "ck.content.text", "body": "original"}
                 }),
             ),
             &hlc,
@@ -8603,7 +8603,7 @@ mod tests {
                 serde_json::json!({
                     "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "new_event_id": "ck:event:01904100-0000-7000-8000-c4daaba541fc",
-                    "content": {"kind": "cx.content.text", "body": "revised"}
+                    "content": {"kind": "ck.content.text", "body": "revised"}
                 }),
             ),
             &hlc,
@@ -8969,7 +8969,7 @@ mod tests {
     }
 
     /// Stream-F (Wave 2C) — spec `realm-and-space.md` §2.5.1 ¶6.
-    /// `cx.realm.destroy` on Realm A must mark cross-Realm child
+    /// `ck.realm.destroy` on Realm A must mark cross-Realm child
     /// Spaces in Realm B (whose `parent_ref` points at a Space hosted
     /// inside Realm A) with `parent_ref_locked = true`. The child
     /// Space in Realm B stays alive (it's only the parent edge that
@@ -9053,7 +9053,7 @@ mod tests {
         );
     }
 
-    /// Stream-F (Wave 2C) — `cx.audit.erasure_receipt` reducer pass
+    /// Stream-F (Wave 2C) — `ck.audit.erasure_receipt` reducer pass
     /// extracts `scope.realm_id`, seeds an empty `peer_status` map,
     /// and stamps `fanout_status = "pending"`. The federation outbox
     /// enqueue + per-peer seeding is exercised by
@@ -9068,7 +9068,7 @@ mod tests {
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "receipt_id": "ck:receipt:01",
-                    "schema": "cx.schema.erasure_receipt.v1",
+                    "schema": "ck.schema.erasure_receipt.v1",
                     "issuer": "did:web:soland.local",
                     "subject": {"kind": "realm", "ref": "ck:realm:01904100-0000-7000-8000-cfc039892036"},
                     "scope": {
@@ -10093,7 +10093,7 @@ mod tests {
 
     // ── Flow position events (move / reorder) ──
 
-    /// `cx.flow.move` / `cx.flow.reorder` touch the Flow projection's
+    /// `ck.flow.move` / `ck.flow.reorder` touch the Flow projection's
     /// `updated_at` / `updated_by` but do NOT change state. Cell-write
     /// happens on the Move/Anchor pipeline (out of scope here).
     #[test]
@@ -10127,7 +10127,7 @@ mod tests {
             "create does not set updated_at"
         );
 
-        // cx.flow.move — state unchanged, updated_at advances.
+        // ck.flow.move — state unchanged, updated_at advances.
         let move_effect = state.apply(
             &make_operation(
                 crate::kinds::CX_FLOW_MOVE,
@@ -10159,7 +10159,7 @@ mod tests {
             Some("did:web:alice.example")
         );
 
-        // cx.flow.reorder — same family, same effect.
+        // ck.flow.reorder — same family, same effect.
         let reorder_effect = state.apply(
             &make_operation(
                 crate::kinds::CX_FLOW_REORDER,
@@ -10402,7 +10402,7 @@ mod tests {
 
     // ── Flow tracks update ──
 
-    /// `cx.flow.tracks.update` touches Flow.updated_at but never flips
+    /// `ck.flow.tracks.update` touches Flow.updated_at but never flips
     /// lifecycle state. Parent Flow must be Active or the touch is
     /// rejected with `flow_not_active` (defence-in-depth in the reducer,
     /// mirroring the admission preflight).

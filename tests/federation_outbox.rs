@@ -31,7 +31,7 @@ use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound
 use soland::state::AppState;
 
 const PEER_DID: &str = "did:web:peer.example";
-const FEDERATION_ENDPOINT: &str = "/api/v1/federation/push-operations";
+const FEDERATION_ENDPOINT: &str = "/_cokret/peer/federation/push-operations";
 const IDEMPOTENCY_KEY: &str = "ck:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
 
@@ -190,7 +190,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     assert!(
         captured
             .captured
-            .starts_with("POST /api/v1/federation/push-operations"),
+            .starts_with("POST /_cokret/peer/federation/push-operations"),
         "request line should target the configured endpoint; got: {}",
         captured.captured
     );

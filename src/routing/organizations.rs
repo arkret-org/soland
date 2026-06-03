@@ -224,7 +224,7 @@ async fn upsert_organization_policy(
     if payload.get("kind").and_then(Value::as_str).is_none() {
         payload.as_object_mut().expect("object checked").insert(
             "kind".to_owned(),
-            json!("cx.organization.moderation_policy"),
+            json!("ck.organization.moderation_policy"),
         );
     }
     if payload
@@ -564,7 +564,7 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     json!({
-        "kind": "cx.organization.moderation_policy",
+        "kind": "ck.organization.moderation_policy",
         "organization_id": record.organization_id.clone(),
         "policy_id": record.policy_id.clone(),
         "version": record.version,
@@ -577,7 +577,7 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
 
 fn space_policy_record_json(record: &SpaceModerationPolicyRecord) -> Value {
     json!({
-        "kind": "cx.realm.moderation_policy",
+        "kind": "ck.realm.moderation_policy",
         "realm_id": record.realm_id.clone(),
         "policy": record.payload.clone(),
         "updated_by": record.updated_by.clone(),

@@ -71,7 +71,7 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
-    let body = TestClient::get(format!("http://server/api/v1/account/subscribe?{query}"))
+    let body = TestClient::get(format!("http://server/_cokret/self/account/subscribe?{query}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await
@@ -82,7 +82,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&json!({
             "actor": actor,
             "device_id": format!("ck:device:01904100-0000-7000-8000-{device_suffix}"),
@@ -97,9 +97,9 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 }
 
 /// Seed a Realm directly via AppState (the Realm REST mutation surface
-/// `POST /api/v1/spaces` was removed in W2A; tests now set up Realm
+/// `POST /_cokret/self/spaces` was removed in W2A; tests now set up Realm
 /// fixtures internally and exercise downstream behaviour via the canonical
-/// `POST /api/v1/events` path).
+/// `POST /_cokret/self/events` path).
 async fn seed_realm(
     state: &AppState,
     owner: &str,
@@ -144,7 +144,7 @@ async fn seed_realm(
 }
 
 /// Have the owner admit a new member by submitting a
-/// `cx.member.state{membership:"join", actor_id: new_member}` event. The
+/// `ck.member.state{membership:"join", actor_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
 /// history_visibility gate) and updates `state.realms.members` via
 /// `project_member_state`. The owner is already a member (seeded by
@@ -165,8 +165,8 @@ async fn admit_member(
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("ck:event:"),
-        "kind": "cx.member.state",
-        "schema_id": "cx.schema.event.v1",
+        "kind": "ck.member.state",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": owner_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -187,7 +187,7 @@ async fn admit_member(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -197,7 +197,7 @@ async fn admit_member(
         .unwrap();
     assert!(
         resp["event_id"].is_string(),
-        "cx.member.state{{join}} admit failed: {resp:?}"
+        "ck.member.state{{join}} admit failed: {resp:?}"
     );
 }
 
@@ -206,15 +206,15 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
         "flow_id": flow_id_for_realm(space_id),
         "track_name": "discussion",
         "content": {
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": body,
             "format": "plain"
         }
     });
     let mut event = json!({
         "event_id": new_prefixed_uuid7("ck:event:"),
-        "kind": "cx.message.create",
-        "schema_id": "cx.schema.message.v1",
+        "kind": "ck.message.create",
+        "schema_id": "ck.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": space_id,
@@ -234,7 +234,7 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/api/v1/events")
+    let sent: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -346,7 +346,7 @@ async fn send_circle_scoped_encrypted_message(
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": space_id,
-                "event_kind": "cx.message.create"
+                "event_kind": "ck.message.create"
             },
             "key_ref": {
                 "algorithm": "MLS",
@@ -358,8 +358,8 @@ async fn send_circle_scoped_encrypted_message(
     });
     let mut event = json!({
         "event_id": event_id,
-        "kind": "cx.message.create",
-        "schema_id": "cx.schema.message.v1",
+        "kind": "ck.message.create",
+        "schema_id": "ck.schema.message.v1",
         "actor_id": actor_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": space_id,
@@ -379,7 +379,7 @@ async fn send_circle_scoped_encrypted_message(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/api/v1/events")
+    let sent: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -407,7 +407,7 @@ async fn submit_projection_event(
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
-        "schema_id": "cx.schema.event.v1",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": actor_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -428,7 +428,7 @@ async fn submit_projection_event(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let sent: Value = TestClient::post("http://server/api/v1/events")
+    let sent: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -456,7 +456,7 @@ async fn submit_projection_event_status(
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
-        "schema_id": "cx.schema.event.v1",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": actor_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
@@ -477,7 +477,7 @@ async fn submit_projection_event_status(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let mut response = TestClient::post("http://server/api/v1/events")
+    let mut response = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -571,7 +571,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&limit=20"
+        "http://server/_cokret/self/events?realms={space_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -619,7 +619,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&limit=20"
+        "http://server/_cokret/self/events?realms={space_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -705,7 +705,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         "Realm member outside Circle must not receive Circle-scoped ciphertext: {mallory_sync:?}"
     );
 
-    let bob_read: Value = TestClient::get(format!("http://server/api/v1/events/{event_id}"))
+    let bob_read: Value = TestClient::get(format!("http://server/_cokret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -724,7 +724,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         "encrypted message aad MUST NOT carry scope_circle_id (spec): {bob_read:?}"
     );
 
-    let mallory_read = TestClient::get(format!("http://server/api/v1/events/{event_id}"))
+    let mallory_read = TestClient::get(format!("http://server/_cokret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {mallory}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -757,12 +757,12 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         alice_did,
         alice_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.text",
+                "kind": "ck.content.text",
                 "body": "root mentions bob",
                 "mention_routing_hint": {
                     "mentioned": [bob_did]
@@ -782,13 +782,13 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
-                "kind": "cx.content.text",
+                "kind": "ck.content.text",
                 "body": "reply to root"
             }
         }),
@@ -800,7 +800,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         alice_did,
         alice_device_id,
         &space_id,
-        "cx.reaction.add",
+        "ck.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -813,7 +813,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.reaction.add",
+        "ck.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -826,7 +826,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.reaction.remove",
+        "ck.reaction.remove",
         json!({
             "target_ref": root_message_ref.clone(),
             "key": "+1"
@@ -919,12 +919,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         alice_did,
         alice_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll",
+                "kind": "ck.content.poll",
                 "body": "Which window?",
                 "poll_id": poll_id,
                 "question": "Which window?",
@@ -943,12 +943,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll.response",
+                "kind": "ck.content.poll.response",
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "now"
@@ -962,12 +962,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll.response",
+                "kind": "ck.content.poll.response",
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "backup"
@@ -981,12 +981,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         carol_did,
         carol_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll.response",
+                "kind": "ck.content.poll.response",
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "backup"
@@ -1016,7 +1016,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         alice_did,
         alice_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
@@ -1034,12 +1034,12 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         bob_did,
         bob_device_id,
         &space_id,
-        "cx.message.create",
+        "ck.message.create",
         json!({
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll.response",
+                "kind": "ck.content.poll.response",
                 "body": "poll response",
                 "poll_id": poll_id,
                 "choice": "now"

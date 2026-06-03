@@ -1,9 +1,9 @@
 //! Device-pairing handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/devices/pairing-challenge` — current device asks the server to mint a
+//! - `POST /_cokret/self/devices/pairing-challenge` — current device asks the server to mint a
 //!   short-lived pairing challenge for a new sibling device
-//! - `POST /api/v1/devices/authorize-pairing` — current device authorises the sibling and registers
+//! - `POST /_cokret/self/devices/authorize-pairing` — current device authorises the sibling and registers
 //!   it in the device inventory
 //!
 //! Both routes are scaffolds: the proof at `body.proof` is accepted as

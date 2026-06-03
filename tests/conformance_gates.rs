@@ -276,18 +276,18 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
         .collect();
     circle_kinds.sort();
 
-    // The 7 spec-active Circle kinds; `cx.circle.anchor_commit` is
+    // The 7 spec-active Circle kinds; `ck.circle.anchor_commit` is
     // reducer-DERIVED (sub-anchor on the Circle's profile cadence) and
     // therefore MUST NOT appear as a reducer-INPUT dispatch entry. See
     // SDK `events::kinds::NON_REDUCER_EVENT_KINDS`.
     let expected: Vec<&str> = vec![
-        "cx.circle.anchor_commit",
-        "cx.circle.archive",
-        "cx.circle.create",
-        "cx.circle.member.state",
-        "cx.circle.restore",
-        "cx.circle.tombstone",
-        "cx.circle.update",
+        "ck.circle.anchor_commit",
+        "ck.circle.archive",
+        "ck.circle.create",
+        "ck.circle.member.state",
+        "ck.circle.restore",
+        "ck.circle.tombstone",
+        "ck.circle.update",
     ];
     assert_eq!(
         circle_kinds.iter().map(String::as_str).collect::<Vec<_>>(),

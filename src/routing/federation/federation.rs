@@ -1,13 +1,13 @@
 //! Server-to-server federation handlers.
 //!
 //! Surfaces:
-//! - `PUT /api/v1/federation/transactions/{txn_id}` (idempotent inbound txn)
-//! - `POST /api/v1/federation/push-operations`
-//! - `GET /api/v1/federation/pull-operations`
-//! - `GET /api/v1/federation/space-members`
-//! - `POST /api/v1/federation/verify-actor`
-//! - `GET /api/v1/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for a
-//!   Space) + `POST /api/v1/federation/anchors` (peer-push: accept Anchor envelopes for
+//! - `PUT /_cokret/peer/federation/transactions/{txn_id}` (idempotent inbound txn)
+//! - `POST /_cokret/peer/federation/push-operations`
+//! - `GET /_cokret/peer/federation/pull-operations`
+//! - `GET /_cokret/peer/federation/space-members`
+//! - `POST /_cokret/peer/federation/verify-actor`
+//! - `GET /_cokret/peer/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for a
+//!   Space) + `POST /_cokret/peer/federation/anchors` (peer-push: accept Anchor envelopes for
 //!   replication). The wire path is identical for both [`crate::config::FederationPolicy::Mesh`]
 //!   and [`crate::config::FederationPolicy::Hub`]; only the outbound routing decision (broadcast vs
 //!   hub-only) differs.
@@ -554,7 +554,7 @@ fn spawn_block_hint_push(
     });
     tokio::spawn(async move {
         let target = format!(
-            "{}/api/v1/federation/block-hint",
+            "{}/_cokret/peer/federation/block-hint",
             peer_url.trim_end_matches('/')
         );
         let target_url = match crate::security::validate_http_url_for_egress(
@@ -1103,7 +1103,7 @@ pub(super) async fn federation_pull_operations(
                 "service_type": "principal_server",
                 "role": "primary",
                 "endpoint": state.config.public_base_url.clone(),
-                "operations": ["cx.events.submit"],
+                "operations": ["ck.events.submit"],
                 "join_methods": ["invite_accept", "member_join", "knock", "application"],
                 "priority": 0,
                 "source": "directory_ingest",
@@ -2072,7 +2072,7 @@ async fn pull_operations_page(
     after_cursor: Option<&str>,
     limit: usize,
 ) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
-    let mut url = reqwest::Url::parse(&format!("{}/api/v1/federation/pull-operations", peer.url))
+    let mut url = reqwest::Url::parse(&format!("{}/_cokret/peer/federation/pull-operations", peer.url))
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
         let mut query = url.query_pairs_mut();
@@ -2253,7 +2253,7 @@ async fn enqueue_operation_push(
         state,
         peer.url.as_str(),
         peer.did.as_str(),
-        "/api/v1/federation/push-operations",
+        "/_cokret/peer/federation/push-operations",
         &idempotency_key,
         &payload,
     )
@@ -2501,8 +2501,8 @@ async fn enqueue_outbound_for(
     peer: &FederationPeerTarget,
 ) {
     let endpoint = match resource_kind {
-        "anchor" => "/api/v1/federation/anchors",
-        _ => "/api/v1/federation/push-operations",
+        "anchor" => "/_cokret/peer/federation/anchors",
+        _ => "/_cokret/peer/federation/push-operations",
     };
     let payload = json!({
         "schema": format!("cx.federation.outbound.{resource_kind}.v1"),
@@ -2578,8 +2578,8 @@ async fn record_outbound_fanout_attempt(
     });
     let next_retry_at = attempted_at + Duration::seconds(30);
     let target_path = match resource_kind {
-        "anchor" => "/api/v1/federation/anchors",
-        _ => "/api/v1/federation/push-operations",
+        "anchor" => "/_cokret/peer/federation/anchors",
+        _ => "/_cokret/peer/federation/push-operations",
     };
     let intent = json!({
         "schema": "cx.federation.outbound_fanout.intent.v1",
@@ -2643,7 +2643,7 @@ async fn record_outbound_fanout_attempt(
             "content_digest_scope": "transcript_json"
         },
         "limitations": {
-            "profile": "cx.profile.principal_server.v1",
+            "profile": "ck.profile.principal_server.v1",
             "full_conformance": false,
             "remaining": [
                 "long-running retry daemon scheduling",
@@ -3359,7 +3359,7 @@ mod tests {
                 "event_id": "ck:event:01904100-0000-7000-8000-000000000054",
                 "sender": "did:web:alice.example",
                 "thread_id": "ck:flow:01904100-0000-7000-8000-000000000051",
-                "content": {"kind": "cx.content.text", "body": "hello federation"}
+                "content": {"kind": "ck.content.text", "body": "hello federation"}
             }),
         );
 
@@ -3379,7 +3379,7 @@ mod tests {
         assert_eq!(outbox.len(), 3);
         assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
             && row.peer_did == "did:web:peer.example"
-            && row.endpoint == "/api/v1/federation/push-operations"));
+            && row.endpoint == "/_cokret/peer/federation/push-operations"));
         let payloads = outbox
             .iter()
             .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
@@ -3462,14 +3462,14 @@ mod tests {
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_MESSAGE_CREATE,
-            json!({"content": {"kind": "cx.content.text", "body": "one"}}),
+            json!({"content": {"kind": "ck.content.text", "body": "one"}}),
         );
         let second = Operation::create(
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063")
                 .unwrap(),
             realm_id,
             kinds::CX_MESSAGE_CREATE,
-            json!({"content": {"kind": "cx.content.text", "body": "two"}}),
+            json!({"content": {"kind": "ck.content.text", "body": "two"}}),
         );
         state
             .persistence
@@ -3530,7 +3530,7 @@ mod tests {
             .expect("outbound anchor transcript persisted");
         assert_eq!(
             transcript.response["target_path"],
-            "/api/v1/federation/anchors"
+            "/_cokret/peer/federation/anchors"
         );
         assert_eq!(transcript.response["intent"]["resource_kind"], "anchor");
         assert_eq!(

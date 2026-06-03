@@ -31,7 +31,7 @@ Following the Phase 1–4 terminology inversion (Round R1.x — wire-breaking):
 - **Space:** navigation container — board, list, section, calendar bucket
   inside a Realm. Old name on the wire: `Place`.
 
-`cx.realm.link`, `cx.realm.inheritance_policy`, and `cx.capability.derived`
+`ck.realm.link`, `ck.realm.inheritance_policy`, and `ck.capability.derived`
 are the new typed edges that wire boundaries together (governed_by /
 discoverable_from / mirror_of). Legacy `space_*` and `place_*` payload
 fields remain accepted as serde aliases.
@@ -44,10 +44,10 @@ on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
 Operator-visible highlights:
 
 - **`trust_domain` is now immutable on a Realm** — captured by
-  `cx.realm.create` and locked thereafter. Cross-domain replays reject
+  `ck.realm.create` and locked thereafter. Cross-domain replays reject
   with `cross_domain_replay_rejected`.
-- **`ServiceDescribe` v2** — `cx.server.describe` / `cx.account.describe` /
-  `cx.events.describe` / `cx.applet.describe` return the 17-field
+- **`ServiceDescribe` v2** — `ck.server.describe` / `ck.account.describe` /
+  `ck.events.describe` / `ck.applet.describe` return the 17-field
   canonical envelope, including `trust_domain` / `plaintext_visibility` /
   `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
 - **`/events/frontier` split by role** — `peer_role` query param routes
@@ -67,7 +67,7 @@ Operator-visible highlights:
 - **Delivery-binding handover error codes** —
   `delivery_binding_stale` (with `new_recipient_service_did` +
   `handover_frontier`) and `delivery_binding_handed_over`.
-- **`cx.cross_signing.publish` CAS** —
+- **`ck.cross_signing.publish` CAS** —
   `expected_previous_generation == current && new = current + 1`,
   verified before signature.
 
@@ -81,11 +81,11 @@ normative source. The key operational hooks:
 
 - **`SOLAND_TRUST_DOMAIN`** — required `ck:trust_domain:<scope>` value
   (defaults to a value derived from the configured `service_did`).
-  Enters the canonical transcript of every `cx.cross_signing.reset`
+  Enters the canonical transcript of every `ck.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
-- **Ephemeral kinds rejected on `POST /api/v1/events`** — producers
-  must route the 12 ephemeral kinds (`cx.call.signal`, `cx.presence`,
-  `cx.typing`, `cx.receipt.read`, `cx.key.verification.*`) through
+- **Ephemeral kinds rejected on `POST /_cokret/self/events`** — producers
+  must route the 12 ephemeral kinds (`ck.call.signal`, `cx.presence`,
+  `cx.typing`, `ck.receipt.read`, `ck.key.verification.*`) through
   the ephemeral envelope / device-message channels; no compatibility
   shim.
 - **Realm terminal-state, presign blob fail-closed, federation
@@ -188,7 +188,7 @@ All settings can be supplied via environment variables (preferred) or a
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SOLAND_BIND` (or `--bind`) | `127.0.0.1:8698` | Listen address |
-| `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/api/v1/server/describe`) |
+| `SOLAND_PUBLIC_BASE_URL` | `http://<bind>` | Advertised base URL (`/_cokret/describe`) |
 | `SOLAND_TLS_CERT_PATH` | unset | TLS certificate PEM path; when paired with `SOLAND_TLS_KEY_PATH`, soland serves HTTPS via rustls |
 | `SOLAND_TLS_KEY_PATH` | unset | TLS private-key PEM path paired with `SOLAND_TLS_CERT_PATH` |
 | `SOLAND_SERVICE_DID` | `did:web:soland.local` | Service DID — also the proof `audience` binding |
@@ -303,9 +303,9 @@ must match the canonical commit digest, the verification method must be rooted
 in the commit author DID, and proof `domain`/`audience` must bind to
 `SOLAND_SERVICE_DID`.
 
-`GET /api/v1/identity/describe` exposes `did_webvh.providers[]` for coauth.
+`GET /_cokret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through
-`POST /api/v1/identity/webvh/register` with `Authorization: Bearer
+`POST /_cokret/root/identity/webvh/register` with `Authorization: Bearer
 <SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER>`; soland then serves the DID
 document and webvh log from `/webvh/{local_id}/did.json` and `.jsonl`. The
 embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
@@ -318,12 +318,12 @@ soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
 `Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
 token with `urn:cokret:principal-server:session.bind`, then maps
 `org.cokret.principal_did` and `org.cokret.device_id` into the local
-account/device view. The older `/api/v1/auth/session-grant/exchange` bridge is
+account/device view. The older `/_cokret/gate/auth/session-grant/exchange` bridge is
 kept as a legacy scaffold, not the primary login path.
 
 Account subscribe and Events API cursors are structured `ck:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and
-expiry. `/api/v1/account/subscribe` resumes with `after`; `/api/v1/events`
+expiry. `/_cokret/self/account/subscribe` resumes with `after`; `/_cokret/self/events`
 paginates with `before` / `after`. Expired cursors fail with `cursor_expired`.
 
 Development bearer sessions are stored server-side by service-bound SHA-256
@@ -334,9 +334,9 @@ to-device position. Blob downloads require a bearer session plus a `purpose`
 query parameter; blobs are visible to the uploader or to members of the bound
 Space.
 
-The v1 primary write path is the signed Event Envelope API: `GET /api/v1/events/describe`
+The v1 primary write path is the signed Event Envelope API: `GET /_cokret/self/events/describe`
 declares the active event registry, schema/reducer profiles, and limits, and
-`POST /api/v1/events` accepts one canonical Event Envelope.
+`POST /_cokret/self/events` accepts one canonical Event Envelope.
 
 Federation transaction IDs are recorded per origin with canonical request
 digests. Replaying the same `(origin, txn_id)` and body returns the stored
@@ -355,12 +355,12 @@ soland exposes the canonical Cokret v1 routes (~180 routes total). Highlights:
 - `GET  /.well-known/cokret/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
-- `POST /api/v1/events`, `GET /api/v1/events/describe`, …
-- `GET /api/v1/sync`, `GET /api/v1/identity/*`, `GET /api/v1/directory/*`
-- `POST /api/v1/auth/dev-login` (development_mode only)
+- `POST /_cokret/self/events`, `GET /_cokret/self/events/describe`, …
+- `GET /_cokret/sync`, `GET /_cokret/root/identity/*`, `GET /_cokret/find/directory/*`
+- `POST /_cokret/gate/auth/dev-login` (development_mode only)
 
 A complete list lives in the OpenAPI document above; `/_soland/admin/{resource}`
-and `/api/v1/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
+and `/_cokret/gate/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Development
 
@@ -401,7 +401,7 @@ the complete federation/media/recovery/key-backup surfaces.
 
 Before exposing soland to the public internet, walk every item below.
 The same list is computed at runtime and surfaced on
-`/health.hardening` (and `/api/v1/server/describe.hardening`) so sodmin's
+`/health.hardening` (and `/_cokret/describe.hardening`) so sodmin's
 `/hardening` dashboard can flag failing checks across the whole fleet.
 
 - [ ] `SOLAND_DEVELOPMENT_MODE=false` (default — only flip to true on a loopback dev bind)

@@ -1,10 +1,10 @@
 //! Actor-private account data CRUD.
 //!
 //! Surfaces:
-//! - `PUT /api/v1/account_data/{type}` — upsert a per-actor account data entry
-//! - `GET /api/v1/account_data/{type}` — fetch one entry
-//! - `GET /api/v1/account_data` — list every entry the authenticated actor owns
-//! - `DELETE /api/v1/account_data/{type}` — tombstone one entry
+//! - `PUT /_cokret/self/account_data/{type}` — upsert a per-actor account data entry
+//! - `GET /_cokret/self/account_data/{type}` — fetch one entry
+//! - `GET /_cokret/self/account_data` — list every entry the authenticated actor owns
+//! - `DELETE /_cokret/self/account_data/{type}` — tombstone one entry
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
 //! sections (§3.1 Space tags, §3.5 blocklist, §3.6 contact remarks, §3.7 Space
@@ -42,11 +42,11 @@ struct AccountDataTypeSpec {
 
 const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
     AccountDataTypeSpec {
-        data_type: "cx.agent.draft.v1",
+        data_type: "ck.agent.draft.v1",
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: "cx.agent.sidecar_projection.v1",
+        data_type: "ck.agent.sidecar_projection.v1",
         controller_private: true,
     },
 ];
@@ -72,7 +72,7 @@ pub(super) fn router() -> Router {
 pub struct AccountDataSetRequest {
     /// Caller-supplied opaque payload. Server stores it verbatim; canonical
     /// encoding and (for sensitive keys like `cx.contacts.*` /
-    /// `cx.account.blocklist`) client-side encryption are the client's
+    /// `ck.account.blocklist`) client-side encryption are the client's
     /// responsibility.
     pub content: Value,
 }
@@ -121,7 +121,7 @@ fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
 fn account_data_update_type(data_type: &str) -> &'static str {
     if matches!(
         data_type,
-        "cx.account.blocklist" | "cx.account.blocklist.v1"
+        "ck.account.blocklist" | "cx.account.blocklist.v1"
     ) {
         BLOCKLIST_UPDATE_TYPE
     } else {
@@ -199,7 +199,7 @@ async fn put_account_data(
     };
     let is_blocklist_update = matches!(
         data_type.as_str(),
-        "cx.account.blocklist" | "cx.account.blocklist.v1"
+        "ck.account.blocklist" | "cx.account.blocklist.v1"
     );
     state
         .persistence

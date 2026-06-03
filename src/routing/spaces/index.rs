@@ -1,15 +1,15 @@
 //! Index / projection-query surface.
 //!
 //! Surfaces:
-//! - `GET  /api/v1/index/describe`
-//! - `GET  /api/v1/index/object`
-//! - `GET  /api/v1/index/thread`
-//! - `GET  /api/v1/index/notifications`
-//! - `GET  /api/v1/index/inbox`
-//! - `POST /api/v1/index/search`
-//! - `GET  /api/v1/index/space-hierarchy`
-//! - `POST /api/v1/index/query`
-//! - `GET  /api/v1/index/debug/reducer`
+//! - `GET  /_cokret/self/index/describe`
+//! - `GET  /_cokret/self/index/object`
+//! - `GET  /_cokret/self/index/thread`
+//! - `GET  /_cokret/self/index/notifications`
+//! - `GET  /_cokret/self/index/inbox`
+//! - `POST /_cokret/self/index/search`
+//! - `GET  /_cokret/self/index/space-hierarchy`
+//! - `POST /_cokret/self/index/query`
+//! - `GET  /_cokret/self/index/debug/reducer`
 //!
 //! Today the index is a thin scaffold over the in-memory projection — it
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
@@ -41,7 +41,7 @@ const QUERY_FEATURES: &[&str] = &[
     "debug_reducer_snapshot",
 ];
 const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -66,7 +66,7 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
         "stability": "limited_projection",
         "profile_claim": "not_claimed",
         "service_did": state.config.service_did.clone(),
-        "reducer_profile": "cx.reducer.v1",
+        "reducer_profile": "ck.reducer.v1",
         "schema_profiles": ["cx.schema.core.v1"],
         "query_features": QUERY_FEATURES,
         "supported_facets": SUPPORTED_FACETS,
@@ -81,7 +81,7 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 /// Map a `ck:<kind>:...` typed id to the spec id-kind it belongs to. Used by
-/// `/api/v1/index/object` to surface a polymorphic typed-id describe; this
+/// `/_cokret/self/index/object` to surface a polymorphic typed-id describe; this
 /// is just a tiny lookup over the spec-registered prefixes.
 fn object_kind_for(object_id: &str) -> Option<&'static str> {
     if object_id.starts_with("ck:space:") {
@@ -142,7 +142,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
         .map(|message| {
             json!({
                 "event_id": message.event_id,
-                "kind": "cx.message.create",
+                "kind": "ck.message.create",
                 "space_id": message.realm_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
@@ -305,7 +305,7 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
         "flows": [{
             "flow": {
                 "flow_id": flow_id,
-                "schema": "cx.schema.flow.v1",
+                "schema": "ck.schema.flow.v1",
                 "realm_id": DEMO_REALM_ID,
                 "track": super::default_discussion_track(&flow_id, &flow_id),
             },
@@ -736,7 +736,7 @@ async fn index_debug_reducer(
         .map(|message| {
             json!({
                 "event_id": message.event_id,
-                "kind": "cx.message.create",
+                "kind": "ck.message.create",
                 "sender": message.sender,
                 "thread_id": message.thread_id,
                 "created_at": message.created_at,
@@ -748,7 +748,7 @@ async fn index_debug_reducer(
     json_ok(json!({
         "service_did": state.config.service_did.clone(),
         "realm_id": realm_id,
-        "reducer_profile": "cx.reducer.v1",
+        "reducer_profile": "ck.reducer.v1",
         "schema_profiles": ["cx.schema.core.v1"],
         "frontier": {
             "message_count": messages.len(),

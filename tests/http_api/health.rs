@@ -31,7 +31,7 @@ async fn health_and_describe_work() {
     assert_eq!(readyz["ok"], true);
     assert_eq!(readyz["checks"]["database"]["ok"], true);
 
-    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&app())
         .await
         .take_json()
@@ -61,7 +61,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.schema.core.v1" || profile == "cx.reducer.v1")
+            .any(|profile| profile == "cx.schema.core.v1" || profile == "ck.reducer.v1")
     );
     assert!(
         describe["supported_schema_profiles"]
@@ -75,7 +75,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.reducer.v1")
+            .any(|profile| profile == "ck.reducer.v1")
     );
     assert_eq!(
         describe["limits"]["profile_status"]["conformance"],
@@ -98,35 +98,35 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.profile.mimi_interop.v1")
+            .any(|profile| profile == "ck.profile.mimi_interop.v1")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "cx.mimi.submit_message")
+            .any(|operation| operation == "ck.mimi.submit_message")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "cx.events.submit")
+            .any(|operation| operation == "ck.events.submit")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "cx.blob.upload")
+            .any(|operation| operation == "ck.blob.upload")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "cx.keys.backups.put")
+            .any(|operation| operation == "ck.keys.backups.put")
     );
     for operation in describe["supported_operations"].as_array().unwrap() {
         let operation = operation.as_str().expect("operation id string");
@@ -165,7 +165,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.profile.directory_service.v1")
+            .any(|profile| profile == "ck.profile.directory_service.v1")
     );
     let limitation_areas = describe["limits"]["profile_status"]["limitations"]
         .as_array()
@@ -196,7 +196,7 @@ async fn health_and_describe_work() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|gap| gap["profile"] == "cx.profile.principal_server.v1")
+        .find(|gap| gap["profile"] == "ck.profile.principal_server.v1")
         .expect("principal server full-profile gap summary should be visible");
     assert_eq!(full_gap["status"], "not_claimed");
 }
@@ -221,7 +221,7 @@ async fn readyz_returns_503_until_introspection_bearer_is_configured() {
 
 #[tokio::test]
 async fn describe_separates_claim_levels() {
-    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&app())
         .await
         .take_json()
@@ -307,7 +307,7 @@ async fn describe_returns_development_mode_field() {
     assert_eq!(health["proof_verifier_mode"], "development");
     assert_eq!(health["admin_auth_mode"], "development");
 
-    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&dev_app)
         .await
         .take_json()
@@ -338,7 +338,7 @@ async fn describe_returns_development_mode_field() {
     assert_eq!(prod_health["proof_verifier_mode"], "production");
     assert_eq!(prod_health["admin_auth_mode"], "did_allowlist");
 
-    let prod_describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    let prod_describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&prod_app)
         .await
         .take_json()
@@ -414,8 +414,8 @@ async fn healthz_exposes_hardening_status() {
         "prod posture should clear several extra checks (dev={score} prod={prod_score})"
     );
 
-    // /api/v1/server/describe should also embed the same hardening block.
-    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    // /_cokret/describe should also embed the same hardening block.
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&prod_app)
         .await
         .take_json()

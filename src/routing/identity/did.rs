@@ -1,15 +1,15 @@
 //! Identity / DID handlers.
 //!
 //! Surfaces:
-//! - `GET  /api/v1/identity/describe`     — service identity capability descriptor
-//! - `POST /api/v1/identity/resolve`      — resolve a DID via SDK + local store
-//! - `GET  /api/v1/identity/document`     — fetch the locally-cached DID document
-//! - `GET  /api/v1/identity/log`          — return the local key log for a DID
-//! - `POST /api/v1/identity/webvh/register` — register through the embedded webvh provider
+//! - `GET  /_cokret/root/identity/describe`     — service identity capability descriptor
+//! - `POST /_cokret/root/identity/resolve`      — resolve a DID via SDK + local store
+//! - `GET  /_cokret/root/identity/document`     — fetch the locally-cached DID document
+//! - `GET  /_cokret/root/identity/log`          — return the local key log for a DID
+//! - `POST /_cokret/root/identity/webvh/register` — register through the embedded webvh provider
 //! - `GET  /webvh/{local_id}/did.json` — embedded webvh DID document
 //! - `GET  /webvh/{local_id}/did.jsonl` — embedded webvh log
-//! - `POST /api/v1/identity/submit-did-operation` — submit a DID operation
-//! - `GET  /api/v1/identity/receipts`     — issuer receipts for the local key log
+//! - `POST /_cokret/root/identity/submit-did-operation` — submit a DID operation
+//! - `GET  /_cokret/root/identity/receipts`     — issuer receipts for the local key log
 //!
 //! All long-term state lives behind `state.persistence.webvh()`; the
 //! `did_resolver` is still an in-process resolver chain. Production must move it onto a
@@ -68,7 +68,7 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
             "trust_roots": resolver_trust_roots(state, &did_webvh),
             "freshness_receipts": {
                 "supported": true,
-                "endpoint_template": "/api/v1/identity/receipts?did={did}",
+                "endpoint_template": "/_cokret/root/identity/receipts?did={did}",
                 "issuer": state.config.service_did.clone(),
                 "threshold_mode": "local_single_issuer",
                 "evidence_fields": ["service_did", "did", "head_event_digest", "seq", "issued_at"]
@@ -382,11 +382,11 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
 }
 
 #[endpoint(
-    operation_id = "cx.identity.resolve",
+    operation_id = "ck.identity.resolve",
     tags("identity"),
     summary = "Resolve a DID via local webvh store + SDK resolver chain"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.resolve"))]
 pub(super) async fn identity_resolve(
     body: JsonBody<IdentityResolveReqBody>,
     depot: &mut Depot,
@@ -452,11 +452,11 @@ pub(super) async fn identity_resolve(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.get_document",
+    operation_id = "ck.identity.get_document",
     tags("identity"),
     summary = "Fetch the locally-cached DID document for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.get_document"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.get_document"))]
 pub(super) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -506,11 +506,11 @@ pub(super) async fn identity_did_document(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.get_log",
+    operation_id = "ck.identity.get_log",
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.get_log"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.get_log"))]
 pub(super) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -545,11 +545,11 @@ pub(super) async fn identity_log(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.get_receipts",
+    operation_id = "ck.identity.get_receipts",
     tags("identity"),
     summary = "Read issuer receipts for the local webvh key-log of a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.get_receipts"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.get_receipts"))]
 pub(super) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -583,12 +583,12 @@ pub(super) async fn identity_receipts(
 }
 
 #[endpoint(
-    operation_id = "cx.identity.submit_did_operation",
+    operation_id = "ck.identity.submit_did_operation",
     tags("identity"),
     summary = "Submit a method-neutral DID operation to the local registry",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.submit_did_operation"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.submit_did_operation"))]
 pub(super) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<Value>,
@@ -655,7 +655,7 @@ pub(super) async fn identity_submit_did_operation(
     );
     let method_evidence = json!({
         "mode": "submitted_operation",
-        "source": "cx.identity.submit_did_operation",
+        "source": "ck.identity.submit_did_operation",
         "previous": existing
             .as_ref()
             .map(|record| record.method_evidence.clone())
@@ -779,8 +779,8 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "method": "did:webvh",
             "default": default_provider_id.as_deref() == Some(embedded_id),
             "active": active,
-            "registration_url": format!("{}/api/v1/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
-            "resolver_url": format!("{}/api/v1/identity", state.config.public_base_url.trim_end_matches('/')),
+            "registration_url": format!("{}/_cokret/root/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
+            "resolver_url": format!("{}/_cokret/root/identity", state.config.public_base_url.trim_end_matches('/')),
             "document_url_template": document_url_template,
             "log_url_template": log_url_template,
             "registration_auth": {
@@ -840,7 +840,7 @@ fn resolver_trust_roots(state: &AppState, did_webvh: &Value) -> Value {
         "kind": "local_identity_store",
         "trust_domain": state.config.trust_domain.clone(),
         "methods": state.config.did_resolver_allow_methods.clone(),
-        "freshness_receipt_endpoint": "/api/v1/identity/receipts",
+        "freshness_receipt_endpoint": "/_cokret/root/identity/receipts",
         "proof_verification": {
             "controller_proof": "eddsa-jcs-2022",
             "webvh_log_chain": "required",
@@ -1260,7 +1260,7 @@ fn default_did_document(did: &str) -> Value {
         "id": did,
         "verificationMethod": [],
         "authentication": [],
-        "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/api/v1"}]
+        "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/_cokret"}]
     })
 }
 

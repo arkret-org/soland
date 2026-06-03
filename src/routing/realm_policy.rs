@@ -1,13 +1,13 @@
 //! G3.S2 — Realm policy server admin HTTP surface.
 //!
 //! Surfaces:
-//! - `GET /api/v1/realms/{realm_id}/policy-server` — fetch the currently-projected
-//!   `cx.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
+//! - `GET /_cokret/self/realms/{realm_id}/policy-server` — fetch the currently-projected
+//!   `ck.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /api/v1/realms/{realm_id}/policy-server` — submit a `cx.realm.policy_server` Move. Routes
+//! - `PUT /_cokret/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move. Routes
 //!   through the standard `accept_local_operations` pipeline so the reducer's validators (URL
 //!   scheme, on_timeout enum) run.
-//! - `DELETE /api/v1/realms/{realm_id}/policy-server` — write a tombstoning Move so admins can
+//! - `DELETE /_cokret/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins can
 //!   remove the per-realm policy server config (callers fall back to the `governed_by` chain or the
 //!   local-only capability check after this lands).
 //!
@@ -65,7 +65,7 @@ pub struct PutRealmPolicyServerRequest {
 #[endpoint(
     operation_id = "cx.realms.policy_server.get",
     tags("realms"),
-    summary = "Read the projected cx.realm.policy_server config (G3.S2)"
+    summary = "Read the projected ck.realm.policy_server config (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.get"))]
 async fn get_realm_policy_server(
@@ -85,7 +85,7 @@ async fn get_realm_policy_server(
             Some(c) => (c.clone(), true),
             None => {
                 return Err(AppError::not_found(
-                    "no cx.realm.policy_server declared for this realm",
+                    "no ck.realm.policy_server declared for this realm",
                 ));
             }
         },
@@ -105,7 +105,7 @@ async fn get_realm_policy_server(
 #[endpoint(
     operation_id = "cx.realms.policy_server.put",
     tags("realms"),
-    summary = "Submit a cx.realm.policy_server Move (G3.S2)"
+    summary = "Submit a ck.realm.policy_server Move (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.put"))]
 async fn put_realm_policy_server(
@@ -169,7 +169,7 @@ async fn put_realm_policy_server(
 #[endpoint(
     operation_id = "cx.realms.policy_server.delete",
     tags("realms"),
-    summary = "Tombstone the cx.realm.policy_server cell (G3.S2)"
+    summary = "Tombstone the ck.realm.policy_server cell (G3.S2)"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.delete"))]
 async fn delete_realm_policy_server(
@@ -189,11 +189,11 @@ async fn delete_realm_policy_server(
     let mut projection = state.projection.lock().expect("projection mutex");
     if projection.realm_policy_servers.remove(&realm_id).is_none() {
         return Err(AppError::not_found(
-            "no cx.realm.policy_server to tombstone for this realm",
+            "no ck.realm.policy_server to tombstone for this realm",
         ));
     }
     if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.policy_server.v1:{realm_id}"
+        "ck:cell:ck.component.realm.policy_server.v1:{realm_id}"
     )) {
         projection.cells.remove(&cell_id);
     }
@@ -205,7 +205,7 @@ async fn delete_realm_policy_server(
         kind = "policy_server_tombstone",
         realm_id = %realm_id,
         actor = %session.actor,
-        "G3.S2: cx.realm.policy_server tombstoned"
+        "G3.S2: ck.realm.policy_server tombstoned"
     );
     empty_ok()
 }

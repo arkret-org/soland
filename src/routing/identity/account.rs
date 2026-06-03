@@ -1,11 +1,11 @@
 //! Account + contact handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/account/register` — create the account record
-//! - `GET  /api/v1/account/me` — return the authenticated principal's account
-//! - `POST /api/v1/contacts/request` — open a pending contact relationship
-//! - `POST /api/v1/contacts/respond` — accept or reject a pending request
-//! - `GET  /api/v1/contacts` — list contacts visible to the actor
+//! - `POST /_cokret/self/account/register` — create the account record
+//! - `GET  /_cokret/self/account/me` — return the authenticated principal's account
+//! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
+//! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
+//! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -42,7 +42,7 @@ use crate::wire::{
 /// can swap to a longer constant or env-driven value once the persistent
 /// release ledger lands.
 pub const HANDLE_GRACE_PERIOD_SECONDS: i64 = 5;
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
 
 fn handle_in_grace_period(state: &AppState, handle: &str) -> bool {
     let releases = state.handle_releases.lock().expect("handle_releases lock");
@@ -304,7 +304,7 @@ async fn update_profile(
     // Spec: discovery/profiles-presence.md §2 — actor profile updates
     // fan out through the directory's actor projection. We store the
     // updates on the `AccountRecord` directly; `demo_actors()` reads
-    // them when serving `/api/v1/directory/search-actors`.
+    // them when serving `/_cokret/find/directory/search-actors`.
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -893,7 +893,7 @@ async fn erase_account(
     let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
     let erasure_receipt = json!({
         "receipt_id": crate::ids::generate("receipt"),
-        "schema": "cx.schema.erasure_receipt.v1",
+        "schema": "ck.schema.erasure_receipt.v1",
         "issuer": state.config.service_did.clone(),
         "subject": {
             "kind": "principal",
@@ -937,7 +937,7 @@ async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "cx.audit.erasure_receipt",
+        "ck.audit.erasure_receipt",
         erasure_receipt.clone(),
         "accepted",
     )
@@ -1117,7 +1117,7 @@ fn realm_erasure_receipt(
     let proof_signature = erasure_receipt_proof_signature(state, &proof_payload);
     json!({
         "receipt_id": receipt_id,
-        "schema": "cx.schema.erasure_receipt.v1",
+        "schema": "ck.schema.erasure_receipt.v1",
         "issuer": state.config.service_did.clone(),
         "subject": {
             "kind": "principal",
@@ -1366,7 +1366,7 @@ fn notification_from_message(
         "id": format!("ck:notification:{}", message.event_id),
         "notification_id": format!("ck:notification:{}", message.event_id),
         "event_id": message.event_id,
-        "event_kind": "cx.message.create",
+        "event_kind": "ck.message.create",
         "notification_type": notification_kind,
         "notification_kind": notification_kind,
         "kind": notification_kind,
@@ -1395,7 +1395,7 @@ fn encrypted_notification_from_message(
         "id": format!("ck:notification:{}", message.event_id),
         "notification_id": format!("ck:notification:{}", message.event_id),
         "event_id": message.event_id,
-        "event_kind": "cx.message.create",
+        "event_kind": "ck.message.create",
         "notification_type": "blind_wakeup",
         "notification_kind": notification_kind,
         "kind": "blind_wakeup",
@@ -1536,7 +1536,7 @@ fn flow_participants_include_actor(state: &AppState, flow_id: &str, actor: &str)
 }
 
 fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
-    let cell_id = format!("ck:cell:cx.component.flow.watch.v1:{flow_id}:{actor}");
+    let cell_id = format!("ck:cell:ck.component.flow.watch.v1:{flow_id}:{actor}");
     state
         .projection
         .lock()
@@ -1893,7 +1893,7 @@ async fn list_contacts(
     json_ok(ContactsResponse { contacts: result })
 }
 
-/// `GET /api/v1/account/{did}/principal-space` response.
+/// `GET /_cokret/self/account/{did}/principal-space` response.
 ///
 /// **Wire shape (locked for coauth integration)**:
 /// ```json
@@ -1923,7 +1923,7 @@ pub struct PrincipalSpaceResponse {
     pub stashed: bool,
 }
 
-/// `GET /api/v1/account/{did}/principal-space`.
+/// `GET /_cokret/self/account/{did}/principal-space`.
 ///
 /// Returns the deterministic principal-control Space id for `did`,
 /// matching the `sha256(did) → UUIDv7` convention coauth currently mirrors

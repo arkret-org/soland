@@ -14,10 +14,10 @@
 //! `state.persistence` store is a follow-up — see TODO at module
 //! bottom.
 //!
-//! HTTP surface (mounted under `/api/v1/extensions/bots`):
-//!   POST   /api/v1/extensions/bots         — register a bot/ghost
-//!   DELETE /api/v1/extensions/bots/{did}   — revoke a bot/ghost
-//!   GET    /api/v1/extensions/bots         — list bots owned by caller
+//! HTTP surface (mounted under `/_cokret/self/extensions/bots`):
+//!   POST   /_cokret/self/extensions/bots         — register a bot/ghost
+//!   DELETE /_cokret/self/extensions/bots/{did}   — revoke a bot/ghost
+//!   GET    /_cokret/self/extensions/bots         — list bots owned by caller
 //!
 //! Reducer dispatch hooks are exposed via
 //! `apply_bot_register` / `apply_bot_revoke` so the central reducer
@@ -27,7 +27,7 @@
 //! TODO(G3.S9-followup): bind bot/ghost provisioning to the verified
 //! manifest's `applet_id`; persist the registry through
 //! `state.persistence` so it survives restart; emit
-//! `cx.identity.accountability_grant` events so the accountability
+//! `ck.identity.accountability_grant` events so the accountability
 //! chain is queryable via the standard DID Document fetch.
 
 use std::sync::Mutex;

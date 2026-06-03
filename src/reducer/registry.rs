@@ -55,11 +55,11 @@ mod lattice_kind_scaffold_tests {
     #[test]
     fn lattice_kind_error_display_is_stable() {
         let err = LatticeKindError::MissingSubjectField {
-            cell_family: "cx.component.flow.position.v1",
+            cell_family: "ck.component.flow.position.v1",
             field: "flow_id",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("cx.component.flow.position.v1"));
+        assert!(msg.contains("ck.component.flow.position.v1"));
         assert!(msg.contains("flow_id"));
 
         let err = LatticeKindError::UnknownCellFamily {

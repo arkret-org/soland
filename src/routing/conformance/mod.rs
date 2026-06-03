@@ -6,7 +6,7 @@
 //! at `cotest/e2e/tests/conformance/encoding-vectors.spec.ts` can drive the
 //! same vectors against a running soland.
 //!
-//! Routes (all `POST /api/v1/conformance/...`):
+//! Routes (all `POST /_cokret/self/conformance/...`):
 //!   - `encode`
 //!   - `sign`
 //!   - `hlc-merge`
@@ -38,7 +38,7 @@ pub(crate) mod util;
 
 use crate::error::{AppError, ErrorCode};
 
-/// Build the `/conformance/*` sub-router. Mounted under `/api/v1`.
+/// Build the `/conformance/*` sub-router. Mounted under `/_cokret/self`.
 pub fn router() -> Router {
     Router::with_path("conformance")
         .push(Router::with_path("encode").post(handlers::encode))

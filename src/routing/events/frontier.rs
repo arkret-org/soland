@@ -1,4 +1,4 @@
-//! Typed `/api/v1/events/frontier` response builder + federation frontier
+//! Typed `/_cokret/self/events/frontier` response builder + federation frontier
 //! root / signature helpers (spec B1.4, federation.md §4.5.1).
 //!
 //! `peer_role` routes the frontier read to one of three typed responses —
@@ -204,7 +204,7 @@ pub(crate) fn frontier_service_binding_ref(
     }))?;
     let reducer_profile_digest = canonical_hash(&json!({
         "domain": "cx.events.frontier.reducer_profile.v1",
-        "profile": "cx.reducer.v1",
+        "profile": "ck.reducer.v1",
     }))?;
 
     Ok(FederationServiceBindingRef {

@@ -1,15 +1,15 @@
 //! Directory + handle / actor / organization resolution handlers.
 //!
 //! Surfaces:
-//! - `GET  /api/v1/directory/describe`            — capability + profile probe
-//! - `POST /api/v1/directory/search-realms`       — fuzzy text + visibility filter
-//! - `POST /api/v1/directory/resolve-realm`       — by id / alias / invite_token / signed_link
-//! - `POST /api/v1/directory/resolve-target`      — Realm / Flow / Message address preview
-//! - `POST /api/v1/directory/search-organizations`
-//! - `POST /api/v1/directory/resolve-organization`
-//! - `POST /api/v1/directory/search-actors`
-//! - `POST /api/v1/directory/search-users`        — same as search-actors via body `q`
-//! - `POST /api/v1/directory/resolve-handle`
+//! - `GET  /_cokret/find/directory/describe`            — capability + profile probe
+//! - `POST /_cokret/find/directory/search-realms`       — fuzzy text + visibility filter
+//! - `POST /_cokret/find/directory/resolve-realm`       — by id / alias / invite_token / signed_link
+//! - `POST /_cokret/find/directory/resolve-target`      — Realm / Flow / Message address preview
+//! - `POST /_cokret/find/directory/search-organizations`
+//! - `POST /_cokret/find/directory/resolve-organization`
+//! - `POST /_cokret/find/directory/search-actors`
+//! - `POST /_cokret/find/directory/search-users`        — same as search-actors via body `q`
+//! - `POST /_cokret/find/directory/resolve-handle`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
@@ -71,7 +71,7 @@ async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     live
 }
 
-pub(super) fn router() -> Router {
+pub(crate) fn router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
         .push(Router::with_path("directory/search-realms").post(search_realms))
@@ -102,17 +102,17 @@ async fn directory_describe(depot: &mut Depot, res: &mut Response) {
             "organization".to_owned(),
             "actor".to_owned(),
         ],
-        discovery_profiles: vec!["cx.profile.directory_service.v1".to_owned()],
+        discovery_profiles: vec!["ck.profile.directory_service.v1".to_owned()],
         restricted_query_proof: false,
     }));
 }
 
 #[endpoint(
-    operation_id = "cx.directory.search_realms",
+    operation_id = "ck.directory.search_realms",
     tags("directory"),
     summary = "Fuzzy-text + visibility-filtered realm search"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.search_realms"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.search_realms"))]
 async fn search_realms(
     body: JsonBody<SearchRealmsRequest>,
     depot: &mut Depot,
@@ -144,11 +144,11 @@ async fn search_realms(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.resolve_realm",
+    operation_id = "ck.directory.resolve_realm",
     tags("directory"),
     summary = "Resolve a realm by id / alias / invite_token / signed_link"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_realm"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.resolve_realm"))]
 async fn resolve_realm(
     body: JsonBody<ResolveRealmRequest>,
     depot: &mut Depot,
@@ -215,8 +215,8 @@ async fn resolve_realm(
                 stripped_state: vec![json!({
                     // R1.2 (Realm/Space reversal): security-namespace
                     // event renamed from `cx.space.discovery` to
-                    // `cx.realm.discovery`.
-                    "type": "cx.realm.discovery",
+                    // `ck.realm.discovery`.
+                    "type": "ck.realm.discovery",
                     "subject": "",
                     "content": {
                         "discoverability": discoverability,
@@ -242,11 +242,11 @@ async fn resolve_realm(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.resolve_target",
+    operation_id = "ck.directory.resolve_target",
     tags("directory"),
     summary = "Resolve a Realm / Flow / Message share address to a policy-limited preview"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_target"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.resolve_target"))]
 async fn resolve_target(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -747,7 +747,7 @@ fn join_candidates_for_resolved_realm(
         service_type: "principal_server".to_owned(),
         role: "primary".to_owned(),
         endpoint: Some(state.config.public_base_url.clone()),
-        operations: vec!["cx.events.submit".to_owned()],
+        operations: vec!["ck.events.submit".to_owned()],
         join_methods,
         priority: Some(0),
         source: "directory_ingest".to_owned(),
@@ -760,11 +760,11 @@ fn join_candidates_for_resolved_realm(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.search_organizations",
+    operation_id = "ck.directory.search_organizations",
     tags("directory"),
     summary = "Fuzzy-text search across known organizations (demo data for now)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.search_organizations"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.search_organizations"))]
 async fn search_organizations(
     body: JsonBody<SearchOrganizationsRequest>,
     depot: &mut Depot,
@@ -789,11 +789,11 @@ async fn search_organizations(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.resolve_organization",
+    operation_id = "ck.directory.resolve_organization",
     tags("directory"),
     summary = "Resolve an organization by organization_id or handle"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_organization"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.resolve_organization"))]
 async fn resolve_organization(
     body: JsonBody<ResolveOrganizationRequest>,
     depot: &mut Depot,
@@ -867,11 +867,11 @@ async fn resolve_organization(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.search_actors",
+    operation_id = "ck.directory.search_actors",
     tags("directory"),
     summary = "Search actors visible to the calling session"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.search_actors"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.search_actors"))]
 async fn search_actors(
     body: JsonBody<SearchActorsRequest>,
     depot: &mut Depot,
@@ -909,11 +909,11 @@ async fn search_actors(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.search_users",
+    operation_id = "ck.directory.search_users",
     tags("directory"),
     summary = "Search users via a POST body to avoid query-string leakage"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.search_users"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.search_users"))]
 async fn search_users(
     body: JsonBody<SearchUsersRequest>,
     depot: &mut Depot,
@@ -925,11 +925,11 @@ async fn search_users(
     let limit = checked_limit(body.limit)?;
     let query = body.query;
     let session = authenticated_session(state, req).await.ok();
-    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `cx.directory.search_users`
+    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `ck.directory.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
-    // avatar) goes through `cx.directory.search_actors` or
+    // avatar) goes through `ck.directory.search_actors` or
     // `cx.directory.resolve-handle`.
     let mut results: Vec<Value> = Vec::new();
     for actor in demo_actors(state).await {
@@ -949,7 +949,7 @@ async fn search_users(
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
-/// `cx.directory.search_users` response entry. Only `handle` (canonical
+/// `ck.directory.search_users` response entry. Only `handle` (canonical
 /// `<localpart>:<domain>` per handle-claim.schema.json, cokret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
@@ -987,11 +987,11 @@ fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
 }
 
 #[endpoint(
-    operation_id = "cx.directory.resolve_handle",
+    operation_id = "ck.directory.resolve_handle",
     tags("directory"),
     summary = "Resolve a normalized actor handle (e.g. `@alice`) to a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.resolve_handle"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.resolve_handle"))]
 async fn resolve_handle(
     body: JsonBody<ResolveHandleRequest>,
     depot: &mut Depot,
@@ -1085,7 +1085,7 @@ fn signed_handle_claim(
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let unsigned = json!({
-        "schema": "cx.schema.handle_claim.v1",
+        "schema": "ck.schema.handle_claim.v1",
         "handle": canonical_handle,
         "handle_aliases": [format!("acct:{localpart}@{service_domain}")],
         "subject": did,
@@ -1093,7 +1093,7 @@ fn signed_handle_claim(
         "issuer_service_did": service_did,
         "binding_state": "verified",
         // HC-SOL-1 (R3.2, cokret-spec @ b56cab1) — `claim_type=service_handle`
-        // is removed from `cx.schema.handle_claim.v1`. The demo directory
+        // is removed from `ck.schema.handle_claim.v1`. The demo directory
         // issues a user/principal handle claim, so `user_handle` is the
         // correct class here.
         "claim_kind": "handle_binding",
@@ -1123,7 +1123,7 @@ fn signed_handle_claim(
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
 
     let claim = HandleClaim {
-        schema: "cx.schema.handle_claim.v1".to_owned(),
+        schema: "ck.schema.handle_claim.v1".to_owned(),
         handle: canonical_handle,
         handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
         subject: did.to_owned(),
@@ -1176,11 +1176,11 @@ fn signed_handle_claim(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.private_contact_discovery",
+    operation_id = "ck.directory.private_contact_discovery",
     tags("directory"),
     summary = "Privacy-preserving contact discovery over padded identifier batches"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.private_contact_discovery"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.private_contact_discovery"))]
 async fn private_contact_discovery(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -1243,11 +1243,11 @@ async fn private_contact_discovery(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.announce",
+    operation_id = "ck.directory.announce",
     tags("directory"),
     summary = "Announce a discoverable directory resource"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.announce"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.announce"))]
 async fn directory_announce(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -1295,11 +1295,11 @@ async fn directory_announce(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.withdraw",
+    operation_id = "ck.directory.withdraw",
     tags("directory"),
     summary = "Withdraw a previously-announced directory resource"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.withdraw"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.withdraw"))]
 async fn directory_withdraw(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -1341,11 +1341,11 @@ async fn directory_withdraw(
 }
 
 #[endpoint(
-    operation_id = "cx.directory.push.register",
+    operation_id = "ck.directory.push.register",
     tags("directory"),
     summary = "Subscribe to directory update notifications"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.directory.push.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.directory.push.register"))]
 async fn directory_subscribe(
     body: JsonBody<Value>,
     depot: &mut Depot,

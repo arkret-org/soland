@@ -1,11 +1,11 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `GET    /api/v1/policy/documents`           — list owner-scoped policies
-//! - `GET    /api/v1/policy/documents/{id}`      — read one policy document
-//! - `PUT    /api/v1/policy/documents/{id}`      — upsert (idempotent)
-//! - `DELETE /api/v1/policy/documents/{id}`      — remove a policy document
-//! - `POST   /api/v1/policy/check`               — evaluate a `PolicyCheckReqBody`
+//! - `GET    /_cokret/self/policy/documents`           — list owner-scoped policies
+//! - `GET    /_cokret/self/policy/documents/{id}`      — read one policy document
+//! - `PUT    /_cokret/self/policy/documents/{id}`      — upsert (idempotent)
+//! - `DELETE /_cokret/self/policy/documents/{id}`      — remove a policy document
+//! - `POST   /_cokret/self/policy/check`               — evaluate a `PolicyCheckReqBody`
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -195,8 +195,8 @@ async fn upsert_policy_document(
     json_ok(policy_document_to_response(&record))
 }
 
-/// Body for `PATCH /api/v1/policies/{policy_id}` — applies a
-/// `cx.schema.patch.v1` field-patch to the existing policy document's
+/// Body for `PATCH /_cokret/self/policies/{policy_id}` — applies a
+/// `ck.schema.patch.v1` field-patch to the existing policy document's
 /// payload (effect / actions / resource / obligations). Behaves as a
 /// shallow set/unset over the payload object: each key in `patch` is
 /// either a direct value (sugared `set`) or an explicit
@@ -211,7 +211,7 @@ pub struct PatchPolicyDocumentRequest {
 #[endpoint(
     operation_id = "cx.extension.soland.policies.patch",
     tags("policy"),
-    summary = "Apply a cx.schema.patch.v1 patch to a policy document"
+    summary = "Apply a ck.schema.patch.v1 patch to a policy document"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.patch"))]
 async fn patch_policy_document(
@@ -324,11 +324,11 @@ async fn delete_policy_document(
 }
 
 #[endpoint(
-    operation_id = "cx.policy.check",
+    operation_id = "ck.policy.check",
     tags("policy"),
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.policy.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.policy.check"))]
 async fn policy_check(
     body: JsonBody<PolicyCheckReqBody>,
     depot: &mut Depot,

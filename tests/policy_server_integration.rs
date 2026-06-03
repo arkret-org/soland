@@ -56,7 +56,7 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         request_id: "polreq_integ".to_owned(),
         realm_id: RealmId::new(REALM_ID).unwrap(),
         actor: Did::new("did:web:alice.example").unwrap(),
-        action: "cx.message.create".to_owned(),
+        action: "ck.message.create".to_owned(),
         source_service_did: Did::new("did:web:soland.local").unwrap(),
         source_service_type: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
@@ -207,7 +207,7 @@ async fn policy_server_integration_hits_mock() {
         }
     });
 
-    let url = format!("http://{addr}/api/v1/policy/check");
+    let url = format!("http://{addr}/_cokret/self/policy/check");
     let cfg = config_for(&url, 2000);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true)
@@ -217,7 +217,7 @@ async fn policy_server_integration_hits_mock() {
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
         actor_did: "did:web:alice.example".to_owned(),
-        action: "cx.message.create".to_owned(),
+        action: "ck.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,
         request_rate_counter: 0,
@@ -268,7 +268,7 @@ async fn policy_server_integration_timeout_fails_closed() {
         drop(listener);
     });
 
-    let url = format!("http://{addr}/api/v1/policy/check");
+    let url = format!("http://{addr}/_cokret/self/policy/check");
     let cfg = config_for(&url, 250);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true);
@@ -277,7 +277,7 @@ async fn policy_server_integration_timeout_fails_closed() {
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
         actor_did: "did:web:alice.example".to_owned(),
-        action: "cx.message.create".to_owned(),
+        action: "ck.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,
         request_rate_counter: 0,

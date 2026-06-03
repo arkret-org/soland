@@ -29,33 +29,50 @@ use super::{
 
 pub fn router() -> Router {
     Router::new()
-        .push(auth::router())
-        .push(account::router())
-        .push(account_data::router())
-        .push(consent::router())
+        // `gate` — authentication entry (session-grant / dev-login / logout /
+        // agent-key-pair). Trust segment: outermost authenticated edge.
+        // `gate/auth/*` carries soland's auth extension namespace; the
+        // spec-canonical agent key-pair authorization sits at
+        // `gate/account/agent-key-pair`.
         .push(
-            Router::with_path("identity")
-                .push(Router::with_path("describe").get(did::identity_describe))
-                .push(Router::with_path("resolve").post(did::identity_resolve))
-                .push(Router::with_path("document").get(did::identity_document))
-                .push(Router::with_path("{did}/did-document").get(did::identity_did_document))
-                .push(Router::with_path("log").get(did::identity_log))
-                .push(
-                    Router::with_path("submit-did-operation")
-                        .post(did::identity_submit_did_operation),
-                )
-                .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
-                .push(Router::with_path("receipts").get(did::identity_receipts)),
+            Router::with_path("gate")
+                .push(auth::router())
+                .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )
-        .push(device::router())
-        .push(keys::router())
-        .push(key_backup::router())
-        .push(device_messages::router())
-        .push(profile::router())
-        // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
-        .push(agents::router())
-        // R3 spec-sync — recovery policy / receipt endpoints.
-        .push(recovery::router())
+        // `root` — trust root: DID / identity documents + recovery.
+        .push(
+            Router::with_path("root").push(
+                Router::with_path("identity")
+                    .push(Router::with_path("describe").get(did::identity_describe))
+                    .push(Router::with_path("resolve").post(did::identity_resolve))
+                    .push(Router::with_path("document").get(did::identity_document))
+                    .push(Router::with_path("{did}/did-document").get(did::identity_did_document))
+                    .push(Router::with_path("log").get(did::identity_log))
+                    .push(
+                        Router::with_path("submit-did-operation")
+                            .post(did::identity_submit_did_operation),
+                    )
+                    .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
+                    .push(Router::with_path("receipts").get(did::identity_receipts)),
+            ),
+        )
+        .push(Router::with_path("root").push(recovery::router()))
+        // `self` — the principal's own authenticated session surface:
+        // account, contacts, device inventory, keys, key backups, device
+        // messages, presence, personal agents.
+        .push(
+            Router::with_path("self")
+                .push(account::router())
+                .push(account_data::router())
+                .push(consent::router())
+                .push(device::router())
+                .push(keys::router())
+                .push(key_backup::router())
+                .push(device_messages::router())
+                .push(profile::router())
+                // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
+                .push(agents::router()),
+        )
 }
 
 pub(super) fn embedded_webvh_public_router() -> Router {

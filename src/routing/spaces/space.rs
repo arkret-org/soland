@@ -1,15 +1,15 @@
 //! Space read + visibility surface.
 //!
 //! The lifecycle / membership mutation REST endpoints that previously lived
-//! here (POST/PATCH/PUT/DELETE on `/api/v1/spaces/*`) bypassed canonical
+//! here (POST/PATCH/PUT/DELETE on `/_cokret/self/spaces/*`) bypassed canonical
 //! Event Envelope construction and maintained Realm-level state outside the
 //! event log. They have been removed (see `_spec_report_claude.md` §2.5 and
 //! `realm-and-space.md:140`); Realm state mutations MUST flow through the
-//! canonical operation pipeline (`POST /api/v1/operations`).
+//! canonical operation pipeline (`POST /_cokret/self/operations`).
 //!
 //! Surfaces that remain:
-//! - `GET    /api/v1/spaces/{space_id}` — read a Space's lifecycle response
-//! - `GET    /api/v1/spaces/{space_id}/export` — full event log + projection dump
+//! - `GET    /_cokret/self/spaces/{space_id}` — read a Space's lifecycle response
+//! - `GET    /_cokret/self/spaces/{space_id}/export` — full event log + projection dump
 //!
 //! Everything else in this module is the visibility / membership / typing
 //! query helper surface that every other domain (federation, message, blob,
@@ -127,7 +127,7 @@ async fn upsert_space_moderation_policy(
     let policy =
         organizations::persist_space_moderation_policy(state, &space_id, payload, &session.actor);
     json_ok(json!({
-        "kind": "cx.realm.moderation_policy",
+        "kind": "ck.realm.moderation_policy",
         "space_id": policy.realm_id,
         "policy": policy.payload,
         "updated_by": policy.updated_by,
@@ -923,10 +923,10 @@ pub async fn typing_ephemeral_for_space(
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// cx.space.archive / restore / tombstone payload parsing (spec B1.13).
+// ck.space.archive / restore / tombstone payload parsing (spec B1.13).
 // ────────────────────────────────────────────────────────────────────────
 
-/// Spec B1.13 — parse a `cx.space.archive` / `cx.space.restore` payload
+/// Spec B1.13 — parse a `ck.space.archive` / `ck.space.restore` payload
 /// into the typed [`cokret_sdk::SpaceStateTransitionPayload`]. Returns
 /// `Err` (with `schema_violation`) when the payload still carries the
 /// legacy top-level `target_ref` form (pre-typed wire).
@@ -937,7 +937,7 @@ pub fn parse_space_state_transition_payload(
     if payload.get("target_ref").is_some() {
         return Err((
             cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            "cx.space.archive/restore payload legacy `target_ref` form is wire-broken; \
+            "ck.space.archive/restore payload legacy `target_ref` form is wire-broken; \
              use the typed `space_state_transition_payload` shape (space_id, new_state, reason?)"
                 .to_owned(),
         ));
@@ -947,14 +947,14 @@ pub fn parse_space_state_transition_payload(
             (
                 cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
                 format!(
-                    "cx.space.archive/restore payload must match SpaceStateTransitionPayload: {err}"
+                    "ck.space.archive/restore payload must match SpaceStateTransitionPayload: {err}"
                 ),
             )
         },
     )
 }
 
-/// Spec B1.13 — parse a `cx.space.tombstone` payload into the typed
+/// Spec B1.13 — parse a `ck.space.tombstone` payload into the typed
 /// [`cokret_sdk::SpaceObjectTombstonePayload`].
 #[allow(dead_code)]
 pub fn parse_space_object_tombstone_payload(
@@ -963,7 +963,7 @@ pub fn parse_space_object_tombstone_payload(
     if payload.get("target_ref").is_some() {
         return Err((
             cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            "cx.space.tombstone payload legacy `target_ref` form is wire-broken; \
+            "ck.space.tombstone payload legacy `target_ref` form is wire-broken; \
              use the typed `space_object_tombstone_payload` shape (space_id, tombstone_reason)"
                 .to_owned(),
         ));
@@ -972,7 +972,7 @@ pub fn parse_space_object_tombstone_payload(
         |err| {
             (
                 cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-                format!("cx.space.tombstone payload must match SpaceObjectTombstonePayload: {err}"),
+                format!("ck.space.tombstone payload must match SpaceObjectTombstonePayload: {err}"),
             )
         },
     )

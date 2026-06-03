@@ -4,7 +4,7 @@
 //! Endpoints:
 //!
 //! - `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` — projected
-//!   `cx.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
+//!   `ck.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
 //!   boundary). Mirrors the wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
 //!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
 //! - `GET /_soland/admin/spaces/{space_id}/delivery-binding-policy` — 410 Gone shim. Realm/Space
@@ -17,7 +17,7 @@
 //! `TODO(realm-rework)` in reducer.rs for the eventual rename to
 //! `realm_id`). Operator mutation (PATCH / PUT) is intentionally not
 //! exposed here yet; policy changes flow through the regular
-//! `cx.realm.delivery_binding_policy` event submit path.
+//! `ck.realm.delivery_binding_policy` event submit path.
 
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
@@ -55,7 +55,7 @@ pub struct RealmDeliveryBindingPolicyResponse {
     pub updated_at: Option<String>,
 }
 
-/// Translate the raw `cx.component.realm.delivery_binding_policy.v1`
+/// Translate the raw `ck.component.realm.delivery_binding_policy.v1`
 /// cell value into the typed response DTO. Unknown / missing fields
 /// fall back to defaults so callers can rely on the typed shape even
 /// during the transition window. `TODO(realm-rework)`: once the

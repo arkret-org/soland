@@ -1,13 +1,13 @@
 //! Outbound push gateway bridge — describe / resolve / fetch / cache.
 //!
 //! Surfaces:
-//! - `GET  /api/v1/push/outbound/bridge/describe`        — manifest
-//! - `POST /api/v1/push/outbound/bridge/resolve`         — resolve gateway URL → contract
-//! - `POST /api/v1/push/outbound/bridge/fetch`           — pull remote contract + cache
-//! - `GET  /api/v1/push/outbound/bridge/cache/status`    — current cache age
-//! - `GET  /api/v1/push/outbound/bridge/cache/export`    — dump cache snapshots
-//! - `POST /api/v1/push/outbound/bridge/cache/import`    — restore snapshots
-//! - `POST /api/v1/push/outbound/bridge/cache/invalidate`— invalidate one entry
+//! - `GET  /_cokret/edge/push/outbound/bridge/describe`        — manifest
+//! - `POST /_cokret/edge/push/outbound/bridge/resolve`         — resolve gateway URL → contract
+//! - `POST /_cokret/edge/push/outbound/bridge/fetch`           — pull remote contract + cache
+//! - `GET  /_cokret/edge/push/outbound/bridge/cache/status`    — current cache age
+//! - `GET  /_cokret/edge/push/outbound/bridge/cache/export`    — dump cache snapshots
+//! - `POST /_cokret/edge/push/outbound/bridge/cache/import`    — restore snapshots
+//! - `POST /_cokret/edge/push/outbound/bridge/cache/invalidate`— invalidate one entry
 //!
 //! Implemented: live remote `bridge/describe` fetch with `Etag`/freshness
 //! metadata stamped per entry; durable cache via
@@ -81,16 +81,16 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     res.render(Json(OutboundPushBridgeDescribeResponse {
         contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
-        api_base_path: "/api/v1/push".to_owned(),
+        api_base_path: "/_cokret/edge/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
-            resolve_path: "/api/v1/push/outbound/bridge/resolve".to_owned(),
-            fetch_path: "/api/v1/push/outbound/bridge/fetch".to_owned(),
-            cache_status_path: "/api/v1/push/outbound/bridge/cache/status".to_owned(),
-            cache_invalidate_path: "/api/v1/push/outbound/bridge/cache/invalidate".to_owned(),
-            cache_export_path: "/api/v1/push/outbound/bridge/cache/export".to_owned(),
-            cache_import_path: "/api/v1/push/outbound/bridge/cache/import".to_owned(),
-            bridge_describe_path: "/api/v1/push/bridge/describe".to_owned(),
-            notify_path: "/api/v1/push/notify".to_owned(),
+            resolve_path: "/_cokret/edge/push/outbound/bridge/resolve".to_owned(),
+            fetch_path: "/_cokret/edge/push/outbound/bridge/fetch".to_owned(),
+            cache_status_path: "/_cokret/edge/push/outbound/bridge/cache/status".to_owned(),
+            cache_invalidate_path: "/_cokret/edge/push/outbound/bridge/cache/invalidate".to_owned(),
+            cache_export_path: "/_cokret/edge/push/outbound/bridge/cache/export".to_owned(),
+            cache_import_path: "/_cokret/edge/push/outbound/bridge/cache/import".to_owned(),
+            bridge_describe_path: "/_cokret/edge/push/bridge/describe".to_owned(),
+            notify_path: "/_cokret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
                 "cx.push.bridge.describe".to_owned(),
                 "cx.profile.push_gateway.v1".to_owned(),
@@ -112,11 +112,11 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
         },
         examples: OutboundPushBridgeExamples {
             resolve_request: json!({
-                "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                 "refresh": false
             }),
             fetch_request: json!({
-                "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                 "force_refresh": true
             }),
             notify_headers: json!({
@@ -128,9 +128,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             cache_import_request: json!({
                 "replace_existing": true,
                 "entries": [{
-                    "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                    "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/api/v1/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_cokret/edge/push/bridge/describe",
                     "fetch_state": "seed_import",
                     "cache_state": "imported_replace_existing",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -138,7 +138,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "remote_contract": {
                         "contract": "cx.push.bridge.describe",
                         "delivery": {
-                            "notify_path": "/api/v1/push/notify",
+                            "notify_path": "/_cokret/edge/push/notify",
                             "operation_id": "cx.push.notify"
                         }
                     }
@@ -146,9 +146,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             }),
             cache_export_response: json!({
                 "entries": [{
-                    "push_gateway_url": "https://floria.example/api/v1/push/notify",
+                    "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/api/v1/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_cokret/edge/push/bridge/describe",
                     "fetch_state": "cache_hit",
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -188,7 +188,7 @@ async fn outbound_push_bridge_resolve(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let cached = state
         .persistence
         .push_bridge_cache()
@@ -256,7 +256,7 @@ async fn outbound_push_bridge_fetch(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let bridge_describe_target = crate::security::validate_http_url_for_egress(
         &bridge_describe_url,
         "push bridge describe",
@@ -509,7 +509,7 @@ async fn outbound_push_bridge_cache_invalidate(
     {
         if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
             let bridge_describe_url =
-                join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+                join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
             usize::from(cache.delete(&bridge_describe_url).await.unwrap_or(false))
         } else {
             0
@@ -536,11 +536,11 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     }
 
     for suffix in [
-        "/api/v1/push/bridge/describe",
+        "/_cokret/edge/push/bridge/describe",
         "/cokret/push/v1/bridge/describe",
-        "/api/v1/push/notify",
+        "/_cokret/edge/push/notify",
         "/cokret/push/v1/notify",
-        "/api/v1/push",
+        "/_cokret/edge/push",
         "/cokret/push/v1",
     ] {
         if let Some(prefix) = value.strip_suffix(suffix) {
@@ -552,22 +552,22 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     if value.is_empty() { None } else { Some(value) }
 }
 
-pub(super) fn join_api_v1_url(base: &str, path: &str) -> String {
+pub(super) fn join_edge_push_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
-    let path = path.strip_prefix("api/v1/").unwrap_or(path);
+    let path = path.strip_prefix("_cokret/edge/").unwrap_or(path);
 
-    if base.ends_with("/api/v1") {
+    if base.ends_with("/_cokret/edge") {
         format!("{base}/{path}")
     } else {
-        format!("{base}/api/v1/{path}")
+        format!("{base}/_cokret/edge/{path}")
     }
 }
 
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
         contract: "cx.push.bridge.describe".to_owned(),
-        expected_notify_path: "/api/v1/push/notify".to_owned(),
+        expected_notify_path: "/_cokret/edge/push/notify".to_owned(),
         expected_operation_id: "cx.push.notify".to_owned(),
         expected_origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
         expected_destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),

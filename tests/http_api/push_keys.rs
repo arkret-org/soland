@@ -11,7 +11,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let token = dev_token(state.clone()).await;
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::seconds(30);
-    let unauth_presence = TestClient::post("http://server/api/v1/ephemeral")
+    let unauth_presence = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
             "kind": "cx.presence",
             "realm_id": DEMO_REALM_ID,
@@ -26,7 +26,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await;
     assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let presence: Value = TestClient::post("http://server/api/v1/ephemeral")
+    let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "cx.presence",
@@ -47,7 +47,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(presence["kind"], "cx.presence");
 
     let profile: Value =
-        TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
+        TestClient::get("http://server/_cokret/self/profile/presence?did=did:web:alice.example")
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -67,7 +67,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     let stale_profile: Value =
-        TestClient::get("http://server/api/v1/profile/presence?did=did:web:alice.example")
+        TestClient::get("http://server/_cokret/self/profile/presence?did=did:web:alice.example")
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -76,7 +76,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(stale_profile["presence"]["status"], "offline");
     assert!(stale_profile["presence"]["last_seen"].is_string());
 
-    let unauth_typing = TestClient::post("http://server/api/v1/ephemeral")
+    let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
             "kind": "cx.typing",
             "realm_id": DEMO_REALM_ID,
@@ -91,7 +91,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await;
     assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let typing: Value = TestClient::post("http://server/api/v1/ephemeral")
+    let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "cx.typing",
@@ -124,7 +124,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let stop_sent_at = chrono::Utc::now();
     let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
-    let typing_stopped: Value = TestClient::post("http://server/api/v1/ephemeral")
+    let typing_stopped: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "kind": "cx.typing",
@@ -151,7 +151,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert!(cleared_typing.is_empty());
 
-    let push: Value = TestClient::post("http://server/api/v1/push/register-device")
+    let push: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -167,7 +167,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(push["ok"], true);
 
-    let initial_rules: Value = TestClient::get("http://server/api/v1/push/rules")
+    let initial_rules: Value = TestClient::get("http://server/_cokret/edge/push/rules")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -176,7 +176,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert!(initial_rules["rules"].as_array().unwrap().is_empty());
 
-    let push_rule: Value = TestClient::post("http://server/api/v1/push/rules")
+    let push_rule: Value = TestClient::post("http://server/_cokret/edge/push/rules")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "rule_id": "mute-device",
@@ -195,7 +195,7 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(push_rule["ok"], true);
     assert_eq!(push_rule["rule"]["rule_id"], "mute-device");
 
-    let listed_rules: Value = TestClient::get("http://server/api/v1/push/rules")
+    let listed_rules: Value = TestClient::get("http://server/_cokret/edge/push/rules")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -204,7 +204,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(listed_rules["rules"].as_array().unwrap().len(), 1);
 
-    let muted_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+    let muted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -228,7 +228,7 @@ async fn push_profile_and_moderation_contracts_work() {
             && device["reason"] == "unknown_device"
     }));
 
-    let deleted_rule: Value = TestClient::delete("http://server/api/v1/push/rules/mute-device")
+    let deleted_rule: Value = TestClient::delete("http://server/_cokret/edge/push/rules/mute-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -237,7 +237,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(deleted_rule["ok"], true);
 
-    let unmuted_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+    let unmuted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -251,7 +251,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert!(unmuted_notify["rejected"].as_array().unwrap().is_empty());
 
-    let report: Value = TestClient::post("http://server/api/v1/moderation/report")
+    let report: Value = TestClient::post("http://server/_cokret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -288,7 +288,7 @@ async fn push_profile_and_moderation_contracts_work() {
             .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
     );
 
-    let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
+    let unauthenticated_report = TestClient::post("http://server/_cokret/self/moderation/report")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
@@ -305,7 +305,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let upload: Value = TestClient::post("http://server/api/v1/keys/upload")
+    let upload: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -327,7 +327,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(upload["one_time_key_counts"]["signed_curve25519"], 1);
 
-    let query: Value = TestClient::post("http://server/api/v1/keys/query")
+    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001"]}
@@ -384,7 +384,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "backup-key"
     );
 
-    let claimed_once: Value = TestClient::post("http://server/api/v1/keys/claim")
+    let claimed_once: Value = TestClient::post("http://server/_cokret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
@@ -403,7 +403,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             ["key_id"],
         "otk1"
     );
-    let claimed_replay: Value = TestClient::post("http://server/api/v1/keys/claim")
+    let claimed_replay: Value = TestClient::post("http://server/_cokret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "one_time_keys": {
@@ -422,14 +422,14 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "one-time key claim must be single-use"
     );
 
-    let invalid_device_message = TestClient::post("http://server/api/v1/device_messages")
+    let invalid_device_message = TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "bad-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.welcome",
+                        "type": "ck.mls.welcome",
                         "content": {"ciphertext": "opaque"}
                     }
                 }
@@ -439,15 +439,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(invalid_device_message.status_code.unwrap().as_u16(), 400);
 
-    let send: Value = TestClient::post("http://server/api/v1/device_messages")
+    let send: Value = TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.welcome",
-                        "content": encrypted_envelope("cx.mls.welcome", "opaque")
+                        "type": "ck.mls.welcome",
+                        "content": encrypted_envelope("ck.mls.welcome", "opaque")
                     }
                 }
             }
@@ -459,15 +459,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(send["ok"], true);
 
-    let duplicate: Value = TestClient::post("http://server/api/v1/device_messages")
+    let duplicate: Value = TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.welcome",
-                        "content": encrypted_envelope("cx.mls.welcome", "opaque")
+                        "type": "ck.mls.welcome",
+                        "content": encrypted_envelope("ck.mls.welcome", "opaque")
                     }
                 }
             }
@@ -479,7 +479,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(duplicate["delivered"].as_object().unwrap().len(), 0);
 
-    let bad_blob = TestClient::post("http://server/api/v1/blob/upload")
+    let bad_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "x-cokret-content-digest",
@@ -491,7 +491,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(bad_blob.status_code.unwrap().as_u16(), 409);
 
-    let bad_attachment = TestClient::post("http://server/api/v1/blob/upload")
+    let bad_attachment = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "x-cokret-attachment-envelope",
@@ -509,7 +509,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(bad_attachment.status_code.unwrap().as_u16(), 400);
 
-    let missing_envelope = TestClient::post("http://server/api/v1/blob/upload")
+    let missing_envelope = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("x-cokret-blob-encrypted", "true", true)
         .body("encrypted-bytes")
@@ -518,7 +518,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(missing_envelope.status_code.unwrap().as_u16(), 400);
 
     let large_plaintext = "a".repeat(96 * 1024);
-    let large_blob: Value = TestClient::post("http://server/api/v1/blob/upload")
+    let large_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "image/jpeg", true)
         .body(large_plaintext.clone())
@@ -540,7 +540,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         &[],
     )
     .await;
-    let plaintext_private_blob = TestClient::post("http://server/api/v1/blob/upload")
+    let plaintext_private_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "x-cokret-space-id",
@@ -554,7 +554,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let encrypted_bytes = b"encrypted-bytes";
     let ciphertext_digest = format!("sha256:{:x}", Sha256::digest(encrypted_bytes));
-    let blob: Value = TestClient::post("http://server/api/v1/blob/upload")
+    let blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "Text/Plain; charset=utf-8", true)
         .add_header("x-cokret-filename", "..\\danger<script>.txt", true)
@@ -609,7 +609,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(std::fs::read(blob_path).unwrap(), encrypted_bytes);
 
     let anonymous_blob = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .send(&app_from_state(state.clone()))
@@ -617,7 +617,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(anonymous_blob.status_code.unwrap().as_u16(), 401);
 
     let mut alice_blob = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -667,7 +667,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         shared_plaintext_space["space_id"].as_str().unwrap(),
         "did:web:blob-bob.example",
     );
-    let plaintext_blob: Value = TestClient::post("http://server/api/v1/blob/upload")
+    let plaintext_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "text/plain; charset=utf-8", true)
         .add_header("x-cokret-filename", "report final.txt", true)
@@ -692,7 +692,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
 
     let mut bob_plaintext = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         plaintext_blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -713,7 +713,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         "shared plaintext"
     );
 
-    let mut plaintext_presign = TestClient::post("http://server/api/v1/blob/presign")
+    let mut plaintext_presign = TestClient::post("http://server/_cokret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "blob_ref": plaintext_blob["blob_ref"].as_str().unwrap(),
@@ -741,7 +741,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(forged_plaintext.status_code.unwrap().as_u16(), 401);
 
     let mut bob_blob = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -758,7 +758,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
 
     let mut range = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -777,7 +777,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
     assert_eq!(range.take_string().await.unwrap(), "encrypted");
 
-    let mut presign = TestClient::post("http://server/api/v1/blob/presign")
+    let mut presign = TestClient::post("http://server/_cokret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "blob_ref": blob["blob_ref"].as_str().unwrap(),
@@ -797,7 +797,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     )
     .await;
     let mut invisible_blob = TestClient::get(format!(
-        "http://server/api/v1/blob/get?blob_ref={}&purpose=message_attachment",
+        "http://server/_cokret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {mallory}"), true)
@@ -813,7 +813,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(!invisible_text.contains(locked_space["space_id"].as_str().unwrap()));
     assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
 
-    let push_registration: Value = TestClient::post("http://server/api/v1/push/register-device")
+    let push_registration: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -829,7 +829,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(push_registration["ok"], true);
 
-    let plaintext_push = TestClient::post("http://server/api/v1/push/notify")
+    let plaintext_push = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "message",
@@ -841,7 +841,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await;
     assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 400);
 
-    let notify: Value = TestClient::post("http://server/api/v1/push/notify")
+    let notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -862,12 +862,12 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
-    let push_gateway = "https://push.example/api/v1/push/notify";
-    let bridge_describe = "https://push.example/api/v1/push/bridge/describe";
+    let push_gateway = "https://push.example/_cokret/edge/push/notify";
+    let bridge_describe = "https://push.example/_cokret/edge/push/bridge/describe";
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
 
     let stale_import: Value = TestClient::post(
-        "http://server/api/v1/push/outbound/bridge/cache/import",
+        "http://server/_cokret/edge/push/outbound/bridge/cache/import",
     )
     .json(&serde_json::json!({
         "replace_existing": true,
@@ -882,7 +882,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "cx.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/api/v1/push/notify", "operation_id": "cx.push.notify"}
+                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.push.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": stale_at,
@@ -896,7 +896,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     .unwrap();
     assert_eq!(stale_import["imported_count"], 1);
 
-    let registered: Value = TestClient::post("http://server/api/v1/push/register-device")
+    let registered: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": device_id,
@@ -912,7 +912,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(registered["ok"], true);
 
-    let stale_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+    let stale_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -929,7 +929,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let now = chrono::Utc::now();
     let fresh_import: Value = TestClient::post(
-        "http://server/api/v1/push/outbound/bridge/cache/import",
+        "http://server/_cokret/edge/push/outbound/bridge/cache/import",
     )
     .json(&serde_json::json!({
         "replace_existing": true,
@@ -944,7 +944,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "cx.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/api/v1/push/notify", "operation_id": "cx.push.notify"}
+                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.push.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": now,
@@ -958,7 +958,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     .unwrap();
     assert_eq!(fresh_import["total_entries"], 1);
 
-    let fresh_notify: Value = TestClient::post("http://server/api/v1/push/notify")
+    let fresh_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -972,7 +972,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert!(fresh_notify["rejected"].as_array().unwrap().is_empty());
 
-    let unregistered: Value = TestClient::post("http://server/api/v1/push/unregister-device")
+    let unregistered: Value = TestClient::post("http://server/_cokret/edge/push/unregister-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": device_id,
@@ -986,7 +986,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(unregistered["ok"], true);
 
-    let after_unregister: Value = TestClient::post("http://server/api/v1/push/notify")
+    let after_unregister: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
@@ -1019,7 +1019,7 @@ async fn keys_query_hides_revoked_device() {
     )
     .await;
 
-    let _desktop_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
+    let _desktop_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -1040,7 +1040,7 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
 
-    let _phone_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
+    let _phone_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
@@ -1061,7 +1061,7 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
 
-    let pre_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
+    let pre_revoke_query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001", "ck:device:01904100-0000-7000-8000-9b04e0000007"]}
@@ -1082,7 +1082,7 @@ async fn keys_query_hides_revoked_device() {
         "phone-device-key"
     );
 
-    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1091,7 +1091,7 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert_eq!(logout["revoked"], true);
 
-    let post_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
+    let post_revoke_query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
             "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001", "ck:device:01904100-0000-7000-8000-9b04e0000007"]}
@@ -1127,7 +1127,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     )
     .await;
 
-    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
         .add_header("authorization", format!("Bearer {device_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1148,7 +1148,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     .await;
     assert_eq!(blocked_send.as_u16(), 401);
 
-    let blocked_upload = TestClient::post("http://server/api/v1/keys/upload")
+    let blocked_upload = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-30b11e000005",
@@ -1174,7 +1174,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
     let token = dev_token(state.clone()).await;
     let ciphertext = "base64url-opaque-ciphertext";
 
-    TestClient::post("http://server/api/v1/device_messages")
+    TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "e2ee-txn", true)
         .json(&serde_json::json!({
@@ -1190,7 +1190,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let delivered: Value = TestClient::get("http://server/api/v1/device_messages")
+    let delivered: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await
@@ -1208,7 +1208,7 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::post("http://server/api/v1/device_messages")
+    TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "ack-txn", true)
         .json(&serde_json::json!({
@@ -1262,15 +1262,15 @@ async fn device_messages_evicted_after_session_logout() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    TestClient::post("http://server/api/v1/device_messages")
+    TestClient::post("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "logout-txn", true)
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.welcome",
-                        "content": encrypted_envelope("cx.mls.welcome", "logout-ciphertext")
+                        "type": "ck.mls.welcome",
+                        "content": encrypted_envelope("ck.mls.welcome", "logout-ciphertext")
                     }
                 }
             }
@@ -1278,7 +1278,7 @@ async fn device_messages_evicted_after_session_logout() {
         .send(&app_from_state(state.clone()))
         .await;
 
-    let pre_logout: Value = TestClient::get("http://server/api/v1/device_messages")
+    let pre_logout: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1287,7 +1287,7 @@ async fn device_messages_evicted_after_session_logout() {
         .unwrap();
     assert_eq!(pre_logout["events"].as_array().unwrap().len(), 1);
 
-    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1297,14 +1297,14 @@ async fn device_messages_evicted_after_session_logout() {
     assert_eq!(logout["ok"], true);
     assert_eq!(logout["revoked"], true);
 
-    let revoked_session_messages = TestClient::get("http://server/api/v1/device_messages")
+    let revoked_session_messages = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(revoked_session_messages.status_code.unwrap().as_u16(), 401);
 
     let new_token = dev_token(state.clone()).await;
-    let post_logout: Value = TestClient::get("http://server/api/v1/device_messages")
+    let post_logout: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {new_token}"), true)
         .send(&app_from_state(state.clone()))
         .await

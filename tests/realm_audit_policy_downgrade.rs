@@ -1,4 +1,4 @@
-//! Reducer-level tests for `cx.realm.audit_policy_downgrade` (R3.3).
+//! Reducer-level tests for `ck.realm.audit_policy_downgrade` (R3.3).
 
 use cokret_sdk::Operation;
 use serde_json::{Value, json};

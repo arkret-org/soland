@@ -14,7 +14,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
-        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -24,7 +24,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let create_event = signed_place_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000001",
         1,
-        "cx.space.create",
+        "ck.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -36,7 +36,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
         .send(&app_from_state(state.clone()))
@@ -52,11 +52,11 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let archive_event = signed_place_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000002",
         2,
-        "cx.space.archive",
+        "ck.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ck:event:01904100-0000-7000-8000-f10ec0000001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_event)
         .send(&app_from_state(state.clone()))
@@ -71,7 +71,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 
     // ── projection now reports archived ───────────────────────────────
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -92,11 +92,11 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let restore_event = signed_place_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000003",
         3,
-        "cx.space.restore",
+        "ck.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ck:event:01904100-0000-7000-8000-f10ec0000002"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&restore_event)
         .send(&app_from_state(state.clone()))
@@ -110,7 +110,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     );
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -127,7 +127,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     assert_eq!(row["state"], "active");
 
     let legacy_underscore = TestClient::get(format!(
-        "http://server/api/v1/projection/space_containers?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/space_containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -135,7 +135,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     assert_eq!(legacy_underscore.status_code, Some(StatusCode::NOT_FOUND));
 
     let legacy_hyphen = TestClient::get(format!(
-        "http://server/api/v1/projection/space-containers?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/space-containers?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -155,7 +155,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     let create_event = signed_flow_event(
         "ck:event:01904100-0000-7000-8000-f20ec0000001",
         1,
-        "cx.flow.create",
+        "ck.flow.create",
         serde_json::json!({
             "object": {
                 "id": flow_id,
@@ -173,7 +173,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
         .send(&app_from_state(state.clone()))
@@ -186,11 +186,11 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     let archive_event = signed_flow_event(
         "ck:event:01904100-0000-7000-8000-f20ec0000002",
         2,
-        "cx.flow.archive",
+        "ck.flow.archive",
         serde_json::json!({ "flow_id": flow_id }),
         vec!["ck:event:01904100-0000-7000-8000-f20ec0000001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_event)
         .send(&app_from_state(state.clone()))
@@ -201,7 +201,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?realm_id={space_id}"
+        "http://server/_cokret/self/projection/flows?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -226,7 +226,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     // ── 1. auth required ──────────────────────────────────────────────
-    let unauth = TestClient::post("http://server/api/v1/audit/user-action")
+    let unauth = TestClient::post("http://server/_cokret/self/audit/user-action")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
             "action": "ui.button.click",
@@ -237,7 +237,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
 
     // ── 2. happy path: session actor posts ────────────────────────────
-    let ok: Value = TestClient::post("http://server/api/v1/audit/user-action")
+    let ok: Value = TestClient::post("http://server/_cokret/self/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
@@ -254,7 +254,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(ok["ok"], true);
 
     // ── 3. cross-actor post → 403 ─────────────────────────────────────
-    let mut bad = TestClient::post("http://server/api/v1/audit/user-action")
+    let mut bad = TestClient::post("http://server/_cokret/self/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actor": "did:web:eve.example",
@@ -268,7 +268,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(body["error"]["code"], "capability_denied");
 
     // ── 4. missing actor / action → 400 ──────────────────────────────
-    let mut missing_actor = TestClient::post("http://server/api/v1/audit/user-action")
+    let mut missing_actor = TestClient::post("http://server/_cokret/self/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"action": "ui.click"}))
         .send(&app_from_state(state.clone()))
@@ -277,7 +277,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     let body: Value = missing_actor.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "invalid_param");
 
-    let missing_action = TestClient::post("http://server/api/v1/audit/user-action")
+    let missing_action = TestClient::post("http://server/_cokret/self/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"actor": "did:web:alice.example"}))
         .send(&app_from_state(state.clone()))
@@ -285,7 +285,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(missing_action.status_code.unwrap().as_u16(), 400);
 
     // ── 5. entry shows up in GET /audit/events for the same actor ────
-    let events: Value = TestClient::get("http://server/api/v1/audit/events")
+    let events: Value = TestClient::get("http://server/_cokret/self/audit/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -311,7 +311,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let create_event = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-d20ec0000001",
         1,
-        "cx.morph.create",
+        "ck.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
@@ -323,7 +323,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
         .send(&app_from_state(state.clone()))
@@ -335,7 +335,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Initial state — Active.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -356,11 +356,11 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let archive_event = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-d20ec0000002",
         2,
-        "cx.morph.archive",
+        "ck.morph.archive",
         serde_json::json!({ "morph_id": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-d20ec0000001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_event)
         .send(&app_from_state(state.clone()))
@@ -371,7 +371,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -389,7 +389,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Unauthenticated → 401, no body leak.
     let unauth = TestClient::get(format!(
-        "http://server/api/v1/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -416,14 +416,14 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let create_event = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-d21ec0000001",
         1,
-        "cx.morph.create",
+        "ck.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
                 "space_id": realm_id,
                 "morph_type": "document",
                 "metadata": { "title": "Postmortem draft" },
-                "schema_refs": ["cx.schema.morph.v1"],
+                "schema_refs": ["ck.schema.morph.v1"],
                 "facets": {
                     "documentable": {}
                 },
@@ -435,7 +435,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         }),
         Vec::new(),
     );
-    let create_response: Value = TestClient::post("http://server/api/v1/events")
+    let create_response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
         .send(&app_from_state(state.clone()))
@@ -461,7 +461,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         }),
         vec!["ck:event:01904100-0000-7000-8000-d21ec0000001"],
     );
-    let relation_response: Value = TestClient::post("http://server/api/v1/events")
+    let relation_response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&relation_event)
         .send(&app_from_state(state.clone()))
@@ -481,7 +481,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         realm_id,
         morph_id,
         serde_json::json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "morph_id": morph_id,
             "anchor_range": {
                 "target_ref": morph_id,
@@ -508,7 +508,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let update_event = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-d21ec0000003",
         20_000,
-        "cx.morph.update",
+        "ck.morph.update",
         serde_json::json!({
             "morph_id": morph_id,
             "target_ref": morph_id,
@@ -523,7 +523,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         }),
         vec!["ck:event:01904100-0000-7000-8000-d21ec0000001"],
     );
-    let update_response: Value = TestClient::post("http://server/api/v1/events")
+    let update_response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&update_event)
         .send(&app_from_state(state.clone()))
@@ -537,7 +537,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     );
 
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/documents/{morph_id}"
+        "http://server/_cokret/self/projection/documents/{morph_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -550,7 +550,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(body["document"]["morph_type"], "document");
     assert_eq!(body["document"]["body"], updated_body);
     assert_eq!(body["document"]["fields"]["document"], updated_body);
-    assert_eq!(body["document"]["schema_refs"][0], "cx.schema.morph.v1");
+    assert_eq!(body["document"]["schema_refs"][0], "ck.schema.morph.v1");
     assert_eq!(body["document"]["facets"][0], "documentable");
 
     let versions = body["versions"].as_array().expect("versions array");
@@ -595,7 +595,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let create_place = signed_place_event(
         "ck:event:01904100-0000-7000-8000-c15d70010001",
         1,
-        "cx.space.create",
+        "ck.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -607,7 +607,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         }),
         Vec::new(),
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_place)
         .send(&app_from_state(state.clone()))
@@ -620,11 +620,11 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let tombstone_place = signed_place_event(
         "ck:event:01904100-0000-7000-8000-c15d70010002",
         2,
-        "cx.space.tombstone",
+        "ck.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ck:event:01904100-0000-7000-8000-c15d70010001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&tombstone_place)
         .send(&app_from_state(state.clone()))
@@ -636,7 +636,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Space-container projection — tombstoned Space container is hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/spaces?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -655,7 +655,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — tombstoned Space container is visible.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/spaces?realm_id={realm_id}&include_terminal=true"
+        "http://server/_cokret/self/projection/spaces?realm_id={realm_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -675,7 +675,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let create_flow = signed_flow_event(
         "ck:event:01904100-0000-7000-8000-c15d70020001",
         3,
-        "cx.flow.create",
+        "ck.flow.create",
         serde_json::json!({
             "object": {
                 "id": flow_id,
@@ -686,7 +686,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         }),
         vec!["ck:event:01904100-0000-7000-8000-c15d70010002"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_flow)
         .send(&app_from_state(state.clone()))
@@ -705,7 +705,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         }),
         vec!["ck:event:01904100-0000-7000-8000-c15d70020001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&redact_flow)
         .send(&app_from_state(state.clone()))
@@ -717,7 +717,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Flow listing — redacted Flow hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?realm_id={space_id}"
+        "http://server/_cokret/self/projection/flows?realm_id={space_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -736,7 +736,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — redacted Flow visible.
     let body: Value = TestClient::get(format!(
-        "http://server/api/v1/projection/flows?realm_id={space_id}&include_terminal=true"
+        "http://server/_cokret/self/projection/flows?realm_id={space_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -765,7 +765,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_place = signed_place_event(
         "ck:event:01904100-0000-7000-8000-15a15ae00001",
         1,
-        "cx.space.create",
+        "ck.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
@@ -777,7 +777,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         }),
         Vec::new(),
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_place)
         .send(&app_from_state(state.clone()))
@@ -790,11 +790,11 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let archive_place = signed_place_event(
         "ck:event:01904100-0000-7000-8000-15a15ae00002",
         2,
-        "cx.space.archive",
+        "ck.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
         vec!["ck:event:01904100-0000-7000-8000-15a15ae00001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_place)
         .send(&app_from_state(state.clone()))
@@ -843,7 +843,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_flow = signed_flow_event(
         "ck:event:01904100-0000-7000-8000-15a15af00001",
         3,
-        "cx.flow.create",
+        "ck.flow.create",
         serde_json::json!({
             "object": {
                 "id": flow_id,
@@ -854,7 +854,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         }),
         vec!["ck:event:01904100-0000-7000-8000-15a15ae00002"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_flow)
         .send(&app_from_state(state.clone()))
@@ -882,7 +882,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         }),
         vec!["ck:event:01904100-0000-7000-8000-15a15af00001"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&redact_flow)
         .send(&app_from_state(state.clone()))
@@ -907,7 +907,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let create_morph = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-15a15a000004",
         5,
-        "cx.morph.create",
+        "ck.morph.create",
         serde_json::json!({
             "object": {
                 "id": morph_id,
@@ -919,7 +919,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         }),
         vec!["ck:event:01904100-0000-7000-8000-15a15af00002"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_morph)
         .send(&app_from_state(state.clone()))
@@ -932,11 +932,11 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let archive_morph = signed_morph_event(
         "ck:event:01904100-0000-7000-8000-15a15a000005",
         6,
-        "cx.morph.archive",
+        "ck.morph.archive",
         serde_json::json!({ "morph_id": morph_id }),
         vec!["ck:event:01904100-0000-7000-8000-15a15a000004"],
     );
-    let r: Value = TestClient::post("http://server/api/v1/events")
+    let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_morph)
         .send(&app_from_state(state.clone()))

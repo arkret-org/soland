@@ -50,15 +50,15 @@ async fn events_describe_and_single_event_submit_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let describe: Value = TestClient::get("http://server/api/v1/events/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/self/events/describe")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
-    assert_eq!(describe["primary_write_path"], "/api/v1/events");
-    assert_eq!(describe["event_envelope"]["schema"], "cx.schema.event.v1");
+    assert_eq!(describe["primary_write_path"], "/_cokret/self/events");
+    assert_eq!(describe["event_envelope"]["schema"], "ck.schema.event.v1");
     assert_eq!(
         describe["registry"]["event_kind_registry_version"],
         "2026-05-08"
@@ -72,10 +72,10 @@ async fn events_describe_and_single_event_submit_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|kind| kind == "cx.flow.create")
+            .any(|kind| kind == "ck.flow.create")
     );
     assert_eq!(describe["schema_profile"], "cx.schema.core.v1");
-    assert_eq!(describe["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(describe["reducer_profile"], "ck.reducer.v1");
     assert_eq!(describe["capabilities"]["batch_receipt"], false);
     assert_eq!(describe["capabilities"]["snapshot"], false);
     assert_eq!(describe["capabilities"]["witness"], false);
@@ -86,7 +86,7 @@ async fn events_describe_and_single_event_submit_work() {
         1,
         Vec::new(),
     );
-    let submitted: Value = TestClient::post("http://server/api/v1/events")
+    let submitted: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&first)
         .send(&app_from_state(state.clone()))
@@ -101,7 +101,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(submitted["canonical_digest"], first["canonical_digest"]);
 
-    let duplicate: Value = TestClient::post("http://server/api/v1/events")
+    let duplicate: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&first)
         .send(&app_from_state(state.clone()))
@@ -113,7 +113,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["receipt"]["idempotent"], true);
 
     let fetched: Value = TestClient::get(
-        "http://server/api/v1/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "http://server/_cokret/self/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -139,7 +139,7 @@ async fn events_describe_and_single_event_submit_work() {
         2,
         vec!["ck:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
-    let second_submitted: Value = TestClient::post("http://server/api/v1/events")
+    let second_submitted: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&second)
         .send(&app_from_state(state.clone()))
@@ -149,15 +149,15 @@ async fn events_describe_and_single_event_submit_work() {
         .unwrap();
     assert_eq!(second_submitted["status"], "accepted");
 
-    // Round 13: `cx.flow.create` now has a schema requirement (payload
+    // Round 13: `ck.flow.create` now has a schema requirement (payload
     // MUST carry `object`) because it's in the canonical-kind registry;
     // prior to round 13 it passed as an opaque envelope. Use a real Flow
     // object payload so this smoke test still exercises the cross-family
-    // accept path (kind/schema combo distinct from `cx.message.create`).
+    // accept path (kind/schema combo distinct from `ck.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
             "id": "ck:flow:01904100-0000-7000-8000-aa11ccff0001",
-            "schema": "cx.schema.flow.v1",
+            "schema": "ck.schema.flow.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding flow" },
             "stage": "draft",
@@ -176,14 +176,14 @@ async fn events_describe_and_single_event_submit_work() {
         3,
         Vec::new(),
     );
-    artifact_kind_event["kind"] = Value::String("cx.flow.create".to_owned());
-    artifact_kind_event["schema_id"] = Value::String("cx.schema.flow.v1".to_owned());
+    artifact_kind_event["kind"] = Value::String("ck.flow.create".to_owned());
+    artifact_kind_event["schema_id"] = Value::String("ck.schema.flow.v1".to_owned());
     artifact_kind_event["payload"] = artifact_kind_payload.clone();
     artifact_kind_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&artifact_kind_payload));
     artifact_kind_event["canonical_digest"] =
         Value::String(event_canonical_digest(&artifact_kind_event));
-    let artifact_kind_submitted: Value = TestClient::post("http://server/api/v1/events")
+    let artifact_kind_submitted: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&artifact_kind_event)
         .send(&app_from_state(state.clone()))
@@ -200,7 +200,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     unknown_schema["schema_id"] = Value::String("cx.schema.not_registered.v1".to_owned());
     unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
-    let mut unknown_schema_response = TestClient::post("http://server/api/v1/events")
+    let mut unknown_schema_response = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&unknown_schema)
         .send(&app_from_state(state.clone()))
@@ -212,7 +212,7 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
 
-    let batch: Value = TestClient::post("http://server/api/v1/events/resolve")
+    let batch: Value = TestClient::post("http://server/_cokret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "event_ids": ["ck:event:01904100-0000-7000-8000-f15c8ea06c11", "ck:event:01904100-0000-7000-8000-30f4e405b35e"]
@@ -229,7 +229,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let listed: Value =
-        TestClient::get("http://server/api/v1/events?actors=did:web:alice.example&limit=10")
+        TestClient::get("http://server/_cokret/self/events?actors=did:web:alice.example&limit=10")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -244,7 +244,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let frontier: Value =
-        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example&realm_id=ck:realm:0196419b-0000-7000-8000-000000000000")
+        TestClient::get("http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example&realm_id=ck:realm:0196419b-0000-7000-8000-000000000000")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -258,7 +258,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let federation_frontier: Value =
-        TestClient::get("http://server/api/v1/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-000000000000&peer_role=federation_peer")
+        TestClient::get("http://server/_cokret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-000000000000&peer_role=federation_peer")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -307,7 +307,7 @@ async fn events_describe_and_single_event_submit_work() {
     let payload_digest = sha256_json(&conflicting["payload"]);
     conflicting["proofs"][0]["payload_digest"] = Value::String(payload_digest);
     conflicting["canonical_digest"] = Value::String(event_canonical_digest(&conflicting));
-    let mut conflict = TestClient::post("http://server/api/v1/events")
+    let mut conflict = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&conflicting)
         .send(&app_from_state(state.clone()))
@@ -320,7 +320,7 @@ async fn events_describe_and_single_event_submit_work() {
 #[tokio::test]
 async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     let service = app();
-    let authz: Value = TestClient::get("http://server/api/v1/authz/describe")
+    let authz: Value = TestClient::get("http://server/_cokret/self/authz/describe")
         .send(&service)
         .await
         .take_json()
@@ -336,7 +336,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
             .any(|item| item.as_str().unwrap().contains("not complete profile"))
     );
 
-    let policies: Value = TestClient::get("http://server/api/v1/policies/describe")
+    let policies: Value = TestClient::get("http://server/_cokret/self/policies/describe")
         .send(&service)
         .await
         .take_json()
@@ -345,7 +345,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     assert_eq!(policies["stability"], "scaffold_contract");
     assert_eq!(policies["profile_claim"], "not_claimed");
 
-    let index: Value = TestClient::get("http://server/api/v1/index/describe")
+    let index: Value = TestClient::get("http://server/_cokret/self/index/describe")
         .send(&service)
         .await
         .take_json()
@@ -354,7 +354,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     assert_eq!(index["stability"], "limited_projection");
     assert_eq!(index["profile_claim"], "not_claimed");
 
-    let integration: Value = TestClient::get("http://server/api/v1/integration/describe")
+    let integration: Value = TestClient::get("http://server/_cokret/self/integration/describe")
         .send(&service)
         .await
         .take_json()
@@ -399,35 +399,35 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "cx.extension.soland.contacts.request",
         "cx.extension.soland.contacts.respond",
         "cx.extension.soland.contacts.list",
-        "cx.server.describe",
-        "cx.events.describe",
-        "cx.events.submit",
-        "cx.events.get",
-        "cx.events.resolve",
-        "cx.events.query",
-        "cx.events.subscribe",
-        "cx.events.frontier",
+        "ck.server.describe",
+        "ck.events.describe",
+        "ck.events.submit",
+        "ck.events.get",
+        "ck.events.resolve",
+        "ck.events.query",
+        "ck.events.subscribe",
+        "ck.events.frontier",
         "cx.extension.soland.index.query",
-        "cx.authz.get_effective_grants",
-        "cx.authz.get_invites",
+        "ck.authz.get_effective_grants",
+        "ck.authz.get_invites",
         "cx.extension.soland.federation.transaction",
         "cx.extension.soland.federation.push_operations",
         "cx.extension.soland.federation.pull_operations",
         "cx.extension.soland.federation.space_members",
         "cx.extension.soland.federation.verify_actor",
-        "cx.account.subscribe",
-        "cx.ephemeral.send",
-        "cx.events.query_post",
+        "ck.account.subscribe",
+        "ck.ephemeral.send",
+        "ck.events.query_post",
         "cx.extension.soland.sync.backfill_gap",
-        "cx.snapshot.head",
+        "ck.snapshot.head",
         "cx.extension.soland.sync.get_snapshot_chunk",
-        "cx.directory.describe",
-        "cx.directory.search_realms",
-        "cx.directory.resolve_realm",
-        "cx.directory.private_contact_discovery",
-        "cx.directory.announce",
-        "cx.directory.withdraw",
-        "cx.directory.push.register",
+        "ck.directory.describe",
+        "ck.directory.search_realms",
+        "ck.directory.resolve_realm",
+        "ck.directory.private_contact_discovery",
+        "ck.directory.announce",
+        "ck.directory.withdraw",
+        "ck.directory.push.register",
         "cx.extension.soland.index.describe",
         "cx.extension.soland.index.debug_reducer",
         "cx.extension.soland.admin.actors",
@@ -442,44 +442,44 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "cx.extension.soland.admin.audit",
         "cx.extension.soland.admin.policy",
         "cx.extension.soland.admin.media",
-        "cx.authz.check",
+        "ck.authz.check",
         "cx.extension.soland.policies.list",
         "cx.extension.soland.policies.get",
         "cx.extension.soland.policies.upsert",
         "cx.extension.soland.policies.delete",
-        "cx.push.register_device",
+        "ck.push.register_device",
         "cx.extension.soland.devices.pairing_challenge",
         "cx.extension.soland.devices.authorize_pairing",
-        "cx.push.unregister_device",
+        "ck.push.unregister_device",
         "cx.extension.soland.push.rules",
-        "cx.push.notify",
-        "cx.blob.upload",
-        "cx.blob.presign",
-        "cx.blob.head",
-        "cx.blob.get",
+        "ck.push.notify",
+        "ck.blob.upload",
+        "ck.blob.presign",
+        "ck.blob.head",
+        "ck.blob.get",
         "cx.extension.soland.webrtc.create_session",
         "cx.extension.soland.webrtc.send_signal",
         "cx.extension.soland.webrtc.close_session",
-        "cx.policy.check",
-        "cx.moderation.report",
-        "cx.mimi.provider_directory",
-        "cx.mimi.key_material",
-        "cx.mimi.room_update",
-        "cx.mimi.notify",
-        "cx.mimi.submit_message",
-        "cx.mimi.group_info",
-        "cx.mimi.request_consent",
-        "cx.mimi.update_consent",
-        "cx.mimi.identifier_query",
-        "cx.mimi.report_abuse",
-        "cx.mimi.proxy_download",
-        "cx.keys.keypackages.consume",
-        "cx.keys.keypackages.revoke",
-        "cx.identity.submit_did_operation",
-        "cx.admin.get_server_status",
-        "cx.admin.update_account_status",
-        "cx.admin.revoke_device",
-        "cx.admin.get_moderation_queue",
+        "ck.policy.check",
+        "ck.moderation.report",
+        "ck.mimi.provider_directory",
+        "ck.mimi.key_material",
+        "ck.mimi.room_update",
+        "ck.mimi.notify",
+        "ck.mimi.submit_message",
+        "ck.mimi.group_info",
+        "ck.mimi.request_consent",
+        "ck.mimi.update_consent",
+        "ck.mimi.identifier_query",
+        "ck.mimi.report_abuse",
+        "ck.mimi.proxy_download",
+        "ck.keys.keypackages.consume",
+        "ck.keys.keypackages.revoke",
+        "ck.identity.submit_did_operation",
+        "ck.admin.get_server_status",
+        "ck.admin.update_account_status",
+        "ck.admin.revoke_device",
+        "ck.admin.get_moderation_queue",
     ];
     for operation_id in expected_operation_ids {
         assert!(
@@ -504,7 +504,7 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
 
 #[tokio::test]
 async fn index_query_supports_facet_projection_binding() {
-    let query: Value = TestClient::post("http://server/api/v1/index/query")
+    let query: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({
             "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
@@ -516,7 +516,7 @@ async fn index_query_supports_facet_projection_binding() {
         .take_json()
         .await
         .unwrap();
-    let unsupported: Value = TestClient::post("http://server/api/v1/index/query")
+    let unsupported: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({
             "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
@@ -557,7 +557,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
     .await;
 
     let debug: Value = TestClient::get(format!(
-        "http://server/api/v1/index/debug/reducer?realm_id={space_id}&limit=5"
+        "http://server/_cokret/self/index/debug/reducer?realm_id={space_id}&limit=5"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -565,7 +565,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(debug["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(debug["reducer_profile"], "ck.reducer.v1");
     assert_eq!(
         debug["schema_profiles"],
         serde_json::json!(["cx.schema.core.v1"])
@@ -580,7 +580,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         "durable_reducer_replay_and_conflict_records"
     );
 
-    let invalid = TestClient::get("http://server/api/v1/index/debug/reducer?realm_id=bad")
+    let invalid = TestClient::get("http://server/_cokret/self/index/debug/reducer?realm_id=bad")
         .send(&app_from_state(state))
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
@@ -603,7 +603,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
         assert!(created["space_id"].as_str().is_some());
     }
 
-    let first_page: Value = TestClient::post("http://server/api/v1/index/query")
+    let first_page: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Query Space"},
             "sort": [{"field": "title", "direction": "asc"}],
@@ -619,7 +619,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
     assert_eq!(first_page["frontier"]["limited"], true);
     let cursor = first_page["next_cursor"].as_str().unwrap().to_owned();
 
-    let second_page: Value = TestClient::post("http://server/api/v1/index/query")
+    let second_page: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Query Space"},
             "sort": [{"field": "title", "direction": "asc"}],
@@ -635,7 +635,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
     assert_eq!(second_page["results"][0]["title"], "Zulu Query Space");
     assert!(second_page["next_cursor"].is_null());
 
-    let mismatch = TestClient::post("http://server/api/v1/index/query")
+    let mismatch = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Alpha"},
             "sort": [{"field": "title", "direction": "asc"}],
@@ -657,7 +657,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let cursor = first["cursor"].as_str().unwrap();
 
     let filter_changed = TestClient::get(format!(
-        "http://server/api/v1/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22cx%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22cx%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
     ))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -686,7 +686,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&limit=1"
+        "http://server/_cokret/self/events?realms={space_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -700,7 +700,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&limit=1&after={next_cursor}"
+        "http://server/_cokret/self/events?realms={space_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -712,7 +712,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
     let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
     let gap: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/backfill/gap?realm_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
+        "http://server/_cokret/self/sync/backfill/gap?realm_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -728,7 +728,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/_cokret/self/events?realms={space_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -861,7 +861,7 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
             DEMO_REALM_ID.to_owned(),
             message.event_id.clone(),
             serde_json::json!({
-                "kind": "cx.message.create",
+                "kind": "ck.message.create",
                 "event_id": message.event_id,
                 "space_id": DEMO_REALM_ID,
             }),

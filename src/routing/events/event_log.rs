@@ -1,14 +1,14 @@
-//! Signed Event Envelope ingestion + read API (`/api/v1/events/*`).
+//! Signed Event Envelope ingestion + read API (`/_cokret/self/events/*`).
 //!
 //! Surfaces:
-//! - `GET  /api/v1/events/describe`  — declare the active event registry, schema/reducer profiles,
+//! - `GET  /_cokret/self/events/describe`  — declare the active event registry, schema/reducer profiles,
 //!   and limits.
-//! - `POST /api/v1/events`           — submit one canonical Event Envelope, an `events[]` batch, or
+//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope, an `events[]` batch, or
 //!   a federation `service_binding_ref` + `events[]` batch.
-//! - `GET  /api/v1/events/{event_id}` — fetch one envelope.
-//! - `POST /api/v1/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
-//! - `GET  /api/v1/events`            — paginated list (filtered by actor / realm).
-//! - `GET  /api/v1/events/frontier`   — per-actor / per-realm frontier.
+//! - `GET  /_cokret/self/events/{event_id}` — fetch one envelope.
+//! - `POST /_cokret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
+//! - `GET  /_cokret/self/events`            — paginated list (filtered by actor / realm).
+//! - `GET  /_cokret/self/events/frontier`   — per-actor / per-realm frontier.
 //!
 //! The validator block (`validate_event_envelope` + helpers) lives at the
 //! bottom of this file.
@@ -79,9 +79,9 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
     res.render(Json(EventDescribeResponse {
         service_did: state.config.service_did.clone(),
         protocol_version: "1.0".to_owned(),
-        primary_write_path: "/api/v1/events".to_owned(),
+        primary_write_path: "/_cokret/self/events".to_owned(),
         event_envelope: json!({
-            "schema": "cx.schema.event.v1",
+            "schema": "ck.schema.event.v1",
             "required_fields": [
                 "event_id",
                 "kind",
@@ -105,8 +105,8 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             }
         }),
         supported_profiles: vec![
-            "cx.profile.core_event_store.v1".to_owned(),
-            "cx.profile.principal_server_events_api.v1".to_owned(),
+            "ck.profile.core_event_store.v1".to_owned(),
+            "ck.profile.principal_server_events_api.v1".to_owned(),
         ],
         registry: json!({
             "source": "cokret-spec/spec/v1/artifacts",
@@ -121,7 +121,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "id_profile": "cx.id.typed-prefix.v1"
         }),
         schema_profile: "cx.schema.core.v1".to_owned(),
-        reducer_profile: "cx.reducer.v1".to_owned(),
+        reducer_profile: "ck.reducer.v1".to_owned(),
         limits: json!({
             "max_event_bytes": MAX_EVENT_BYTES,
             "max_prev_refs": MAX_EVENT_PREV_REFS,
@@ -184,7 +184,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.events.submit batch/federation request uses events[], not envelopes[]",
+            "ck.events.submit batch/federation request uses events[], not envelopes[]",
         );
         return;
     }
@@ -204,7 +204,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "POST /api/v1/events batch body must be an object with events[]",
+            "POST /_cokret/self/events batch body must be an object with events[]",
         );
         return;
     }
@@ -271,11 +271,11 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "cx.events.get",
+    operation_id = "ck.events.get",
     tags("events"),
     summary = "Fetch one canonical Event Envelope by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.get"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -300,11 +300,11 @@ async fn get_event(
 }
 
 #[endpoint(
-    operation_id = "cx.events.resolve",
+    operation_id = "ck.events.resolve",
     tags("events"),
     summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventResolveRequest>,
@@ -341,9 +341,9 @@ async fn resolve_events(
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
 /// that bypass the projection layer. Not wired to a public route in the
 /// current API shape —
-/// the canonical `cx.events.query` path at `GET /api/v1/events` goes to the
+/// the canonical `ck.events.query` path at `GET /_cokret/self/events` goes to the
 /// projection-aware handler in `routing/sync.rs::events_query` so message
-/// timeline reads work through `POST /api/v1/events` → `events_query`
+/// timeline reads work through `POST /_cokret/self/events` → `events_query`
 /// round-trips.
 ///
 /// Supports the multi-value selector `realms[]` ∪ `actors[]` (via
@@ -496,11 +496,11 @@ async fn events_query_durable_scope(
 }
 
 #[endpoint(
-    operation_id = "cx.events.frontier",
+    operation_id = "ck.events.frontier",
     tags("events"),
     summary = "Per-actor + per-realm frontier (highest accepted actor_seq / latest event)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.frontier"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -854,7 +854,7 @@ async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "federation cx.events.submit body must be an object",
+            "federation ck.events.submit body must be an object",
         );
         return;
     };
@@ -867,7 +867,7 @@ async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "federation cx.events.submit permits only service_binding_ref, events, and idempotency_key",
+                "federation ck.events.submit permits only service_binding_ref, events, and idempotency_key",
             );
             return;
         }
@@ -940,7 +940,7 @@ async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("invalid federation cx.events.submit shape: {error}"),
+                &format!("invalid federation ck.events.submit shape: {error}"),
             );
             return;
         }
@@ -956,7 +956,7 @@ async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "federation cx.events.submit must contain at least one event",
+            "federation ck.events.submit must contain at least one event",
         );
         return;
     }
@@ -965,7 +965,7 @@ async fn submit_federation_events(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
-            "federation cx.events.submit exceeds max batch size",
+            "federation ck.events.submit exceeds max batch size",
         );
         return;
     }
@@ -1316,7 +1316,7 @@ async fn submit_event_value(
         )
         .await;
     }
-    if parsed.kind == "cx.realm.create"
+    if parsed.kind == "ck.realm.create"
         && let Some(envelope_object) = envelope_for_bootstrap.as_object()
     {
         bootstrap_realm_member_index(state, &parsed.realm_id, &parsed.actor_id, envelope_object)
@@ -1498,8 +1498,8 @@ async fn validate_event_envelope(
     }
     // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
     // kinds at the submit entrypoint. Aggressive mode: no compat path —
-    // pre-Round-R2/R3 senders MUST switch to cx.schema.ephemeral_envelope.v1
-    // (broadcast forms) or cx.schema.device_message.v1 (cx.key.verification.*).
+    // pre-Round-R2/R3 senders MUST switch to ck.schema.ephemeral_envelope.v1
+    // (broadcast forms) or ck.schema.device_message.v1 (ck.key.verification.*).
     if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
             error_http_status(code),
@@ -1610,7 +1610,7 @@ async fn validate_event_envelope(
 
     let realm_id = event_realm_id(object)?;
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
-    // (`cx.realm.tombstone` OR `cx.realm.destroy` applied) refuses every
+    // (`ck.realm.tombstone` OR `ck.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
     let realm_terminal = state
         .projection
@@ -1624,7 +1624,7 @@ async fn validate_event_envelope(
             reason,
         ));
     }
-    // Spec realm-and-space.md §2.6 — `cx.realm.create` is the genesis
+    // Spec realm-and-space.md §2.6 — `ck.realm.create` is the genesis
     // event for both the Realm metadata cell AND the creator's first
     // member-state cell. The reducer MUST treat `created_by`
     // as already-a-member when admitting this event; otherwise spec-
@@ -1633,7 +1633,7 @@ async fn validate_event_envelope(
     // materialises the member set in state.realms immediately after
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
-    let is_realm_create_bootstrap = kind == "cx.realm.create"
+    let is_realm_create_bootstrap = kind == "ck.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
         && !space_exists_in_index(state, &realm_id);
     let is_invite_acceptance_join =
@@ -1674,7 +1674,7 @@ async fn validate_event_envelope(
     // mode: payload missing the new required fields surfaces as
     // schema_violation here; payload with mismatched trust_domain surfaces as
     // the registered `cross_domain_replay_rejected` (409) code.
-    if kind == "cx.cross_signing.reset" {
+    if kind == "ck.cross_signing.reset" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         if let Err((code, reason)) = cross_signing_reset_replay_check(
             &payload,
@@ -1693,7 +1693,7 @@ async fn validate_event_envelope(
     // profile set comes from the submitted policy-components payload;
     // cross-policy bindings come from the materialized Realm metadata /
     // MLS cells, with the current payload used only for same-event writes.
-    if kind == "cx.realm.policy_components" {
+    if kind == "ck.realm.policy_components" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         // Best-effort: collect active profiles from the payload's own
         // `profiles[]` field plus any payload-asserted "active_profiles".
@@ -1828,7 +1828,7 @@ fn projected_mls_governance_binding_covers_policy_root(
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("cx.component.mls.epoch.v1")
-            || cell_id.contains("cx.component.mls_epoch.v1")
+            || cell_id.contains("ck.component.mls_epoch.v1")
             || cell_id.contains("cx.component.mls.covered_frontier.v1");
         if !is_mls_cell {
             continue;
@@ -1886,7 +1886,7 @@ fn validate_event_critical_features(
 ) -> Result<(), EventValidationError> {
     let supported = [
         "cx.event_envelope.v1",
-        "cx.profile.core_event_store.v1",
+        "ck.profile.core_event_store.v1",
         "cx.proof.event_digest.v1",
     ];
     for key in ["crit", "critical", "critical_features"] {
@@ -1967,9 +1967,9 @@ fn validate_event_critical_features(
     Ok(())
 }
 
-const SENDER_COMMITMENT_FEATURE: &str = "cx.profile.franking.sender_commitment.v1";
-const CX_AUDIT_ACCESSED: &str = "cx.audit.accessed";
-const CX_MODERATION_FRANKING_PROOF: &str = "cx.moderation.franking_proof";
+const SENDER_COMMITMENT_FEATURE: &str = "ck.profile.franking.sender_commitment.v1";
+const CX_AUDIT_ACCESSED: &str = "ck.audit.accessed";
+const CX_MODERATION_FRANKING_PROOF: &str = "ck.moderation.franking_proof";
 const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
 
 async fn append_encrypted_message_franking(
@@ -1977,7 +1977,7 @@ async fn append_encrypted_message_franking(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    if parsed.kind != "cx.message.create" {
+    if parsed.kind != "ck.message.create" {
         return;
     }
     let Some(policy) = audit_disclosure_policy_for_realm(state, &parsed.realm_id).await else {
@@ -2142,7 +2142,7 @@ fn validate_audit_accessed_payload(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "cx.audit.accessed payload must be an object",
+                "ck.audit.accessed payload must be an object",
             )
         })?;
     const ALLOWED: &[&str] = &[
@@ -2163,7 +2163,7 @@ fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed payload contains an unknown field",
+            "ck.audit.accessed payload contains an unknown field",
         ));
     }
     let access_kind = required_payload_string(payload, "access_kind")?;
@@ -2179,7 +2179,7 @@ fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed access_kind is invalid",
+            "ck.audit.accessed access_kind is invalid",
         ));
     }
     let writer_did = required_payload_string(payload, "writer_did")?;
@@ -2187,14 +2187,14 @@ fn validate_audit_accessed_payload(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed writer_did must be a DID",
+            "ck.audit.accessed writer_did must be a DID",
         )
     })?;
     if object.get("actor_id").and_then(Value::as_str) != Some(writer_did.as_str()) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
-            "cx.audit.accessed writer_did must match actor_id",
+            "ck.audit.accessed writer_did must match actor_id",
         ));
     }
     let target_ref = required_payload_string(payload, "target_ref")?;
@@ -2202,7 +2202,7 @@ fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed target_ref must be a typed object ref",
+            "ck.audit.accessed target_ref must be a typed object ref",
         ));
     }
     if required_payload_string(payload, "purpose")?
@@ -2212,7 +2212,7 @@ fn validate_audit_accessed_payload(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed purpose must be non-empty",
+            "ck.audit.accessed purpose must be non-empty",
         ));
     }
     let accessed_at = required_payload_string(payload, "accessed_at")?;
@@ -2220,7 +2220,7 @@ fn validate_audit_accessed_payload(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed accessed_at must be RFC3339",
+            "ck.audit.accessed accessed_at must be RFC3339",
         )
     })?;
     match access_kind.as_str() {
@@ -2234,7 +2234,7 @@ fn validate_audit_accessed_payload(
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "cx.audit.accessed paired event fields are invalid",
+                        "ck.audit.accessed paired event fields are invalid",
                     ));
                 }
             }
@@ -2245,7 +2245,7 @@ fn validate_audit_accessed_payload(
                     return Err(event_validation_error(
                         StatusCode::BAD_REQUEST,
                         "schema_violation",
-                        "cx.audit.accessed cell heads must be null or sha256 digest",
+                        "ck.audit.accessed cell heads must be null or sha256 digest",
                     ));
                 }
             }
@@ -2266,7 +2266,7 @@ fn validate_watch_audit_payload_fields(
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed target_actor_id must be a DID",
+            "ck.audit.accessed target_actor_id must be a DID",
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
@@ -2274,7 +2274,7 @@ fn validate_watch_audit_payload_fields(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed target_cell_id must use ck:cell:",
+            "ck.audit.accessed target_cell_id must use ck:cell:",
         ));
     }
     Ok(())
@@ -2292,7 +2292,7 @@ fn required_payload_string(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                format!("cx.audit.accessed requires {field}"),
+                format!("ck.audit.accessed requires {field}"),
             )
         })
 }
@@ -2363,7 +2363,7 @@ async fn validate_flow_watch_audit_pair(
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
     if audit_record.kind != CX_AUDIT_ACCESSED {
         return Err(manage_others_audit_error(
-            "audit_pair ref must point to cx.audit.accessed",
+            "audit_pair ref must point to ck.audit.accessed",
         ));
     }
     let audit_payload = audit_record
@@ -2516,12 +2516,12 @@ fn validate_event_schema_and_payload(
                 )
             })?;
         registry
-            .validate_value("cx.schema.event.v1", envelope)
+            .validate_value("ck.schema.event.v1", envelope)
             .map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
-                    "event envelope violates cx.schema.event.v1",
+                    "event envelope violates ck.schema.event.v1",
                 )
             })?;
     }
@@ -2565,7 +2565,7 @@ fn validate_event_schema_and_payload(
 /// R3.2 (cokret-spec @ b56cab1) — wire-breaking deny validators applied on
 /// the event ingest path.
 ///
-/// - MIU-SOL-1: `cx.member.identity.update` payloads MUST NOT carry the removed handle fields
+/// - MIU-SOL-1: `ck.member.identity.update` payloads MUST NOT carry the removed handle fields
 ///   (`primary_handle` / `handles[]` / `verified_handle`).
 /// - HC-SOL-3: message event payloads carrying mention references MUST use the v2 shape
 ///   (`subject_id` authoritative); the legacy `subject` / `handle` / `display_snapshot` shape is
@@ -2881,7 +2881,7 @@ fn event_requirements_schema_id(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
-        .unwrap_or_else(|| "cx.schema.event.v1".to_owned());
+        .unwrap_or_else(|| "ck.schema.event.v1".to_owned());
     if !schema_id.starts_with("cx.schema.") || !artifacts::schema_ids().contains(&schema_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -3137,7 +3137,7 @@ fn event_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) ->
         .map(ToOwned::to_owned)
 }
 
-/// True iff a `cx.realm.create` event's `payload.object.created_by`
+/// True iff a `ck.realm.create` event's `payload.object.created_by`
 /// matches the session actor. Spec realm-and-space.md §2.6 — this is the
 /// genesis-member condition that lets the create event bypass the regular
 /// `realm_has_member` check.
@@ -3201,7 +3201,7 @@ async fn member_join_accepts_pending_invite(
 
 /// Quick existence probe against the in-memory `state.realms` index used
 /// by the regular `realm_has_member` check. Used to gate the
-/// `cx.realm.create` bootstrap path so a duplicate-create attempt (where
+/// `ck.realm.create` bootstrap path so a duplicate-create attempt (where
 /// the Realm already has members) falls back to the normal member check.
 fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
     let Ok(space_id_typed) = cokret_sdk::RealmId::new(space_id.to_owned()) else {
@@ -3214,15 +3214,15 @@ fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Spec realm-and-space.md §2.6 step 2 — when a `cx.realm.create` event
+/// Spec realm-and-space.md §2.6 step 2 — when a `ck.realm.create` event
 /// commits, materialise the in-memory Realm index entry with the
 /// creator as the first member so subsequent facet events (join_rule /
 /// history_visibility / discovery / policy_components / ...) from the
 /// same actor pass the regular `realm_has_member` check without a
-/// separate `cx.member.state(join)` event.
+/// separate `ck.member.state(join)` event.
 ///
 /// Extracted out of `submit_event` (called once after `store.put`
-/// succeeds for a `cx.realm.create` event) so the canonical Event
+/// succeeds for a `ck.realm.create` event) so the canonical Event
 /// Envelope path owns Realm bootstrap state.
 async fn bootstrap_realm_member_index(
     state: &AppState,
@@ -3537,7 +3537,7 @@ fn event_submit_response(
         received_at,
         receipt: json!({
             "service_did": state.config.service_did.clone(),
-            "profile": "cx.profile.core_event_store.v1",
+            "profile": "ck.profile.core_event_store.v1",
             "event_id": event_id,
             "canonical_digest": canonical_digest,
             "received_at": received_at,
@@ -3610,7 +3610,7 @@ fn projection_operation_from_event(
     }
     if matches!(
         parsed.kind.as_str(),
-        "cx.consent.grant" | "cx.consent.revoke"
+        "ck.consent.grant" | "ck.consent.revoke"
     ) {
         payload_object
             .entry("actor_seq".to_owned())
@@ -3624,7 +3624,7 @@ fn projection_operation_from_event(
         }
         payload_object
             .entry("capability_action".to_owned())
-            .or_insert_with(|| Value::String("cx.morph.schema.migrate".to_owned()));
+            .or_insert_with(|| Value::String("ck.morph.schema.migrate".to_owned()));
     }
     if let Some(anchor_ref) = envelope.get("anchor_ref").and_then(Value::as_str) {
         payload_object
@@ -3773,7 +3773,7 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     if object.get("kind").and_then(Value::as_str) == Some(kinds::CX_MESSAGE_CREATE) {
         return None;
     }
-    // Non-message events (e.g. cx.flow.create / cx.flow.update) legitimately
+    // Non-message events (e.g. ck.flow.create / ck.flow.update) legitimately
     // carry the object's own `scope_circle_id`.
     let payload = object.get("payload").and_then(Value::as_object)?;
     if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
@@ -3923,13 +3923,13 @@ fn circle_event_visible_to_session(
 }
 
 /// Scan the durable Event store for the most
-/// recent `cx.realm.read_receipt_policy` event in `space_id` and return
+/// recent `ck.realm.read_receipt_policy` event in `space_id` and return
 /// `(disclosure, visibility, scope_overrides_allowed)` from its payload.
 /// Returns `None` when no policy event has been written for this Space —
 /// caller treats that as the spec default `Optional` / `Members` /
 /// `scope_overrides_allowed=true`.
 ///
-/// Used by future ephemeral `cx.receipt.read` fanout handlers to enforce
+/// Used by future ephemeral `ck.receipt.read` fanout handlers to enforce
 /// the policy: when `disclosure="disabled"`, drop the receipt and return
 /// HTTP 403 with `error.code` `policy_violation`. When `visibility="private"`,
 /// fanout only to the original sender of the referenced event.
@@ -3942,14 +3942,14 @@ pub async fn effective_read_receipt_policy_for_space(
     space_id: &str,
 ) -> Option<(String, String, bool)> {
     // Cell-keyed fast path. The Move/Anchor pipeline writes the
-    // `cx.component.realm.read_receipt_policy.v1` resolved CasRegister
+    // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_anchor; we
     // read directly from there. (R1.2 renamed the cell family from
     // `cx.component.space.read_receipt_policy.v1` along with the event
     // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.read_receipt_policy.v1:{space_id}"
+            "ck:cell:ck.component.realm.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
@@ -3978,7 +3978,7 @@ pub async fn effective_read_receipt_policy_for_space(
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
         // canonical Cokret event kind string.
-        if record.kind != "cx.realm.read_receipt_policy" {
+        if record.kind != "ck.realm.read_receipt_policy" {
             continue;
         }
         if canonical_realm_id_for_record(record).as_deref() != Some(space_id) {
@@ -4015,7 +4015,7 @@ pub async fn effective_read_receipt_policy_for_space(
 // (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.6 — discriminated `/api/v1/events` POST body. Single is the
+/// Spec B1.6 — discriminated `/_cokret/self/events` POST body. Single is the
 /// pre-existing canonical Event Envelope; batch and federation are the new
 /// typed shapes.
 ///
@@ -4088,7 +4088,7 @@ impl EventsSubmitRequest {
 }
 
 /// Reject any event kind that is ephemeral or receipt-object-only at the
-/// `cx.events.submit` entrypoint. Spec T02 + T23.
+/// `ck.events.submit` entrypoint. Spec T02 + T23.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the
@@ -4097,9 +4097,9 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
     if cokret_sdk::events::is_ephemeral_kind(kind) {
         return Some((
             ErrorCode::SchemaViolation,
-            "ephemeral kind MUST be carried via cx.schema.ephemeral_envelope.v1 \
-             (broadcast forms) or cx.schema.device_message.v1 \
-             (cx.key.verification.* to-device); not durable cx.events.submit",
+            "ephemeral kind MUST be carried via ck.schema.ephemeral_envelope.v1 \
+             (broadcast forms) or ck.schema.device_message.v1 \
+             (ck.key.verification.* to-device); not durable ck.events.submit",
         ));
     }
     if cokret_sdk::events::is_receipt_object_only(kind) {
@@ -4113,7 +4113,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
 }
 
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
-/// terminal (`cx.realm.tombstone` or `cx.realm.destroy` applied). Spec T07.
+/// terminal (`ck.realm.tombstone` or `ck.realm.destroy` applied). Spec T07.
 ///
 /// Returns `Some((ErrorCode::RealmTerminalState, reason))` when the write
 /// MUST be rejected; `None` otherwise.
@@ -4124,14 +4124,14 @@ pub fn terminal_realm_check(
     if realm_in_terminal_state && !crate::kinds::is_audit_kind(kind) {
         return Some((
             ErrorCode::RealmTerminalState,
-            "Realm has reached cx.realm.tombstone or cx.realm.destroy \
+            "Realm has reached ck.realm.tombstone or ck.realm.destroy \
              terminal state; only audit-class events are accepted",
         ));
     }
     None
 }
 
-/// `cx.cross_signing.reset` payload trust-domain & reset_event_id check.
+/// `ck.cross_signing.reset` payload trust-domain & reset_event_id check.
 /// Spec T08.
 ///
 /// Verification order MUST be:
@@ -4198,11 +4198,11 @@ pub fn cross_signing_reset_replay_check(
     Ok(())
 }
 
-/// Validate a `cx.realm.policy_components` payload. Spec T09 + T12.
+/// Validate a `ck.realm.policy_components` payload. Spec T09 + T12.
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
-/// 2. `cx.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
+/// 2. `ck.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
 /// 3. When `media_service_decrypts=true`, all governance bindings are present (T12).
 pub fn realm_policy_components_check(
     payload: &Value,
@@ -4231,18 +4231,18 @@ pub fn realm_policy_components_check(
     // (2) T09 — e2ee_relaxed.v1 mutex against audit compliance.
     let relaxed_active = active_profiles
         .iter()
-        .any(|p| p == "cx.profile.e2ee_relaxed.v1")
+        .any(|p| p == "ck.profile.e2ee_relaxed.v1")
         || payload
             .pointer("/e2ee_relaxed/profile")
             .and_then(Value::as_str)
-            == Some("cx.profile.e2ee_relaxed.v1");
+            == Some("ck.profile.e2ee_relaxed.v1");
     let compliance_active = active_profiles
         .iter()
         .any(|p| crate::kinds::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str()));
     if relaxed_active && compliance_active {
         return Err((
             ErrorCode::E2eeRelaxedDisallowedInComplianceProfile,
-            "cx.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
+            "ck.profile.e2ee_relaxed.v1 is mutually exclusive with audit \
              compliance profiles (attested_audit.e2ee.v1 / \
              disclosed_audit.e2ee.v1)"
                 .to_owned(),
@@ -4284,13 +4284,13 @@ mod admission_tests {
     #[test]
     fn ephemeral_kind_rejected_at_submit_entry() {
         for kind in [
-            "cx.call.signal",
+            "ck.call.signal",
             "cx.presence",
             "cx.typing",
-            "cx.receipt.read",
-            "cx.key.verification.start",
-            "cx.key.verification.accept",
-            "cx.key.verification.mac",
+            "ck.receipt.read",
+            "ck.key.verification.start",
+            "ck.key.verification.accept",
+            "ck.key.verification.mac",
         ] {
             let result = events_submit_pre_admit_check(kind);
             assert!(
@@ -4310,17 +4310,17 @@ mod admission_tests {
 
     #[test]
     fn durable_kind_passes_submit_entry() {
-        assert!(events_submit_pre_admit_check("cx.message.create").is_none());
-        assert!(events_submit_pre_admit_check("cx.realm.create").is_none());
+        assert!(events_submit_pre_admit_check("ck.message.create").is_none());
+        assert!(events_submit_pre_admit_check("ck.realm.create").is_none());
     }
 
     #[test]
     fn terminal_realm_blocks_non_audit_kind() {
-        let blocked = terminal_realm_check(true, "cx.message.create");
+        let blocked = terminal_realm_check(true, "ck.message.create");
         assert!(matches!(blocked, Some((ErrorCode::RealmTerminalState, _))));
-        let audit_ok = terminal_realm_check(true, "cx.audit.accessed");
+        let audit_ok = terminal_realm_check(true, "ck.audit.accessed");
         assert!(audit_ok.is_none());
-        let live_ok = terminal_realm_check(false, "cx.message.create");
+        let live_ok = terminal_realm_check(false, "ck.message.create");
         assert!(live_ok.is_none());
     }
 
@@ -4377,10 +4377,10 @@ mod admission_tests {
 
     #[test]
     fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
-        let payload = json!({"e2ee_relaxed": {"profile": "cx.profile.e2ee_relaxed.v1"}});
+        let payload = json!({"e2ee_relaxed": {"profile": "ck.profile.e2ee_relaxed.v1"}});
         let err = realm_policy_components_check(
             &payload,
-            &["cx.profile.attested_audit.e2ee.v1".to_owned()],
+            &["ck.profile.attested_audit.e2ee.v1".to_owned()],
             false,
             false,
         )
@@ -4768,11 +4768,11 @@ mod proof_strictness_tests {
 
         object.insert(
             "requirements".to_owned(),
-            json!({ "schema": ["cx.schema.event.v1"] }),
+            json!({ "schema": ["ck.schema.event.v1"] }),
         );
         assert_eq!(
             event_requirements_schema_id(&state, &object).unwrap(),
-            "cx.schema.event.v1"
+            "ck.schema.event.v1"
         );
     }
 
@@ -4811,8 +4811,8 @@ mod proof_strictness_tests {
         let object = envelope.as_object().unwrap();
         let err = validate_event_schema_and_payload(
             &state,
-            "cx.flow.move",
-            "cx.schema.event.v1",
+            "ck.flow.move",
+            "ck.schema.event.v1",
             &envelope,
             object,
         )
@@ -4834,12 +4834,12 @@ mod proof_strictness_tests {
         });
         validate_event_schema_and_payload(
             &state,
-            "cx.member.state",
-            "cx.schema.event.v1",
+            "ck.member.state",
+            "ck.schema.event.v1",
             &valid,
             valid.as_object().unwrap(),
         )
-        .expect("cx.member.state invite accept should allow invite_ref");
+        .expect("ck.member.state invite accept should allow invite_ref");
     }
 
     #[test]
@@ -4859,12 +4859,12 @@ mod proof_strictness_tests {
         });
         validate_event_schema_and_payload(
             &state,
-            "cx.flow.update",
-            "cx.schema.event.v1",
+            "ck.flow.update",
+            "ck.schema.event.v1",
             &valid,
             valid.as_object().unwrap(),
         )
-        .expect("canonical cx.flow.update object_patch_payload should validate");
+        .expect("canonical ck.flow.update object_patch_payload should validate");
 
         let invalid_patch_op = json!({
             "payload": {
@@ -4879,12 +4879,12 @@ mod proof_strictness_tests {
         });
         let err = validate_event_schema_and_payload(
             &state,
-            "cx.flow.update",
-            "cx.schema.event.v1",
+            "ck.flow.update",
+            "ck.schema.event.v1",
             &invalid_patch_op,
             invalid_patch_op.as_object().unwrap(),
         )
-        .expect_err("cx.flow.update patch operations must match cx.patch.v1 exactly");
+        .expect_err("ck.flow.update patch operations must match ck.patch.v1 exactly");
         assert_eq!(err.code, "schema_violation");
     }
 
@@ -4911,12 +4911,12 @@ mod proof_strictness_tests {
     fn event_payload_validator_enforces_object_patch_family_schema() {
         let catalog = cokret_sdk::schema::event_payload_validator_catalog();
         let object_patch_kinds = [
-            "cx.realm.update",
-            "cx.flow.update",
-            "cx.morph.update",
-            "cx.space.update",
-            "cx.profile.update",
-            "cx.profile.space_override",
+            "ck.realm.update",
+            "ck.flow.update",
+            "ck.morph.update",
+            "ck.space.update",
+            "ck.profile.update",
+            "ck.profile.space_override",
         ];
         let missing = catalog.missing_payload_validators_for(object_patch_kinds);
         assert!(
@@ -4925,7 +4925,7 @@ mod proof_strictness_tests {
         );
 
         for event_kind in object_patch_kinds {
-            let patch = if matches!(event_kind, "cx.flow.update" | "cx.morph.update") {
+            let patch = if matches!(event_kind, "ck.flow.update" | "ck.morph.update") {
                 json!({ "metadata.title": { "$op": "set", "value": "Roadmap" } })
             } else {
                 json!({ "title": { "$op": "set", "value": "Roadmap" } })
@@ -4953,13 +4953,13 @@ mod proof_strictness_tests {
                         }),
                     )
                     .is_err(),
-                "{event_kind} must reject patch ops outside cx.patch.v1"
+                "{event_kind} must reject patch ops outside ck.patch.v1"
             );
         }
 
         catalog
             .validate_payload(
-                "cx.flow.tracks.update",
+                "ck.flow.tracks.update",
                 &json!({
                     "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                     "tracks": {
@@ -4971,19 +4971,19 @@ mod proof_strictness_tests {
                 }),
             )
             .unwrap_or_else(|err| {
-                panic!("cx.flow.tracks.update must accept canonical tracks map payload: {err}");
+                panic!("ck.flow.tracks.update must accept canonical tracks map payload: {err}");
             });
         assert!(
             catalog
                 .validate_payload(
-                    "cx.flow.tracks.update",
+                    "ck.flow.tracks.update",
                     &json!({
                         "type": "legacy_track_update",
                         "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                     }),
                 )
                 .is_err(),
-            "cx.flow.tracks.update must still reject retired `type` discriminators"
+            "ck.flow.tracks.update must still reject retired `type` discriminators"
         );
     }
 
@@ -4995,11 +4995,11 @@ mod proof_strictness_tests {
             "payload": {
                 "object": {
                     "id": realm_id,
-                    "schema": "cx.schema.realm.v1",
+                    "schema": "ck.schema.realm.v1",
                     "title": "encrypted public history",
                     "created_by": "did:web:alice.example",
                     "trust_domain": "ck:trust_domain:soland.local",
-                    "schema_refs": ["cx.schema.realm.v1"],
+                    "schema_refs": ["ck.schema.realm.v1"],
                     "default_discoverability": "listed",
                     "default_join_rule": "invite",
                     "history_visibility": "world_readable",
@@ -5022,8 +5022,8 @@ mod proof_strictness_tests {
         let object = envelope.as_object().unwrap();
         let err = validate_event_schema_and_payload(
             &state,
-            "cx.realm.create",
-            "cx.schema.event.v1",
+            "ck.realm.create",
+            "ck.schema.event.v1",
             &envelope,
             object,
         )

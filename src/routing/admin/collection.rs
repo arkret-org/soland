@@ -293,8 +293,8 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
 /// by `reducer::ProjectionState::applets`. Each row is one applet
 /// identified by `service_did`, with the latest registration metadata
 /// (namespace, capabilities) and the most recent manifest (from
-/// `cx.applet.discovery`). Empty until a `cx.applet.registration` or
-/// `cx.applet.discovery` event has been accepted.
+/// `ck.applet.discovery`). Empty until a `ck.applet.registration` or
+/// `ck.applet.discovery` event has been accepted.
 fn admin_applet_items(state: &AppState) -> Vec<Value> {
     let proj = match state.projection.lock() {
         Ok(guard) => guard,
@@ -317,7 +317,7 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
 
 /// Snapshot of the in-memory agent registry maintained
 /// by `reducer::ProjectionState::agents`. One row per agent_id, with
-/// the latest `cx.agent.endpoint` metadata.
+/// the latest `ck.agent.endpoint` metadata.
 fn admin_agent_items(state: &AppState) -> Vec<Value> {
     let proj = match state.projection.lock() {
         Ok(guard) => guard,

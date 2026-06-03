@@ -6,17 +6,17 @@
 //! deep reducer logic.
 //!
 //! Surfaces:
-//! - `POST   /auth/account/agent-key-pair`               — `cx.account.agent_key_pair`
-//! - `POST   /api/v1/agents`                             — `cx.agent.provision`
-//! - `GET    /api/v1/agents`                             — `cx.agent.list`
-//! - `GET    /api/v1/agents/{id}`                        — `cx.agent.get`
-//! - `POST   /api/v1/agents/{id}/pause`                  — `cx.agent.pause`
-//! - `POST   /api/v1/agents/{id}/resume`                 — `cx.agent.resume`
-//! - `POST   /api/v1/agents/{id}/deactivate`             — `cx.agent.deactivate`
-//! - `POST   /api/v1/agents/{id}/rotate-key`             — `cx.agent.rotate_key`
-//! - `POST   /api/v1/agents/{id}/grants`                 — `cx.agent.grant.attach`
-//! - `DELETE /api/v1/agents/{id}/grants/{grant_id}`      — `cx.agent.grant.detach`
-//! - `POST   /api/v1/agents/{id}/sidecar-thread/ensure`  — `cx.agent.sidecar_thread.ensure`
+//! - `POST   /_cokret/gate/account/agent-key-pair`               — `ck.account.agent_key_pair`
+//! - `POST   /_cokret/self/agents`                             — `ck.agent.provision`
+//! - `GET    /_cokret/self/agents`                             — `ck.agent.list`
+//! - `GET    /_cokret/self/agents/{id}`                        — `ck.agent.get`
+//! - `POST   /_cokret/self/agents/{id}/pause`                  — `ck.agent.pause`
+//! - `POST   /_cokret/self/agents/{id}/resume`                 — `ck.agent.resume`
+//! - `POST   /_cokret/self/agents/{id}/deactivate`             — `ck.agent.deactivate`
+//! - `POST   /_cokret/self/agents/{id}/rotate-key`             — `ck.agent.rotate_key`
+//! - `POST   /_cokret/self/agents/{id}/grants`                 — `ck.agent.grant.attach`
+//! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      — `ck.agent.grant.detach`
+//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  — `ck.agent.sidecar_thread.ensure`
 //!
 //! All endpoints accept controller-self bearer sessions (TODO(P2-impl):
 //! tighten to `controller-only` actor binding once the personal-agent
@@ -42,7 +42,7 @@ use crate::wire::{
     AgentSidecarThreadEnsureReqBody, AgentSidecarThreadEnsureResBody,
 };
 
-/// Mounted at `/api/v1`.
+/// Mounted under `/_cokret/self`.
 pub(super) fn router() -> Router {
     Router::with_path("agents")
         .post(provision_agent)
@@ -60,8 +60,8 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{agent_id}/sidecar-thread/ensure").post(ensure_sidecar_thread))
 }
 
-/// `/auth/account/agent-key-pair` lives under the auth router, not
-/// `/api/v1/agents`. Registered separately in `routing::identity::auth`.
+/// `/_cokret/gate/account/agent-key-pair` lives under the auth router, not
+/// `/_cokret/self/agents`. Registered separately in `routing::identity::auth`.
 pub(crate) fn agent_key_pair_router() -> Router {
     Router::with_path("agent-key-pair").post(agent_key_pair)
 }
@@ -90,12 +90,12 @@ fn generate_agent_principal_did() -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.account.agent_key_pair",
+    operation_id = "ck.account.agent_key_pair",
     tags("agents"),
     summary = "Authorize an agent runtime key pair against the agent principal",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.account.agent_key_pair"))]
+#[tracing::instrument(skip_all, fields(op = "ck.account.agent_key_pair"))]
 async fn agent_key_pair(
     aa: AuthArgs,
     body: JsonBody<AgentKeyPairReqBody>,
@@ -148,7 +148,7 @@ async fn agent_key_pair(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.key.authorize",
+        "ck.agent.key.authorize",
         json!({
             "agent_principal_id": body.agent_principal_id,
             "verification_method": body.verification_method,
@@ -162,7 +162,7 @@ async fn agent_key_pair(
         verification_method: body.verification_method,
         authorized_at,
         todos: vec![
-            "P2-impl: write cx.agent.key.authorize event into the event log".to_owned(),
+            "P2-impl: write ck.agent.key.authorize event into the event log".to_owned(),
             "P2-impl: persist controller approval consumption before accepting key authorization".to_owned(),
             "P2-impl: wire runtime_attestation verifier before accepting attested key authorization".to_owned(),
         ],
@@ -170,12 +170,12 @@ async fn agent_key_pair(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.provision",
+    operation_id = "ck.agent.provision",
     tags("agents"),
     summary = "Provision a personal agent (DID + first agent key + grant attach)",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.provision"))]
 async fn provision_agent(
     aa: AuthArgs,
     body: JsonBody<AgentProvisionReqBody>,
@@ -209,7 +209,7 @@ async fn provision_agent(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.provision",
+        "ck.agent.provision",
         json!({
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
@@ -230,20 +230,20 @@ async fn provision_agent(
         updated_at: timestamp,
         grants: body.initial_grants,
         todos: vec![
-            "P2-impl: persist agent_principal row + emit cx.agent.provision event".to_owned(),
+            "P2-impl: persist agent_principal row + emit ck.agent.provision event".to_owned(),
             "P2-impl: orchestrate DID Document registration + first key authorize".to_owned(),
-            "P2-impl: process initial_grants[] through cx.capability.grant pipeline".to_owned(),
+            "P2-impl: process initial_grants[] through ck.capability.grant pipeline".to_owned(),
         ],
     })
 }
 
 #[endpoint(
-    operation_id = "cx.agent.list",
+    operation_id = "ck.agent.list",
     tags("agents"),
     summary = "List personal agents owned by the authenticated controller",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.list"))]
 async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -265,12 +265,12 @@ async fn list_agents(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.get",
+    operation_id = "ck.agent.get",
     tags("agents"),
     summary = "Get a personal agent by id (controller-self only)",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.get"))]
 async fn get_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -317,19 +317,19 @@ async fn lifecycle_transition(
         "agent_principal_id": agent_id,
         "controller_principal_id": session.actor.clone(),
         "transition": match event_kind {
-            "cx.agent.pause" => "pause",
-            "cx.agent.resume" => "resume",
-            "cx.agent.deactivate" => "deactivate",
+            "ck.agent.pause" => "pause",
+            "ck.agent.resume" => "resume",
+            "ck.agent.deactivate" => "deactivate",
             _ => new_state,
         },
         "previous_status": match event_kind {
-            "cx.agent.resume" => "paused",
-            "cx.agent.deactivate" => "active",
+            "ck.agent.resume" => "paused",
+            "ck.agent.deactivate" => "active",
             _ => "active",
         },
         "status_changed_at": status_changed_at.clone(),
     });
-    let frontier_key = if event_kind == "cx.agent.deactivate" {
+    let frontier_key = if event_kind == "ck.agent.deactivate" {
         "revocation_frontier"
     } else {
         "freshness_frontier"
@@ -348,9 +348,9 @@ async fn lifecycle_transition(
     let mut todos = vec![format!(
         "P2-impl: emit {event_kind} event + fan-out capability cache invalidation"
     )];
-    if event_kind == "cx.agent.deactivate" {
+    if event_kind == "ck.agent.deactivate" {
         todos.push(
-            "P2-impl: fan-out cx.agent.key.revoke + cx.capability.revoke + runtime endpoint revocation"
+            "P2-impl: fan-out ck.agent.key.revoke + ck.capability.revoke + runtime endpoint revocation"
                 .to_owned(),
         );
     }
@@ -364,12 +364,12 @@ async fn lifecycle_transition(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.pause",
+    operation_id = "ck.agent.pause",
     tags("agents"),
     summary = "Pause a personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.pause"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.pause"))]
 async fn pause_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -386,7 +386,7 @@ async fn pause_agent(
             req,
             agent_id.into_inner(),
             "paused",
-            "cx.agent.pause",
+            "ck.agent.pause",
             body.reason,
         )
         .await?,
@@ -394,12 +394,12 @@ async fn pause_agent(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.resume",
+    operation_id = "ck.agent.resume",
     tags("agents"),
     summary = "Resume a paused personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.resume"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.resume"))]
 async fn resume_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -416,7 +416,7 @@ async fn resume_agent(
             req,
             agent_id.into_inner(),
             "active",
-            "cx.agent.resume",
+            "ck.agent.resume",
             body.reason,
         )
         .await?,
@@ -424,12 +424,12 @@ async fn resume_agent(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.deactivate",
+    operation_id = "ck.agent.deactivate",
     tags("agents"),
     summary = "Deactivate a personal agent (terminal lifecycle state)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.deactivate"))]
 async fn deactivate_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -446,7 +446,7 @@ async fn deactivate_agent(
             req,
             agent_id.into_inner(),
             "deactivated",
-            "cx.agent.deactivate",
+            "ck.agent.deactivate",
             body.reason,
         )
         .await?,
@@ -454,12 +454,12 @@ async fn deactivate_agent(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.rotate_key",
+    operation_id = "ck.agent.rotate_key",
     tags("agents"),
     summary = "Rotate the agent runtime key (revoke + authorize chain)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.rotate_key"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.rotate_key"))]
 async fn rotate_agent_key(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -481,7 +481,7 @@ async fn rotate_agent_key(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.rotate_key",
+        "ck.agent.rotate_key",
         json!({
             "agent_principal_id": agent_id,
             "new_verification_method": body.new_verification_method,
@@ -497,7 +497,7 @@ async fn rotate_agent_key(
         revoked_verification_method: body.previous_key_id,
         at,
         todos: vec![
-            "P2-impl: emit cx.agent.key.revoke + cx.agent.key.authorize chain".to_owned(),
+            "P2-impl: emit ck.agent.key.revoke + ck.agent.key.authorize chain".to_owned(),
             "P2-impl: invalidate session-grants bound to the revoked verification_method"
                 .to_owned(),
         ],
@@ -505,12 +505,12 @@ async fn rotate_agent_key(
 }
 
 #[endpoint(
-    operation_id = "cx.agent.grant.attach",
+    operation_id = "ck.agent.grant.attach",
     tags("agents"),
     summary = "Attach a capability grant to an agent",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.grant.attach"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.grant.attach"))]
 async fn attach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -532,7 +532,7 @@ async fn attach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.grant.attach",
+        "ck.agent.grant.attach",
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
@@ -552,18 +552,18 @@ async fn attach_agent_grant(
         state: "active".to_owned(),
         created_at,
         todos: vec![
-            "P2-impl: emit cx.capability.grant event with accountability_grant binding".to_owned(),
+            "P2-impl: emit ck.capability.grant event with accountability_grant binding".to_owned(),
         ],
     })
 }
 
 #[endpoint(
-    operation_id = "cx.agent.grant.detach",
+    operation_id = "ck.agent.grant.detach",
     tags("agents"),
     summary = "Detach (revoke) a capability grant from an agent",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.grant.detach"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.grant.detach"))]
 async fn detach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -585,7 +585,7 @@ async fn detach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.grant.detach",
+        "ck.agent.grant.detach",
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
@@ -598,17 +598,17 @@ async fn detach_agent_grant(
         agent_principal_id: agent_id,
         grant_id,
         detached_at,
-        todos: vec!["P2-impl: emit cx.capability.revoke event + cache invalidation".to_owned()],
+        todos: vec!["P2-impl: emit ck.capability.revoke event + cache invalidation".to_owned()],
     })
 }
 
 #[endpoint(
-    operation_id = "cx.agent.sidecar_thread.ensure",
+    operation_id = "ck.agent.sidecar_thread.ensure",
     tags("agents"),
     summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
     status_codes(200, 201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.agent.sidecar_thread.ensure"))]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.sidecar_thread.ensure"))]
 async fn ensure_sidecar_thread(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -637,7 +637,7 @@ async fn ensure_sidecar_thread(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.agent.sidecar_thread.ensure",
+        "ck.agent.sidecar_thread.ensure",
         json!({
             "agent_principal_id": agent_id,
             "sidecar_circle_id": sidecar_circle_id,

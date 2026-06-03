@@ -19,7 +19,7 @@ pub struct HealthResponse {
     /// True when soland is running with `SOLAND_DEVELOPMENT_MODE=true`.
     /// Surfaced here so operators / dashboards (e.g. sodmin) can flag the
     /// deployment with a "DEVELOPMENT MODE — do not use in production"
-    /// banner without having to scrape `/api/v1/server/describe`.
+    /// banner without having to scrape `/_cokret/describe`.
     pub development_mode: bool,
     /// String mirror of [`Self::development_mode`]: `"development"` when
     /// `development_mode == true`, `"production"` otherwise. The proof
@@ -44,7 +44,7 @@ pub struct HealthResponse {
 
 /// T8.3 — production deployment hardening checklist snapshot.
 ///
-/// Returned on `/health` and embedded in `/api/v1/server/describe`.
+/// Returned on `/health` and embedded in `/_cokret/describe`.
 /// Every field is derived from runtime config; nothing is hand-set by
 /// the operator. Booleans are intentionally coarse so we don't leak
 /// configured paths, hostnames, or token tails — sodmin renders the
@@ -457,7 +457,7 @@ pub struct SearchUsersRequest {
     #[serde(default)]
     pub limit: Option<usize>,
     /// Why the requester wants to enumerate users — gates anti-enumeration
-    /// filtering. Spec 0a5ab85: `cx.directory.search_users` adds `intent`.
+    /// filtering. Spec 0a5ab85: `ck.directory.search_users` adds `intent`.
     #[serde(default)]
     pub intent: Option<String>,
 }
@@ -1541,20 +1541,20 @@ pub struct MediaTokenExchangeReqBody {
     pub actor_id: String,
     pub device_id: String,
     /// Focus id chosen by the caller. MUST equal the committed
-    /// `cx.call.state.session_focus`; otherwise the handler rejects with
+    /// `ck.call.state.session_focus`; otherwise the handler rejects with
     /// `focus_mismatch`.
     pub focus_id: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ParticipantBindingResBody {
-    /// `cx.media.participant_binding.v1`.
+    /// `ck.media.participant_binding.v1`.
     pub scheme: String,
     /// Detached signature over the canonical binding body.
     pub sig: String,
     /// Key identifier of the signing media-service key. Receivers MUST
     /// verify this resolves to the current
-    /// `cx.realm.media_service.service_id` epoch (MEDIA-1).
+    /// `ck.realm.media_service.service_id` epoch (MEDIA-1).
     pub issuer_kid: String,
     pub realm_id: String,
     pub call_id: String,
@@ -1584,7 +1584,7 @@ pub struct MediaTokenExchangeResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RecoveryPolicyReqBody {
-    /// `cx.schema.recovery_policy.v1`.
+    /// `ck.schema.recovery_policy.v1`.
     pub schema: String,
     pub policy_id: String,
     /// `pending` | `active` | `retired`.
@@ -1609,7 +1609,7 @@ pub struct RecoveryPolicyResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RecoveryReceiptReqBody {
-    /// `cx.schema.recovery_receipt.v1`.
+    /// `ck.schema.recovery_receipt.v1`.
     pub schema: String,
     pub recovery_session_id: String,
     pub policy_id: String,
@@ -1714,17 +1714,17 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "cx.directory.describe",
-    "cx.directory.search_realms",
-    "cx.directory.resolve_realm",
-    "cx.directory.resolve_target",
-    "cx.blob.upload",
-    "cx.blob.head",
-    "cx.blob.get",
-    "cx.keys.backups.put",
-    "cx.keys.backups.list",
-    "cx.keys.backups.get",
-    "cx.keys.backups.delete",
+    "ck.directory.describe",
+    "ck.directory.search_realms",
+    "ck.directory.resolve_realm",
+    "ck.directory.resolve_target",
+    "ck.blob.upload",
+    "ck.blob.head",
+    "ck.blob.get",
+    "ck.keys.backups.put",
+    "ck.keys.backups.list",
+    "ck.keys.backups.get",
+    "ck.keys.backups.delete",
 ];
 
 fn canonical_supported_operations() -> Vec<String> {
@@ -1834,7 +1834,7 @@ fn profile_limitations() -> Vec<Value> {
 
 fn full_principal_server_gap_summary() -> Vec<Value> {
     vec![json!({
-        "profile": "cx.profile.principal_server.v1",
+        "profile": "ck.profile.principal_server.v1",
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
@@ -1895,15 +1895,15 @@ pub fn describe(
     // API stable-catalog profiles in addition to whatever interop
     // staging extensions it implements (MIMI here).
     let claimed_profiles = vec![
-        ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
-        ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
-        ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
+        ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
+        ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
+        ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
         ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+            ..ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
         },
     ];
     let verified_profiles = Vec::new();
@@ -1928,25 +1928,25 @@ pub fn describe(
         protocol_version: cokret_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
-                "cx.profile.core_event_store.v1".to_owned(),
-                "cx.profile.principal_server.v1".to_owned(),
-                "cx.profile.principal_server_events_api.v1".to_owned(),
-                "cx.profile.mimi_interop.v1".to_owned(),
+                "ck.profile.core_event_store.v1".to_owned(),
+                "ck.profile.principal_server.v1".to_owned(),
+                "ck.profile.principal_server_events_api.v1".to_owned(),
+                "ck.profile.mimi_interop.v1".to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
-            // advertise `cx.profile.media_service_binding.v1` whenever the
-            // server exposes the `cx.call.media.token_exchange` handler.
+            // advertise `ck.profile.media_service_binding.v1` whenever the
+            // server exposes the `ck.call.media.token_exchange` handler.
             // soland mounts the handler unconditionally (see
-            // `routing::interop::webrtc::cokret_router`), so the claim is
-            // unconditional too.
-            profiles.push("cx.profile.media_service_binding.v1".to_owned());
-            // PROF-1 — `cx.profile.accountable_principals.strict_reject.v1` is
+            // `routing::interop::webrtc::router` — `/_cokret/self/rtc/token`),
+            // so the claim is unconditional too.
+            profiles.push("ck.profile.media_service_binding.v1".to_owned());
+            // PROF-1 — `ck.profile.accountable_principals.strict_reject.v1` is
             // gated by `SOLAND_ACCOUNTABLE_TO_STRICT_REJECT=true`.
             if matches!(
                 std::env::var("SOLAND_ACCOUNTABLE_TO_STRICT_REJECT").as_deref(),
                 Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
             ) {
-                profiles.push("cx.profile.accountable_principals.strict_reject.v1".to_owned());
+                profiles.push("ck.profile.accountable_principals.strict_reject.v1".to_owned());
             }
             profiles
         },
@@ -2002,8 +2002,8 @@ pub fn describe(
             "plaintext_visible_services".to_owned(),
         ],
         supported_operations,
-        supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/api/v1"})],
-        supported_reducer_profiles: vec!["cx.reducer.v1".to_owned()],
+        supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/_cokret"})],
+        supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
         auth_metadata,
         limits: serde_json::json!({
@@ -2044,10 +2044,10 @@ pub fn describe(
                     }
                 ],
                 "full_profiles_not_claimed": [
-                    "cx.profile.principal_server.v1",
-                    "cx.profile.directory_service.v1",
-                    "cx.profile.identity_registry.v1",
-                    "cx.profile.blob_node.v1"
+                    "ck.profile.principal_server.v1",
+                    "ck.profile.directory_service.v1",
+                    "ck.profile.identity_registry.v1",
+                    "ck.profile.blob_node.v1"
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "supported_operation_catalog": {
@@ -2091,7 +2091,7 @@ pub fn describe(
         }),
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
-        reducer_profile: Some("cx.reducer.v1".to_owned()),
+        reducer_profile: Some("ck.reducer.v1".to_owned()),
         last_materialized_at: None,
     }
 }
@@ -2314,7 +2314,7 @@ mod tests {
     #[test]
     fn handle_claim_serializes_spec_shape() {
         let claim = HandleClaim {
-            schema: "cx.schema.handle_claim.v1".to_owned(),
+            schema: "ck.schema.handle_claim.v1".to_owned(),
             handle: "alice:acme.example".to_owned(),
             handle_aliases: vec!["acct:alice@acme.example".to_owned()],
             subject: "did:web:alice.example".to_owned(),
@@ -2353,7 +2353,7 @@ mod tests {
         };
 
         let value = serde_json::to_value(claim).expect("handle claim serializes");
-        assert_eq!(value["schema"], "cx.schema.handle_claim.v1");
+        assert_eq!(value["schema"], "ck.schema.handle_claim.v1");
         assert_eq!(
             value["member_delivery_binding"]["recipient_service_did"],
             "did:web:principal.acme.example"

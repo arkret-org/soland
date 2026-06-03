@@ -1,11 +1,11 @@
 //! Relation create / delete / list handlers.
 //!
 //! Surfaces:
-//! - `POST   /api/v1/relations`                — create
-//! - `GET    /api/v1/relations`                — list, filtered by `?realm_id` / `?kind`
-//! - `DELETE /api/v1/relations/{relation_id}`  — delete (soft)
+//! - `POST   /_cokret/self/relations`                — create
+//! - `GET    /_cokret/self/relations`                — list, filtered by `?realm_id` / `?kind`
+//! - `DELETE /_cokret/self/relations/{relation_id}`  — delete (soft)
 //!
-//! `cx.relation.update` is intentionally not exposed as its own handler — the
+//! `ck.relation.update` is intentionally not exposed as its own handler — the
 //! reducer handles in-place patch-merge per round-1 work (Round-1 A1a in
 //! `_todos.md`); update-by-relation-id is reached via the canonical event
 //! submit endpoint instead.
@@ -37,11 +37,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.relation.create",
+    operation_id = "ck.relation.create",
     tags("relations"),
     summary = "Create a relation between two refs in a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.relation.create"))]
+#[tracing::instrument(skip_all, fields(op = "ck.relation.create"))]
 async fn create_relation(
     aa: AuthArgs,
     body: JsonBody<CreateRelationRequest>,
@@ -112,11 +112,11 @@ async fn create_relation(
 }
 
 #[endpoint(
-    operation_id = "cx.relation.tombstone",
+    operation_id = "ck.relation.tombstone",
     tags("relations"),
     summary = "Soft-delete a relation by relation_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.relation.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ck.relation.tombstone"))]
 async fn delete_relation(
     aa: AuthArgs,
     relation_id: PathParam<String>,

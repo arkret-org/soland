@@ -15,6 +15,10 @@ use super::{
     space_search_discoverability, space_search_visible_to, validate_space_id,
 };
 
+/// `self`-segment spaces surface (spaces, reactions, read-cursors,
+/// relations, projection index). The directory surface is split out into
+/// [`find_router`] because directory discovery belongs to the `find` trust
+/// segment, not `self`.
 pub fn router() -> Router {
     Router::new()
         .push(space::router())
@@ -25,6 +29,10 @@ pub fn router() -> Router {
                 .get(read_cursor::get_read_cursors),
         )
         .push(relation::router())
-        .push(directory::router())
         .push(index::router())
+}
+
+/// `find`-segment directory discovery surface (`/_cokret/find/directory/*`).
+pub fn find_router() -> Router {
+    directory::router()
 }

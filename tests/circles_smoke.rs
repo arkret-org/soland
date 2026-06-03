@@ -7,14 +7,14 @@
 //! anchors the reducer's invariants in soland-local CI so a regression
 //! on the projection-side state machine surfaces immediately:
 //!
-//! 1. `cx.circle.create` writes a live Circle into the projection;
-//! 2. `cx.circle.member.state -> active` for a non-Realm member is rejected with the canonical
+//! 1. `ck.circle.create` writes a live Circle into the projection;
+//! 2. `ck.circle.member.state -> active` for a non-Realm member is rejected with the canonical
 //!    CXP-0007 reason `circle_member_must_be_realm_member`;
 //! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
 //!    members set is updated;
 //! 4. A Flow create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
 //!    with `circle_realm_mismatch`;
-//! 5. `cx.circle.tombstone` flips the projection to the terminal state and the read helper hides
+//! 5. `ck.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
 
 use cokret_sdk::{Did, Operation, OperationId, RealmId};
@@ -78,7 +78,7 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
 /// CXP-0007 smoke helper — write a `(realm_id, actor)` membership entry
 /// directly into the projection's `members` cache so the test can focus
 /// on the Circle strict-subset invariant without booting the full
-/// `cx.member.state` join pipeline (delivery_binding_policy
+/// `ck.member.state` join pipeline (delivery_binding_policy
 /// pre-conditions, FSM cell synthesis, etc.). The Circle handler reads
 /// the same cache via `ProjectionState::member`.
 fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, actor: &str) {

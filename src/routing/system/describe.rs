@@ -8,13 +8,13 @@
 //! Surfaces:
 //! - `GET /health` — liveness + database/events health
 //! - `GET /readyz` — readiness gate for deploy orchestrators
-//! - `GET /api/v1/server/describe`
-//! - `GET /api/v1/auth/bridge/describe`
-//! - `GET /api/v1/authz/describe`
-//! - `GET /api/v1/policies/describe`
-//! - `GET /api/v1/device_messages/describe`
-//! - `GET /api/v1/keys/backups/describe`
-//! - `GET /api/v1/integration/describe`
+//! - `GET /_cokret/describe`
+//! - `GET /_cokret/gate/auth/bridge/describe`
+//! - `GET /_cokret/self/authz/describe`
+//! - `GET /_cokret/self/policies/describe`
+//! - `GET /_cokret/self/device_messages/describe`
+//! - `GET /_cokret/self/keys/backups/describe`
+//! - `GET /_cokret/self/integration/describe`
 //!
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
@@ -42,8 +42,10 @@ pub(super) fn health_router() -> Router {
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(Router::with_path("server/describe").get(server_describe))
-        .push(Router::with_path("integration/describe").get(integration_describe))
+        // `/_cokret/describe` — root meta position (no trust segment).
+        .push(Router::with_path("describe").get(server_describe))
+        // soland-local integration describe → self-scoped.
+        .push(Router::with_path("self/integration/describe").get(integration_describe))
 }
 
 #[endpoint(
@@ -172,11 +174,11 @@ struct HealthCheckRow {
 }
 
 #[endpoint(
-    operation_id = "cx.server.describe",
+    operation_id = "ck.server.describe",
     tags("server"),
     summary = "Server capability description"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.server.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.server.describe"))]
 async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let description = describe(
@@ -213,7 +215,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     value["proof_verifier_mode"] = json!(state.config.proof_verifier_mode());
     value["admin_auth_mode"] = json!(state.config.admin_auth_mode());
     // Round R2/R3 (T08) — expose deployment trust_domain so peers /
-    // clients can bind `cx.cross_signing.reset` payloads correctly.
+    // clients can bind `ck.cross_signing.reset` payloads correctly.
     value["trust_domain"] = json!(state.config.trust_domain);
     // Stream-F (Wave 2C) — advertise the audit erasure-receipts
     // surface. Spec `realm-and-space.md` §2.5.2 requires the receipt
@@ -221,7 +223,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // so verifiers can query the issuing server's current view (incl.
     // per-peer fanout_status and the timeout-triggered `incomplete`
     // flip).
-    value["erasure_receipts_endpoint"] = json!("/api/v1/audit/erasure-receipts");
+    value["erasure_receipts_endpoint"] = json!("/_cokret/self/audit/erasure-receipts");
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
     value["hardening"] =
@@ -229,7 +231,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
 
     // T6.1 — claim-level partition of the describe response.
     // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
-    // `cx.schema.service_describe.v1`. The legacy `supported_operations`
+    // `ck.schema.service_describe.v1`. The legacy `supported_operations`
     // already populated above is wire-callable only; the helper below
     // separates feature implementation from profile claims and dev-mode
     // posture from cotest-verified claims.
@@ -285,15 +287,15 @@ pub(crate) fn apply_claim_level_partition(
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
-        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.core_event_store.v1"),
-        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server.v1"),
-        cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.principal_server_events_api.v1"),
+        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.core_event_store.v1"),
+        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server.v1"),
+        cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.principal_server_events_api.v1"),
         cokret_sdk::ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..cokret_sdk::ClaimedProfileEntry::self_claimed("cx.profile.mimi_interop.v1")
+            ..cokret_sdk::ClaimedProfileEntry::self_claimed("ck.profile.mimi_interop.v1")
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
@@ -408,18 +410,18 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
     json_ok(AuthBridgeDescribeResponse {
         contract: "cokret.rest.principal_bridge.v1".to_owned(),
         version: "2026-05-12-oauth-introspection".to_owned(),
-        api_base_path: "/api/v1".to_owned(),
+        api_base_path: "/_cokret".to_owned(),
         auth: AuthBridgeAuthDescriptor {
-            dev_login_path: "/api/v1/auth/dev-login".to_owned(),
-            session_grant_exchange_path: "/api/v1/auth/session-grant/exchange".to_owned(),
+            dev_login_path: "/_cokret/gate/auth/dev-login".to_owned(),
+            session_grant_exchange_path: "/_cokret/gate/auth/session-grant/exchange".to_owned(),
             bearer_auth_scheme:
                 "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
                     .to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
         },
         push: AuthBridgePushDescriptor {
-            register_device_path: "/api/v1/push/register-device".to_owned(),
-            unregister_device_path: "/api/v1/push/unregister-device".to_owned(),
+            register_device_path: "/_cokret/edge/push/register-device".to_owned(),
+            unregister_device_path: "/_cokret/edge/push/unregister-device".to_owned(),
             session_grant_header: "X-Cokret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
             register_device_mode: "bearer_session_or_oauth_bearer_introspection".to_owned(),
@@ -438,7 +440,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             register_device_request: json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
-                "push_gateway": "https://floria.example/api/v1/push/notify",
+                "push_gateway": "https://floria.example/_cokret/edge/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
@@ -472,11 +474,11 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
             "effective-grants and check are backed by the local AuthzEngine only",
             "condition lattice, obligation execution, and cross-service policy lifecycle are not complete profile surfaces"
         ],
-        "check_path": "/api/v1/authz/check",
-        "effective_grants_path": "/api/v1/authz/effective-grants",
-        "grants_path": "/api/v1/authz/grants",
-        "grant_item_path": "/api/v1/authz/grants/{grant_id}",
-        "policy_describe_path": "/api/v1/policies/describe",
+        "check_path": "/_cokret/self/authz/check",
+        "effective_grants_path": "/_cokret/self/authz/effective-grants",
+        "grants_path": "/_cokret/self/authz/grants",
+        "grant_item_path": "/_cokret/self/authz/grants/{grant_id}",
+        "policy_describe_path": "/_cokret/self/policies/describe",
         "resource_selector_examples": [
             {
                 "kind": "event",
@@ -511,7 +513,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_request_example": {
             "actor": "did:web:alice.example",
-            "action": "cx.keys.backups.get",
+            "action": "ck.keys.backups.get",
             "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
@@ -553,16 +555,16 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
             "describe JSON is not generated from a normative policy-profile artifact",
             "obligation execution and distributed policy lifecycle are not implemented"
         ],
-        "collection_path": "/api/v1/policies",
-        "item_path": "/api/v1/policies/{policy_id}",
-        "authz_describe_path": "/api/v1/authz/describe",
+        "collection_path": "/_cokret/self/policies",
+        "item_path": "/_cokret/self/policies/{policy_id}",
+        "authz_describe_path": "/_cokret/self/authz/describe",
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "cx.keys.backups.get",
+            "policy_type": "ck.keys.backups.get",
             "effect": "require_review",
             "payload": {
-                "actions": ["cx.keys.backups.get"],
+                "actions": ["ck.keys.backups.get"],
                 "resource": {
                     "kind": "blob",
                     "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
@@ -581,8 +583,8 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
                 ]
             }
         },
-        "get_path_example": "/api/v1/policies/policy-key-backup-read-01",
-        "delete_path_example": "/api/v1/policies/policy-key-backup-read-01",
+        "get_path_example": "/_cokret/self/policies/policy-key-backup-read-01",
+        "delete_path_example": "/_cokret/self/policies/policy-key-backup-read-01",
     }))
 }
 
@@ -596,25 +598,25 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
     json_ok(json!({
         "contract": "cokret.rest.device_messages_describe.v1",
         "version": "2026-05-04-scaffold",
-        "collection_path": "/api/v1/device_messages",
-        "send_path": "/api/v1/device_messages",
+        "collection_path": "/_cokret/self/device_messages",
+        "send_path": "/_cokret/self/device_messages",
         "idempotency_header": "Idempotency-Key",
-        "schema": "cx.schema.device_message.v1",
+        "schema": "ck.schema.device_message.v1",
         "verification_event_kinds": [
-            "cx.key.verification.request",
-            "cx.key.verification.ready",
-            "cx.key.verification.start",
-            "cx.key.verification.accept",
-            "cx.key.verification.key",
-            "cx.key.verification.mac",
-            "cx.key.verification.done",
-            "cx.key.verification.cancel"
+            "ck.key.verification.request",
+            "ck.key.verification.ready",
+            "ck.key.verification.start",
+            "ck.key.verification.accept",
+            "ck.key.verification.key",
+            "ck.key.verification.mac",
+            "ck.key.verification.done",
+            "ck.key.verification.cancel"
         ],
         "send_request_example": {
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-000000000001": {
-                        "type": "cx.key.verification.request",
+                        "type": "ck.key.verification.request",
                         "content": {
                             "transaction_id": "verify-sas-01",
                             "method": "sas",
@@ -636,14 +638,14 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
 pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "cokret.rest.key_backups_describe.v1",
-        "collection_path": "/api/v1/keys/backups",
-        "item_path": "/api/v1/keys/backups/{backup_id}",
-        "schema": "cx.schema.key_backup.v1",
+        "collection_path": "/_cokret/self/keys/backups",
+        "item_path": "/_cokret/self/keys/backups/{backup_id}",
+        "schema": "ck.schema.key_backup.v1",
         "operations": [
-            "cx.keys.backups.put",
-            "cx.keys.backups.list",
-            "cx.keys.backups.get",
-            "cx.keys.backups.delete"
+            "ck.keys.backups.put",
+            "ck.keys.backups.list",
+            "ck.keys.backups.get",
+            "ck.keys.backups.delete"
         ]
     }))
 }
@@ -660,8 +662,8 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),
         service_kind: "principal_server".to_owned(),
-        api_base_path: "/api/v1".to_owned(),
-        describe_path: "/api/v1/integration/describe".to_owned(),
+        api_base_path: "/_cokret".to_owned(),
+        describe_path: "/_cokret/self/integration/describe".to_owned(),
         dependencies: vec![
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
@@ -674,7 +676,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
                 required_contract: "cx.push.bridge.describe".to_owned(),
-                discovery_path: "/api/v1/push/bridge/describe".to_owned(),
+                discovery_path: "/_cokret/edge/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },
         ],
@@ -682,7 +684,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "auth_bridge".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/auth/bridge/describe".to_owned(),
+                path: "/_cokret/gate/auth/bridge/describe".to_owned(),
                 contract: "cokret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
@@ -690,7 +692,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "oauth_bearer_introspection".to_owned(),
                 method: "Authorization".to_owned(),
-                path: "all protected /api/v1 routes".to_owned(),
+                path: "all protected /_cokret routes".to_owned(),
                 contract: "oauth2.token_introspection.rfc7662".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "make the introspection cache/timeout policy explicit in the published contract.".to_owned(),
@@ -698,7 +700,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "outbound_push_bridge".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/push/outbound/bridge/describe".to_owned(),
+                path: "/_cokret/edge/push/outbound/bridge/describe".to_owned(),
                 contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
@@ -706,7 +708,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
-                path: "/api/v1/push/register-device".to_owned(),
+                path: "/_cokret/edge/push/register-device".to_owned(),
                 contract: "cokret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
@@ -714,7 +716,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/device_messages/describe".to_owned(),
+                path: "/_cokret/self/device_messages/describe".to_owned(),
                 contract: "cokret.rest.device_messages_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
@@ -722,7 +724,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "key_backups_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/keys/backups/describe".to_owned(),
+                path: "/_cokret/self/keys/backups/describe".to_owned(),
                 contract: "cokret.rest.key_backups_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
@@ -730,7 +732,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/authz/describe".to_owned(),
+                path: "/_cokret/self/authz/describe".to_owned(),
                 contract: "cokret.rest.authz_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "inline examples only; server/describe limitations explicitly mark this as not a full authz profile surface.".to_owned(),
@@ -738,7 +740,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "policies_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/api/v1/policies/describe".to_owned(),
+                path: "/_cokret/self/policies/describe".to_owned(),
                 contract: "cokret.rest.policies_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "policy document CRUD is implemented locally; describe is not a generated full-profile artifact.".to_owned(),
@@ -754,7 +756,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "index_query".to_owned(),
                 method: "POST".to_owned(),
-                path: "/api/v1/index/query".to_owned(),
+                path: "/_cokret/self/index/query".to_owned(),
                 contract: "cokret.rest.index_query.v1".to_owned(),
                 stability: "limited_projection".to_owned(),
                 todo: "backed by local projection state and demo fallback, not a full index-node profile.".to_owned(),
@@ -762,23 +764,23 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "member_identity_update".to_owned(),
                 method: "POST".to_owned(),
-                path: "/api/v1/events".to_owned(),
-                contract: "cx.member.identity.update".to_owned(),
+                path: "/_cokret/self/events".to_owned(),
+                contract: "ck.member.identity.update".to_owned(),
                 stability: "partial_fail_closed".to_owned(),
                 todo: "plaintext Ed25519 MemberIdentity proofs are verified; encrypted proof verification and ES256/ES384 are unsupported and rejected.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
-                path: "/api/v1/auth/account/agent-key-pair".to_owned(),
-                contract: "cx.account.agent_key_pair".to_owned(),
+                path: "/_cokret/gate/account/agent-key-pair".to_owned(),
+                contract: "ck.account.agent_key_pair".to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "extensions_tsp".to_owned(),
                 method: "POST/GET".to_owned(),
-                path: "/api/v1/extensions/tsp/*".to_owned(),
+                path: "/_cokret/self/extensions/tsp/*".to_owned(),
                 contract: "cx.extension.soland.extensions.tsp.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local TSP transport/route/audit scaffold only; no real TSP envelope verify/decrypt or persistent signed audit chain.".to_owned(),
@@ -786,7 +788,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_bot_actor".to_owned(),
                 method: "POST/GET/DELETE".to_owned(),
-                path: "/api/v1/extensions/bots*".to_owned(),
+                path: "/_cokret/self/extensions/bots*".to_owned(),
                 contract: "cx.extension.soland.extensions.bots.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local bot/ghost registry only; durable provisioning and accountability grant emission are not wired.".to_owned(),
@@ -794,16 +796,16 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
-                path: "/api/v1/extensions/deployment/*".to_owned(),
-                contract: "cx.profile.sovereign_enclave.v1".to_owned(),
+                path: "/_cokret/self/deployment/*".to_owned(),
+                contract: "ck.profile.sovereign_enclave.v1".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
-                path: "/api/v1/blob/presign".to_owned(),
-                contract: "cx.blob.presign".to_owned(),
+                path: "/_cokret/self/blob/presign".to_owned(),
+                contract: "ck.blob.presign".to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },
@@ -812,8 +814,8 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             "compose_flow": {
                 "step_1": {"service": "coauth", "path": "/oauth/token", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
-                "step_3": {"service": "soland", "path": "/api/v1/push/outbound/bridge/fetch", "method": "POST"},
-                "step_4": {"service": "soland", "path": "/api/v1/push/register-device", "method": "POST"}
+                "step_3": {"service": "soland", "path": "/_cokret/edge/push/outbound/bridge/fetch", "method": "POST"},
+                "step_4": {"service": "soland", "path": "/_cokret/edge/push/register-device", "method": "POST"}
             }
         }),
         todos: vec![

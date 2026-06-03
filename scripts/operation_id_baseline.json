@@ -32,7 +32,7 @@
     "cx.integration.describe",
     "cx.keys.backups.describe",
     "cx.mimi.room_notify",
-    "cx.moderation.appeal.submit",
+    "ck.moderation.appeal.submit",
     "cx.profile.presence",
     "cx.push.delete_rule",
     "cx.push.rules",
@@ -48,8 +48,8 @@
     "cx.realms.policy_server.delete",
     "cx.realms.policy_server.get",
     "cx.realms.policy_server.put",
-    "cx.relation.create",
-    "cx.relation.tombstone",
+    "ck.relation.create",
+    "ck.relation.tombstone",
     "cx.relation.list",
     "cx.system.health"
   ]

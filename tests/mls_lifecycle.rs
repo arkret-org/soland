@@ -3,12 +3,12 @@
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. submit canonical `cx.mls.genesis` and `cx.mls.welcome` events and assert they mirror into
+//!   3. submit canonical `ck.mls.genesis` and `ck.mls.welcome` events and assert they mirror into
 //!      the MLS epoch / Welcome stores,
-//!   4. drain the calling device's queue via `GET /api/v1/keys/keypackages/welcomes/pending`.
+//!   4. drain the calling device's queue via `GET /_cokret/self/keys/keypackages/welcomes/pending`.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
-//! `cx.mls.commit` events via the canonical `POST /api/v1/events` pipeline
+//! `ck.mls.commit` events via the canonical `POST /_cokret/self/events` pipeline
 //! (W1C). The commit-bump path is covered by reducer-level unit tests in
 //! `reducer::mls`; we don't re-test it here.
 //!
@@ -117,7 +117,7 @@ fn signed_event(
     let mut event = json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "cx.schema.event.v1",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
@@ -141,7 +141,7 @@ fn signed_event(
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&json!({
             "actor": actor,
             "device_id": device_id,
@@ -163,7 +163,7 @@ async fn mls_lifecycle_end_to_end() {
     let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
 
-    // ── 1. upload a KeyPackage (W1C: cx.keys.keypackages.upload) ──
+    // ── 1. upload a KeyPackage (W1C: ck.keys.keypackages.upload) ──
     let keypackage_id = "ck:mls_keypackage:t-01";
     let publish_body = json!({
         "keypackage_id": keypackage_id,
@@ -172,7 +172,7 @@ async fn mls_lifecycle_end_to_end() {
         "lifetime": {"not_before": 1, "not_after": 4_102_444_800_i64},
         "key_package_bytes_b64": b64(b"opaque-mls-keypackage"),
     });
-    let publish_resp = TestClient::post("http://server/api/v1/keys/keypackages/upload")
+    let publish_resp = TestClient::post("http://server/_cokret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&publish_body)
         .send(&app_from_state(state.clone()))
@@ -193,9 +193,9 @@ async fn mls_lifecycle_end_to_end() {
         "publish must mirror into the store"
     );
 
-    // ── 2a. atomic claim wins (W1C: cx.keys.keypackages.claim) ───
+    // ── 2a. atomic claim wins (W1C: ck.keys.keypackages.claim) ───
     // keypackage_id is now carried in the body, not the URL.
-    let claim_url = "http://server/api/v1/keys/keypackages/claim".to_owned();
+    let claim_url = "http://server/_cokret/self/keys/keypackages/claim".to_owned();
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
@@ -259,15 +259,15 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "cx.realm.create",
+        "ck.realm.create",
         json!({
             "object": {
                 "id": realm_id,
-                "schema": "cx.schema.realm.v1",
+                "schema": "ck.schema.realm.v1",
                 "title": "MLS lifecycle",
                 "created_by": alice_did,
                 "trust_domain": "ck:trust_domain:soland-mls-test.local",
-                "schema_refs": ["cx.schema.realm.v1"],
+                "schema_refs": ["ck.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
                 "history_visibility": "joined",
@@ -287,7 +287,7 @@ async fn mls_lifecycle_end_to_end() {
             }
         }),
     );
-    let create_resp = TestClient::post("http://server/api/v1/events")
+    let create_resp = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&realm_create)
         .send(&app_from_state(state.clone()))
@@ -300,7 +300,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "cx.mls.genesis",
+        "ck.mls.genesis",
         json!({
             "mls_group_id": group_id,
             "effective_scope": effective_scope.clone(),
@@ -314,7 +314,7 @@ async fn mls_lifecycle_end_to_end() {
             "created_at": "2026-05-25T00:00:01Z"
         }),
     );
-    let genesis_resp = TestClient::post("http://server/api/v1/events")
+    let genesis_resp = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&genesis)
         .send(&app_from_state(state.clone()))
@@ -339,7 +339,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "cx.mls.welcome",
+        "ck.mls.welcome",
         json!({
             "mls_group_id": group_id,
             "epoch": 1,
@@ -362,7 +362,7 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": governance_binding
         }),
     );
-    let welcome_resp = TestClient::post("http://server/api/v1/events")
+    let welcome_resp = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&welcome)
         .send(&app_from_state(state.clone()))
@@ -397,7 +397,7 @@ async fn mls_lifecycle_end_to_end() {
         alice_did,
         alice_device,
         realm_id,
-        "cx.mls.commit",
+        "ck.mls.commit",
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
@@ -408,7 +408,7 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": commit_binding
         }),
     );
-    let commit_resp = TestClient::post("http://server/api/v1/events")
+    let commit_resp = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&commit)
         .send(&app_from_state(state.clone()))
@@ -428,7 +428,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 4. Bob drains his Welcome queue via the HTTP route ──────
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
-    let drain_resp = TestClient::get("http://server/api/v1/keys/keypackages/welcomes/pending")
+    let drain_resp = TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -447,7 +447,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // Second drain must return zero rows — `delivered_at` flips
     // ensures we don't redeliver.
-    let drain2_resp = TestClient::get("http://server/api/v1/keys/keypackages/welcomes/pending")
+    let drain2_resp = TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -459,10 +459,10 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──
-    // The dedicated `POST /api/v1/mls/commits` endpoint was removed in
-    // W1C; clients now submit `cx.mls.commit` events via the canonical
-    // `POST /api/v1/events` pipeline (cx.events.submit of the registered
-    // durable `cx.mls.commit` kind). The reducer-level epoch-bump path is
+    // The dedicated `POST /_cokret/self/mls/commits` endpoint was removed in
+    // W1C; clients now submit `ck.mls.commit` events via the canonical
+    // `POST /_cokret/self/events` pipeline (ck.events.submit of the registered
+    // durable `ck.mls.commit` kind). The reducer-level epoch-bump path is
     // covered by unit tests in `reducer::mls`. We deliberately do not
     // re-exercise it here from the HTTP layer.
 }

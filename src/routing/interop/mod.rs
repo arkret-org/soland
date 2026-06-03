@@ -18,26 +18,33 @@ use super::{
 
 pub fn router() -> Router {
     Router::new()
-        .push(Router::with_path("push/register-device").post(push::push_register))
-        .push(Router::with_path("push/unregister-device").post(push::push_unregister))
-        .push(push_outbound::router())
+        // `edge` — push / bridge gateway (`/_cokret/edge/push/*`).
         .push(
-            Router::with_path("push/rules")
-                .get(push::push_rules)
-                .post(push::upsert_push_rule),
+            Router::with_path("edge").push(
+                Router::new()
+                    .push(Router::with_path("push/register-device").post(push::push_register))
+                    .push(Router::with_path("push/unregister-device").post(push::push_unregister))
+                    .push(push_outbound::router())
+                    .push(
+                        Router::with_path("push/rules")
+                            .get(push::push_rules)
+                            .post(push::upsert_push_rule),
+                    )
+                    .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
+                    .push(Router::with_path("push/notify").post(push::push_notify)),
+            ),
         )
-        .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
-        .push(Router::with_path("push/notify").post(push::push_notify))
-        .push(webrtc::router())
-        .push(blob::router())
-        .push(moderation::router())
-        .push(mimi::router())
+        // `self` — RTC/WebRTC, blob, moderation (authenticated session surface).
+        .push(
+            Router::with_path("self")
+                .push(webrtc::router())
+                .push(blob::router())
+                .push(moderation::router()),
+        )
+        // `open` — non-Cokret external vendor interop (MIMI).
+        .push(Router::with_path("open").push(mimi::router()))
 }
 
 pub fn well_known_router() -> Router {
     mimi::well_known_router()
-}
-
-pub fn cokret_router() -> Router {
-    webrtc::cokret_router()
 }

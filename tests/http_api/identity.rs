@@ -8,7 +8,7 @@ use super::common::*;
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/root/identity/describe")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -34,7 +34,7 @@ async fn identity_surface_works() {
     );
     assert_eq!(
         describe["resolver_policy"]["freshness_receipts"]["endpoint_template"],
-        "/api/v1/identity/receipts?did={did}"
+        "/_cokret/root/identity/receipts?did={did}"
     );
     assert_eq!(
         describe["resolver_policy"]["webvh_validation"]["witness_quorum"],
@@ -42,7 +42,7 @@ async fn identity_surface_works() {
     );
     assert_eq!(describe["did_webvh"]["enabled"], false);
 
-    let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
+    let resolved: Value = TestClient::post("http://server/_cokret/root/identity/resolve")
         .json(&serde_json::json!({"did": "did:web:alice.example"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -52,7 +52,7 @@ async fn identity_surface_works() {
     assert_eq!(resolved["did_document"]["id"], "did:web:alice.example");
 
     let document: Value =
-        TestClient::get("http://server/api/v1/identity/document?did=did:web:alice.example")
+        TestClient::get("http://server/_cokret/root/identity/document?did=did:web:alice.example")
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -60,7 +60,7 @@ async fn identity_surface_works() {
             .unwrap();
     assert_eq!(document["did_document"]["id"], "did:web:alice.example");
 
-    let log: Value = TestClient::get("http://server/api/v1/identity/log?did=did:web:alice.example")
+    let log: Value = TestClient::get("http://server/_cokret/root/identity/log?did=did:web:alice.example")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -80,7 +80,7 @@ async fn identity_describe_exposes_external_webvh_provider() {
         "uuid".to_owned(),
         "webvh".to_owned(),
     ];
-    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/root/identity/describe")
         .send(&app_from_state(AppState::new(config, Db { pool: None })))
         .await
         .take_json()
@@ -135,7 +135,7 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
         "uuid".to_owned(),
         "webvh".to_owned(),
     ];
-    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/root/identity/describe")
         .send(&app_from_state(AppState::new(config, Db { pool: None })))
         .await
         .take_json()
@@ -182,7 +182,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     ];
     let state = AppState::new(config, Db { pool: None });
 
-    let describe: Value = TestClient::get("http://server/api/v1/identity/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/root/identity/describe")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -211,7 +211,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "https://soland.example/webvh/{local_id}/did.jsonl"
     );
 
-    let unauthorized = TestClient::post("http://server/api/v1/identity/webvh/register")
+    let unauthorized = TestClient::post("http://server/_cokret/root/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
             "did_public_key_multibase": "z6Mkmallory",
@@ -221,7 +221,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
-    let reused_key = TestClient::post("http://server/api/v1/identity/webvh/register")
+    let reused_key = TestClient::post("http://server/_cokret/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "reused",
@@ -247,7 +247,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         version_time,
     );
 
-    let registered: Value = TestClient::post("http://server/api/v1/identity/webvh/register")
+    let registered: Value = TestClient::post("http://server/_cokret/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "alice",
@@ -320,7 +320,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
     assert!(!log_body.contains(&format!("\"updateKeys\":[\"{did_public_key}\"]")));
     assert!(log_body.contains("\"DataIntegrityProof\""));
 
-    let resolved: Value = TestClient::post("http://server/api/v1/identity/resolve")
+    let resolved: Value = TestClient::post("http://server/_cokret/root/identity/resolve")
         .json(&serde_json::json!({"did": registered["did"]}))
         .send(&app_from_state(state.clone()))
         .await

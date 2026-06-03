@@ -2,7 +2,7 @@
 //!
 //! When `AppConfig::sovereign_enclave_enabled` is true (env
 //! `SOLAND_SOVEREIGN_ENCLAVE=1`), soland claims
-//! `cx.profile.sovereign_enclave.v1` on `/server/describe` and refuses
+//! `ck.profile.sovereign_enclave.v1` on `/server/describe` and refuses
 //! every outbound HTTP call that isn't first whitelisted.
 //!
 //! The enclave profile MUST disable:
@@ -144,7 +144,7 @@ fn url_host(url: &str) -> Option<String> {
 /// The conformance profile id soland claims on `/server/describe` when
 /// `sovereign_enclave_enabled=true`. Registered in
 /// `cokret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
-pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "cx.profile.sovereign_enclave.v1";
+pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ck.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct ConfigureDeploymentRequest {

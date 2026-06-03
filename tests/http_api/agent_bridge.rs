@@ -12,8 +12,8 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     let service_did = "did:web:applet.example";
     let agent_id = "did:web:agent.example";
 
-    // Build an applet registration event. cx.applet.registration uses
-    // cx.schema.event_payload.v1 since there's no dedicated applet
+    // Build an applet registration event. ck.applet.registration uses
+    // ck.schema.event_payload.v1 since there's no dedicated applet
     // schema in the spec registry (applet payload is free-form per
     // spec extensions/applet-integration.md).
     let registration_payload = serde_json::json!({
@@ -26,14 +26,14 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         1,
         Vec::new(),
     );
-    registration_event["kind"] = Value::String("cx.applet.registration".to_owned());
-    registration_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    registration_event["kind"] = Value::String("ck.applet.registration".to_owned());
+    registration_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
     registration_event["payload"] = registration_payload.clone();
     registration_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&registration_payload));
     registration_event["canonical_digest"] =
         Value::String(event_canonical_digest(&registration_event));
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&registration_event)
         .send(&app_from_state(state.clone()))
@@ -53,12 +53,12 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         2,
         vec!["ck:event:01904100-0000-7000-8000-ab10de000001"],
     );
-    discovery_event["kind"] = Value::String("cx.applet.discovery".to_owned());
-    discovery_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    discovery_event["kind"] = Value::String("ck.applet.discovery".to_owned());
+    discovery_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
     discovery_event["payload"] = discovery_payload.clone();
     discovery_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&discovery_payload));
     discovery_event["canonical_digest"] = Value::String(event_canonical_digest(&discovery_event));
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&discovery_event)
         .send(&app_from_state(state.clone()))
@@ -80,12 +80,12 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
         3,
         vec!["ck:event:01904100-0000-7000-8000-ab10de000002"],
     );
-    agent_event["kind"] = Value::String("cx.agent.endpoint".to_owned());
-    agent_event["schema_id"] = Value::String("cx.schema.event_payload.v1".to_owned());
+    agent_event["kind"] = Value::String("ck.agent.endpoint".to_owned());
+    agent_event["schema_id"] = Value::String("ck.schema.event_payload.v1".to_owned());
     agent_event["payload"] = agent_payload.clone();
     agent_event["proofs"][0]["payload_digest"] = Value::String(sha256_json(&agent_payload));
     agent_event["canonical_digest"] = Value::String(event_canonical_digest(&agent_event));
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&agent_event)
         .send(&app_from_state(state.clone()))
@@ -148,8 +148,8 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-d3d3d3d3d3d3",
-        "kind": "cx.applet.protocol_session.start",
-        "schema_id": "cx.schema.applet.v1",
+        "kind": "ck.applet.protocol_session.start",
+        "schema_id": "ck.schema.applet.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -171,7 +171,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -185,7 +185,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     // event for the same session_id. Pull it out of the projection
     // log via the events list endpoint.
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -197,7 +197,7 @@ async fn applet_bridge_emits_synthetic_status_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "cx.applet.protocol_session.status"
+            e["event_kind"] == "ck.applet.protocol_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic status event missing from projection log");
@@ -229,8 +229,8 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-e4e4e4e4e4e4",
-        "kind": "cx.agent.endpoint",
-        "schema_id": "cx.schema.agent.v1",
+        "kind": "ck.agent.endpoint",
+        "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -250,7 +250,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
-    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&endpoint_event)
         .send(&app_from_state(state.clone()))
@@ -271,8 +271,8 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-d4d4d4d4d4d4",
-        "kind": "cx.agent.protocol_session.start",
-        "schema_id": "cx.schema.agent.v1",
+        "kind": "ck.agent.protocol_session.start",
+        "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
@@ -294,7 +294,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -305,7 +305,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -318,7 +318,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.protocol_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent status event missing from projection log");
@@ -331,7 +331,7 @@ async fn agent_bridge_emits_status_and_result_for_session_start() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.result"
+            e["event_kind"] == "ck.agent.protocol_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("synthetic agent result event missing from projection log");
@@ -381,7 +381,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let session_id = "ck:agent_session:01904100-0000-7000-8000-deaddeaddead";
     let agent_id = "did:web:unregistered-agent.example";
 
-    // Intentionally skip the cx.agent.endpoint step — this is the
+    // Intentionally skip the ck.agent.endpoint step — this is the
     // dispatch-failure path.
     let mut payload = serde_json::json!({
         "counterparty_agent": agent_id,
@@ -391,8 +391,8 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-deadbeefdead",
-        "kind": "cx.agent.protocol_session.start",
-        "schema_id": "cx.schema.agent.v1",
+        "kind": "ck.agent.protocol_session.start",
+        "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -414,7 +414,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -425,7 +425,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     assert_eq!(resp["status"], "accepted", "submit response: {resp}");
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -438,7 +438,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     // No status(working) event should be present.
     assert!(
         !list.iter().any(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.protocol_session.status"
                 && e["payload"]["session_id"] == session_id
         }),
         "B4c failed-closed dispatch must skip the status(working) event"
@@ -447,7 +447,7 @@ async fn agent_bridge_fails_closed_on_unknown_agent() {
     let result_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.result"
+            e["event_kind"] == "ck.agent.protocol_session.result"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("error result event missing from projection log");
@@ -472,7 +472,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let token = dev_token(state.clone()).await;
     let session_id = "ck:agent_session:01904100-0000-7000-8000-c0c0c0c0c0c0";
     let agent_id = "did:web:b4d-agent.example";
-    let endpoint_url = "https://b4d-agent.example/api/v1/agent";
+    let endpoint_url = "https://b4d-agent.example/_cokret/self/agent";
 
     let endpoint_payload = serde_json::json!({
         "agent_id": agent_id,
@@ -483,8 +483,8 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     });
     let mut endpoint_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-c1c1c1c1c1c1",
-        "kind": "cx.agent.endpoint",
-        "schema_id": "cx.schema.agent.v1",
+        "kind": "ck.agent.endpoint",
+        "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 1u64,
         "realm_id": DEMO_REALM_ID,
@@ -504,7 +504,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         }],
     });
     endpoint_event["canonical_digest"] = Value::String(event_canonical_digest(&endpoint_event));
-    let endpoint_resp: Value = TestClient::post("http://server/api/v1/events")
+    let endpoint_resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&endpoint_event)
         .send(&app_from_state(state.clone()))
@@ -525,8 +525,8 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     });
     let mut start_event = serde_json::json!({
         "event_id": "ck:event:01904100-0000-7000-8000-c2c2c2c2c2c2",
-        "kind": "cx.agent.protocol_session.start",
-        "schema_id": "cx.schema.agent.v1",
+        "kind": "ck.agent.protocol_session.start",
+        "schema_id": "ck.schema.agent.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": 2u64,
         "realm_id": DEMO_REALM_ID,
@@ -548,7 +548,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     start_event["canonical_digest"] = Value::String(event_canonical_digest(&start_event));
     let _ = &mut payload;
 
-    let resp: Value = TestClient::post("http://server/api/v1/events")
+    let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&start_event)
         .send(&app_from_state(state.clone()))
@@ -568,7 +568,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let events: Value = TestClient::get(format!(
-                "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+                "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
             ))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -578,7 +578,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
             .unwrap();
             if let Some(arr) = events["events"].as_array() {
                 if let Some(e) = arr.iter().find(|e| {
-                    e["event_kind"] == "cx.agent.protocol_session.result"
+                    e["event_kind"] == "ck.agent.protocol_session.result"
                         && e["payload"]["session_id"] == session_id
                 }) {
                     found = Some(e.clone());
@@ -590,7 +590,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     };
 
     let events: Value = TestClient::get(format!(
-        "http://server/api/v1/events?realms={DEMO_REALM_ID}"
+        "http://server/_cokret/self/events?realms={DEMO_REALM_ID}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -603,7 +603,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
     let status_event = list
         .iter()
         .find(|e| {
-            e["event_kind"] == "cx.agent.protocol_session.status"
+            e["event_kind"] == "ck.agent.protocol_session.status"
                 && e["payload"]["session_id"] == session_id
         })
         .expect("status event missing");

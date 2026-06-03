@@ -106,9 +106,9 @@ pub(crate) async fn account_subscribe_frame(
     query: &str,
 ) -> serde_json::Value {
     let url = if query.is_empty() {
-        "http://server/api/v1/account/subscribe".to_owned()
+        "http://server/_cokret/self/account/subscribe".to_owned()
     } else {
-        format!("http://server/api/v1/account/subscribe?{query}")
+        format!("http://server/_cokret/self/account/subscribe?{query}")
     };
     let mut request = TestClient::get(url);
     if let Some(token) = token {
@@ -247,7 +247,7 @@ pub(crate) async fn dev_token_for_device(
     device_id: &str,
     display_name: &str,
 ) -> String {
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
             "device_id": device_id,
@@ -378,7 +378,7 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
 fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
     // HDLREN-4/5 (cokret-spec @ 7157ee8) — roster rows MUST NOT carry
     // `handle` / `handle_uri` directly; identity is resolved through the
-    // `cx.member.identity.update` events surfaced via
+    // `ck.member.identity.update` events surfaced via
     // `MemberRosterEntry.identity_event_ids[]`. The test helper now only
     // emits `{did}` to match the spec wire shape.
     entry
@@ -466,15 +466,15 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
         "track_name": "discussion",
         "content": {
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": format!("event body {actor_seq}"),
             "format": "plain"
         }
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "cx.message.create",
-        "schema_id": "cx.schema.message.v1",
+        "kind": "ck.message.create",
+        "schema_id": "ck.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -529,7 +529,7 @@ pub(crate) fn signed_message_event_envelope(
                 "aad".to_owned(),
                 serde_json::json!({
                     "realm_id": realm_id,
-                    "event_kind": "cx.message.create"
+                    "event_kind": "ck.message.create"
                 }),
             );
             object.insert(
@@ -554,7 +554,7 @@ pub(crate) fn signed_message_event_envelope(
                 ),
             );
             // `encrypted_envelope` carries a legacy `digests` blob that is not
-            // a field of cx.schema.encrypted_envelope.v1 (additionalProperties
+            // a field of ck.schema.encrypted_envelope.v1 (additionalProperties
             // is false); drop it so the conforming envelope validates.
             object.remove("digests");
         }
@@ -567,15 +567,15 @@ pub(crate) fn signed_message_event_envelope(
         {
             object.insert(
                 "kind".to_owned(),
-                Value::String("cx.content.text".to_owned()),
+                Value::String("ck.content.text".to_owned()),
             );
         }
         payload["content"] = content;
     }
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "cx.message.create",
-        "schema_id": "cx.schema.message.v1",
+        "kind": "ck.message.create",
+        "schema_id": "ck.schema.message.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
@@ -608,7 +608,7 @@ pub(crate) async fn post_message_event(
     encrypted: bool,
 ) -> StatusCode {
     let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
-    TestClient::post("http://server/api/v1/events")
+    TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -627,7 +627,7 @@ pub(crate) async fn submit_message_event(
     encrypted: bool,
 ) -> Value {
     let event = signed_message_event_envelope(actor, realm_id, thread_id, content, encrypted);
-    let mut response: Value = TestClient::post("http://server/api/v1/events")
+    let mut response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -639,7 +639,7 @@ pub(crate) async fn submit_message_event(
         let event_id = event_id.to_owned();
         let event_suffix = event_id.strip_prefix("ck:event:").unwrap_or(&event_id);
         response["operation_id"] = Value::String(format!("ck:operation:{event_suffix}"));
-        response["kind"] = Value::String("cx.message.create".to_owned());
+        response["kind"] = Value::String("ck.message.create".to_owned());
         response["message_id"] = Value::String(format!("ck:message:{event_suffix}"));
         response["realm_id"] = Value::String(realm_id.to_owned());
         response["space_id"] = Value::String(realm_id.to_owned());
@@ -657,7 +657,7 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
-    let registered: Value = TestClient::post("http://server/api/v1/account/register")
+    let registered: Value = TestClient::post("http://server/_cokret/self/account/register")
         .json(&serde_json::json!({
             "did": did,
             "handle": handle,
@@ -671,7 +671,7 @@ pub(crate) async fn register_account(
         .unwrap();
     assert_eq!(registered["did"], did);
 
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": did,
             "device_id": device_id,
@@ -856,8 +856,8 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `cokret-spec/v1`. Typed objects in the protocol are `ck:flow:` / `ck:space:`
 // / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `cx.view.*` events going
-// through the reducer, not on a free-form `/api/v1/entities` /
-// `/api/v1/views` scaffold.
+// through the reducer, not on a free-form `/_cokret/self/entities` /
+// `/_cokret/self/views` scaffold.
 
 /// Build a signed container `cx.space.*` event envelope for the Space
 /// (container) state-machine integration test. Post-R1.2 the container
@@ -875,7 +875,7 @@ pub(crate) fn signed_place_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "cx.schema.space.v1",
+        "schema_id": "ck.schema.space.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -903,11 +903,11 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "cx.space.create" {
+    if kind == "ck.space.create" {
         if let Some(space) = object.get_mut("object").and_then(Value::as_object_mut) {
             space
                 .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("cx.schema.space.v1".to_owned()));
+                .or_insert_with(|| Value::String("ck.schema.space.v1".to_owned()));
             space.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -940,7 +940,7 @@ pub(crate) fn signed_flow_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "cx.schema.flow.v1",
+        "schema_id": "ck.schema.flow.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -968,10 +968,10 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "cx.flow.create" {
+    if kind == "ck.flow.create" {
         if let Some(flow) = object.get_mut("object").and_then(Value::as_object_mut) {
             flow.entry("schema".to_owned())
-                .or_insert_with(|| Value::String("cx.schema.flow.v1".to_owned()));
+                .or_insert_with(|| Value::String("ck.schema.flow.v1".to_owned()));
             flow.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -991,7 +991,7 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "cx.flow.archive" | "cx.flow.restore" | "cx.flow.tombstone"
+        "ck.flow.archive" | "ck.flow.restore" | "cx.flow.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(flow_id) = object.get("flow_id").and_then(Value::as_str) {
@@ -1006,7 +1006,7 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
         object.remove("flow_id");
         object.remove("object_ref");
     }
-    if kind == "cx.flow.update" {
+    if kind == "ck.flow.update" {
         if !object.contains_key("target_ref")
             && let Some(flow_id) = object.get("flow_id").and_then(Value::as_str)
         {
@@ -1028,7 +1028,7 @@ pub(crate) fn signed_morph_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "cx.schema.morph.v1",
+        "schema_id": "ck.schema.morph.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -1056,11 +1056,11 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "cx.morph.create" {
+    if kind == "ck.morph.create" {
         if let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut) {
             morph
                 .entry("schema".to_owned())
-                .or_insert_with(|| Value::String("cx.schema.morph.v1".to_owned()));
+                .or_insert_with(|| Value::String("ck.schema.morph.v1".to_owned()));
             morph.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
@@ -1072,12 +1072,12 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
                 .or_insert_with(|| Value::String("draft".to_owned()));
             morph
                 .entry("schema_refs".to_owned())
-                .or_insert_with(|| serde_json::json!(["cx.schema.morph.v1"]));
+                .or_insert_with(|| serde_json::json!(["ck.schema.morph.v1"]));
         }
     }
     if matches!(
         kind,
-        "cx.morph.archive" | "cx.morph.restore" | "cx.morph.tombstone"
+        "ck.morph.archive" | "ck.morph.restore" | "cx.morph.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(morph_id) = object.get("morph_id").and_then(Value::as_str) {
@@ -1092,7 +1092,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
         object.remove("morph_id");
         object.remove("object_ref");
     }
-    if kind == "cx.morph.update" {
+    if kind == "ck.morph.update" {
         if !object.contains_key("target_ref")
             && let Some(morph_id) = object.get("morph_id").and_then(Value::as_str)
         {
@@ -1124,7 +1124,7 @@ pub(crate) fn signed_relation_event(
             relation.insert("id".to_owned(), relation_id);
             relation.insert(
                 "schema".to_owned(),
-                Value::String("cx.schema.relation.v1".to_owned()),
+                Value::String("ck.schema.relation.v1".to_owned()),
             );
             relation.insert(
                 "realm_id".to_owned(),
@@ -1157,8 +1157,8 @@ pub(crate) fn signed_relation_event(
     }
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "cx.relation.create",
-        "schema_id": "cx.schema.event_payload.v1",
+        "kind": "ck.relation.create",
+        "schema_id": "ck.schema.event_payload.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,
@@ -1191,7 +1191,7 @@ pub(crate) fn signed_relation_event(
 /// `signed_event_envelope` for the redaction kind. The spec schema
 /// registry doesn't carry a dedicated `cx.schema.redaction.v1` —
 /// `cx.redaction` is `category=message` per event-kind-registry, so
-/// reuses `cx.schema.message.v1`.
+/// reuses `ck.schema.message.v1`.
 pub(crate) fn signed_redaction_event(
     event_id: &str,
     actor_seq: u64,
@@ -1211,7 +1211,7 @@ pub(crate) fn signed_redaction_event(
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": "cx.redaction",
-        "schema_id": "cx.schema.message.v1",
+        "schema_id": "ck.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,

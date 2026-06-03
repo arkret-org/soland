@@ -1,5 +1,5 @@
 //! Reducer-level tests for the `cx.space.delivery_binding_policy`
-//! cell projection + `cx.member.state{join,routable}` validation
+//! cell projection + `ck.member.state{join,routable}` validation
 //! (Round C46, spec join-policy.md §5.1).
 //!
 //! These tests drive `ProjectionState` directly so they stay tight on

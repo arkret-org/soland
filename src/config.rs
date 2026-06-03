@@ -19,7 +19,7 @@ pub struct AppConfig {
     pub object_storage: ObjectStorageConfig,
     pub cors_allow_origin: Option<String>,
     /// Public Auth / Account Server base URL advertised to browser clients in
-    /// `/api/v1/server/describe.auth_metadata`. Registration, password
+    /// `/_cokret/describe.auth_metadata`. Registration, password
     /// recovery, passkey, OIDC, and email verification live there; soland only
     /// consumes the resulting OAuth/session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
@@ -40,7 +40,7 @@ pub struct AppConfig {
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
     /// ordinary self-hosted deployments and tests: coauth can discover it via
-    /// `/api/v1/identity/describe`, register a user DID through soland, then
+    /// `/_cokret/root/identity/describe`, register a user DID through soland, then
     /// resolve the resulting document through soland's local identity store.
     pub embedded_webvh_provider_enabled: bool,
     /// Shared bearer token required to write embedded `did:webvh` records.
@@ -71,7 +71,7 @@ pub struct AppConfig {
     pub jws_replay_window_seconds: u64,
     /// Per-cell-family replay-window overrides.
     /// Some cell families have different freshness requirements than the
-    /// global default — e.g. `cx.component.anchorer.v1` (Space-wide
+    /// global default — e.g. `ck.component.anchorer.v1` (Space-wide
     /// authority cell) needs a much tighter window than chat messages.
     /// When a Move's `effects[]` touch any cell whose family appears in
     /// this map, the **minimum** override across touched families wins
@@ -79,12 +79,12 @@ pub struct AppConfig {
     /// families without an override.
     ///
     /// Production default (built by [`AppConfig::default_replay_overrides`]):
-    /// - `cx.component.anchorer.v1` → 60s (very fresh — Space-wide pause risk)
+    /// - `ck.component.anchorer.v1` → 60s (very fresh — Space-wide pause risk)
     /// - `cx.component.mls.epoch.v1` → 60s (E2EE fork risk)
-    /// - `cx.component.consent.grant.v1` → 120s (capability-equivalent)
-    /// - `cx.component.capability.grant.v1` → 120s
-    /// - `cx.component.capability.delegate.v1` → 120s
-    /// - `cx.component.capability.derived.v1` → 120s
+    /// - `ck.component.consent.grant.v1` → 120s (capability-equivalent)
+    /// - `ck.component.capability.grant.v1` → 120s
+    /// - `ck.component.capability.delegate.v1` → 120s
+    /// - `ck.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
     /// Base64-encoded 32-byte ed25519 seed for the AnchorerWorker
     /// signing identity (env `SOLAND_ANCHORER_SIGNING_KEY`). When `Some(_)`
@@ -98,7 +98,7 @@ pub struct AppConfig {
     /// fails fast at startup with a clear error.
     pub anchorer_signing_key_seed: Option<[u8; 32]>,
     /// Per-deployment Ed25519 seed used by the reference agent runtime
-    /// to sign `audit_binding` blocks on `cx.agent.protocol_session.result`
+    /// to sign `audit_binding` blocks on `ck.agent.protocol_session.result`
     /// events. When `None` (default), the bridge falls back to
     /// `REFERENCE_AGENT_AUDIT_ED25519_SEED` — fine for dev / reference
     /// deployments but provides no real authentication because every
@@ -125,7 +125,7 @@ pub struct AppConfig {
     pub use_keystore: bool,
     /// Federation routing policy. The on-the-wire
     /// shape is identical for both variants (Move broadcast push / Anchor
-    /// pull-push under `/api/v1/federation/{push-operations,anchors,...}`);
+    /// pull-push under `/_cokret/peer/federation/{push-operations,anchors,...}`);
     /// the policy only changes which set of peer endpoints we talk to.
     ///
     /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every known peer
@@ -207,7 +207,7 @@ pub struct AppConfig {
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT` (default 50).
     pub compaction_prune_walk_per_space_limit: usize,
     /// Round R2/R3 (T08) — deployment trust domain id, used to bind
-    /// `cx.cross_signing.reset` events to this Principal Server so the
+    /// `ck.cross_signing.reset` events to this Principal Server so the
     /// same proof bytes cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ck:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
@@ -221,7 +221,7 @@ pub struct AppConfig {
     /// `test_config()` to keep their fixture IDs stable.
     /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
     pub seed_demo_data: bool,
-    /// G3.S9 — when true, soland claims `cx.profile.sovereign_enclave.v1`
+    /// G3.S9 — when true, soland claims `ck.profile.sovereign_enclave.v1`
     /// on `/server/describe` and enforces the enclave invariants
     /// (`routing::extensions::sovereign::assert_enclave_invariants`):
     /// outbound federation OFF, DID resolver method allow-list
@@ -236,7 +236,7 @@ pub struct AppConfig {
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
     /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt
     /// propagation window in milliseconds. After a
-    /// `cx.audit.erasure_receipt` is accepted, the federation fanout
+    /// `ck.audit.erasure_receipt` is accepted, the federation fanout
     /// worker waits up to this many ms for every peer to acknowledge.
     /// Peers that don't respond inside the window flip the receipt's
     /// top-level `fanout_status` to `incomplete`. Spec
@@ -387,12 +387,12 @@ impl AppConfig {
     /// default still applies to everything else.
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
         let mut m = std::collections::BTreeMap::new();
-        m.insert("cx.component.anchorer.v1", 60);
+        m.insert("ck.component.anchorer.v1", 60);
         m.insert("cx.component.mls.epoch.v1", 60);
-        m.insert("cx.component.consent.grant.v1", 120);
-        m.insert("cx.component.capability.grant.v1", 120);
-        m.insert("cx.component.capability.delegate.v1", 120);
-        m.insert("cx.component.capability.derived.v1", 120);
+        m.insert("ck.component.consent.grant.v1", 120);
+        m.insert("ck.component.capability.grant.v1", 120);
+        m.insert("ck.component.capability.delegate.v1", 120);
+        m.insert("ck.component.capability.derived.v1", 120);
         m
     }
 }
@@ -637,7 +637,7 @@ impl AppConfig {
 
     /// Derive the effective admin-API authentication posture from the
     /// current config. Returned values are stable strings safe to surface
-    /// in `/health` and `/api/v1/server/describe`:
+    /// in `/health` and `/_cokret/describe`:
     ///
     ///   - `"development"` — `SOLAND_DEVELOPMENT_MODE=true`; any authenticated session may call
     ///     admin endpoints.
@@ -660,7 +660,7 @@ impl AppConfig {
     }
 
     /// String mirror of [`Self::development_mode`]: `"development"` or
-    /// `"production"`. Exposed on `/health` and `/api/v1/server/describe`
+    /// `"production"`. Exposed on `/health` and `/_cokret/describe`
     /// so operators can see at a glance whether proof verification is
     /// running in the relaxed dev-mode path.
     #[inline]

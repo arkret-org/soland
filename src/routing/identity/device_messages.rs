@@ -1,10 +1,10 @@
 //! To-device message transport.
 //!
 //! Surfaces:
-//! - `POST /api/v1/device_messages` — send to-device messages, idempotent on `(actor,
+//! - `POST /_cokret/self/device_messages` — send to-device messages, idempotent on `(actor,
 //!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
 //!   supplied via the `Idempotency-Key` request header.
-//! - `GET /api/v1/device_messages` — pull pending to-device messages for the bound session/device.
+//! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound session/device.
 //!   Uses the `ck:cursor:` `to_device_position` from `parse_and_validate_sync_cursor` so a
 //!   duplicate sync cannot prematurely ack a delivery (this is what the README calls out as the
 //!   cursor-acked eviction guarantee).
@@ -46,11 +46,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.device_messages.put",
+    operation_id = "ck.device_messages.put",
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.device_messages.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.device_messages.put"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesSendReqBody>,
@@ -171,11 +171,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "cx.device_messages.get",
+    operation_id = "ck.device_messages.get",
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.device_messages.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.device_messages.get"))]
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,

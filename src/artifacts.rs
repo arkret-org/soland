@@ -373,14 +373,14 @@ mod tests {
             groups.iter().any(|group| {
                 group.surface == "events_sync"
                     && group.tier == "core"
-                    && group.operations.iter().any(|op| op == "cx.events.submit")
+                    && group.operations.iter().any(|op| op == "ck.events.submit")
             }),
             "events_sync operation surface group should come from operation-registry.json"
         );
 
         let operations = operation_ids_for_surface_groups(&["events_sync", "push"]);
-        assert!(operations.iter().any(|op| op == "cx.events.submit"));
-        assert!(operations.iter().any(|op| op == "cx.push.notify"));
+        assert!(operations.iter().any(|op| op == "ck.events.submit"));
+        assert!(operations.iter().any(|op| op == "ck.push.notify"));
         assert!(operations.iter().all(|op| operation_ids().contains(op)));
     }
 
@@ -389,28 +389,28 @@ mod tests {
         let bindings = active_durable_cell_bindings();
         let member = bindings
             .iter()
-            .find(|binding| binding.event_kind == "cx.member.state")
+            .find(|binding| binding.event_kind == "ck.member.state")
             .expect("member state binding should come from event-kind registry");
-        assert_eq!(member.cell_family, "cx.component.member.state.v1");
+        assert_eq!(member.cell_family, "ck.component.member.state.v1");
         assert_eq!(member.lattice, "fsm");
         assert_eq!(member.bottom, "reject");
 
         let families = cell_family_bindings();
         let consent = families
             .iter()
-            .find(|binding| binding.cell_family == "cx.component.consent.grant.v1")
+            .find(|binding| binding.cell_family == "ck.component.consent.grant.v1")
             .expect("consent grant family should be grouped");
         assert!(
             consent
                 .event_kinds
                 .iter()
-                .any(|kind| kind == "cx.consent.grant")
+                .any(|kind| kind == "ck.consent.grant")
         );
         assert!(
             consent
                 .event_kinds
                 .iter()
-                .any(|kind| kind == "cx.consent.revoke")
+                .any(|kind| kind == "ck.consent.revoke")
         );
     }
 }

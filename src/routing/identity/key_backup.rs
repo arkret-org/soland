@@ -148,7 +148,7 @@ fn validate_key_backup_encryption(
             // unlocked). recipient_key_ref names that key id, not a device id;
             // no passphrase KDF travels on the wire. The legacy
             // `device_snapshot_secret` wire value was removed (not in the
-            // cx.schema.key_backup.v1 enum).
+            // ck.schema.key_backup.v1 enum).
             if !matches!(backup_class, "mls_history" | "secret_storage") {
                 return Err(schema_error(
                     "secret_storage_key is only valid for mls_history or secret_storage key backups",
@@ -305,15 +305,15 @@ fn validate_key_backup_body(
             "key backup payload must be a JSON object",
         ));
     };
-    // CXP-0008 / CXP-0009 — reject the legacy `cx.secret_storage.v1` wire
+    // CXP-0008 / CXP-0009 — reject the legacy `ck.secret_storage.v1` wire
     // envelope shape. Senders MUST switch to the chained
-    // `cx.schema.key_backup.v1` form with `series_id` / `series_seq`.
+    // `ck.schema.key_backup.v1` form with `series_id` / `series_seq`.
     if let Some(schema) = object.get("schema").and_then(Value::as_str)
-        && schema == "cx.secret_storage.v1"
+        && schema == "ck.secret_storage.v1"
     {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "legacy_secret_storage_wire_form: senders MUST use cx.schema.key_backup.v1",
+            "legacy_secret_storage_wire_form: senders MUST use ck.schema.key_backup.v1",
         )
         .with_wire_code("legacy_secret_storage_wire_form"));
     }
@@ -366,9 +366,9 @@ fn validate_key_backup_body(
     if let Some(payload_schema) = object.get("payload_schema").and_then(Value::as_str)
         && !matches!(
             payload_schema,
-            "cx.schema.recovery_policy.v1"
-                | "cx.schema.recovery_receipt.v1"
-                | "cx.schema.key_backup.v1"
+            "ck.schema.recovery_policy.v1"
+                | "ck.schema.recovery_receipt.v1"
+                | "ck.schema.key_backup.v1"
         )
     {
         return Err(AppError::new(
@@ -572,7 +572,7 @@ async fn enforce_recovery_policy_ref(
 }
 
 /// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
-/// for `PUT /api/v1/keys/backups/{backup_id}`. Returns one of the three
+/// for `PUT /_cokret/self/keys/backups/{backup_id}`. Returns one of the three
 /// canonical 409 reasons:
 /// - `series_chain_broken`     — supersedes_digest is missing/empty when `series_seq > 0`
 /// - `series_seq_not_monotonic`— the new envelope's `series_seq` does not immediately follow the
@@ -689,7 +689,7 @@ fn key_backup_delete_proof_canonical_bytes(
         kind: "cx.key_backup.delete_proof.v1",
         actor_id,
         backup_id,
-        action: "DELETE /api/v1/keys/backups/{backup_id}",
+        action: "DELETE /_cokret/self/keys/backups/{backup_id}",
         audience: "soland.key_backup.delete",
     };
     cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
@@ -788,11 +788,11 @@ fn key_backup_duplicate_for_actor(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.backups.put",
+    operation_id = "ck.keys.backups.put",
     tags("keys"),
     summary = "Store an encrypted key backup payload by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.put"))]
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -834,7 +834,7 @@ async fn put_key_backup(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.backups.list",
+    operation_id = "ck.keys.backups.list",
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
@@ -843,7 +843,7 @@ async fn put_key_backup(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.list"))]
 async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
@@ -898,11 +898,11 @@ async fn list_key_backups(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.backups.get",
+    operation_id = "ck.keys.backups.get",
     tags("keys"),
     summary = "Read a single encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.get"))]
 async fn get_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -929,11 +929,11 @@ async fn get_key_backup(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.backups.delete",
+    operation_id = "ck.keys.backups.delete",
     tags("keys"),
     summary = "Delete an encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.delete"))]
 async fn delete_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -1016,7 +1016,7 @@ mod tests {
             },
             "aead": {
                 "name": "xchacha20_poly1305",
-                "aead_profile": "cx.aead.xchacha20_poly1305.v1",
+                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce",
                 "nonce_salt": "bm9uY2VzYWx0"
             }
@@ -1029,7 +1029,7 @@ mod tests {
             "recipient_key_ref": "mls_group_secrets_backup_key",
             "aead": {
                 "name": "xchacha20_poly1305",
-                "aead_profile": "cx.aead.xchacha20_poly1305.v1",
+                "aead_profile": "ck.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce"
             }
         })
@@ -1041,7 +1041,7 @@ mod tests {
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {
                 "name": "chacha20_poly1305",
-                "aead_profile": "cx.aead.chacha20_poly1305.v1",
+                "aead_profile": "ck.aead.chacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         })

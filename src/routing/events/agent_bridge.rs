@@ -1,12 +1,12 @@
 //! Reference agent invocation runtime.
 //!
-//! When a client emits `cx.agent.protocol_session.start` against an
-//! agent registered via `cx.agent.endpoint`, this module fans out the
+//! When a client emits `ck.agent.protocol_session.start` against an
+//! agent registered via `ck.agent.endpoint`, this module fans out the
 //! lifecycle as projection events:
 //!
-//! 1. `cx.agent.protocol_session.status` with `status="working"` once the runtime acknowledges the
+//! 1. `ck.agent.protocol_session.status` with `status="working"` once the runtime acknowledges the
 //!    invocation.
-//! 2. `cx.agent.protocol_session.result` carrying the terminal payload plus an Ed25519-signed
+//! 2. `ck.agent.protocol_session.result` carrying the terminal payload plus an Ed25519-signed
 //!    `audit_binding` block (signature is computed by
 //!    `cokret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
 //!    `{session_id, agent_principal_id, result.echo, actor}`).
@@ -15,7 +15,7 @@
 //!
 //! - The runtime first looks up `counterparty_agent` in `state.projection.lock().agents`. When no
 //!   AgentProjection is present the bridge fails closed with a single
-//!   `cx.agent.protocol_session.result` (`status="failed"` + `error.code="unknown_agent"`) and
+//!   `ck.agent.protocol_session.result` (`status="failed"` + `error.code="unknown_agent"`) and
 //!   emits no status(working).
 //! - When the registered agent carries an `endpoint_url`, the runtime POSTs the invocation to it
 //!   via reqwest on a tokio task and emits the result event when the upstream replies. Failures
@@ -56,8 +56,8 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_echo.ed25519_v1";
 
 /// Inspect `operation` and, when it carries a
-/// `cx.agent.protocol_session.start` payload, emit synthetic
-/// `cx.agent.protocol_session.status` + `cx.agent.protocol_session.result`
+/// `ck.agent.protocol_session.start` payload, emit synthetic
+/// `ck.agent.protocol_session.status` + `ck.agent.protocol_session.result`
 /// projection events. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -112,7 +112,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             "error": {
                 "code": "unknown_agent",
                 "message": format!(
-                    "counterparty_agent `{agent_principal_id}` is not registered (no cx.agent.endpoint accepted)"
+                    "counterparty_agent `{agent_principal_id}` is not registered (no ck.agent.endpoint accepted)"
                 ),
             },
             "detail": {
@@ -228,7 +228,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
 }
 
 /// Outcome of an agent invocation as surfaced into the
-/// `cx.agent.protocol_session.result` envelope.
+/// `ck.agent.protocol_session.result` envelope.
 enum AgentInvocationOutcome {
     /// In-process reference echo — `result.echo` mirrors the
     /// caller's `params`.
@@ -516,7 +516,7 @@ mod tests {
     }
 
     /// Helper: insert a registered agent so B4c's dispatch lookup
-    /// succeeds. Mirrors what `cx.agent.endpoint` would do via the
+    /// succeeds. Mirrors what `ck.agent.endpoint` would do via the
     /// reducer; the tests need it because they hand-build operations
     /// and bypass the full reducer pipeline.
     fn register_agent(state: &AppState, agent_principal_id: &str) {
@@ -617,9 +617,9 @@ mod tests {
         );
     }
 
-    /// When the counterparty_agent is not registered (no `cx.agent.endpoint`
+    /// When the counterparty_agent is not registered (no `ck.agent.endpoint`
     /// accepted), the bridge MUST emit a single
-    /// `cx.agent.protocol_session.result` with `status=failed` +
+    /// `ck.agent.protocol_session.result` with `status=failed` +
     /// `error.code=unknown_agent` instead of the status/result
     /// success pair.
     #[tokio::test]

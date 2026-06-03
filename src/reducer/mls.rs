@@ -10,7 +10,7 @@
 //! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`. Each accepted Welcome is
 //!    appended to a per-`(recipient_actor_id, recipient_device_id)` queue inside
 //!    `ProjectionState::mls_welcomes`. The recipient device drains its queue via the `GET
-//!    /api/v1/mls/welcomes/pending` route, which marks delivered rows with `delivered_at = now()`
+//!    /_cokret/self/keys/welcomes/pending` route, which marks delivered rows with `delivered_at = now()`
 //!    so subsequent polls don't redeliver.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
@@ -31,11 +31,11 @@ use super::{
     KeyPackageLifetime, MlsCommitEpoch, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionState,
 };
 
-/// Reason code emitted when a `cx.mls.keypackage` event with
+/// Reason code emitted when a `ck.mls.keypackage` event with
 /// `payload.action == "claim"` targets a KeyPackage that has already
 /// been claimed. Routing layer maps to HTTP 409 `cas_conflict`.
 pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_claimed";
-/// Reason code emitted when a `cx.mls.keypackage` event with
+/// Reason code emitted when a `ck.mls.keypackage` event with
 /// `payload.action == "claim"` targets an unknown KeyPackage id.
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
@@ -53,7 +53,7 @@ pub const REASON_COMMIT_COVERED_FRONTIER_MISSING: &str = "mls_covered_frontier_m
 /// Reject code for a second genesis against an already initialized group.
 pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 
-/// G3.S1 — project a `cx.mls.keypackage` event with
+/// G3.S1 — project a `ck.mls.keypackage` event with
 /// `payload.action == "publish"`.
 ///
 /// Payload shape (validated below):
@@ -616,7 +616,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let publish = op_at(
             100,
-            "cx.mls.keypackage",
+            "ck.mls.keypackage",
             publish_payload(
                 "ck:mls_keypackage:01",
                 "did:web:alice.example",
@@ -641,7 +641,7 @@ mod tests {
 
         let claim = op_at(
             200,
-            "cx.mls.keypackage",
+            "ck.mls.keypackage",
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:01",
@@ -671,7 +671,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let publish = op_at(
             100,
-            "cx.mls.keypackage",
+            "ck.mls.keypackage",
             publish_payload(
                 "ck:mls_keypackage:02",
                 "did:web:alice.example",
@@ -684,7 +684,7 @@ mod tests {
         // First claim — wins.
         let claim1 = op_at(
             200,
-            "cx.mls.keypackage",
+            "ck.mls.keypackage",
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:02",
@@ -700,7 +700,7 @@ mod tests {
         // Second claim — must be rejected by the CAS.
         let claim2 = op_at(
             201,
-            "cx.mls.keypackage",
+            "ck.mls.keypackage",
             json!({
                 "action": "claim",
                 "keypackage_id": "ck:mls_keypackage:02",
@@ -725,7 +725,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let enqueue = op_at(
             300,
-            "cx.mls.welcome",
+            "ck.mls.welcome",
             json!({
                 "welcome_id": "ck:mls_welcome:w1",
                 "group_id": "ck:mls_group:abc",
@@ -782,7 +782,7 @@ mod tests {
         let mut state = ProjectionState::default();
         let enqueue = op_at(
             300,
-            "cx.mls.welcome",
+            "ck.mls.welcome",
             json!({
                 "welcome_id": "ck:mls_welcome:w-leaky",
                 "group_id": "ck:mls_group:abc",
@@ -810,7 +810,7 @@ mod tests {
         // First commit on a brand-new group — expected_prev_epoch=0 → epoch=1.
         let c1 = op_at(
             500,
-            "cx.mls.commit",
+            "ck.mls.commit",
             json!({
                 "group_id": "ck:mls_group:abc",
                 "expected_prev_epoch": 0,
@@ -841,7 +841,7 @@ mod tests {
         // Second commit — expected_prev_epoch=1 → epoch=2.
         let c2 = op_at(
             501,
-            "cx.mls.commit",
+            "ck.mls.commit",
             json!({
                 "group_id": "ck:mls_group:abc",
                 "expected_prev_epoch": 1,
@@ -878,7 +878,7 @@ mod tests {
             &mut state,
             &op_at(
                 500,
-                "cx.mls.commit",
+                "ck.mls.commit",
                 json!({
                     "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
@@ -916,7 +916,7 @@ mod tests {
             &mut state,
             &op_at(
                 600,
-                "cx.mls.commit",
+                "ck.mls.commit",
                 json!({
                     "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
@@ -933,7 +933,7 @@ mod tests {
             &mut state,
             &op_at(
                 601,
-                "cx.mls.commit",
+                "ck.mls.commit",
                 json!({
                     "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
@@ -965,7 +965,7 @@ mod tests {
             &mut state,
             &op_at(
                 602,
-                "cx.mls.commit",
+                "ck.mls.commit",
                 json!({
                     "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 5,

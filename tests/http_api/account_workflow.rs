@@ -17,7 +17,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
 
-    let duplicate = TestClient::post("http://server/api/v1/account/register")
+    let duplicate = TestClient::post("http://server/_cokret/self/account/register")
         .json(&serde_json::json!({
             "did": "did:web:bob.example",
             "handle": "@bob",
@@ -27,7 +27,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
 
-    let hidden_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
+    let hidden_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
         .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -36,7 +36,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(hidden_bob["results"].as_array().unwrap().is_empty());
 
-    let me: Value = TestClient::get("http://server/api/v1/account/me")
+    let me: Value = TestClient::get("http://server/_cokret/self/account/me")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -45,7 +45,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(me["did"], "did:web:bob.example");
 
-    let contact_request: Value = TestClient::post("http://server/api/v1/contacts/request")
+    let contact_request: Value = TestClient::post("http://server/_cokret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"target": "did:web:bob.example"}))
         .send(&app_from_state(state.clone()))
@@ -56,7 +56,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(contact_request["status"], "pending");
 
     let duplicate_contact_request: Value =
-        TestClient::post("http://server/api/v1/contacts/request")
+        TestClient::post("http://server/_cokret/self/contacts/request")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .json(&serde_json::json!({"target": "did:web:bob.example"}))
             .send(&app_from_state(state.clone()))
@@ -66,7 +66,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .unwrap();
     assert_eq!(duplicate_contact_request["status"], "pending");
 
-    let accepted: Value = TestClient::post("http://server/api/v1/contacts/respond")
+    let accepted: Value = TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "requester": "did:web:alice.example",
@@ -79,7 +79,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(accepted["status"], "accepted");
 
-    let accepted_again: Value = TestClient::post("http://server/api/v1/contacts/respond")
+    let accepted_again: Value = TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "requester": "did:web:alice.example",
@@ -92,7 +92,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(accepted_again["status"], "accepted");
 
-    let reject_after_accept = TestClient::post("http://server/api/v1/contacts/respond")
+    let reject_after_accept = TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
             "requester": "did:web:alice.example",
@@ -102,7 +102,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(reject_after_accept.status_code.unwrap().as_u16(), 409);
 
-    let bob_contacts: Value = TestClient::get("http://server/api/v1/contacts")
+    let bob_contacts: Value = TestClient::get("http://server/_cokret/self/contacts")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -111,7 +111,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(bob_contacts["contacts"].as_array().unwrap().len(), 1);
 
-    let visible_bob: Value = TestClient::post("http://server/api/v1/directory/search-users")
+    let visible_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"query": "bob"}))
         .send(&app_from_state(state.clone()))
@@ -136,7 +136,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let realm_id = space_id.clone();
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
-    let hidden_space: Value = TestClient::post("http://server/api/v1/directory/search-realms")
+    let hidden_space: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "Workflow Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -156,7 +156,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let invite_space_id = invite_space["space_id"].as_str().unwrap().to_owned();
-    let bob_invites: Value = TestClient::get("http://server/api/v1/authz/invites")
+    let bob_invites: Value = TestClient::get("http://server/_cokret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -169,12 +169,12 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .as_str()
         .unwrap()
         .to_owned();
-    let invalid_invite_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let invalid_invite_resolve = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"invite_token": "ck:invite-token:invalid"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
-    let invite_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let invite_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"invite_token": invite_token}))
         .send(&app_from_state(state.clone()))
         .await
@@ -194,7 +194,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
-    let listed_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
+    let listed_search: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "Listed Directory Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -225,7 +225,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
-    let unlisted_search: Value = TestClient::post("http://server/api/v1/directory/search-realms")
+    let unlisted_search: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -233,7 +233,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert!(unlisted_search["results"].as_array().unwrap().is_empty());
-    let unlisted_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let unlisted_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": unlisted_space_id.clone()}))
         .send(&app_from_state(state.clone()))
         .await
@@ -245,13 +245,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         unlisted_space_id
     );
 
-    let anonymous_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let anonymous_resolve = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": space_id}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
 
-    let owner_resolve: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let owner_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"realm_id": space_id}))
         .send(&app_from_state(state.clone()))
@@ -360,7 +360,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "did:web:alice.example",
         &space_id,
         "ck:flow:workflow",
-        serde_json::json!({"kind": "cx.content.composite", "body": "invalid", "parts": [{"kind": "cx.content.image", "body": "image"}]}),
+        serde_json::json!({"kind": "ck.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
         false,
     )
     .await;
@@ -372,7 +372,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "did:web:alice.example",
         &space_id,
         "ck:flow:workflow",
-        serde_json::json!({"kind": "cx.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
+        serde_json::json!({"kind": "ck.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
     .await;
@@ -397,16 +397,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &space_id,
         "ck:flow:workflow",
         serde_json::json!({
-            "kind": "cx.content.composite",
+            "kind": "ck.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
                 {"type": "flow", "flow_id": "ck:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
             "parts": [
-                {"kind": "cx.content.text", "body": "structured hello"},
-                {"kind": "cx.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
-                {"kind": "cx.content.poll", "body": "ship?", "question": "ship?", "options": ["yes", "no"]}
+                {"kind": "ck.content.text", "body": "structured hello"},
+                {"kind": "ck.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},
+                {"kind": "ck.content.poll", "body": "ship?", "question": "ship?", "options": ["yes", "no"]}
             ]
         }),
         false,
@@ -421,7 +421,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let workflow_thread_id = expected_flow_id_for_scope(&space_id);
     let thread: Value = TestClient::get(format!(
-        "http://server/api/v1/index/thread?thread_id={workflow_thread_id}"
+        "http://server/_cokret/self/index/thread?thread_id={workflow_thread_id}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -431,7 +431,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     .unwrap();
     assert_eq!(thread["events"][0]["content"]["body"], "hello workflow");
 
-    let message_search: Value = TestClient::post("http://server/api/v1/index/search")
+    let message_search: Value = TestClient::post("http://server/_cokret/self/index/search")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "query": "workflow",
@@ -449,7 +449,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
 
     let notifications: Value =
-        TestClient::get("http://server/api/v1/index/notifications?actor=did:web:bob.example")
+        TestClient::get("http://server/_cokret/self/index/notifications?actor=did:web:bob.example")
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -513,7 +513,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
     assert_eq!(
         sync_with_message["realms"][&space_id]["summary"]["flow"]["schema"],
-        "cx.schema.flow.v1"
+        "ck.schema.flow.v1"
     );
 
     // After the realms-incremental optimisation a fully-quiet realm
@@ -565,7 +565,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
 
     let mismatch = TestClient::get(format!(
-        "http://server/api/v1/account/subscribe?catchup=true&after={}",
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={}",
         sync_with_message["cursor"].as_str().unwrap()
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
@@ -574,7 +574,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
 
     let filter_mismatch = TestClient::get(format!(
-        "http://server/api/v1/account/subscribe?catchup=true&after={}&filter=%7B%22spaces%22%3A%5B%22{}%22%5D%7D",
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={}&filter=%7B%22spaces%22%3A%5B%22{}%22%5D%7D",
         sync_with_message["cursor"].as_str().unwrap(),
         space_id
     ))
@@ -586,7 +586,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let mut expired_cursor = cursor.clone();
     expired_cursor["x"] = serde_json::json!(1);
     let mut expired = TestClient::get(format!(
-        "http://server/api/v1/account/subscribe?catchup=true&after={}",
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={}",
         encode_cursor(&expired_cursor)
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
@@ -596,7 +596,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let expired_body: Value = expired.take_json().await.unwrap();
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
-    let exported: Value = TestClient::get(format!("http://server/api/v1/spaces/{space_id}/export"))
+    let exported: Value = TestClient::get(format!("http://server/_cokret/self/spaces/{space_id}/export"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -618,7 +618,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         sent_message["event_id"]
     );
 
-    let invalid_wait = TestClient::get("http://server/api/v1/account/subscribe?catchup=true")
+    let invalid_wait = TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("x-cokret-wait-for", "not-a-sync-token", true)
         .send(&app_from_state(state.clone()))
@@ -626,7 +626,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     let snapshot: Value = TestClient::get(format!(
-        "http://server/api/v1/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -641,7 +641,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("ck:snapshot:")
     );
     assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
-    assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");
+    assert_eq!(snapshot["manifest"]["reducer_profile"], "ck.reducer.v1");
     // Snapshot v1 (round 9): chunk_id is now a typed integer in the SDK
     // shape; small test states fit in a single 256 KiB chunk so chunk[0]
     // .digest is the state_digest and chunk_count == 1.
@@ -668,7 +668,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     );
 
     let snapshot_chunk: Value = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
+        "http://server/_cokret/self/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
         snapshot["snapshot_ref"].as_str().unwrap()
     ))
     .send(&app_from_state(state.clone()))
@@ -705,7 +705,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let deleted = delete_test_realm(&state, &space_id).await;
     assert_eq!(deleted["deleted"], true);
 
-    let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
+    let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "Workflow Space"}))
         .send(&app_from_state(state.clone()))
         .await
@@ -714,7 +714,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert!(directory["results"].as_array().unwrap().is_empty());
 
-    let index: Value = TestClient::post("http://server/api/v1/index/query")
+    let index: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({"realm_ids": [space_id]}))
         .send(&app_from_state(state.clone()))
         .await
@@ -726,7 +726,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
     assert!(!sync["realms"].as_object().unwrap().contains_key(&space_id));
 
-    let audit_events: Value = TestClient::get("http://server/api/v1/audit/events?limit=20")
+    let audit_events: Value = TestClient::get("http://server/_cokret/self/audit/events?limit=20")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -734,7 +734,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert!(!audit_events["events"].as_array().unwrap().is_empty());
-    let audit_page_one: Value = TestClient::get("http://server/api/v1/audit/events?limit=1")
+    let audit_page_one: Value = TestClient::get("http://server/_cokret/self/audit/events?limit=1")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -745,7 +745,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .as_str()
         .expect("audit page should expose next cursor");
     let audit_page_two: Value = TestClient::get(format!(
-        "http://server/api/v1/audit/events?limit=1&cursor={audit_cursor}"
+        "http://server/_cokret/self/audit/events?limit=1&cursor={audit_cursor}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -758,13 +758,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         audit_page_two["events"][0]["audit_id"]
     );
     let forbidden_audit =
-        TestClient::get("http://server/api/v1/audit/events?actor=did:web:bob.example")
+        TestClient::get("http://server/_cokret/self/audit/events?actor=did:web:bob.example")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
 
-    let logout: Value = TestClient::post("http://server/api/v1/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -783,7 +783,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         assert_eq!(bob_session.audience, "did:web:soland.local");
         assert!(bob_session.revoked_at.is_some());
     }
-    let revoked_me = TestClient::get("http://server/api/v1/account/me")
+    let revoked_me = TestClient::get("http://server/_cokret/self/account/me")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await;

@@ -13,7 +13,7 @@
 //!   `backfill_gap_events`, `truncate_gap_events`, and `sync_timeline_message_json` to render
 //!   timeline-shaped responses.
 //!
-//! Today this layer only fans out `cx.message.*` / `cx.member.state` /
+//! Today this layer only fans out `cx.message.*` / `ck.member.state` /
 //! `cx.realm.*` (security boundary, was `cx.space.*` pre-R1.2) lifecycle
 //! events plus the container `cx.space.*` (was `cx.place.*`) family;
 //! everything else is dropped on the floor (`project_accepted_operations`
@@ -345,7 +345,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     let flow_id = flow_id_from_space_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
-        "kind": "cx.message.create",
+        "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
@@ -499,7 +499,7 @@ fn poll_projection_json(
     event_id: &str,
     projection: &crate::reducer::ProjectionState,
 ) -> Option<serde_json::Value> {
-    if content.get("kind").and_then(serde_json::Value::as_str) != Some("cx.content.poll") {
+    if content.get("kind").and_then(serde_json::Value::as_str) != Some("ck.content.poll") {
         return None;
     }
     let poll_id = content
@@ -658,7 +658,7 @@ pub fn tombstone_timeline_event_value(event: &mut Value) {
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": ERASED_USER_PLACEHOLDER,
         }),
     );
@@ -714,7 +714,7 @@ pub fn tombstone_timeline_event_for_retention(
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -730,7 +730,7 @@ pub fn retention_tombstone_payload_value(
     let Some(object) = value.as_object_mut() else {
         return json!({
             "content": {
-                "kind": "cx.content.text",
+                "kind": "ck.content.text",
                 "body": RETENTION_EXPIRED_PLACEHOLDER,
             },
             "retention_tombstone": true,
@@ -764,7 +764,7 @@ pub fn retention_tombstone_payload_value(
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": RETENTION_EXPIRED_PLACEHOLDER,
         }),
     );
@@ -777,7 +777,7 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     let Some(object) = value.as_object_mut() else {
         return json!({
             "content": {
-                "kind": "cx.content.text",
+                "kind": "ck.content.text",
                 "body": ERASED_USER_PLACEHOLDER,
             },
             "erasure_tombstone": true,
@@ -792,7 +792,7 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     object.insert(
         "content".to_owned(),
         json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": ERASED_USER_PLACEHOLDER,
         }),
     );
@@ -1474,7 +1474,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             project_federated_message(state, origin, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
             project_invite_create_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation) == "cx.realm.plaintext_visible_services" {
+        } else if kinds::canonical_kind_string(operation) == "ck.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_realm_lifecycle(operation)
@@ -1482,7 +1482,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             project_membership_operation(state, origin, operation).await;
         }
         // MID-3 (R3.1, cokret-spec @ 7157ee8) — persist accepted
-        // `cx.member.identity.update` events into the in-memory registry.
+        // `ck.member.identity.update` events into the in-memory registry.
         // Reducer-shape validation (segment whitelist, cross-cell guard,
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
@@ -1490,23 +1490,23 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         if kinds::canonical_kind_string(operation) == kinds::CX_MEMBER_IDENTITY_UPDATE {
             project_member_identity_update(state, operation);
         }
-        // Cache cx.realm.read_receipt_policy state into ProjectionState so
-        // ephemeral cx.receipt.read fanout (and other readers) can hit a
+        // Cache ck.realm.read_receipt_policy state into ProjectionState so
+        // ephemeral ck.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
         // (R1.2 renamed `cx.space.read_receipt_policy` to `cx.realm.*`.)
-        if kinds::canonical_kind_string(operation) == "cx.realm.read_receipt_policy" {
+        if kinds::canonical_kind_string(operation) == "ck.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Phase 4 — materialize accepted cross-signing publishes into the
         // DeviceManager (CAS bookkeeping). Validation already ran pre-acceptance.
-        if kinds::canonical_kind_string(operation) == "cx.cross_signing.publish" {
+        if kinds::canonical_kind_string(operation) == "ck.cross_signing.publish" {
             crate::routing::identity::cross_signing::project_cross_signing_publish(
                 state,
                 &operation.payload,
             );
         }
-        if kinds::canonical_kind_string(operation) == "cx.cross_signing.reset" {
+        if kinds::canonical_kind_string(operation) == "ck.cross_signing.reset" {
             crate::routing::identity::cross_signing::project_cross_signing_reset(
                 state,
                 &operation.payload,
@@ -1521,7 +1521,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         if let Some(effect) = reducer_effect {
             mirror_mls_effect_to_persistence(state, operation, &effect).await;
         }
-        // Stream-F (Wave 2C) — `cx.audit.erasure_receipt` federation
+        // Stream-F (Wave 2C) — `ck.audit.erasure_receipt` federation
         // fanout. The reducer has already pushed the receipt into the
         // `erasure_receipts` projection; the fanout helper looks it up
         // by `receipt_id`, enqueues one outbox row per federation peer,
@@ -1548,7 +1548,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         write_through_projection(state, operation).await;
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
-        // event to live subscribers on cx.events.subscribe. Subscribers
+        // event to live subscribers on ck.events.subscribe. Subscribers
         // filter by `realm_id`. `send` returns Err only if there are no
         // active receivers — that's not an error path, it's the steady
         // state when no one's subscribed.
@@ -1569,8 +1569,8 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             );
         }
         // Reference applet bridge: if the accepted operation is
-        // `cx.applet.protocol_session.start`, emit a synthetic
-        // `cx.applet.protocol_session.status` (echo response)
+        // `ck.applet.protocol_session.start`, emit a synthetic
+        // `ck.applet.protocol_session.status` (echo response)
         // immediately afterwards so the timeline observes the full
         // round trip without a real applet service plugged in. See
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
@@ -1578,9 +1578,9 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation)
             .await;
         // Reference agent runtime: if the accepted operation is
-        // `cx.agent.protocol_session.start`, fan out a synthetic
-        // `cx.agent.protocol_session.status` (running) followed by a
-        // terminal `cx.agent.protocol_session.result` (completed) with
+        // `ck.agent.protocol_session.start`, fan out a synthetic
+        // `ck.agent.protocol_session.status` (running) followed by a
+        // terminal `ck.agent.protocol_session.result` (completed) with
         // an `audit_binding` placeholder so the lifecycle is observable
         // end-to-end. See
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
@@ -1735,11 +1735,11 @@ pub async fn persist_projected_operation(
     Ok(())
 }
 
-/// Project a `cx.realm.read_receipt_policy` (post-R1.2; was
+/// Project a `ck.realm.read_receipt_policy` (post-R1.2; was
 /// `cx.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
-/// `ck:cell:cx.component.realm.read_receipt_policy.v1:<realm_id>`.
+/// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
 /// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_space`
@@ -1773,7 +1773,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
     let cell_id = match cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.read_receipt_policy.v1:{}",
+        "ck:cell:ck.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
         Ok(c) => c,
@@ -1960,9 +1960,9 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .unwrap_or(origin);
 
     // Project an `invite` membership transition into a SpaceInviteRecord so
-    // `GET /api/v1/authz/invites` can surface seed invites carried on the
+    // `GET /_cokret/self/authz/invites` can surface seed invites carried on the
     // canonical event path (e.g. when the Realm bootstrap flow emits
-    // `cx.member.state{membership=invite}` for each seed member, per
+    // `ck.member.state{membership=invite}` for each seed member, per
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
     tracing::debug!(
         membership = ?membership,
@@ -2007,7 +2007,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                     %invite_id,
                     invitee = %invitee.as_str(),
                     realm_id = %operation.realm_id,
-                    "projected seed-member invite via cx.member.state event"
+                    "projected seed-member invite via ck.member.state event"
                 ),
                 Err(error) => tracing::warn!(%error, "failed to project space invite"),
             }
@@ -2036,7 +2036,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 // HDLREN-3/4 (cokret-spec @ 7157ee8) — `handle` is no longer
                 // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
                 // roster; clients resolve identity by following the
-                // `cx.member.identity.update` events surfaced via
+                // `ck.member.identity.update` events surfaced via
                 // `MemberRosterEntry.identity_event_ids[]`. The earlier
                 // `member_handle_uris` cache populated from
                 // `payload.handle_uri` is gone with this rename.
@@ -2049,7 +2049,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 }
 
 /// MID-2..6 (R3.1, cokret-spec @ 7157ee8) — projection write for
-/// `cx.member.identity.update`. Validates payload shape (segment
+/// `ck.member.identity.update`. Validates payload shape (segment
 /// whitelist, cell-subject coherence), computes the canonical
 /// payload digest, and inserts a [`crate::state::MemberIdentityEventRecord`]
 /// into `AppState::member_identity`. Replacement-edge consistency is
@@ -2082,7 +2082,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let (Some(realm_id), Some(actor_id), Some(segment)) = (realm_id, actor_id, segment) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "cx.member.identity.update missing realm_id/actor_id/segment; skipping projection"
+            "ck.member.identity.update missing realm_id/actor_id/segment; skipping projection"
         );
         return;
     };
@@ -2092,7 +2092,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         tracing::warn!(
             operation_id = %operation.operation_id,
             %segment,
-            "cx.member.identity.update unknown segment; rejecting at projection"
+            "ck.member.identity.update unknown segment; rejecting at projection"
         );
         return;
     }
@@ -2103,7 +2103,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let Some(identity_payload) = payload.get("identity_payload") else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "cx.member.identity.update missing identity_payload"
+            "ck.member.identity.update missing identity_payload"
         );
         return;
     };
@@ -2113,7 +2113,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
             tracing::warn!(
                 %err,
                 operation_id = %operation.operation_id,
-                "cx.member.identity.update canonical_payload_sha256 failed"
+                "ck.member.identity.update canonical_payload_sha256 failed"
             );
             return;
         }
@@ -2159,7 +2159,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
                 expected,
                 actual = %current.as_deref().unwrap_or(""),
                 error_code = "member_identity_state_mismatch",
-                "cx.member.identity.update optimistic-concurrency guard tripped"
+                "ck.member.identity.update optimistic-concurrency guard tripped"
             );
             return;
         }
@@ -2231,7 +2231,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "cx.invite.create missing valid invitee DID"
+            "ck.invite.create missing valid invitee DID"
         );
         return;
     };
@@ -2239,7 +2239,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "cx.invite.create missing valid invite id"
+            "ck.invite.create missing valid invite id"
         );
         return;
     };
@@ -2250,7 +2250,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
             tracing::debug!(
                 invite_id = %invite_id,
                 status = %existing.status,
-                "cx.invite.create projection replay skipped"
+                "ck.invite.create projection replay skipped"
             );
             return;
         }
@@ -2297,7 +2297,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
                 realm_id = %operation.realm_id,
-                "projected invite via cx.invite.create event"
+                "projected invite via ck.invite.create event"
             );
             touch_realm(state, operation.realm_id.as_str()).await;
         }
@@ -2319,7 +2319,7 @@ fn invite_id_for_operation(operation: &Operation) -> Option<String> {
         tracing::warn!(
             operation_id = %operation.operation_id,
             invite_id = %invite_id,
-            "cx.invite.create supplied malformed invite_id; deriving stable invite id"
+            "ck.invite.create supplied malformed invite_id; deriving stable invite id"
         );
     }
     ids::typed_uuid_part(operation.operation_id.as_str())
@@ -2429,7 +2429,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     let content = message_content_from_payload(&operation.payload, flow_scope);
     if matches!(
         content.get("kind").and_then(Value::as_str),
-        Some("cx.content.poll.response" | "cx.content.poll.close")
+        Some("ck.content.poll.response" | "cx.content.poll.close")
     ) {
         return;
     }

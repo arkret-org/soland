@@ -3,15 +3,15 @@
 //! Mounted under `/_soland/admin/moderation/...`:
 //!
 //! ### Queue
-//! - `GET /queue` — canonical queue read (`cx.admin.get_moderation_queue`)
+//! - `GET /queue` — canonical queue read (`ck.admin.get_moderation_queue`)
 //!   is served by [`super::spec`]; this suite does NOT re-bind it.
 //! - `POST /queue/{id}/assign` — assign reviewer DIDs.
 //! - `POST /queue/{id}/priority` — set priority.
 //!
 //! ### Decisions
-//! - `POST /decision` — admin issues `cx.moderation.decision`. Body: `{ target_ref, realm_id,
+//! - `POST /decision` — admin issues `ck.moderation.decision`. Body: `{ target_ref, realm_id,
 //!   action, reason_text_ref?, decision_ref? }`.
-//! - `POST /decision/{decision_id}/lift` — issues `cx.moderation.decision.lift` (used when an
+//! - `POST /decision/{decision_id}/lift` — issues `ck.moderation.decision.lift` (used when an
 //!   appeal overturns a decision; the admin endpoint records the lift separately so the
 //!   appeal-decision handler can pair them in the same batch).
 //!
@@ -47,7 +47,7 @@ use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
-        // `GET queue` (canonical `cx.admin.get_moderation_queue`) is owned
+        // `GET queue` (canonical `ck.admin.get_moderation_queue`) is owned
         // by `super::spec` to keep the single `/_soland/admin/moderation/queue` URL
         // bound to exactly one handler; only the sub-paths live here.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
@@ -64,7 +64,7 @@ pub(super) fn router() -> Router {
 // ── Queue ────────────────────────────────────────────────────────────
 //
 // The canonical `GET /_soland/admin/moderation/queue` read
-// (`cx.admin.get_moderation_queue`) lives in `super::spec`; the queue
+// (`ck.admin.get_moderation_queue`) lives in `super::spec`; the queue
 // sub-actions (assign / priority) are below.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -512,7 +512,7 @@ pub struct DecideAppealReq {
     #[serde(default)]
     pub modify_decision_ref: Option<String>,
     /// Required iff `verdict=overturn`. Points to the
-    /// `cx.moderation.decision.lift` issued in the same admin session.
+    /// `ck.moderation.decision.lift` issued in the same admin session.
     #[serde(default)]
     pub decision_lift_ref: Option<String>,
 }
@@ -590,7 +590,7 @@ async fn decide_appeal(
         Vec::new()
     } else {
         vec![(
-            "cx.moderation.decision.lift",
+            "ck.moderation.decision.lift",
             original_decision_ref.as_str(),
         )]
     };
@@ -702,7 +702,7 @@ async fn close_appeal(
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// cx.moderation.appeal.* reducer & state machine (spec T06).
+// ck.moderation.appeal.* reducer & state machine (spec T06).
 // ────────────────────────────────────────────────────────────────────────
 
 /// Cell state machine for a `ck:appeal:<uuid>` row. Spec T06.
@@ -744,7 +744,7 @@ pub fn appeal_cell_id(appeal_id: &str) -> String {
 }
 
 /// Spec T06 — when an appeal `decision` event has `verdict=overturn`, the
-/// reducer MUST find a paired `cx.moderation.decision.lift` event in the
+/// reducer MUST find a paired `ck.moderation.decision.lift` event in the
 /// same Anchor batch referencing the original decision.
 ///
 /// Returns `Err(AppealOverturnMissingLift)` when the verdict is overturn
@@ -758,13 +758,13 @@ pub fn appeal_decision_overturn_paired_check(
         return Ok(());
     }
     let has_lift = batch_kinds_and_refs.iter().any(|(kind, ref_id)| {
-        *kind == "cx.moderation.decision.lift" && *ref_id == original_decision_id
+        *kind == "ck.moderation.decision.lift" && *ref_id == original_decision_id
     });
     if !has_lift {
         return Err((
             ErrorCode::AppealOverturnMissingLift,
-            "cx.moderation.appeal.decision verdict=overturn requires a paired \
-             cx.moderation.decision.lift in the same Anchor batch referencing \
+            "ck.moderation.appeal.decision verdict=overturn requires a paired \
+             ck.moderation.decision.lift in the same Anchor batch referencing \
              the original decision"
                 .to_owned(),
         ));
@@ -782,7 +782,7 @@ pub fn appeal_self_review_check(
     if reviewer == original_decision_issuer {
         return Err((
             ErrorCode::AppealSelfReviewForbidden,
-            "cx.moderation.appeal review/decision actor MUST differ from the \
+            "ck.moderation.appeal review/decision actor MUST differ from the \
              original moderation decision issuer (separation of duties)"
                 .to_owned(),
         ));
@@ -834,7 +834,7 @@ mod appeal_tests {
             "overturn",
             "ck:event:01904100-0000-7000-8000-000000000aaa",
             &[(
-                "cx.moderation.decision.lift",
+                "ck.moderation.decision.lift",
                 "ck:event:01904100-0000-7000-8000-000000000aaa",
             )],
         )

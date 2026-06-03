@@ -21,7 +21,7 @@ For a quick map of the codebase, the canonical pointers are:
 
 soland keeps the durable, signed event log as the source of truth; every
 read surface is a projection cached in PostgreSQL (or the in-memory mirror).
-A successful `POST /api/v1/events` walks the following stages:
+A successful `POST /_cokret/self/events` walks the following stages:
 
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
@@ -39,7 +39,7 @@ A successful `POST /api/v1/events` walks the following stages:
 3. **Reducer dispatch** (`src/reducer.rs`). The reducer maps each
    `event_kind` to an `apply_*_dispatch` arm and updates the in-memory
    `ProjectionState`. CXP-0007 adds the Circle FSM, the
-   `cx.realm.link` / `cx.realm.inheritance_policy` edges, and the
+   `ck.realm.link` / `ck.realm.inheritance_policy` edges, and the
    `scope_circle_id` projection columns; the conformance gate
    (`tests/conformance_gates.rs::cxp_0007_circle_event_kinds_are_dispatched`)
    keeps the dispatch table in lock-step with the spec registry.
@@ -67,14 +67,14 @@ The end-to-end pipeline is observable on the
 
 ## 2. Federation outbox
 
-soland's outbound federation surface (`/api/v1/federation/...`) is
+soland's outbound federation surface (`/_cokret/peer/federation/...`) is
 implemented as an at-least-once outbox table backed by Postgres (or the
 in-memory mirror) and a single in-process dispatcher per replica.
 
 ### Enqueue path
 
 1. A reducer that produces a federation side effect (e.g. accepting a
-   `cx.realm.create` whose participants include a remote DID) writes a
+   `ck.realm.create` whose participants include a remote DID) writes a
    `FederationOutboxRecord` via `FederationOutboxStore::enqueue` in the
    same transaction as the projection write. This guarantees the wire
    commit and the fanout intent are durable together.
@@ -116,7 +116,7 @@ MLS (RFC 9420) lives inside the same event log: every
 replay-window and signature verification. The lifecycle states the
 operator should be aware of:
 
-1. **Group create** (`cx.realm.create` + `cx.component.mls.epoch.v1`
+1. **Group create** (`ck.realm.create` + `cx.component.mls.epoch.v1`
    cell write). The reducer mints the initial epoch and seeds
    `MlsGroupProjection` (`src/reducer/mls.rs`).
 2. **Epoch rotation**. Any commit that touches the
@@ -127,9 +127,9 @@ operator should be aware of:
    keys.
 3. **Member adds / removes**. Routed via `routing::spaces::mls` —
    the reducer hard-rejects any add for a principal that is not also
-   listed in the Realm's `cx.member.state` projection
+   listed in the Realm's `ck.member.state` projection
    (`circle_member_must_be_realm_member` invariant).
-4. **Group archive / tombstone**. `cx.circle.archive` / `cx.circle.tombstone`
+4. **Group archive / tombstone**. `ck.circle.archive` / `ck.circle.tombstone`
    move the projection row into a terminal state; the
    `cx.component.mls.epoch.v1` cell remains addressable for forensic
    purposes but no new commits are accepted.
@@ -168,7 +168,7 @@ of the following sharing boundaries:
 - **MLS broadcast.** The `AppState::event_broadcast` channel is
   in-process; NDJSON subscribers see notifications only from the replica
   serving their request. Load-balancers should use sticky sessions on
-  `/api/v1/events/subscribe` so a single subscriber stays anchored to one
+  `/_cokret/self/events/subscribe` so a single subscriber stays anchored to one
   replica for the lifetime of the stream.
 - **In-process projection mirrors.** Pieces of soland (handle release
   ledger, account lifecycle, erased actors, failed-login counters)

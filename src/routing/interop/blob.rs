@@ -1,11 +1,11 @@
 //! Blob upload + download handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/blob/upload`         — multipart-or-raw upload, normalises MIME / filename,
+//! - `POST /_cokret/self/blob/upload`         — multipart-or-raw upload, normalises MIME / filename,
 //!   enforces per-actor / per-space / per-upload quotas, rejects plaintext blobs in private Spaces
 //!   unless this service is in `plaintext_visible_services`.
-//! - `HEAD /api/v1/blob/get`            — metadata + size for range planning
-//! - `GET  /api/v1/blob/get`            — content (supports `Range` and the `?purpose=`
+//! - `HEAD /_cokret/self/blob/get`            — metadata + size for range planning
+//! - `GET  /_cokret/self/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
 //! Blob metadata carries the spec `realm_id` association; plaintext-visibility
@@ -535,7 +535,7 @@ async fn blob_presign(
     let token = presign_token(state, blob_ref, purpose, expires_at.timestamp());
     let base = state.config.public_base_url.trim_end_matches('/');
     let url = format!(
-        "{base}/api/v1/blob/get?blob_ref={}&purpose={}&expires_at={}&presign_token={}",
+        "{base}/_cokret/self/blob/get?blob_ref={}&purpose={}&expires_at={}&presign_token={}",
         query_escape(blob_ref),
         query_escape(purpose),
         expires_at.timestamp(),

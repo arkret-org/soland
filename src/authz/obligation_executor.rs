@@ -165,7 +165,7 @@ mod tests {
         RequestContext {
             realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
             actor_did: "did:web:alice.example".to_owned(),
-            action: "cx.message.create".to_owned(),
+            action: "ck.message.create".to_owned(),
             mfa_completed: false,
             mfa_requested: false,
             request_rate_counter: 0,

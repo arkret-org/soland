@@ -105,7 +105,7 @@ pub async fn flow_projection_for_space(
         "id": flow_id_from_space_id(space_id),
         "flow_id": flow_id_from_space_id(space_id),
         "type": "flow",
-        "schema": "cx.schema.flow.v1",
+        "schema": "ck.schema.flow.v1",
         "space_id": space_id,
         "kind": "discussion",
         "title": title,

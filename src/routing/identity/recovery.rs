@@ -2,8 +2,8 @@
 //!
 //! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
 //!
-//! - `POST /api/v1/identity/recovery-policy`  — persist + advance a recovery policy.
-//! - `POST /api/v1/identity/recovery-receipt` — record a recovery receipt for a witnessed session.
+//! - `POST /_cokret/root/identity/recovery-policy`  — persist + advance a recovery policy.
+//! - `POST /_cokret/root/identity/recovery-receipt` — record a recovery receipt for a witnessed session.
 //!
 //! Wire-level validation lands here (proof_kind enum, recovery_session
 //! uuid pattern, expires/policy_version monotonicity,
@@ -289,23 +289,23 @@ async fn recovery_receipts_get(
 // Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
 // rather than silently leaving the session pending.
 //
-// C-P4 — `/complete` requires the client-signed `cx.device.authorize` material
+// C-P4 — `/complete` requires the client-signed `ck.device.authorize` material
 // (recovery-session.schema.json complete_request), validates every session
 // binding (device_id / principal_id / recovery_session_id / ssk_generation +
 // cross_signing_binding + device_signature shape), then EMITS the authorize plus
-// a `cx.device.list_update` onto the principal's control realm (a deterministic
+// a `ck.device.list_update` onto the principal's control realm (a deterministic
 // per-principal `ck:realm:` auto-materialized by the projector) via
 // `accept_local_operations` — real schema validation + reducer apply. The
 // session transitions to `completed` and the response is the schema's
 // complete_response (authorization_event_id / device_list_update_event_id).
 // Remaining nuance (not faked): the SSK signature inside cross_signing_binding
-// is not re-verified here (no accepted cx.cross_signing.publish state yet —
+// is not re-verified here (no accepted ck.cross_signing.publish state yet —
 // Phase 4), and these ids identify accepted operations in the reducer/projection;
 // wiring them into the durable event-envelope read store is Phase 3.
 
 fn recovery_session_summary(record: &RecoverySessionRecord) -> Value {
     let mut out = json!({
-        "schema": "cx.schema.recovery_session.v1",
+        "schema": "ck.schema.recovery_session.v1",
         "recovery_session_id": record.recovery_session_id,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -732,7 +732,7 @@ async fn verify_principal_signing_proof(
 /// MUST construct this identically.
 fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Value {
     json!({
-        "type": "cx.identity.recovery_proof.v1",
+        "type": "ck.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -783,8 +783,8 @@ async fn recovery_session_complete(
 
     // C-P4 / Phase 3 (durable model) — the recovering client has already
     // submitted, via POST /events on the principal control stream, both a
-    // `cx.device.authorize` (SSK-signed; its cross_signing_binding was verified
-    // at ingest, §3a) and a `cx.device.list_update`, each a signed Event
+    // `ck.device.authorize` (SSK-signed; its cross_signing_binding was verified
+    // at ingest, §3a) and a `ck.device.list_update`, each a signed Event
     // Envelope carrying the next actor_seq. Completion REFERENCES those durable
     // event ids and verifies they are the right events bound to this session —
     // the server never authors/signs control events on the principal's behalf.
@@ -792,9 +792,9 @@ async fn recovery_session_complete(
     let device_list_update_event_id =
         require_string(&complete_request, "device_list_update_event_id")?;
 
-    // Resolve + verify the referenced cx.device.authorize.
+    // Resolve + verify the referenced ck.device.authorize.
     let authorize_payload =
-        resolve_control_event_payload(state, &authorization_event_id, "cx.device.authorize").await?;
+        resolve_control_event_payload(state, &authorization_event_id, "ck.device.authorize").await?;
     if authorize_payload.get("principal_id").and_then(Value::as_str)
         != Some(record.principal_id.as_str())
     {
@@ -834,9 +834,9 @@ async fn recovery_session_complete(
         binding,
     )?;
 
-    // Resolve + verify the referenced cx.device.list_update.
+    // Resolve + verify the referenced ck.device.list_update.
     let list_update_payload =
-        resolve_control_event_payload(state, &device_list_update_event_id, "cx.device.list_update")
+        resolve_control_event_payload(state, &device_list_update_event_id, "ck.device.list_update")
             .await?;
     if list_update_payload.get("principal_id").and_then(Value::as_str)
         != Some(record.principal_id.as_str())
@@ -887,7 +887,7 @@ async fn recovery_session_complete(
                 "proof_summary": proof_summary,
                 "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
             },
-            // The accepted device key (from the referenced cx.device.authorize),
+            // The accepted device key (from the referenced ck.device.authorize),
             // used to verify a later recovery_receipt is signed by THIS device
             // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
             "device_public_key": device_public_key,
@@ -944,8 +944,8 @@ async fn recovery_session_complete(
 
 /// Deterministic principal control realm id for a principal DID
 /// (`ck:realm:<uuidv7>`). Mirrors `account::principal_space_for_did` but in the
-/// realm namespace: device-control events (`cx.device.authorize`,
-/// `cx.device.list_update`, future `cx.cross_signing.publish`) land here. The
+/// realm namespace: device-control events (`ck.device.authorize`,
+/// `ck.device.list_update`, future `ck.cross_signing.publish`) land here. The
 /// realm is auto-materialized by the projector on the first accepted op.
 pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     let mut hasher = Sha256::new();
@@ -1054,7 +1054,7 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 #[endpoint(
     operation_id = "cx.extension.soland.identity.recovery_policy.put",
     tags("identity", "recovery"),
-    summary = "Submit a cx.schema.recovery_policy.v1 policy (REC-1)",
+    summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
@@ -1154,7 +1154,7 @@ async fn recovery_policy_put(
 #[endpoint(
     operation_id = "cx.extension.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
-    summary = "Record a cx.schema.recovery_receipt.v1 receipt (REC-1)",
+    summary = "Record a ck.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
@@ -1240,7 +1240,7 @@ async fn recovery_receipt_put(
     }
 
     // §15 step 7 — the receipt MUST be signed by the new device's ACCEPTED
-    // device key (proving a `cx.device.authorize` for `new_device_id` landed
+    // device key (proving a `ck.device.authorize` for `new_device_id` landed
     // before the receipt was signed). Server keys / unauthorized fresh-device
     // keys MUST NOT sign. We verify against the device key recorded at
     // authorization, not the principal DID.
@@ -1282,7 +1282,7 @@ async fn recovery_receipt_put(
 }
 
 fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, AppError> {
-    require_const_string(payload, "schema", "cx.schema.recovery_policy.v1")?;
+    require_const_string(payload, "schema", "ck.schema.recovery_policy.v1")?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
     let principal_id = require_did(payload, "principal_id")?;
@@ -1392,7 +1392,7 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
 }
 
 fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, AppError> {
-    require_const_string(payload, "schema", "cx.schema.recovery_receipt.v1")?;
+    require_const_string(payload, "schema", "ck.schema.recovery_receipt.v1")?;
     let receipt_id = require_string(payload, "receipt_id")?;
     if !receipt_id.starts_with("ck:receipt:") {
         return Err(AppError::invalid_param(format!(
@@ -1574,7 +1574,7 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
 }
 
 /// §15 step 7 — verify a recovery receipt is signed by the new device's
-/// ACCEPTED device key (recorded at `cx.device.authorize`), not the principal
+/// ACCEPTED device key (recorded at `ck.device.authorize`), not the principal
 /// signing key or a server key.
 async fn verify_recovery_receipt_device_signature(
     state: &AppState,
@@ -1616,7 +1616,7 @@ async fn verify_recovery_receipt_device_signature(
 /// Resolve the Ed25519 public key recorded when `device_id` was authorized for
 /// `principal_id` (the device inventory `payload.device_public_key`). Rejects
 /// when the device is absent / revoked / unverified / keyless — i.e. no accepted
-/// `cx.device.authorize` is on record.
+/// `ck.device.authorize` is on record.
 async fn resolve_authorized_device_key(
     state: &AppState,
     principal_id: &str,
@@ -1954,7 +1954,7 @@ pub struct LateRecoveryAcceptInputs {
     /// to issue late shares (e.g. cross-signed device or trusted recovery
     /// service).
     pub key_share_authorised: bool,
-    /// (d) Audit profile MUST emit a paired `cx.audit.accessed{late_recovery=true}`
+    /// (d) Audit profile MUST emit a paired `ck.audit.accessed{late_recovery=true}`
     /// event for the read. Callers set this true once they have queued the
     /// audit emit.
     pub audit_emit_queued: bool,
@@ -1989,7 +1989,7 @@ pub fn late_recovery_accept_check(
     if !inputs.audit_emit_queued {
         return Err((
             ErrorCode::FailedPrecondition,
-            "late key recovery requires a paired cx.audit.accessed{late_recovery=true} \
+            "late key recovery requires a paired ck.audit.accessed{late_recovery=true} \
              audit emit",
         ));
     }

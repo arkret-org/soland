@@ -194,7 +194,7 @@ async fn recovery_receipt_rejects_tampered_proof_digest() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_unauthorized_device() {
-    // §15 step 7 — a receipt for a device with no accepted cx.device.authorize
+    // §15 step 7 — a receipt for a device with no accepted ck.device.authorize
     // MUST be rejected (no authorized device key to verify against).
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
@@ -308,7 +308,7 @@ async fn recovery_policy_get_returns_active_and_history() {
     let active = get_recovery(
         state.clone(),
         &token,
-        "/api/v1/identity/recovery-policy",
+        "/_cokret/root/identity/recovery-policy",
         StatusCode::OK,
     )
     .await;
@@ -318,7 +318,7 @@ async fn recovery_policy_get_returns_active_and_history() {
     let history = get_recovery(
         state,
         &token,
-        "/api/v1/identity/recovery-policies",
+        "/_cokret/root/identity/recovery-policies",
         StatusCode::OK,
     )
     .await;
@@ -351,7 +351,7 @@ async fn recovery_receipts_get_returns_history() {
     let body = get_recovery(
         state,
         &token,
-        "/api/v1/identity/recovery-receipts",
+        "/_cokret/root/identity/recovery-receipts",
         StatusCode::OK,
     )
     .await;
@@ -372,7 +372,7 @@ async fn recovery_read_enforces_principal_isolation() {
     let body = get_recovery(
         state,
         &token,
-        "/api/v1/identity/recovery-policy?principal_id=did:web:someone-else.example",
+        "/_cokret/root/identity/recovery-policy?principal_id=did:web:someone-else.example",
         StatusCode::FORBIDDEN,
     )
     .await;
@@ -403,7 +403,7 @@ async fn open_recovery_session(
     post_recovery(
         state,
         token,
-        "/api/v1/identity/recovery-sessions",
+        "/_cokret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CREATED,
     )
@@ -430,7 +430,7 @@ async fn recovery_session_create_and_get_roundtrip() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -456,7 +456,7 @@ async fn recovery_session_create_requires_active_policy() {
     let body = post_recovery(
         state,
         &token,
-        "/api/v1/identity/recovery-sessions",
+        "/_cokret/root/identity/recovery-sessions",
         &create_body,
         StatusCode::CONFLICT,
     )
@@ -483,7 +483,7 @@ async fn recovery_session_get_enforces_principal_isolation() {
     let body = get_recovery(
         state,
         &token_b,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::FORBIDDEN,
     )
     .await;
@@ -494,7 +494,7 @@ async fn recovery_session_get_enforces_principal_isolation() {
 /// return a base64url Ed25519 signature over it by `signing`.
 fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
     let transcript = serde_json::json!({
-        "type": "cx.identity.recovery_proof.v1",
+        "type": "ck.identity.recovery_proof.v1",
         "kind": "principal_signing",
         "principal_id": session["principal_id"],
         "requesting_device_id": session["requesting_device_id"],
@@ -535,7 +535,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::OK,
     )
@@ -555,11 +555,11 @@ async fn recovery_session_principal_signing_proof_verifies() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
-    assert_eq!(fetched["schema"], "cx.schema.recovery_session.v1");
+    assert_eq!(fetched["schema"], "ck.schema.recovery_session.v1");
     assert_eq!(fetched["state"], "verified");
     assert_eq!(fetched["ssk_generation"], 1);
     assert_eq!(fetched["proof_summary"]["kind"], "principal_signing");
@@ -591,7 +591,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::UNAUTHORIZED,
     )
@@ -602,7 +602,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
     let fetched = get_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}"),
         StatusCode::OK,
     )
     .await;
@@ -625,7 +625,7 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::CONFLICT,
     )
@@ -652,7 +652,7 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &proof_body,
         StatusCode::CONFLICT,
     )
@@ -673,7 +673,7 @@ async fn recovery_session_complete_rejects_unverified() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &serde_json::json!({}),
         StatusCode::CONFLICT,
     )
@@ -703,7 +703,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     post_recovery(
         state.clone(),
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &serde_json::json!({
             "proof": {
                 "kind": "principal_signing",
@@ -724,7 +724,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     let body = post_recovery(
         state.clone(),
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::OK,
     )
@@ -752,7 +752,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     let again = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -781,7 +781,7 @@ async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -819,7 +819,7 @@ async fn authorize_device_via_recovery(
     post_recovery(
         state.clone(),
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::OK,
     )
@@ -837,7 +837,7 @@ fn signed_device_recovery_receipt(
     signed_fields: &[&str],
 ) -> Value {
     let mut receipt = serde_json::json!({
-        "schema": "cx.schema.recovery_receipt.v1",
+        "schema": "ck.schema.recovery_receipt.v1",
         "receipt_id": new_prefixed_uuid7("ck:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": new_prefixed_uuid7("ck:recovery_session:"),
@@ -908,7 +908,7 @@ fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Value {
     })
 }
 
-/// Seed an accepted `cx.cross_signing.publish` (generation 1) into the server's
+/// Seed an accepted `ck.cross_signing.publish` (generation 1) into the server's
 /// DeviceManager so `/complete` can verify the device binding against the SSK.
 fn seed_cross_signing(
     state: &AppState,
@@ -972,7 +972,7 @@ async fn seed_control_event(
             actor_seq: 1,
             realm_id: None,
             kind: kind.to_owned(),
-            schema_id: "cx.schema.event.v1".to_owned(),
+            schema_id: "ck.schema.event.v1".to_owned(),
             canonical_digest: format!("sha256:{}", "0".repeat(64)),
             canonical_bytes,
             envelope,
@@ -988,12 +988,12 @@ async fn seed_control_event(
 async fn seed_completion_events(state: &AppState, session: &Value, device_authorize: Value) -> Value {
     let principal = session["principal_id"].as_str().unwrap();
     let device = session["requesting_device_id"].as_str().unwrap();
-    seed_control_event(state, AUTH_EVENT_ID, "cx.device.authorize", principal, device_authorize)
+    seed_control_event(state, AUTH_EVENT_ID, "ck.device.authorize", principal, device_authorize)
         .await;
     seed_control_event(
         state,
         LIST_EVENT_ID,
-        "cx.device.list_update",
+        "ck.device.list_update",
         principal,
         serde_json::json!({ "principal_id": principal, "changed": [device] }),
     )
@@ -1020,7 +1020,7 @@ async fn verified_session_for(
     post_recovery(
         state.clone(),
         token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/proofs"),
         &serde_json::json!({
             "proof": {
                 "kind": "principal_signing",
@@ -1038,7 +1038,7 @@ async fn verified_session_for(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // A cx.cross_signing.reset retires the current generation (removes the
+    // A ck.cross_signing.reset retires the current generation (removes the
     // accepted publish). A device-authorize binding can then no longer verify —
     // completion MUST reject (cross_signing_state_missing), proving reset
     // invalidates stale bindings.
@@ -1078,7 +1078,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -1101,7 +1101,7 @@ async fn recovery_session_complete_rejects_missing_cross_signing_state() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::CONFLICT,
     )
@@ -1129,7 +1129,7 @@ async fn recovery_session_complete_rejects_wrong_ssk_signature() {
     let body = post_recovery(
         state,
         &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &format!("/_cokret/root/identity/recovery-sessions/{session_id}/complete"),
         &complete_body,
         StatusCode::UNAUTHORIZED,
     )
@@ -1170,7 +1170,7 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {
                 "name": "chacha20_poly1305",
-                "aead_profile": "cx.aead.chacha20_poly1305.v1",
+                "aead_profile": "ck.aead.chacha20_poly1305.v1",
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         },
@@ -1197,7 +1197,7 @@ async fn put_key_backup(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::put(format!("http://server/api/v1/keys/backups/{backup_id}"))
+    let mut response = TestClient::put(format!("http://server/_cokret/self/keys/backups/{backup_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))
@@ -1312,7 +1312,7 @@ fn signed_recovery_policy(
     signed_fields: &[&str],
 ) -> Value {
     let mut policy = serde_json::json!({
-        "schema": "cx.schema.recovery_policy.v1",
+        "schema": "ck.schema.recovery_policy.v1",
         "policy_id": new_prefixed_uuid7("ck:policy:"),
         "principal_id": principal_id,
         "version": version,
@@ -1347,7 +1347,7 @@ fn signed_recovery_receipt(
     signed_fields: &[&str],
 ) -> Value {
     let mut receipt = serde_json::json!({
-        "schema": "cx.schema.recovery_receipt.v1",
+        "schema": "ck.schema.recovery_receipt.v1",
         "receipt_id": new_prefixed_uuid7("ck:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": recovery_session_id
@@ -1412,7 +1412,7 @@ async fn post_recovery_policy(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/api/v1/identity/recovery-policy")
+    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))
@@ -1429,7 +1429,7 @@ async fn post_recovery_receipt(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/api/v1/identity/recovery-receipt")
+    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-receipt")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))

@@ -1,9 +1,9 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /api/v1/moderation/report` (`cx.moderation.report`) — file a report. Persists both the
+//! - `POST /_cokret/self/moderation/report` (`cx.moderation.report`) — file a report. Persists both the
 //!   report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
 //!   architecture.
-//! - `POST /api/v1/moderation/appeal` (`cx.moderation.appeal.submit`) — file an appeal against a
+//! - `POST /_cokret/self/moderation/appeal` (`cx.moderation.appeal.submit`) — file an appeal against a
 //!   moderation decision. Validates the four-state FSM via `crate::routing::admin::moderation::AppealState` and
 //!   enforces separation-of-duties when the decision is later reviewed by an admin.
 
@@ -244,7 +244,7 @@ async fn notify_audit_agent_for_report(
     }
     let agent_url = agent_url.trim_end_matches('/');
     let identity_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/api/v1/audit-agent/identity"),
+        &format!("{agent_url}/_cokret/self/audit-agent/identity"),
         "audit agent identity",
         state.config.development_mode,
     ) {
@@ -255,7 +255,7 @@ async fn notify_audit_agent_for_report(
         }
     };
     let invite_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/api/v1/audit-agent/invite"),
+        &format!("{agent_url}/_cokret/self/audit-agent/invite"),
         "audit agent invite",
         state.config.development_mode,
     ) {
@@ -266,7 +266,7 @@ async fn notify_audit_agent_for_report(
         }
     };
     let events_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/api/v1/audit-agent/events"),
+        &format!("{agent_url}/_cokret/self/audit-agent/events"),
         "audit agent events",
         state.config.development_mode,
     ) {

@@ -10,7 +10,7 @@ async fn policy_check_and_validation_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let policy: Value = TestClient::post("http://server/api/v1/policy/check")
+    let policy: Value = TestClient::post("http://server/_cokret/self/policy/check")
         .json(&serde_json::json!({
             "request_id": "req1",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -30,7 +30,7 @@ async fn policy_check_and_validation_work() {
     assert_eq!(policy["decision_trace"]["action"], "message.send");
     assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 
-    let unauthenticated_policy = TestClient::post("http://server/api/v1/policies")
+    let unauthenticated_policy = TestClient::post("http://server/_cokret/self/policies")
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
@@ -44,7 +44,7 @@ async fn policy_check_and_validation_work() {
         Some(StatusCode::UNAUTHORIZED)
     );
 
-    let policy_document: Value = TestClient::post("http://server/api/v1/policies")
+    let policy_document: Value = TestClient::post("http://server/_cokret/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -63,7 +63,7 @@ async fn policy_check_and_validation_work() {
     let policy_id = policy_document["policy_id"].as_str().unwrap().to_owned();
     assert_eq!(policy_document["payload"]["effect"], "deny");
 
-    let policies: Value = TestClient::get("http://server/api/v1/policies")
+    let policies: Value = TestClient::get("http://server/_cokret/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -72,7 +72,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(policies["policies"].as_array().unwrap().len(), 1);
 
-    let denied: Value = TestClient::post("http://server/api/v1/policy/check")
+    let denied: Value = TestClient::post("http://server/_cokret/self/policy/check")
         .json(&serde_json::json!({
             "request_id": "req2",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -95,7 +95,7 @@ async fn policy_check_and_validation_work() {
     assert_eq!(denied["decision_trace"]["obligations"][0]["level"], "high");
     assert!(denied["decision_trace"]["missing_proofs"].is_array());
 
-    let deleted: Value = TestClient::delete(format!("http://server/api/v1/policies/{policy_id}"))
+    let deleted: Value = TestClient::delete(format!("http://server/_cokret/self/policies/{policy_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -104,7 +104,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(deleted["ok"], true);
 
-    let allowed_again: Value = TestClient::post("http://server/api/v1/policy/check")
+    let allowed_again: Value = TestClient::post("http://server/_cokret/self/policy/check")
         .json(&serde_json::json!({
             "request_id": "req3",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -120,7 +120,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(allowed_again["decision"], "allow");
 
-    let invalid = TestClient::post("http://server/api/v1/auth/dev-login")
+    let invalid = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "alice",
             "device_id": "bad-device"
@@ -154,7 +154,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let space_id = space["space_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -190,7 +190,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     for chunk_id in 0..chunk_count {
         let chunk: Value = TestClient::get(format!(
-            "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
+            "http://server/_cokret/self/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
         ))
         .send(&app_from_state(state.clone()))
         .await
@@ -219,7 +219,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
 
     // Out-of-range chunk_id returns 404, not a placeholder.
     let oob = TestClient::get(format!(
-        "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_count}"
+        "http://server/_cokret/self/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_count}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -249,7 +249,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     // reproducible run-to-run.
     //
     // Snapshot's `messages` array comes from the MessageRecord store, now
-    // populated by canonical `POST /api/v1/events` projection.
+    // populated by canonical `POST /_cokret/self/events` projection.
     let body_text: String = (0..40)
         .map(|i| {
             format!(
@@ -277,7 +277,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     }
 
     let head: Value = TestClient::get(format!(
-        "http://server/api/v1/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -305,7 +305,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     let mut any_non_empty_path = false;
     for chunk_id in 0..chunk_count {
         let chunk: Value = TestClient::get(format!(
-            "http://server/api/v1/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
+            "http://server/_cokret/self/sync/snapshot-chunk?snapshot_ref={snapshot_ref}&chunk_id={chunk_id}"
         ))
         .send(&app_from_state(state.clone()))
         .await

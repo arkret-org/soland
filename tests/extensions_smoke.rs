@@ -72,7 +72,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn dev_token(state: AppState) -> String {
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -119,7 +119,7 @@ async fn applet_manifest_verify_smoke() {
     let sig = signing.sign(&signing_bytes);
     manifest["signature"] = json!(URL_SAFE_NO_PAD.encode(sig.to_bytes()));
 
-    let resp: Value = TestClient::post("http://server/api/v1/extensions/applets/manifest/verify")
+    let resp: Value = TestClient::post("http://server/_cokret/edge/applets/manifest/verify")
         .json(&json!({
             "manifest_json": manifest,
             "trusted_registry_did": signer_did,
@@ -143,7 +143,7 @@ async fn bot_actor_register_then_list_smoke() {
     let token = dev_token(state.clone()).await;
     let app = service(state);
 
-    let resp: Value = TestClient::post("http://server/api/v1/extensions/bots")
+    let resp: Value = TestClient::post("http://server/_cokret/self/extensions/bots")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "did": "did:web:bot-smoke",
@@ -159,7 +159,7 @@ async fn bot_actor_register_then_list_smoke() {
     assert_eq!(resp["kind"], json!("bot"));
     assert_eq!(resp["owner_actor_did"], json!("did:web:alice.example"));
 
-    let list: Value = TestClient::get("http://server/api/v1/extensions/bots")
+    let list: Value = TestClient::get("http://server/_cokret/self/extensions/bots")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await
@@ -173,14 +173,14 @@ async fn bot_actor_register_then_list_smoke() {
     );
 
     // Revoke removes it from the listing.
-    let _: Value = TestClient::delete("http://server/api/v1/extensions/bots/did:web:bot-smoke")
+    let _: Value = TestClient::delete("http://server/_cokret/self/extensions/bots/did:web:bot-smoke")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await
         .take_json()
         .await
         .unwrap();
-    let list_after: Value = TestClient::get("http://server/api/v1/extensions/bots")
+    let list_after: Value = TestClient::get("http://server/_cokret/self/extensions/bots")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await
@@ -208,7 +208,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let namespace = format!("bridge.smoke.{suffix}");
     let manifest = signed_applet_manifest(&applet_id, &namespace, signer_did);
 
-    let register: Value = TestClient::post("http://server/api/v1/extensions/applets/register")
+    let register: Value = TestClient::post("http://server/_cokret/edge/applets/register")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", format!("idem-{suffix}"), true)
         .json(&json!({
@@ -234,7 +234,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
 
     let space_id = format!("ck:realm:applet-bridge-smoke-{suffix}");
     let ghost: Value = TestClient::post(format!(
-        "http://server/api/v1/extensions/applets/{applet_id}/ghosts"
+        "http://server/_cokret/edge/applets/{applet_id}/ghosts"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
@@ -276,7 +276,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     );
 
     let ghost_doc: Value = TestClient::get(format!(
-        "http://server/api/v1/identity/{ghost_actor_did}/did-document"
+        "http://server/_cokret/root/identity/{ghost_actor_did}/did-document"
     ))
     .send(&app)
     .await
@@ -294,7 +294,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     );
 
     let revoke: Value = TestClient::post(format!(
-        "http://server/api/v1/extensions/applets/{applet_id}/revoke"
+        "http://server/_cokret/edge/applets/{applet_id}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({}))
@@ -306,7 +306,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(revoke["status"], json!("revoked"));
 
     let rejected: Value = TestClient::post(format!(
-        "http://server/api/v1/extensions/applets/{applet_id}/ghosts"
+        "http://server/_cokret/edge/applets/{applet_id}/ghosts"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
@@ -322,7 +322,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
 
     let revoked_doc: Value = TestClient::get(format!(
-        "http://server/api/v1/identity/{ghost_actor_did}/did-document"
+        "http://server/_cokret/root/identity/{ghost_actor_did}/did-document"
     ))
     .send(&app)
     .await
@@ -332,7 +332,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(revoked_doc["status"], json!("revoked"));
 
     let bot_rejected: Value = TestClient::post(format!(
-        "http://server/api/v1/extensions/applets/{applet_id}/bot/messages"
+        "http://server/_cokret/edge/applets/{applet_id}/bot/messages"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
@@ -357,7 +357,7 @@ async fn tsp_transport_route_audit_smoke() {
     let app = service(state);
 
     // 1) declare a transport
-    let transport: Value = TestClient::post("http://server/api/v1/extensions/tsp/transports")
+    let transport: Value = TestClient::post("http://server/_cokret/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "transport_id": "tspt:alice-smoke",
@@ -373,7 +373,7 @@ async fn tsp_transport_route_audit_smoke() {
     assert_eq!(transport["transport_id"], json!("tspt:alice-smoke"));
 
     // 2) list transports
-    let list: Value = TestClient::get("http://server/api/v1/extensions/tsp/transports")
+    let list: Value = TestClient::get("http://server/_cokret/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await
@@ -390,7 +390,7 @@ async fn tsp_transport_route_audit_smoke() {
     );
 
     // 3) establish a route
-    let route: Value = TestClient::post("http://server/api/v1/extensions/tsp/routes")
+    let route: Value = TestClient::post("http://server/_cokret/self/extensions/tsp/routes")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "route_id": "rt:alice-bob-smoke",
@@ -407,7 +407,7 @@ async fn tsp_transport_route_audit_smoke() {
 
     // 4) fetch the audit chain — establish_route auto-appends one entry
     let audit: Value =
-        TestClient::get("http://server/api/v1/extensions/tsp/routes/rt:alice-bob-smoke/audit")
+        TestClient::get("http://server/_cokret/self/extensions/tsp/routes/rt:alice-bob-smoke/audit")
             .add_header("Authorization", format!("Bearer {token}"), true)
             .send(&app)
             .await

@@ -1,10 +1,10 @@
 //! WebRTC session + signaling handlers.
 //!
 //! Surfaces:
-//! - `POST /cokret/v1/ice-config` (TURN / STUN list — currently empty)
-//! - `POST /api/v1/webrtc/sessions` create
-//! - `PUT/GET /api/v1/webrtc/sessions/{session_id}/signals`
-//! - `DELETE /api/v1/webrtc/sessions/{session_id}` close
+//! - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list — currently empty)
+//! - `POST /_cokret/self/webrtc/sessions` create
+//! - `PUT/GET /_cokret/self/webrtc/sessions/{session_id}/signals`
+//! - `DELETE /_cokret/self/webrtc/sessions/{session_id}` close
 //!
 //! Sessions are persisted through `state.persistence.webrtc()`. Durable
 //! Pg backing + TURN policy + spec rule (no DID in TURN username / push
@@ -36,17 +36,21 @@ use crate::wire::{
     WebrtcSignalResponse, WebrtcSignalsResponse,
 };
 
+/// RTC / WebRTC surface. Mounted under the `self` trust segment by
+/// `interop::router()` so the spec-canonical media paths resolve at
+/// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token`. The
+/// soland-specific call-lifecycle + signaling endpoints (`calls/*`,
+/// `webrtc/sessions/*`) ride alongside on the same self surface.
 pub(super) fn router() -> Router {
     Router::new()
+        // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
+        .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
+        // CXP-0010 — media token exchange (`/_cokret/self/rtc/token`).
+        .push(Router::with_path("rtc/token").post(cokret_rtc_token))
+        // soland-local call lifecycle helpers.
         .push(Router::with_path("calls/ice-config").post(api_ice_config))
         .push(Router::with_path("calls/{call_id}/ice-config/refresh").post(refresh_ice_config))
         .push(Router::with_path("calls/{call_id}/recording/start").post(start_recording))
-        // CXP-0010 (R3 spec-sync) — media token exchange. Spec-canonical
-        // wire-path is `POST /rtc/token` (mounted via `cokret_router`)
-        // but `/api/v1/rtc/token` is also accepted as a deployment-local
-        // alias so admin UIs that namespace everything under `/api/v1/`
-        // can reach the handler without a separate ingress rule.
-        .push(Router::with_path("rtc/token").post(api_rtc_token))
         .push(Router::with_path("webrtc/sessions").post(create_webrtc_session))
         .push(
             Router::with_path("webrtc/sessions/{session_id}/signals")
@@ -54,18 +58,6 @@ pub(super) fn router() -> Router {
                 .get(get_webrtc_signals),
         )
         .push(Router::with_path("webrtc/sessions/{session_id}").delete(delete_webrtc_session))
-}
-
-pub(super) fn cokret_router() -> Router {
-    Router::new()
-        .push(Router::with_path("cokret/v1/ice-config").post(cokret_ice_config))
-        // CXP-0010 — `POST /rtc/token` per CXP-0010 / cokret-spec
-        // b47ff6ec. Spec path lives at the deployment root (not under
-        // `/cokret/v1/`); both shapes are mounted so deployments behind
-        // an ingress that strips the `/cokret/v1/` prefix can still
-        // reach the handler.
-        .push(Router::with_path("rtc/token").post(cokret_rtc_token))
-        .push(Router::with_path("cokret/v1/rtc/token").post(cokret_rtc_token))
 }
 
 #[endpoint(
@@ -1386,27 +1378,6 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.call.media.token_exchange"))]
 async fn cokret_rtc_token(
-    aa: AuthArgs,
-    body: JsonBody<MediaTokenExchangeReqBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<MediaTokenExchangeResBody> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    handle_rtc_token(state, &session, body.into_inner()).await
-}
-
-#[endpoint(
-    operation_id = "cx.extension.soland.calls.media.token_exchange",
-    tags("media", "calls"),
-    summary = "Exchange session-focus for backend media token (alias under /api/v1)",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "cx.extension.soland.calls.media.token_exchange")
-)]
-async fn api_rtc_token(
     aa: AuthArgs,
     body: JsonBody<MediaTokenExchangeReqBody>,
     depot: &mut Depot,

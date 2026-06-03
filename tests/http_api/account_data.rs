@@ -32,7 +32,7 @@ async fn account_data_space_remark_round_trip() {
     });
 
     // First PUT → 201 Created with the echoed entry.
-    let mut put_resp = TestClient::put(format!("http://server/api/v1/account_data/{key}"))
+    let mut put_resp = TestClient::put(format!("http://server/_cokret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"content": remark.clone()}))
         .send(&app_from_state(state.clone()))
@@ -43,7 +43,7 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(body["content"]["local_name"], "Acme 内部 · 工程");
 
     // GET round-trips the same payload.
-    let fetched: Value = TestClient::get(format!("http://server/api/v1/account_data/{key}"))
+    let fetched: Value = TestClient::get(format!("http://server/_cokret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -62,7 +62,7 @@ async fn account_data_space_remark_round_trip() {
         "saved_at": "2026-05-08T10:00:00Z",
         "updated_at": "2026-05-09T10:00:00Z"
     });
-    let put_again = TestClient::put(format!("http://server/api/v1/account_data/{key}"))
+    let put_again = TestClient::put(format!("http://server/_cokret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({"content": updated_remark.clone()}))
         .send(&app_from_state(state.clone()))
@@ -71,7 +71,7 @@ async fn account_data_space_remark_round_trip() {
 
     // /sync hydrates the actor's account_data entries.
     let sync_resp_body =
-        TestClient::get("http://server/api/v1/account/subscribe?catchup=true&set_presence=online")
+        TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -89,7 +89,7 @@ async fn account_data_space_remark_round_trip() {
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
     let bob_sync_body =
-        TestClient::get("http://server/api/v1/account/subscribe?catchup=true&set_presence=online")
+        TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online")
             .add_header("authorization", format!("Bearer {bob}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -107,12 +107,12 @@ async fn account_data_space_remark_round_trip() {
     );
 
     // DELETE removes the entry; subsequent GET → 404.
-    let del = TestClient::delete(format!("http://server/api/v1/account_data/{key}"))
+    let del = TestClient::delete(format!("http://server/_cokret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(del.status_code.unwrap().as_u16(), 200);
-    let not_found = TestClient::get(format!("http://server/api/v1/account_data/{key}"))
+    let not_found = TestClient::get(format!("http://server/_cokret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await;
@@ -121,7 +121,7 @@ async fn account_data_space_remark_round_trip() {
 
 #[tokio::test]
 async fn account_data_requires_auth() {
-    let resp = TestClient::put("http://server/api/v1/account_data/cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000")
+    let resp = TestClient::put("http://server/_cokret/self/account_data/cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000")
         .json(&serde_json::json!({"content": {"local_name": "x"}}))
         .send(&app())
         .await;

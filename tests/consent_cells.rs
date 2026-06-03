@@ -60,7 +60,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn dev_token(app: &salvo::Service, actor: &str) -> String {
-    let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
             "device_id": format!("ck:device:test-{}", actor.replace(':', "-")),
@@ -75,7 +75,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 }
 
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
-    TestClient::post("http://server/api/v1/contacts/request")
+    TestClient::post("http://server/_cokret/self/contacts/request")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "target": target, "scope": scope }))
         .send(app)
@@ -93,7 +93,7 @@ async fn get_cell(
     scope: &str,
 ) -> Value {
     TestClient::get(format!(
-        "http://server/api/v1/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
+        "http://server/_cokret/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(app)
@@ -111,7 +111,7 @@ async fn grant_cell(
     scope: &str,
     valid_until: Option<String>,
 ) -> Value {
-    TestClient::post(format!("http://server/api/v1/consent/cells/{holder}/grant"))
+    TestClient::post(format!("http://server/_cokret/self/consent/cells/{holder}/grant"))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "peer_did": peer,
@@ -133,7 +133,7 @@ async fn revoke_cell(
     scope: &str,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/api/v1/consent/cells/{holder}/revoke"
+        "http://server/_cokret/self/consent/cells/{holder}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "peer_did": peer, "consent_scope": scope }))
@@ -172,14 +172,14 @@ fn signed_event(actor: &str, realm_id: &str, kind: &str, actor_seq: u64, payload
     let mut event = serde_json::json!({
         "event_id": ids::generate_event_id(),
         "kind": kind,
-        "schema_id": "cx.schema.event.v1",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
         "prev_refs": [],
         "refs": [],
         "requirements": {
-            "schema": ["cx.schema.event.v1"],
+            "schema": ["ck.schema.event.v1"],
             "features": [],
             "critical_extensions": []
         },
@@ -208,7 +208,7 @@ async fn submit_event(
     payload: Value,
 ) -> Value {
     let event = signed_event(actor, realm_id, kind, actor_seq, payload);
-    let mut response = TestClient::post("http://server/api/v1/events")
+    let mut response = TestClient::post("http://server/_cokret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(app)
@@ -230,17 +230,17 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
         token,
         actor,
         &realm_id,
-        "cx.realm.create",
+        "ck.realm.create",
         1,
         serde_json::json!({
             "object": {
                 "id": realm_id,
-                "schema": "cx.schema.realm.v1",
+                "schema": "ck.schema.realm.v1",
                 "title": "Consent event projection",
                 "summary": "Consent reducer test realm",
                 "created_by": actor,
                 "trust_domain": "ck:trust_domain:soland.local",
-                "schema_refs": ["cx.schema.realm.v1"],
+                "schema_refs": ["ck.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
                 "history_visibility": "shared",
@@ -318,7 +318,7 @@ async fn consent_events_project_cells_and_contact_gate() {
         &alice_token,
         alice,
         &realm_id,
-        "cx.consent.grant",
+        "ck.consent.grant",
         grant_seq,
         serde_json::json!({
             "consent_id": consent_id,
@@ -335,7 +335,7 @@ async fn consent_events_project_cells_and_contact_gate() {
     assert_eq!(granted["state"], "granted");
     assert_eq!(
         granted["cell_id"],
-        format!("ck:cell:cx.component.consent.grant.v1:{consent_id}")
+        format!("ck:cell:ck.component.consent.grant.v1:{consent_id}")
     );
     assert!(
         granted["grant_dots"]
@@ -352,7 +352,7 @@ async fn consent_events_project_cells_and_contact_gate() {
         &alice_token,
         alice,
         &realm_id,
-        "cx.consent.revoke",
+        "ck.consent.revoke",
         3,
         serde_json::json!({
             "consent_id": consent_id,

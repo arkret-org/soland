@@ -87,11 +87,11 @@ pub(super) fn require_admin_principal(
     }
 }
 
-/// Audit endpoints (`/api/v1/audit/*`). These live on the protocol
-/// surface under `/api/v1`, not the deployment-local `/admin/*`
-/// namespace, and carry their own per-handler auth rather than the
-/// shared `RequireAdmin` hoop — so they are mounted separately from the
-/// admin branch below.
+/// Audit endpoints (`/_cokret/self/audit/*`). These live on the protocol
+/// surface under the `self` trust segment, not the deployment-local
+/// `/_soland/admin/*` namespace, and carry their own per-handler auth
+/// rather than the shared `RequireAdmin` hoop — so they are mounted
+/// separately from the admin branch below.
 pub fn audit_router() -> Router {
     audit::router()
 }
@@ -100,7 +100,7 @@ pub fn audit_router() -> Router {
 /// namespace (collection snapshot, cell inspection, control-frame
 /// triggers, retention), per cokret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
-/// `/api/v1` protocol prefix. Gated by the shared `RequireAdmin` hoop.
+/// `/_cokret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
     Router::new()
         .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
@@ -119,7 +119,7 @@ pub fn admin_router() -> Router {
     // namespace (anchorer / anchor-DAG / bottom repair / multisig /
     // gc-candidates / delivery-binding / moderation). Per cokret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
-    // deployment-local and MUST NOT carry the `/api/v1` protocol prefix.
+    // deployment-local and MUST NOT carry the `/_cokret/...` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")

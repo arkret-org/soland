@@ -1,10 +1,10 @@
 //! Reaction add / remove handlers.
 //!
 //! Surfaces:
-//! - `POST   /api/v1/reactions` — add a reaction
-//! - `DELETE /api/v1/reactions` — remove a reaction
+//! - `POST   /_cokret/self/reactions` — add a reaction
+//! - `DELETE /_cokret/self/reactions` — remove a reaction
 //!
-//! Both routes validate a `cx.reaction.add` / `cx.reaction.remove` operation
+//! Both routes validate a `ck.reaction.add` / `ck.reaction.remove` operation
 //! and project it through the canonical projection layer.
 
 use cokret_sdk::{Operation, OperationId, RealmId};

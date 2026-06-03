@@ -2,7 +2,7 @@
 //! actor support, TSP transport + route + audit, sovereign enclave
 //! profile guards).
 //!
-//! All sub-routers are mounted under `/api/v1/extensions/...` and are
+//! All sub-routers are mounted under `/_cokret/self/extensions/...` and are
 //! intentionally *runnable stubs*: they accept and return the
 //! spec-shaped wire envelopes the cotest scenarios expect
 //! (`cotest/e2e/scenarios/extensions/applet-bridge.md`,
@@ -32,16 +32,30 @@ pub mod bot_actor;
 pub mod sovereign;
 pub mod tsp;
 
-/// Compose the four sub-routers under a shared `/extensions` prefix.
-/// Mounted into the api/v1 router by `routing::mod.rs`.
+/// Compose the soland extension sub-routers under trust segments.
+/// Mounted into the `_cokret` router by `routing::mod.rs`.
+///
+/// Trust segments: the applet bridge + manifest verifier are the
+/// push/bridge gateway surface (`edge`); the bot/ghost actor + TSP
+/// transport surfaces and the sovereign-enclave deployment surface are
+/// authenticated session-scoped (`self`).
 pub fn router() -> Router {
     Router::new()
+        // `edge` — applet bridge + manifest verifier
+        // (`/_cokret/edge/applets/...`).
         .push(
-            Router::with_path("extensions")
+            Router::with_path("edge")
                 .push(applet_bridge::router())
-                .push(applet_manifest::router())
-                .push(bot_actor::router())
-                .push(tsp::router()),
+                .push(applet_manifest::router()),
         )
-        .push(sovereign::router())
+        // `self` — bot/ghost actor + TSP + sovereign enclave surfaces.
+        .push(
+            Router::with_path("self")
+                .push(
+                    Router::with_path("extensions")
+                        .push(bot_actor::router())
+                        .push(tsp::router()),
+                )
+                .push(sovereign::router()),
+        )
 }

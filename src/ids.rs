@@ -53,8 +53,8 @@ pub fn generate_relation_id() -> String {
 }
 
 /// CXP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
-/// for the Circle primitive. Used by `POST /api/v1/circles` to mint the new
-/// Circle's typed wire id before submitting `cx.circle.create`.
+/// for the Circle primitive. Used by `POST /_cokret/self/circles` to mint the new
+/// Circle's typed wire id before submitting `ck.circle.create`.
 pub fn generate_circle_id() -> String {
     generate("circle")
 }

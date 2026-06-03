@@ -1,11 +1,11 @@
 //! Auth + session handlers and the session-validation helpers they rely on.
 //!
 //! Surfaces:
-//! - `POST /api/v1/auth/dev-login` — dev-mode bearer issue
+//! - `POST /_cokret/gate/auth/dev-login` — dev-mode bearer issue
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
 //!   `/oauth/introspect`
-//! - `POST /api/v1/auth/session-grant/exchange` — legacy coauth session-grant bridge
-//! - `POST /api/v1/auth/logout` — revoke the bearer + the bound device
+//! - `POST /_cokret/gate/auth/session-grant/exchange` — legacy coauth session-grant bridge
+//! - `POST /_cokret/gate/auth/logout` — revoke the bearer + the bound device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
@@ -46,11 +46,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("dev-login").post(dev_login))
         .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
         .push(Router::with_path("logout").post(logout))
-        // CXP-0008 / CXP-0009 — `cx.account.agent_key_pair`. Spec path is
-        // `/auth/account/agent-key-pair`; mounted here so the soland HTTP
-        // tree carries the canonical `/api/v1/auth/account/agent-key-pair`
-        // route the cross-project clients (sodmin, yougen, cotest) expect.
-        .push(Router::with_path("account").push(super::agents::agent_key_pair_router()))
 }
 
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {

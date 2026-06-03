@@ -246,10 +246,10 @@ pub mod reasons {
     // `core_error::REASON_*` re-exports the same way the C44/C45 block does.
     // TODO(R3.2.1): swap to SDK re-exports once the registry lands.
 
-    /// MIU-SOL-1 — `cx.member.identity.update` payload carried a forbidden
+    /// MIU-SOL-1 — `ck.member.identity.update` payload carried a forbidden
     /// handle field (`primary_handle` / `handles[]` / `verified_handle`).
     /// MemberIdentity no longer carries handle lifecycle; it lives solely on
-    /// `cx.schema.handle_claim.v1`.
+    /// `ck.schema.handle_claim.v1`.
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
         "member_identity_handle_field_forbidden";
     /// HC-SOL-1 — handle claim used the removed `claim_type=service_handle`.
@@ -345,7 +345,7 @@ pub mod reasons {
         ),
         (
             UNKNOWN_FOCUS_TYPE,
-            "routing::events::operations cx.realm.media_service foci[] check",
+            "routing::events::operations ck.realm.media_service foci[] check",
         ),
         (
             TOKEN_ISSUER_UNAUTHORISED,
@@ -353,7 +353,7 @@ pub mod reasons {
         ),
         (
             PARTICIPANT_BINDING_INVALID,
-            "routing::events::operations cx.call.state participant_binding check",
+            "routing::events::operations ck.call.state participant_binding check",
         ),
         (
             PARTICIPANT_IDENTITY_UNRECOGNISED,
@@ -361,7 +361,7 @@ pub mod reasons {
         ),
         (
             SESSION_FOCUS_ALREADY_COMMITTED,
-            "routing::events::operations cx.call.state.session_focus write-once",
+            "routing::events::operations ck.call.state.session_focus write-once",
         ),
         (
             E2EE_KEY_SOURCE_UNAUTHORISED,
@@ -373,7 +373,7 @@ pub mod reasons {
         ),
         (
             LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE,
-            "routing::events::operations cx.realm.media_service legacy",
+            "routing::events::operations ck.realm.media_service legacy",
         ),
         (
             FOCUS_UNAVAILABLE_FOR_CLIENT,

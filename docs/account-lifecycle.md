@@ -1,7 +1,7 @@
 # Account lifecycle (soland)
 
 Reference for the soland implementation of the Cokret account lifecycle
-state machine. The wire surface is `/api/v1/account/*`; this document
+state machine. The wire surface is `/_cokret/self/account/*`; this document
 covers the soland-side behaviours: the lifecycle states, the audit
 contract, and the GDPR erasure cascade.
 
@@ -12,8 +12,8 @@ contract, and the GDPR erasure cascade.
 | `active`       | default                                 | normal session issuance       |
 | `locked`       | `set_account_lifecycle_record`           | 403 `account_locked`          |
 | `suspended`    | `set_account_lifecycle_record`           | 403 `account_suspended`       |
-| `deactivated`  | `POST /api/v1/account/deactivate`       | 403 `account_deactivated`     |
-| `erased`       | `POST /api/v1/account/erase`            | 401 `account_erased`          |
+| `deactivated`  | `POST /_cokret/self/account/deactivate`       | 403 `account_deactivated`     |
+| `erased`       | `POST /_cokret/self/account/erase`            | 401 `account_erased`          |
 
 The state projection is in-memory today (`AppState::account_lifecycle`)
 and persists across the process lifetime only — a durable ledger lands
@@ -21,7 +21,7 @@ with the projection rewrite worker.
 
 ## Failed-login lockout
 
-`POST /api/v1/auth/dev-login` and `POST /api/v1/auth/session-grant/exchange`
+`POST /_cokret/gate/auth/dev-login` and `POST /_cokret/gate/auth/session-grant/exchange`
 participate in the in-memory failed-login counter
 (`AppState::failed_login_attempts`).
 
@@ -43,7 +43,7 @@ spikes without inspecting raw tracing output.
 
 ## GDPR erasure cascade
 
-`POST /api/v1/account/erase` is the spec exit-point for an erased
+`POST /_cokret/self/account/erase` is the spec exit-point for an erased
 principal. Soland performs the following actions atomically per
 request (best-effort under in-memory state; durable persistence lands
 with the projection rewrite worker):
@@ -70,8 +70,8 @@ with the projection rewrite worker):
    carries the historical rows so chain-of-custody is preserved.
    Downstream consumers honour this marker when rendering the actor's
    audit trail.
-9. Mint a `cx.schema.erasure_receipt.v1` proof, sign it with the
-   anchorer signing key, and append `cx.audit.erasure_receipt`.
+9. Mint a `ck.schema.erasure_receipt.v1` proof, sign it with the
+   anchorer signing key, and append `ck.audit.erasure_receipt`.
 10. Mint a per-realm `cx.schema.erasure_receipt.realm.v1` proof for
     every realm the actor was active in (`affected_erasure_realms_for_actor`)
     and emit each as a realm-scoped operation (best-effort fanout —
@@ -123,7 +123,7 @@ body with `[redacted]` while preserving `audit_id`, `created_at`, and
 
 ## v1 export scope
 
-The `POST /api/v1/account/export` bundle in v1 is authoritative only
+The `POST /_cokret/self/account/export` bundle in v1 is authoritative only
 for `{ account, devices, audit_log }` (plus the already-empty
 `messages` and `spaces` collections). The following fields are
 reserved on the response envelope so downstream consumers can compile
@@ -137,7 +137,7 @@ per-actor extracts:
 - `contacts` — placeholder (`[]`); will carry the principal's
   directory contact set once Contacts ships.
 - `key_backup_state` — placeholder (`null`); will carry the principal's
-  `cx.schema.key_backup.v1` descriptor + recovery commitments once the
+  `ck.schema.key_backup.v1` descriptor + recovery commitments once the
   key-backup endpoint is wired into the export pipeline.
 
 Until then, treat absence as "unsupported in v1" rather than "no data".

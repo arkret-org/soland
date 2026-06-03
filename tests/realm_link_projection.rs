@@ -1,4 +1,4 @@
-//! Reducer-level tests for `cx.realm.link` (R3.1).
+//! Reducer-level tests for `ck.realm.link` (R3.1).
 //!
 //! Exercises:
 //! - all eight canonical link_kinds write their cell + are queryable
@@ -165,7 +165,7 @@ fn realm_link_cell_value_persisted() {
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
+        "ck:cell:ck.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell must be projected");

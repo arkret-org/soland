@@ -7,7 +7,7 @@ use super::common::*;
 
 #[tokio::test]
 async fn sync_directory_and_index_share_demo_space() {
-    let sync_describe: Value = TestClient::get("http://server/api/v1/account/describe")
+    let sync_describe: Value = TestClient::get("http://server/_cokret/self/account/describe")
         .send(&app())
         .await
         .take_json()
@@ -23,7 +23,7 @@ async fn sync_directory_and_index_share_demo_space() {
         );
     }
 
-    let invalid_profile = TestClient::post("http://server/api/v1/account/subscribe?catchup=true")
+    let invalid_profile = TestClient::post("http://server/_cokret/self/account/subscribe?catchup=true")
         .json(&serde_json::json!({"profile": "invalid"}))
         .send(&app())
         .await;
@@ -42,7 +42,7 @@ async fn sync_directory_and_index_share_demo_space() {
             .contains_key("ck:realm:0196419b-0000-7000-8000-000000000000")
     );
 
-    let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
+    let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
         .json(&serde_json::json!({"query": "demo", "limit": 10}))
         .send(&app())
         .await
@@ -51,7 +51,7 @@ async fn sync_directory_and_index_share_demo_space() {
         .unwrap();
     assert_eq!(directory["results"].as_array().unwrap().len(), 1);
 
-    let index: Value = TestClient::post("http://server/api/v1/index/query")
+    let index: Value = TestClient::post("http://server/_cokret/self/index/query")
         .json(&serde_json::json!({"realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
@@ -64,7 +64,7 @@ async fn sync_directory_and_index_share_demo_space() {
 #[tokio::test]
 async fn directory_product_endpoints_return_demo_projection_shapes() {
     let organizations: Value =
-        TestClient::post("http://server/api/v1/directory/search-organizations")
+        TestClient::post("http://server/_cokret/find/directory/search-organizations")
             .json(&serde_json::json!({"query": "cokret", "limit": 10}))
             .send(&app())
             .await
@@ -77,7 +77,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     );
 
     let organization: Value =
-        TestClient::post("http://server/api/v1/directory/resolve-organization")
+        TestClient::post("http://server/_cokret/find/directory/resolve-organization")
             .json(&serde_json::json!({"organization_id": "ck:org:demo"}))
             .send(&app())
             .await
@@ -87,7 +87,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(organization["organization"]["handle"], "@cokret-demo");
     assert_eq!(organization["spaces"].as_array().unwrap().len(), 1);
 
-    let actors: Value = TestClient::post("http://server/api/v1/directory/search-actors")
+    let actors: Value = TestClient::post("http://server/_cokret/find/directory/search-actors")
         .json(&serde_json::json!({"query": "alice"}))
         .send(&app())
         .await
@@ -96,7 +96,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .unwrap();
     assert_eq!(actors["results"][0]["did"], "did:web:alice.example");
 
-    let users: Value = TestClient::post("http://server/api/v1/directory/search-users")
+    let users: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
         .json(&serde_json::json!({"query": "alice"}))
         .send(&app())
         .await
@@ -111,7 +111,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert!(users["results"][0].get("presence").is_none());
     assert!(users["results"][0].get("organization_id").is_none());
 
-    let handle: Value = TestClient::post("http://server/api/v1/directory/resolve-handle")
+    let handle: Value = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
         .json(&serde_json::json!({"handle": "alice"}))
         .send(&app())
         .await
@@ -121,7 +121,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(handle["did"], "did:web:alice.example");
     assert_eq!(
         handle["handle_claim"]["schema"],
-        "cx.schema.handle_claim.v1"
+        "ck.schema.handle_claim.v1"
     );
     // HDLREN-2 (cokret-spec @ 7157ee8) — canonical handle wire form is
     // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
@@ -138,7 +138,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .is_some_and(|digest| digest.starts_with("sha256:"))
     );
 
-    let invalid = TestClient::post("http://server/api/v1/directory/search-users")
+    let invalid = TestClient::post("http://server/_cokret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
         .send(&app())
         .await;
@@ -167,7 +167,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     ];
 
     for (path, body) in not_found_cases {
-        let response = TestClient::post(format!("http://server/api/v1/directory/{path}"))
+        let response = TestClient::post(format!("http://server/_cokret/find/directory/{path}"))
             .json(&body)
             .send(&service)
             .await;
@@ -184,7 +184,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     )];
 
     for (path, body) in empty_search_cases {
-        let mut response = TestClient::post(format!("http://server/api/v1/directory/{path}"))
+        let mut response = TestClient::post(format!("http://server/_cokret/find/directory/{path}"))
             .json(&body)
             .send(&service)
             .await;
@@ -220,7 +220,7 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
         realm_id,
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     );
-    let unauthorized = TestClient::post("http://server/api/v1/directory/resolve-target")
+    let unauthorized = TestClient::post("http://server/_cokret/find/directory/resolve-target")
         .json(&serde_json::json!({
             "address": format!("{address}&tok={token}"),
             "token": token,
@@ -273,7 +273,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "web+cokret:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
-    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-target")
+    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-target")
         .json(&serde_json::json!({
             "address": format!("{address}&tok={token}"),
             "token": token,
@@ -340,11 +340,11 @@ fn preview_token_for_address(
 
 #[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
-    // `/api/v1/index/object` is the polymorphic typed-id describe (renamed
+    // `/_cokret/self/index/object` is the polymorphic typed-id describe (renamed
     // from `/index/entity` in round 6); it returns `{object: {object_id,
     // kind, schema}}` for any spec-registered `ck:<kind>:` prefix.
     let object: Value = TestClient::get(
-        "http://server/api/v1/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_cokret/self/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -353,7 +353,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(object["object"]["kind"], "space");
 
-    let thread: Value = TestClient::get("http://server/api/v1/index/thread?thread_id=ck:flow:demo")
+    let thread: Value = TestClient::get("http://server/_cokret/self/index/thread?thread_id=ck:flow:demo")
         .send(&app())
         .await
         .take_json()
@@ -363,7 +363,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert!(thread["events"].as_array().unwrap().is_empty());
 
     let notifications: Value =
-        TestClient::get("http://server/api/v1/index/notifications?actor=did:web:alice.example")
+        TestClient::get("http://server/_cokret/self/index/notifications?actor=did:web:alice.example")
             .send(&app())
             .await
             .take_json()
@@ -371,16 +371,16 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
             .unwrap();
     assert_eq!(notifications["unread_count"], 0);
 
-    let inbox: Value = TestClient::get("http://server/api/v1/index/inbox")
+    let inbox: Value = TestClient::get("http://server/_cokret/self/index/inbox")
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(inbox["flows"].as_array().unwrap().len(), 1);
-    assert_eq!(inbox["flows"][0]["flow"]["schema"], "cx.schema.flow.v1");
+    assert_eq!(inbox["flows"][0]["flow"]["schema"], "ck.schema.flow.v1");
 
-    let search: Value = TestClient::post("http://server/api/v1/index/search")
+    let search: Value = TestClient::post("http://server/_cokret/self/index/search")
         .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))
         .send(&app())
         .await
@@ -390,7 +390,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
     let hierarchy: Value = TestClient::get(
-        "http://server/api/v1/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_cokret/self/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -402,7 +402,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
         "ck:space:0196419b-0000-7000-8000-000000000000"
     );
 
-    let invalid = TestClient::post("http://server/api/v1/index/search")
+    let invalid = TestClient::post("http://server/_cokret/self/index/search")
         .json(&serde_json::json!({"query": ""}))
         .send(&app())
         .await;
@@ -411,7 +411,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
 
 #[tokio::test]
 async fn broader_protocol_surface_returns_contract_shapes() {
-    let directory_describe: Value = TestClient::get("http://server/api/v1/directory/describe")
+    let directory_describe: Value = TestClient::get("http://server/_cokret/find/directory/describe")
         .send(&app())
         .await
         .take_json()
@@ -419,7 +419,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
-    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
         .send(&app())
         .await
@@ -429,7 +429,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/_cokret/self/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -438,7 +438,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     .unwrap();
     assert_eq!(backfill["limited"], false);
 
-    let authz: Value = TestClient::post("http://server/api/v1/authz/check")
+    let authz: Value = TestClient::post("http://server/_cokret/self/authz/check")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
             "action": "realm.read",
@@ -458,7 +458,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let ice: Value = TestClient::post("http://server/cokret/v1/ice-config")
+    let ice: Value = TestClient::post("http://server/_cokret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,

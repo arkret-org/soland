@@ -1,20 +1,20 @@
 //! G3.S1 — MLS / E2EE lifecycle HTTP surface.
 //!
-//! Spec-canonical binding under `/api/v1/keys/keypackages/*` (see
+//! Spec-canonical binding under `/_cokret/self/keys/keypackages/*` (see
 //! `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /api/v1/keys/keypackages/upload` — op `cx.keys.keypackages.upload` (publishes a fresh
+//! - `POST /_cokret/self/keys/keypackages/upload` — op `ck.keys.keypackages.upload` (publishes a fresh
 //!   KeyPackage).
-//! - `POST /api/v1/keys/keypackages/claim`  — op `cx.keys.keypackages.claim` (atomically claim a
+//! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.keys.keypackages.claim` (atomically claim a
 //!   published KeyPackage; second claim of the same id returns `409 cas_conflict`).
-//! - `GET  /api/v1/keys/keypackages/welcomes/pending` — extension op
+//! - `GET  /_cokret/self/keys/keypackages/welcomes/pending` — extension op
 //!   `cx.extension.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
 //!   50 per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
 //!   redeliver). This is a soland-specific extension (not in the canonical spec registry).
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
-//! submit `cx.mls.commit` events via the normal `POST /api/v1/events`
-//! pipeline (`cx.events.submit` of the registered durable `cx.mls.commit`
+//! submit `ck.mls.commit` events via the normal `POST /_cokret/self/events`
+//! pipeline (`ck.events.submit` of the registered durable `ck.mls.commit`
 //! kind). The reducer's epoch-bump path is unchanged; only the HTTP
 //! entrypoint moved.
 //!
@@ -28,8 +28,8 @@
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - decryption_pending   — deferred-decryption queue + retry.
 //!
-//! `cx.mls.commit` reducer validation now requires governance-binding
-//! quorum plus an attested covered frontier. `cx.mls.welcome` reducer
+//! `ck.mls.commit` reducer validation now requires governance-binding
+//! quorum plus an attested covered frontier. `ck.mls.welcome` reducer
 //! validation queues only minimal routing metadata and rejects plaintext
 //! sender/profile/relationship side-band fields.
 
@@ -48,14 +48,14 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
-/// Mount the `/keys/keypackages/*` sub-router. Mounted under `/api/v1`
-/// from `routing::mod::api_v1_router`.
+/// Mount the `/keys/keypackages/*` sub-router. Mounted under
+/// `/_cokret/self` from `routing::mod::api_v1_router`.
 ///
 /// Spec-canonical paths (see
 /// `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
-///   - `POST /api/v1/keys/keypackages/upload`
-///   - `POST /api/v1/keys/keypackages/claim`
-///   - `GET  /api/v1/keys/keypackages/welcomes/pending` (soland extension)
+///   - `POST /_cokret/self/keys/keypackages/upload`
+///   - `POST /_cokret/self/keys/keypackages/claim`
+///   - `GET  /_cokret/self/keys/keypackages/welcomes/pending` (soland extension)
 pub fn router() -> Router {
     Router::with_path("keys").push(
         Router::with_path("keypackages")
@@ -75,11 +75,11 @@ pub const MAX_WELCOMES_PER_POLL: usize = 50;
 // ── publish ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.keys.keypackages.upload",
+    operation_id = "ck.keys.keypackages.upload",
     tags("keys"),
     summary = "Upload a fresh MLS KeyPackage (G3.S1)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.upload"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.keypackages.upload"))]
 async fn upload_keypackage(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -114,10 +114,10 @@ async fn upload_keypackage(
     // the wire shape (lifetime, bytes presence, etc.) and gives us the
     // canonical Rejected reason if anything is malformed.
     //
-    // Canonical event kind is `cx.mls.keypackage` (publish/claim
+    // Canonical event kind is `ck.mls.keypackage` (publish/claim
     // distinction is conveyed via `payload.action`). The HTTP
-    // operation_id (`cx.keys.keypackages.upload`) lives at the wire
-    // layer; the internal event log stores `cx.mls.keypackage`.
+    // operation_id (`ck.keys.keypackages.upload`) lives at the wire
+    // layer; the internal event log stores `ck.mls.keypackage`.
     let mut publish_payload = body.clone();
     if let Value::Object(ref mut map) = publish_payload {
         map.insert("action".to_owned(), Value::String("publish".to_owned()));
@@ -171,11 +171,11 @@ async fn upload_keypackage(
 // ── claim ─────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.keys.keypackages.claim",
+    operation_id = "ck.keys.keypackages.claim",
     tags("keys"),
     summary = "Atomically claim a published KeyPackage for a Welcome (G3.S1)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.keypackages.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -190,10 +190,10 @@ async fn claim_keypackage(
     let group_id = require_str(&body, "group_id")?;
 
     // Build the canonical op so the reducer sees the same shape as a
-    // federated `cx.mls.keypackage` envelope would. Canonical event
-    // kind is `cx.mls.keypackage`; publish-vs-claim is conveyed via
+    // federated `ck.mls.keypackage` envelope would. Canonical event
+    // kind is `ck.mls.keypackage`; publish-vs-claim is conveyed via
     // `payload.action`. The HTTP operation_id
-    // (`cx.keys.keypackages.claim`) lives at the wire layer only.
+    // (`ck.keys.keypackages.claim`) lives at the wire layer only.
     let payload = json!({
         "action": "claim",
         "keypackage_id": keypackage_id,
@@ -265,11 +265,11 @@ async fn claim_keypackage(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.keypackages.consume",
+    operation_id = "ck.keys.keypackages.consume",
     tags("keys"),
     summary = "Mark claimed KeyPackages consumed by an MLS epoch"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.consume"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.keypackages.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -313,11 +313,11 @@ async fn consume_keypackages(
 }
 
 #[endpoint(
-    operation_id = "cx.keys.keypackages.revoke",
+    operation_id = "ck.keys.keypackages.revoke",
     tags("keys"),
     summary = "Revoke unconsumed KeyPackages for a device"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.keypackages.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.keypackages.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -450,8 +450,8 @@ async fn pending_welcomes(
 // ── commits ───────────────────────────────────────────────────────────
 //
 // Deleted as part of the spec-canonical refactor. MLS commits are now
-// submitted via the regular events pipeline as `cx.mls.commit` durable
-// events through `POST /api/v1/events` (op `cx.events.submit`). The
+// submitted via the regular events pipeline as `ck.mls.commit` durable
+// events through `POST /_cokret/self/events` (op `ck.events.submit`). The
 // reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
 // invoked from the events submission flow; no dedicated REST surface.
 

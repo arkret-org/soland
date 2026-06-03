@@ -1,11 +1,11 @@
 //! Push notification surfaces (register / unregister / rules / notify).
 //!
 //! Surfaces:
-//! - `POST /api/v1/push/register-device` — register a device token + push gateway
-//! - `POST /api/v1/push/unregister-device` — remove an authenticated actor's device token
-//! - `GET / POST /api/v1/push/rules` — list / upsert push rules
-//! - `DELETE /api/v1/push/rules/{rule_id}` — drop one
-//! - `POST /api/v1/push/notify` — fan-out a notification through the rule engine (see the 12-fn
+//! - `POST /_cokret/edge/push/register-device` — register a device token + push gateway
+//! - `POST /_cokret/edge/push/unregister-device` — remove an authenticated actor's device token
+//! - `GET / POST /_cokret/edge/push/rules` — list / upsert push rules
+//! - `DELETE /_cokret/edge/push/rules/{rule_id}` — drop one
+//! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the 12-fn
 //!   helper block at the bottom of this file).
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
-use super::push_outbound::{derive_push_gateway_service_base_url, join_api_v1_url};
+use super::push_outbound::{derive_push_gateway_service_base_url, join_edge_push_url};
 use super::{authenticated_session, now, sha256_hex, validate_canonical_json_value};
 use crate::error::AppError;
 use crate::persistence::DriftResult;
@@ -413,7 +413,7 @@ async fn verify_push_gateway_contract_drift(
     let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
         return DriftResult::Unknown;
     };
-    let bridge_describe_url = join_api_v1_url(&service_base_url, "/api/v1/push/bridge/describe");
+    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let cache = state.persistence.push_bridge_cache();
     let snapshot_digest = match cache.current_contract(&bridge_describe_url).await {
         Ok(Some(record)) => record.contract_digest,

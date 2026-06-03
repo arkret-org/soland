@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn state_response_value_serializes_with_value_field() {
         let cell =
-            CellRef::new("ck:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = CellState::Value(json!("join"));
         let resp = state_response_from(&cell, Some(&st), "fsm", "reject");
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn state_response_absent_state_omits_value_and_bottom() {
         let cell =
-            CellRef::new("ck:cell:cx.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
+            CellRef::new("ck:cell:ck.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
         let resp = state_response_from(&cell, None, "or_set", "expose");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "absent");
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn resolve_space_uses_sentinel_for_actor_keyed_cell_when_no_explicit() {
         let cell =
-            CellRef::new("ck:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let space = resolve_space_for_cell(None, &cell).unwrap();
         assert_eq!(space.as_str(), SENTINEL_SPACE_SCOPE);

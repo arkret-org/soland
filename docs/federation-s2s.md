@@ -15,7 +15,7 @@ inside the signature transcript; any mismatch rejects the request.
 | Header | Source | Verified into |
 | --- | --- | --- |
 | `Source-Trust-Domain` | The sender's `SOLAND_TRUST_DOMAIN` | Signature transcript + `cross_domain_replay_rejected` guard on receive |
-| `Destination-Trust-Domain` | The intended peer's published `trust_domain` (from the peer's `/api/v1/server/describe`) | Signature transcript — protects against on-path mis-routing |
+| `Destination-Trust-Domain` | The intended peer's published `trust_domain` (from the peer's `/_cokret/describe`) | Signature transcript — protects against on-path mis-routing |
 | `Request-Canonical-Digest` | SHA-256 of the canonical request body | Signature transcript — pins the body the signature covered |
 
 The receiver applies the same canonicalization to recompute
@@ -24,14 +24,14 @@ the canonical SDK error code.
 
 ## Trust-domain immutability
 
-A Realm's `trust_domain` is locked at creation (`cx.realm.create`) and
+A Realm's `trust_domain` is locked at creation (`ck.realm.create`) and
 cannot change. Wire events whose `trust_domain` does not match the
 locked value reject with `cross_domain_replay_rejected`. This means:
 
 - An operator who renames `SOLAND_TRUST_DOMAIN` mid-lifetime invalidates
-  every outstanding `cx.cross_signing.reset` proof for that deployment.
+  every outstanding `ck.cross_signing.reset` proof for that deployment.
   Do not rename without a planned key-rotation ceremony.
-- Federation peers see the trust domain on `/api/v1/server/describe`
+- Federation peers see the trust domain on `/_cokret/describe`
   and pin it into the `Destination-Trust-Domain` header on every
   outbound request. Cross-deployment renames need a coordinated
   cutover.
@@ -39,7 +39,7 @@ locked value reject with `cross_domain_replay_rejected`. This means:
 ## Peer onboarding checklist
 
 1. **Exchange describe documents.** Both operators fetch each other's
-   `/api/v1/server/describe` and confirm:
+   `/_cokret/describe` and confirm:
    - `trust_domain` matches what each side will pin into
      `Destination-Trust-Domain`.
    - `protocol_version` is mutually supported.

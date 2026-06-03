@@ -136,11 +136,11 @@ mod tests {
         };
 
         let (_, publish_kind, publish_bottom) =
-            binding_for("cx.component.cross_signing.publish.v1");
+            binding_for("ck.component.cross_signing.publish.v1");
         assert_eq!(publish_kind, SdkLatticeKind::CasRegister);
         assert_eq!(publish_bottom, BottomMode::Reject);
 
-        let (_, reset_kind, reset_bottom) = binding_for("cx.component.cross_signing.reset.v1");
+        let (_, reset_kind, reset_bottom) = binding_for("ck.component.cross_signing.reset.v1");
         assert_eq!(reset_kind, SdkLatticeKind::OrderedLog);
         assert_eq!(reset_bottom, BottomMode::Reject);
     }

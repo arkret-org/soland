@@ -1,8 +1,8 @@
-//! G3.S2 — `cx.realm.policy_server` reducer.
+//! G3.S2 — `ck.realm.policy_server` reducer.
 //!
-//! Projects the per-Realm `cx.realm.policy_server` declaration into:
+//! Projects the per-Realm `ck.realm.policy_server` declaration into:
 //!
-//! 1. the canonical `cx.component.realm.policy_server.v1` cas-register cell (per SDK
+//! 1. the canonical `ck.component.realm.policy_server.v1` cas-register cell (per SDK
 //!    `lattice_registry::RealmPolicyServer`); and
 //! 2. the structured side-band cache [`crate::reducer::ProjectionState::realm_policy_servers`].
 //!
@@ -32,13 +32,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 /// for any Realm that does not opt-out.
 const DEFAULT_ON_TIMEOUT: &str = "fail_closed";
 
-/// Apply a `cx.realm.policy_server` event to projection state.
+/// Apply a `ck.realm.policy_server` event to projection state.
 ///
 /// Payload schema (subset enforced here):
 /// ```json
 /// {
 ///   "policy_server_did": "did:web:policy.example.com",
-///   "policy_server_url": "https://policy.example.com/api/v1/policy/check",
+///   "policy_server_url": "https://policy.example.com/_cokret/self/policy/check",
 ///   "cache_ttl_seconds": 300,
 ///   "timeout_ms": 2000,
 ///   "on_timeout": "fail_closed"
@@ -111,10 +111,10 @@ pub fn apply_realm_policy_server(
 
     let now = operation.created_at;
 
-    // Cell write — `cx.component.realm.policy_server.v1` (cas-register,
+    // Cell write — `ck.component.realm.policy_server.v1` (cas-register,
     // keyed by realm_id per SDK lattice_registry).
     if let Ok(cell_id) = CellRef::new(format!(
-        "ck:cell:cx.component.realm.policy_server.v1:{realm_id}"
+        "ck:cell:ck.component.realm.policy_server.v1:{realm_id}"
     )) {
         let value = serde_json::json!({
             "realm_id": realm_id,
@@ -176,7 +176,7 @@ mod tests {
                 REALM_CHILD,
                 json!({
                     "policy_server_did": "did:web:policy.example.com",
-                    "policy_server_url": "https://policy.example.com/api/v1/policy/check",
+                    "policy_server_url": "https://policy.example.com/_cokret/self/policy/check",
                     "cache_ttl_seconds": 60,
                     "timeout_ms": 1500,
                     "on_timeout": "fail_closed",
@@ -204,7 +204,7 @@ mod tests {
 
         // Cell projection.
         let cell_id = CellRef::new(format!(
-            "ck:cell:cx.component.realm.policy_server.v1:{REALM_CHILD}"
+            "ck:cell:ck.component.realm.policy_server.v1:{REALM_CHILD}"
         ))
         .unwrap();
         let value = state.cell_value(&cell_id).expect("cell present");
@@ -224,7 +224,7 @@ mod tests {
                 REALM_ORG,
                 json!({
                     "policy_server_did": "did:web:org.example.com",
-                    "policy_server_url": "https://org.example.com/api/v1/policy/check",
+                    "policy_server_url": "https://org.example.com/_cokret/self/policy/check",
                 }),
             ),
         );

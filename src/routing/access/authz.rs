@@ -1,11 +1,11 @@
 //! Authorization HTTP surface.
 //!
 //! Surfaces:
-//! - `POST /api/v1/authz/check`             — evaluate one (actor, action, resource)
-//! - `GET  /api/v1/authz/effective-grants`  — direct grants visible to a subject
-//! - `POST /api/v1/authz/grants`            — owner-issued grant
-//! - `DELETE /api/v1/authz/grants/{grant_id}` — revoke
-//! - `GET  /api/v1/authz/invites`           — pending invites visible to the actor
+//! - `POST /_cokret/self/authz/check`             — evaluate one (actor, action, resource)
+//! - `GET  /_cokret/self/authz/effective-grants`  — direct grants visible to a subject
+//! - `POST /_cokret/self/authz/grants`            — owner-issued grant
+//! - `DELETE /_cokret/self/authz/grants/{grant_id}` — revoke
+//! - `GET  /_cokret/self/authz/invites`           — pending invites visible to the actor
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
 //! `state.authz` field is shared). Still-open work: schema alignment,
@@ -37,11 +37,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.authz.check",
+    operation_id = "ck.authz.check",
     tags("authz"),
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.check"))]
 async fn authz_check(
     body: JsonBody<AuthzCheckReqBody>,
     depot: &mut Depot,
@@ -182,11 +182,11 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 #[endpoint(
-    operation_id = "cx.authz.get_effective_grants",
+    operation_id = "ck.authz.get_effective_grants",
     tags("authz"),
     summary = "List effective authorization grants for a subject"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.get_effective_grants"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.get_effective_grants"))]
 async fn effective_grants(
     depot: &mut Depot,
     req: &mut Request,
@@ -488,11 +488,11 @@ async fn revoke_grant(
 }
 
 #[endpoint(
-    operation_id = "cx.authz.get_invites",
+    operation_id = "ck.authz.get_invites",
     tags("authz"),
     summary = "List pending invites for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.get_invites"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.get_invites"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

@@ -1,9 +1,9 @@
 //! Read cursor + read receipt handlers.
 //!
 //! Surfaces:
-//! - `POST /api/v1/read-cursors` — set the actor's read marker (durable persistent state per-actor;
+//! - `POST /_cokret/self/read-cursors` — set the actor's read marker (durable persistent state per-actor;
 //!   spec discovery/read-receipts.md §6).
-//! - `GET  /api/v1/read-cursors` — list the actor's read markers, optionally filtered by
+//! - `GET  /_cokret/self/read-cursors` — list the actor's read markers, optionally filtered by
 //!   `?space_id=...`.
 
 use cokret_sdk::{Operation, OperationId, RealmId};
@@ -48,7 +48,7 @@ pub(super) async fn set_read_cursor(
     let read_at = now();
     let payload = json!({
         "id": ids::generate_read_cursor_id(),
-        "schema": "cx.schema.read_cursor.v1",
+        "schema": "ck.schema.read_cursor.v1",
         "actor_id": session.actor,
         "realm_id": realm_id,
         "device_id": session.device_id,
@@ -73,7 +73,7 @@ pub(super) async fn set_read_cursor(
         &session.device_id,
         READ_MARKER_UPDATE_TYPE,
         json!({
-            "schema": "cx.schema.read_cursor.v1",
+            "schema": "ck.schema.read_cursor.v1",
             "actor_id": session.actor,
             "device_id": session.device_id,
             "realm_id": realm_id,

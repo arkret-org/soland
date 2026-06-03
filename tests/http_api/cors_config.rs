@@ -11,7 +11,7 @@ async fn configured_cors_allows_only_explicit_origin() {
     config.cors_allow_origin = Some("https://app.example".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let allowed = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
+    let allowed = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("Origin", "https://app.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
@@ -36,7 +36,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         Some("true")
     );
 
-    let denied = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
+    let denied = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("Origin", "https://evil.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .send(&service)
@@ -52,7 +52,7 @@ async fn configured_cors_allows_only_explicit_origin() {
 #[tokio::test]
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // The Realm bootstrap flow in yougen emits a
-    // `cx.member.state{membership="invite"}` event for each seed member
+    // `ck.member.state{membership="invite"}` event for each seed member
     // (see cokret-rust-sdk + yougen/src/api.rs `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
@@ -91,7 +91,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     .await;
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
 
-    // Submit alice's cx.member.state{membership=invite} pointing at bob.
+    // Submit alice's ck.member.state{membership=invite} pointing at bob.
     let event_id = "ck:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "actor_id": bob_did,
@@ -100,8 +100,8 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "cx.member.state",
-        "schema_id": "cx.schema.event.v1",
+        "kind": "ck.member.state",
+        "schema_id": "ck.schema.event.v1",
         "actor_id": alice_did,
         "actor_seq": 100_u64,
         "realm_id": space_id.clone(),
@@ -124,7 +124,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
 
-    let submit = TestClient::post("http://server/api/v1/events")
+    let submit = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&event)
         .send(&app_from_state(state.clone()))
@@ -132,11 +132,11 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     assert_eq!(
         submit.status_code.unwrap().as_u16(),
         200,
-        "cx.member.state{{invite}} should be accepted"
+        "ck.member.state{{invite}} should be accepted"
     );
 
     // Bob should now see a pending invite for the space.
-    let bob_invites: Value = TestClient::get("http://server/api/v1/authz/invites")
+    let bob_invites: Value = TestClient::get("http://server/_cokret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -166,7 +166,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     config.cors_allow_origin = Some("*".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let from_yougen = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
+    let from_yougen = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("Origin", "http://127.0.0.1:8080", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
@@ -194,7 +194,7 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 
     // A second, unrelated origin gets the same treatment — the handler is
     // genuinely origin-agnostic, not tied to a single hard-coded URL.
-    let from_other = TestClient::options("http://server/api/v1/account/subscribe?catchup=true")
+    let from_other = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
         .add_header("Origin", "https://app.elsewhere.example", true)
         .add_header("Access-Control-Request-Method", "POST", true)
         .send(&service)
@@ -214,7 +214,7 @@ async fn server_describe_advertises_auth_server_url_when_configured() {
     config.auth_server_url = Some("https://auth.local.host".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let describe: Value = TestClient::get("http://server/api/v1/server/describe")
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
         .send(&service)
         .await
         .take_json()
@@ -245,7 +245,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
 
-    let server: Value = TestClient::get("http://server/api/v1/server/describe")
+    let server: Value = TestClient::get("http://server/_cokret/describe")
         .send(&service)
         .await
         .take_json()
@@ -253,7 +253,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(server["service_did"], service_did);
 
-    let identity: Value = TestClient::get("http://server/api/v1/identity/describe")
+    let identity: Value = TestClient::get("http://server/_cokret/root/identity/describe")
         .send(&service)
         .await
         .take_json()
@@ -261,7 +261,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(identity["service_did"], service_did);
 
-    let sync: Value = TestClient::get("http://server/api/v1/account/describe")
+    let sync: Value = TestClient::get("http://server/_cokret/self/account/describe")
         .send(&service)
         .await
         .take_json()
@@ -269,7 +269,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(sync["service_did"], service_did);
 
-    let events: Value = TestClient::get("http://server/api/v1/events/describe")
+    let events: Value = TestClient::get("http://server/_cokret/self/events/describe")
         .send(&service)
         .await
         .take_json()
@@ -277,7 +277,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(events["service_did"], service_did);
 
-    let directory: Value = TestClient::get("http://server/api/v1/directory/describe")
+    let directory: Value = TestClient::get("http://server/_cokret/find/directory/describe")
         .send(&service)
         .await
         .take_json()
@@ -285,7 +285,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(directory["service_did"], service_did);
 
-    let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-realm")
+    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": resolved_realm_id}))
         .send(&service)
         .await
@@ -298,10 +298,10 @@ async fn service_did_is_config_driven_across_public_metadata() {
     );
     assert_eq!(
         resolved["join_candidates"][0]["operations"],
-        serde_json::json!(["cx.events.submit"])
+        serde_json::json!(["ck.events.submit"])
     );
 
-    let index: Value = TestClient::get("http://server/api/v1/index/describe")
+    let index: Value = TestClient::get("http://server/_cokret/self/index/describe")
         .send(&service)
         .await
         .take_json()
@@ -309,7 +309,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(index["service_did"], service_did);
 
-    let ice: Value = TestClient::post("http://server/cokret/v1/ice-config")
+    let ice: Value = TestClient::post("http://server/_cokret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,

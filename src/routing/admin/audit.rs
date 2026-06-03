@@ -1,6 +1,6 @@
 //! Audit-log surface.
 //!
-//! - `GET /api/v1/audit/events` — actor-scoped audit query (cursor-paginated). Auth-restricted to
+//! - `GET /_cokret/self/audit/events` — actor-scoped audit query (cursor-paginated). Auth-restricted to
 //!   the authenticated actor (no cross-actor reads).
 //! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
 //!   space lifecycle, message send, federation, etc.).
@@ -30,7 +30,7 @@ pub(super) fn router() -> Router {
 #[endpoint(
     operation_id = "cx.extension.soland.audit.franking.verify",
     tags("audit"),
-    summary = "Verify a cx.moderation.franking_proof integrity digest"
+    summary = "Verify a ck.moderation.franking_proof integrity digest"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.audit.franking.verify"))]
 async fn verify_franking_proof(
@@ -58,10 +58,10 @@ async fn verify_franking_proof(
 }
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
-/// `cx.audit.erasure_receipt` projection so verifiers / auditors can
+/// `ck.audit.erasure_receipt` projection so verifiers / auditors can
 /// query the local receipt list (including `fanout_status` per-peer
 /// state and the timeout-triggered `incomplete` flip). Advertised via
-/// `/api/v1/server/describe.erasure_receipts_endpoint`.
+/// `/_cokret/describe.erasure_receipts_endpoint`.
 ///
 /// The endpoint is authentication-gated; reading the receipt list does
 /// not leak any post-erasure payload (the projection holds canonical
@@ -70,7 +70,7 @@ async fn verify_franking_proof(
 #[endpoint(
     operation_id = "cx.extension.soland.audit.erasure_receipts.list",
     tags("audit"),
-    summary = "List cx.audit.erasure_receipt projection rows + fanout state"
+    summary = "List ck.audit.erasure_receipt projection rows + fanout state"
 )]
 #[tracing::instrument(
     skip_all,
@@ -130,7 +130,7 @@ async fn audit_erasure_receipts(
 
 /// Client-side telemetry sink.
 ///
-/// `POST /api/v1/audit/user-action` accepts a batched user-action audit
+/// `POST /_cokret/self/audit/user-action` accepts a batched user-action audit
 /// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
 /// — the same shape that sodmin emits internally and that yougen posts
 /// via `CokretApi::post_audit_user_action`.
@@ -306,7 +306,7 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
 
 fn franking_proof_digest(proof: &Value) -> String {
     let material = json!({
-        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or("cx.moderation.franking_proof"),
+        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or("ck.moderation.franking_proof"),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),

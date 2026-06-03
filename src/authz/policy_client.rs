@@ -1,6 +1,6 @@
 //! G3.S2 — outbound `/policy/check` client.
 //!
-//! [`PolicyClient`] issues `POST /api/v1/policy/check` against the
+//! [`PolicyClient`] issues `POST /_cokret/self/policy/check` against the
 //! `policy_server_url` of the request's Realm
 //! ([`crate::reducer::RealmPolicyServerConfig`]), with per-realm
 //! `cache_ttl_seconds` decision caching and `timeout_ms` fail-closed
@@ -262,7 +262,7 @@ impl PolicyClient {
         let realm_id_str = input.realm_id.as_str().to_owned();
         let config = config_lookup(&realm_id_str).ok_or_else(|| {
             PolicyClientError::Configuration(format!(
-                "no cx.realm.policy_server config for {realm_id_str}"
+                "no ck.realm.policy_server config for {realm_id_str}"
             ))
         })?;
 
@@ -679,7 +679,7 @@ mod tests {
             request_id: "req-1".to_owned(),
             realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
             actor: Did::new("did:web:alice.example").unwrap(),
-            action: "cx.message.create".to_owned(),
+            action: "ck.message.create".to_owned(),
             source_service_did: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
@@ -697,7 +697,7 @@ mod tests {
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 actor: Did::new("did:web:alice.example").unwrap(),
-                action: "cx.message.create".to_owned(),
+                action: "ck.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
             },
@@ -826,7 +826,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/api/v1/policy/check");
+        let url = format!("http://{addr}/_cokret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
 
@@ -849,7 +849,7 @@ mod tests {
             drop(listener);
         });
 
-        let url = format!("http://{addr}/api/v1/policy/check");
+        let url = format!("http://{addr}/_cokret/self/policy/check");
         let mut cfg = realm_config(&url);
         cfg.timeout_ms = 150;
         let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
@@ -903,7 +903,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/api/v1/policy/check");
+        let url = format!("http://{addr}/_cokret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
         let cfg_clone = cfg.clone();
@@ -937,7 +937,7 @@ mod tests {
             }
         });
 
-        let url = format!("http://{addr}/api/v1/policy/check");
+        let url = format!("http://{addr}/_cokret/self/policy/check");
         let cfg = realm_config(&url);
         let client = client_with_policy_key(&signing);
         let cfg_clone = cfg.clone();

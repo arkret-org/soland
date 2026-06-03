@@ -25,10 +25,10 @@ async fn mimi_provider_facade_contracts_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.profile.mimi_interop.v1")
+            .any(|profile| profile == "ck.profile.mimi_interop.v1")
     );
 
-    let directory: Value = TestClient::get("http://server/api/v1/mimi/provider-directory")
+    let directory: Value = TestClient::get("http://server/_cokret/open/mimi/provider-directory")
         .send(&service)
         .await
         .take_json()
@@ -46,13 +46,13 @@ async fn mimi_provider_facade_contracts_work() {
             .any(|feature| feature == "submit_message")
     );
 
-    let unsupported = TestClient::post("http://server/api/v1/mimi/key-material")
+    let unsupported = TestClient::post("http://server/_cokret/open/mimi/key-material")
         .json(&serde_json::json!({"protocol_draft": "draft-ietf-mimi-protocol-99"}))
         .send(&service)
         .await;
     assert_eq!(unsupported.status_code.unwrap().as_u16(), 400);
 
-    let key_material: Value = TestClient::post("http://server/api/v1/mimi/key-material")
+    let key_material: Value = TestClient::post("http://server/_cokret/open/mimi/key-material")
         .json(&serde_json::json!({
             "target_identifier": "mimi://soland.local/users/alice",
             "protocol_draft": "draft-ietf-mimi-protocol-06"
@@ -65,10 +65,10 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(key_material["ok"], true);
     assert_eq!(
         key_material["receipt"]["operation_id"],
-        "cx.mimi.key_material"
+        "ck.mimi.key_material"
     );
 
-    let room_binding: Value = TestClient::put("http://server/api/v1/mimi/flows/01JSMIMI/update")
+    let room_binding: Value = TestClient::put("http://server/_cokret/open/mimi/flows/01JSMIMI/update")
         .json(&serde_json::json!({
             "room_binding": {
                 "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
@@ -84,7 +84,7 @@ async fn mimi_provider_facade_contracts_work() {
         .unwrap();
     assert_eq!(room_binding["ok"], true);
 
-    let group_info: Value = TestClient::get("http://server/api/v1/mimi/flows/01JSMIMI/group-info")
+    let group_info: Value = TestClient::get("http://server/_cokret/open/mimi/flows/01JSMIMI/group-info")
         .send(&service)
         .await
         .take_json()
@@ -99,7 +99,7 @@ async fn mimi_provider_facade_contracts_work() {
         "cokret_signed_event_reducer"
     );
 
-    let identifier: Value = TestClient::post("http://server/api/v1/mimi/identifiers/query")
+    let identifier: Value = TestClient::post("http://server/_cokret/open/mimi/identifiers/query")
         .json(&serde_json::json!({
             "query": "mimi://remote.example/alice",
             "privacy_mode": "private_contact_discovery"
@@ -116,7 +116,7 @@ async fn mimi_provider_facade_contracts_work() {
         false
     );
 
-    let mapped: Value = TestClient::post("http://server/api/v1/mimi/flows/01JSMIMI/messages")
+    let mapped: Value = TestClient::post("http://server/_cokret/open/mimi/flows/01JSMIMI/messages")
         .json(&serde_json::json!({
             "source_format": "text/markdown;variant=GFM-MIMI",
             "body": "hello from MIMI"
@@ -127,13 +127,13 @@ async fn mimi_provider_facade_contracts_work() {
         .await
         .unwrap();
     assert_eq!(mapped["ok"], true);
-    assert_eq!(mapped["receipt"]["operation_id"], "cx.mimi.submit_message");
+    assert_eq!(mapped["receipt"]["operation_id"], "ck.mimi.submit_message");
     assert_eq!(
         mapped["receipt"]["extra"]["target_format"],
-        "cx.message.create"
+        "ck.message.create"
     );
 
-    let proxy: Value = TestClient::post("http://server/api/v1/mimi/proxy-download")
+    let proxy: Value = TestClient::post("http://server/_cokret/open/mimi/proxy-download")
         .json(&serde_json::json!({
             "blob_ref": "ck:blob:sha256:e2e",
             "asset_privacy_policy": "provider_proxy"
@@ -155,7 +155,7 @@ async fn mimi_provider_facade_contracts_work() {
         false
     );
 
-    let report = TestClient::post("http://server/api/v1/mimi/report-abuse")
+    let report = TestClient::post("http://server/_cokret/open/mimi/report-abuse")
         .json(&serde_json::json!({
             "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
             "target_event_digest": "sha256:target",
@@ -181,10 +181,10 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 1: post a room_update carrying a room_binding block.
     let update_resp: Value =
-        TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
+        TestClient::put(format!("http://server/_cokret/open/mimi/flows/{room_id}/update"))
             .json(&serde_json::json!({
                 "room_binding": {
-                    "profile": "cx.profile.mimi_interop.v1",
+                    "profile": "ck.profile.mimi_interop.v1",
                     "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
                     "binding_scope": {
                         "space_id": demo_space,
@@ -217,14 +217,14 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 2: submit_message into the same room.
     let msg_resp: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "text/plain;charset=utf-8",
         "content": {
-            "kind": "cx.content.composite",
+            "kind": "ck.content.composite",
             "body": "hello from MIMI P4",
-            "parts": [{"kind": "cx.content.text", "body": "hello from MIMI P4"}],
+            "parts": [{"kind": "ck.content.text", "body": "hello from MIMI P4"}],
         },
         "sender_did": "did:web:remote.example",
         "mimi_message_id": "mimi-msg-p4-001",
@@ -250,10 +250,10 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .as_str()
         .expect("cokret_event_id missing");
 
-    // Step 3: query /api/v1/events against the bound space and
+    // Step 3: query /_cokret/self/events against the bound space and
     // verify both the room_binding event and the message event are
     // present.
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
+    let events: Value = TestClient::get(format!("http://server/_cokret/self/events?realms={demo_space}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&service)
         .await
@@ -266,7 +266,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .iter()
         .find(|e| e["event_id"] == binding_event_id)
         .expect("room_binding event missing from projection log");
-    assert_eq!(binding_event["event_kind"], "cx.mimi.room_binding");
+    assert_eq!(binding_event["event_kind"], "ck.mimi.room_binding");
     assert_eq!(
         binding_event["payload"]["mimi_room_id"], room_id,
         "room_binding payload must echo room_id for bound-space dispatch"
@@ -280,7 +280,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .iter()
         .find(|e| e["event_id"] == cokret_event_id)
         .expect("MIMI-ingressed message missing from projection log");
-    assert_eq!(message_event["event_kind"], "cx.message.create");
+    assert_eq!(message_event["event_kind"], "ck.message.create");
     assert_eq!(message_event["sender"], "did:web:remote.example");
     assert_eq!(
         message_event["payload"]["content"]["parts"][0]["body"],
@@ -300,8 +300,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         "soland.mimi.v1"
     );
 
-    // Step 4: report_abuse emits a cx.moderation.report event.
-    let report_resp: Value = TestClient::post("http://server/api/v1/mimi/report-abuse")
+    // Step 4: report_abuse emits a ck.moderation.report event.
+    let report_resp: Value = TestClient::post("http://server/_cokret/open/mimi/report-abuse")
         .json(&serde_json::json!({
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "target_event_digest": "sha256:abuse-target",
@@ -325,7 +325,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     );
 
     let events_again: Value =
-        TestClient::get(format!("http://server/api/v1/events?realms={demo_space}"))
+        TestClient::get(format!("http://server/_cokret/self/events?realms={demo_space}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&service)
             .await
@@ -337,7 +337,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .iter()
         .find(|e| e["event_id"] == report_event_id)
         .expect("moderation.report event missing from projection log");
-    assert_eq!(report_event["event_kind"], "cx.moderation.report");
+    assert_eq!(report_event["event_kind"], "ck.moderation.report");
     assert_eq!(report_event["sender"], "did:web:reporter.example");
     assert_eq!(
         report_event["payload"]["mimi_provenance"]["mimi_room_uri"],
@@ -347,10 +347,10 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // Step 5: a second room_update with a different binding_scope
     // updates the dispatch lookup. The most-recently-recorded
     // binding wins per `mimi_bound_space_id` semantics.
-    let _: Value = TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
+    let _: Value = TestClient::put(format!("http://server/_cokret/open/mimi/flows/{room_id}/update"))
         .json(&serde_json::json!({
             "room_binding": {
-                "profile": "cx.profile.mimi_interop.v1",
+                "profile": "ck.profile.mimi_interop.v1",
                 "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
                 "binding_scope": {
                     "space_id": custom_space,
@@ -371,14 +371,14 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .unwrap();
 
     let msg_resp_2: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
         "content": {
-            "kind": "cx.content.composite",
+            "kind": "ck.content.composite",
             "body": "second message",
-            "parts": [{"kind": "cx.content.text", "body": "second message"}]
+            "parts": [{"kind": "ck.content.text", "body": "second message"}]
         },
         "protocol_draft": "draft-ietf-mimi-protocol-06",
     }))
@@ -402,10 +402,10 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let room_id = "01JSMIMI-P75-POLICY";
 
     let update_resp: Value =
-        TestClient::put(format!("http://server/api/v1/mimi/flows/{room_id}/update"))
+        TestClient::put(format!("http://server/_cokret/open/mimi/flows/{room_id}/update"))
             .json(&serde_json::json!({
                 "room_binding": {
-                    "profile": "cx.profile.mimi_interop.v1",
+                    "profile": "ck.profile.mimi_interop.v1",
                     "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
                     "binding_scope": {
                         "space_id": space_id,
@@ -423,13 +423,13 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     assert_eq!(update_resp["ok"], true);
 
     let mut unmarked = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
         "e2ee": true,
         "content": {
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": "this plaintext must not cross silently"
         },
         "sender_did": "did:web:mimi.example",
@@ -447,14 +447,14 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     );
 
     let downgrade_resp: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
         "e2ee": true,
         "e2ee_downgrade": "mimi_bridge",
         "content": {
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": "explicitly downgraded plaintext"
         },
         "sender_did": "did:web:mimi.example",
@@ -479,7 +479,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let transcript_resp: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -489,7 +489,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
             "transcript_hash": "sha256:transcript-bound"
         },
         "content": {
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": "transcript-bound plaintext"
         },
         "sender_did": "did:web:mimi.example",
@@ -513,7 +513,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let quarantine_resp: Value = TestClient::post(format!(
-        "http://server/api/v1/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -544,7 +544,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .expect("quarantine event id")
         .to_owned();
 
-    let events: Value = TestClient::get(format!("http://server/api/v1/events?realms={space_id}"))
+    let events: Value = TestClient::get(format!("http://server/_cokret/self/events?realms={space_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&service)
         .await

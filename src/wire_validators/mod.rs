@@ -7,7 +7,7 @@
 //! caller can render a `schema_violation`. The reason codes are defined in
 //! [`crate::error::reasons`].
 //!
-//! - [`member_identity`] — MIU-SOL-1: reject `cx.member.identity.update` payloads still carrying
+//! - [`member_identity`] — MIU-SOL-1: reject `ck.member.identity.update` payloads still carrying
 //!   `primary_handle` / `handles[]` / `verified_handle`.
 //! - [`handle_claim_subject`] — HC-SOL-1/2: reject `claim_type=service_handle` and
 //!   non-principal-DID `subject`.

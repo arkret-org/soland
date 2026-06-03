@@ -8,13 +8,13 @@
 //!
 //! Wire shapes mirror `cotest/e2e/scenarios/conformance/encoding-vectors.md`
 //! Pre-conditions §:
-//!   POST /api/v1/conformance/encode    { vector_id, input }                              → {
-//! canonical_json, digest }   POST /api/v1/conformance/sign      { vector_id, event,
+//!   POST /_cokret/self/conformance/encode    { vector_id, input }                              → {
+//! canonical_json, digest }   POST /_cokret/self/conformance/sign      { vector_id, event,
 //! signing_key_ref }             → { canonical_bytes, digest, signature, public_key }   POST /api/
 //! v1/conformance/hlc-merge { vector_id, clocks: [{actor, hlc, payload_hint}] } → { ordered: [...]
-//! }   POST /api/v1/conformance/cursor    { vector_id, events, reduce_round }               → {
-//! cursor }   POST /api/v1/conformance/envelope  { vector_id, envelope }
-//! → { canonical_bytes, digest }   POST /api/v1/conformance/redact    { vector_id, event,
+//! }   POST /_cokret/self/conformance/cursor    { vector_id, events, reduce_round }               → {
+//! cursor }   POST /_cokret/self/conformance/envelope  { vector_id, envelope }
+//! → { canonical_bytes, digest }   POST /_cokret/self/conformance/redact    { vector_id, event,
 //! redaction, viewer_did }       → { projected_event }
 //!
 //! Reject paths (`vector_id` starts with `reject_`) return HTTP 4xx with
@@ -1004,7 +1004,7 @@ mod tests {
         assert!(encode_reject_for_vector("reject_noncanonical_numbers.v1").is_some());
         assert!(encode_reject_for_vector("reject_malformed_json.v1").is_some());
         assert!(encode_reject_for_vector("reject_other_thing.v1").is_some());
-        assert!(encode_reject_for_vector("cx.vector.encoding.canonical_json.basic.v1").is_none());
+        assert!(encode_reject_for_vector("ck.vector.encoding.canonical_json.basic.v1").is_none());
     }
 
     #[test]

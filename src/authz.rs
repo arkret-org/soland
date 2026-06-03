@@ -551,8 +551,8 @@ fn evaluate_constraint(
         }
         Constraint::AllowedCircleIds { allowed_circle_ids } => {
             // CXP-0007 (spec b7d35be) — narrow a Circle-management
-            // capability (`cx.circle.manage`, `cx.circle.member.manage`,
-            // `cx.circle.member.add.others`, `cx.circle.audit`) to a
+            // capability (`ck.circle.manage`, `ck.circle.member.manage`,
+            // `ck.circle.member.add.others`, `ck.circle.audit`) to a
             // specific Circle id set. The spec
             // `capability-action-registry.json` declares
             // `required_constraints=["allowed_circle_ids"]` on each
@@ -674,7 +674,7 @@ impl MergedAuthzDecision {
 }
 
 /// G3.S2 — integration helper. Runs the local capability check first;
-/// if it allows AND the realm has a `cx.realm.policy_server` config,
+/// if it allows AND the realm has a `ck.realm.policy_server` config,
 /// calls the remote policy server. Merges the two decisions per the
 /// spec rule "deny if either denies; allow only if both allow", then
 /// runs the remote response's obligations through the executor.

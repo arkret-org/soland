@@ -1,6 +1,6 @@
 //! MIMI (Messaging Layer Interop) provider-facade handlers.
 //!
-//! Surfaces under `/api/v1/mimi/*` plus the well-known
+//! Surfaces under `/_cokret/open/mimi/*` plus the well-known
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Cokret reducer chain:
 //!
@@ -265,7 +265,7 @@ async fn mimi_room_message(
 
     // Map the MIMI message into the canonical Cokret timeline.
     // Append a MessageRecord + a `cx.message.create` projection event so
-    // the message shows up in `GET /api/v1/events?realm_id=...`. The
+    // the message shows up in `GET /_cokret/self/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
@@ -722,7 +722,7 @@ fn mimi_provider_directory_value(state: &AppState) -> Value {
 
 fn mimi_base_url(state: &AppState) -> String {
     format!(
-        "{}/api/v1/mimi",
+        "{}/_cokret/open/mimi",
         state.config.public_base_url.trim_end_matches('/')
     )
 }

@@ -349,7 +349,7 @@ impl AnchorerWorker {
         space_id: &SpaceId,
     ) -> Result<bool, AnchorerError> {
         let anchorer_cell = match CellRef::new(format!(
-            "ck:cell:cx.component.anchorer.v1:{}",
+            "ck:cell:ck.component.anchorer.v1:{}",
             space_id.as_str()
         )) {
             Ok(c) => c,
