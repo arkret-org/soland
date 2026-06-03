@@ -792,6 +792,24 @@ async fn recovery_session_complete(
         .ok_or_else(|| AppError::invalid_param("device_authorize is required"))?;
     validate_device_authorize_material(device_authorize, &record)?;
 
+    // Phase 4 — verify the cross_signing_binding is a real SSK signature at the
+    // currently accepted cross-signing generation (not just shape + snapshot).
+    let binding = device_authorize
+        .get("cross_signing_binding")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("device_authorize.cross_signing_binding is required"))?;
+    let device_public_key = device_authorize
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
+        state,
+        &record.principal_id,
+        &record.requesting_device_id,
+        device_public_key,
+        binding,
+    )?;
+
     let now = chrono::Utc::now();
     let proof_summary = record
         .proof_payload

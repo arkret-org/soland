@@ -5,6 +5,7 @@ pub(super) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod consent;
+pub(crate) mod cross_signing;
 mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
