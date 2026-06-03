@@ -367,7 +367,7 @@ and `/_cokret/gate/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=tru
 Workspace layout (the CI checkout assumes the same):
 
 ```
-cokret-dev/
+cokret/
 ├── cokret-rust-sdk/       # https://github.com/cokret/cokret-rust-sdk
 │   └── crates/sdk
 └── soland/                 # this repo
@@ -423,5 +423,5 @@ Apache-2.0 — see [LICENSE](LICENSE).
 
 <!-- circle-rollout milestone pointer -->
 > **Active milestone tracking** (local-only, gitignored): see
-> `_soland_todos.md` in the parent `cokret-dev/` directory for the
+> `_soland_todos.md` in the parent `cokret/` directory for the
 > circle-rollout (CXP-0007) work item list and per-stage checkpoints.

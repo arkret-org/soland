@@ -16,7 +16,7 @@ git config core.hooksPath .githooks
 The hook runs `cargo fmt --all -- --check` plus `cargo clippy --no-deps -- -D
 warnings` on staged Rust changes. If `.githooks/` is missing or you want a
 richer hook, copy `.githooks/pre-commit` from
-[`cokret-rust-sdk`](https://github.com/cokret-dev/cokret-rust-sdk) and
+[`cokret-rust-sdk`](https://github.com/cokret/cokret-rust-sdk) and
 adapt to your local toolchain.
 
 ## Repository layout
@@ -25,7 +25,7 @@ soland depends on the `cokret` SDK at a sibling path. The CI workflows clone
 both repositories side by side; reproduce the same layout locally:
 
 ```
-cokret-dev/
+cokret/
 ├── cokret-rust-sdk/
 │   └── crates/sdk
 └── soland/                # this repo
