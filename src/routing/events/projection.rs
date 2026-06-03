@@ -1498,6 +1498,14 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             project_read_receipt_policy(state, operation);
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
+        // Phase 4 — materialize accepted cross-signing publishes into the
+        // DeviceManager (CAS bookkeeping). Validation already ran pre-acceptance.
+        if kinds::canonical_kind_string(operation) == "cx.cross_signing.publish" {
+            crate::routing::identity::cross_signing::project_cross_signing_publish(
+                state,
+                &operation.payload,
+            );
+        }
         // Also apply to the deterministic reducer.
         let reducer_effect = state
             .projection

@@ -17,7 +17,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
 use contrix_sdk::{Did, Operation, OperationId, RealmId};
-use ed25519_dalek::{Signature, Verifier as _};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -839,7 +839,14 @@ async fn recovery_session_complete(
                 "trust_domain": record.trust_domain,
                 "proof_summary": proof_summary,
                 "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
-            }
+            },
+            // The accepted device key (from the cx.device.authorize material),
+            // used to verify a later recovery_receipt is signed by THIS device
+            // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
+            "device_public_key": device_authorize
+                .get("device_public_key")
+                .cloned()
+                .unwrap_or(Value::Null),
         }),
         created_at: now,
         updated_at: now,
@@ -951,7 +958,8 @@ async fn emit_recovery_device_authorization(
     let list_update_payload = json!({
         "principal_id": record.principal_id,
         "changed": [record.requesting_device_id],
-        "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        // Canonical operation timestamps are seconds-precision UTC.
+        "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true),
     });
     let list_update_op = Operation::create(
         OperationId::new(crate::ids::generate_operation_id())
@@ -1213,15 +1221,6 @@ async fn recovery_receipt_put(
     let payload = body.into_inner();
 
     let mut record = validate_recovery_receipt(&payload)?;
-    verify_recovery_auth_signature(
-        state,
-        &payload,
-        &record.principal_id,
-        RECEIPT_SIGNATURE_TYPE,
-        RECEIPT_ALLOWED_SIGNED_FIELDS,
-        RECEIPT_REQUIRED_SIGNED_FIELDS,
-    )
-    .await?;
 
     // REC-1 — recovery_witness_revoke_lagging freshness check on the
     // optional witness ref (when the receipt's proof_summary carries
@@ -1287,6 +1286,13 @@ async fn recovery_receipt_put(
         ))
         .with_wire_code("recovery_policy_trust_domain_mismatch"));
     }
+
+    // §15 step 7 — the receipt MUST be signed by the new device's ACCEPTED
+    // device key (proving a `cx.device.authorize` for `new_device_id` landed
+    // before the receipt was signed). Server keys / unauthorized fresh-device
+    // keys MUST NOT sign. We verify against the device key recorded at
+    // authorization, not the principal DID.
+    verify_recovery_receipt_device_signature(state, &payload, &record).await?;
 
     let accepted_at = chrono::Utc::now();
     record.accepted_at = accepted_at;
@@ -1613,6 +1619,81 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         verification_method: verification_method.to_owned(),
         accepted_at: chrono::Utc::now(),
     })
+}
+
+/// §15 step 7 — verify a recovery receipt is signed by the new device's
+/// ACCEPTED device key (recorded at `cx.device.authorize`), not the principal
+/// signing key or a server key.
+async fn verify_recovery_receipt_device_signature(
+    state: &AppState,
+    payload: &Value,
+    record: &RecoveryReceiptRecord,
+) -> Result<(), AppError> {
+    let device_key =
+        resolve_authorized_device_key(state, &record.principal_id, &record.new_device_id).await?;
+
+    let auth_data = payload
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
+    let signed_fields = parse_signed_fields(
+        auth_data,
+        RECEIPT_ALLOWED_SIGNED_FIELDS,
+        RECEIPT_REQUIRED_SIGNED_FIELDS,
+        payload,
+    )?;
+    let transcript = recovery_signature_transcript(RECEIPT_SIGNATURE_TYPE, payload, &signed_fields);
+    let transcript_bytes = contrix_sdk::canonical::canonical_json_bytes(&transcript)
+        .map_err(|error| AppError::internal(format!("recovery receipt transcript failed: {error}")))?;
+    let signature_b64 = auth_data
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("auth_data.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("auth_data.signature must be 64 Ed25519 bytes"))?;
+    device_key.verify(&transcript_bytes, &signature).map_err(|_| {
+        crate::metrics::record_digest_mismatch("recovery_receipt_digest");
+        recovery_signature_error("recovery receipt signature does not verify against the authorized device key")
+    })
+}
+
+/// Resolve the Ed25519 public key recorded when `device_id` was authorized for
+/// `principal_id` (the device inventory `payload.device_public_key`). Rejects
+/// when the device is absent / revoked / unverified / keyless — i.e. no accepted
+/// `cx.device.authorize` is on record.
+async fn resolve_authorized_device_key(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> Result<VerifyingKey, AppError> {
+    let not_authorized = || {
+        AppError::conflict(format!(
+            "device `{device_id}` has no accepted authorization for principal `{principal_id}`"
+        ))
+        .with_wire_code("recovery_receipt_device_not_authorized")
+    };
+    let device = state
+        .persistence
+        .devices()
+        .get(principal_id, device_id)
+        .await
+        .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
+        .ok_or_else(not_authorized)?;
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Err(not_authorized());
+    }
+    let material = device
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(not_authorized)?;
+    crate::routing::identity::cross_signing::decode_ed25519_key(material, "multibase")
+        .map_err(|error| AppError::internal(format!("authorized device key invalid: {error}")))
 }
 
 async fn verify_recovery_auth_signature(

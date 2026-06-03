@@ -41,41 +41,32 @@ const RECEIPT_FIELDS: &[&str] = &[
 async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(MemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[71u8; 32]);
-    let (principal_id, verification_method) = did_key_principal(&signing);
-    let policy = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
+    let (principal_id, vm) = did_key_principal(&signing);
 
-    post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+    // Authorize a device via the full recovery flow (persists the policy + the
+    // device's accepted public key).
+    let (policy_id, device_id) =
+        authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
 
+    // Restart: fresh in-memory state over the same persistence. The device
+    // inventory (and policy) survive; the receipt verifies against the persisted
+    // device key.
     let restarted = shared_recovery_state(persistence.clone());
-    let receipt = signed_recovery_receipt(
-        &signing,
+    let token = dev_token(restarted.clone()).await;
+    let receipt = signed_device_recovery_receipt(
+        &recovery_device_key(),
         &principal_id,
-        &verification_method,
-        policy["policy_id"].as_str().unwrap(),
+        &policy_id,
         1,
-        None,
+        &device_id,
         RECEIPT_FIELDS,
     );
     post_recovery_receipt(restarted.clone(), &token, &receipt, StatusCode::CREATED).await;
+    // Replaying the same receipt (same recovery_session_id) is rejected.
     post_recovery_receipt(restarted.clone(), &token, &receipt, StatusCode::CONFLICT).await;
 
-    let duplicate_version = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
+    let duplicate_version = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
     post_recovery_policy(restarted, &token, &duplicate_version, StatusCode::CONFLICT).await;
 }
 
@@ -177,34 +168,53 @@ async fn recovery_receipt_rejects_policy_binding_mismatch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_tampered_proof_digest() {
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[75u8; 32]);
-    let (principal_id, verification_method) = did_key_principal(&signing);
-    let policy = signed_recovery_policy(
-        &signing,
-        &principal_id,
-        &verification_method,
-        1,
-        None,
-        POLICY_FIELDS,
-    );
-    post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+    let (principal_id, vm) = did_key_principal(&signing);
+    let (policy_id, device_id) =
+        authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
+    let token = dev_token(state.clone()).await;
 
-    let mut receipt = signed_recovery_receipt(
-        &signing,
+    let mut receipt = signed_device_recovery_receipt(
+        &recovery_device_key(),
         &principal_id,
-        &verification_method,
-        policy["policy_id"].as_str().unwrap(),
+        &policy_id,
         1,
-        None,
+        &device_id,
         RECEIPT_FIELDS,
     );
+    // Tamper a signed field (proof_summary) AFTER signing → device signature
+    // no longer verifies.
     receipt["proof_summary"]["proof_digest"] = serde_json::json!(
         "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
 
     let body = post_recovery_receipt(state, &token, &receipt, StatusCode::UNAUTHORIZED).await;
     assert_eq!(body["error"]["code"], "proof_invalid");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_receipt_rejects_unauthorized_device() {
+    // §15 step 7 — a receipt for a device with no accepted cx.device.authorize
+    // MUST be rejected (no authorized device key to verify against).
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let token = dev_token(state.clone()).await;
+    let signing = SigningKey::from_bytes(&[79u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    // Publish an active policy but NEVER authorize the device.
+    let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
+    let pbody = post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+    let policy_id = pbody["policy_id"].as_str().unwrap().to_owned();
+
+    let receipt = signed_device_recovery_receipt(
+        &recovery_device_key(),
+        &principal_id,
+        &policy_id,
+        1,
+        "cx:device:01904100-0000-7000-8000-00000000aaaa",
+        RECEIPT_FIELDS,
+    );
+    let body = post_recovery_receipt(state, &token, &receipt, StatusCode::CONFLICT).await;
+    assert_eq!(body["error"]["code"], "recovery_receipt_device_not_authorized");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -323,14 +333,19 @@ async fn recovery_receipts_get_returns_history() {
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[92u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
+    let (policy_id, device_id) =
+        authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
     let token =
         dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
 
-    let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
-    let pbody = post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
-    let policy_id = pbody["policy_id"].as_str().unwrap().to_owned();
-    let receipt =
-        signed_recovery_receipt(&signing, &principal_id, &vm, &policy_id, 1, None, RECEIPT_FIELDS);
+    let receipt = signed_device_recovery_receipt(
+        &recovery_device_key(),
+        &principal_id,
+        &policy_id,
+        1,
+        &device_id,
+        RECEIPT_FIELDS,
+    );
     post_recovery_receipt(state.clone(), &token, &receipt, StatusCode::CREATED).await;
 
     let body = get_recovery(
@@ -674,6 +689,9 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[112u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
+    let ssk = SigningKey::from_bytes(&[212u8; 32]);
+    let usk = SigningKey::from_bytes(&[213u8; 32]);
+    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
     let token =
         dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
     let session = open_recovery_session(state.clone(), &token, &signing, &principal_id, &vm).await;
@@ -703,7 +721,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         state.clone(),
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session) }),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
         StatusCode::OK,
     )
     .await;
@@ -743,7 +761,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session) }),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
         StatusCode::CONFLICT,
     )
     .await;
@@ -780,7 +798,10 @@ async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
     )
     .await;
 
-    let mut material = device_authorize_material(&session);
+    // Request-level gate: binding ssk_generation (999) != session snapshot (1)
+    // is rejected before any cross-signing lookup, so no seed needed.
+    let ssk = SigningKey::from_bytes(&[214u8; 32]);
+    let mut material = device_authorize_material(&session, &ssk);
     material["cross_signing_binding"]["ssk_generation"] = serde_json::json!(999);
     let body = post_recovery(
         state,
@@ -793,23 +814,240 @@ async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
     assert_eq!(body["error"]["code"], "device_recovery_ssk_generation_mismatch");
 }
 
-/// Build a well-formed client `device_authorize` material bound to `session`.
-fn device_authorize_material(session: &Value) -> Value {
+/// The recovering device's keypair (fixed for tests). Its public key is stored
+/// at authorization and used to verify a later recovery_receipt's signature.
+fn recovery_device_key() -> SigningKey {
+    SigningKey::from_bytes(&[230u8; 32])
+}
+
+/// Run a full recovery completion so the requesting device is authorized (its
+/// `recovery_device_key()` public key recorded). Returns `(policy_id, device_id)`.
+async fn authorize_device_via_recovery(
+    state: &AppState,
+    signing: &SigningKey,
+    principal_id: &str,
+    vm: &str,
+) -> (String, String) {
+    let ssk = SigningKey::from_bytes(&[231u8; 32]);
+    let usk = SigningKey::from_bytes(&[232u8; 32]);
+    seed_cross_signing(state, principal_id, vm, signing, &ssk, &usk);
+    let token =
+        dev_token_for_device(state.clone(), principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+    // `verified_session_for` → `open_recovery_session` already publishes the v1
+    // policy; read its id from the session rather than double-posting.
+    let (session, session_id) =
+        verified_session_for(state, &token, signing, principal_id, vm).await;
+    let policy_id = session["policy_id"].as_str().unwrap().to_owned();
+    let device_id = session["requesting_device_id"].as_str().unwrap().to_owned();
+    post_recovery(
+        state.clone(),
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        StatusCode::OK,
+    )
+    .await;
+    (policy_id, device_id)
+}
+
+/// Build a recovery_receipt signed by the authorized device key (§15 step 7).
+fn signed_device_recovery_receipt(
+    device_key: &SigningKey,
+    principal_id: &str,
+    policy_id: &str,
+    policy_version: u32,
+    new_device_id: &str,
+    signed_fields: &[&str],
+) -> Value {
+    let mut receipt = serde_json::json!({
+        "schema": "cx.schema.recovery_receipt.v1",
+        "receipt_id": new_prefixed_uuid7("cx:receipt:"),
+        "principal_id": principal_id,
+        "recovery_session_id": new_prefixed_uuid7("cx:recovery_session:"),
+        "policy_id": policy_id,
+        "policy_version": policy_version,
+        "trust_domain": "cx:trust_domain:soland.local",
+        "new_device_id": new_device_id,
+        "proof_summary": {
+            "kind": "principal_signing",
+            "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "backup_classes_unlocked": [],
+        "welcome_count": 0,
+        "outcome": "completed",
+        "started_at": "2026-05-30T00:00:00Z",
+        "completed_at": "2026-05-30T00:00:01Z",
+        "auth_data": {
+            "verification_method": format!("{principal_id}#{new_device_id}"),
+            "signature_algorithm": "EdDSA",
+            "signed_fields": signed_fields,
+            "signature": ""
+        }
+    });
+    sign_recovery_payload(
+        &mut receipt,
+        "cx.identity.recovery_receipt.signature.v1",
+        signed_fields,
+        device_key,
+    );
+    receipt
+}
+
+/// Build a well-formed client `device_authorize` material bound to `session`,
+/// with a real `cross_signing_binding` signed by `ssk` over the canonical
+/// device-trust input at the session's ssk_generation.
+fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Value {
+    let principal = session["principal_id"].as_str().unwrap();
+    let device = session["requesting_device_id"].as_str().unwrap();
+    let generation = session["ssk_generation"].as_u64().unwrap();
+    let did = contrix_sdk::Did::new(principal.to_owned()).unwrap();
+    let device_id = contrix_sdk::DeviceId::new(device.to_owned()).unwrap();
+    // The new device's real keypair — its multibase public key is what the
+    // server records, and what a later recovery_receipt MUST be signed by.
+    let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
+    let input = contrix_sdk::DeviceTrustBinding::canonical_input(
+        &did,
+        &device_id,
+        &device_public_key,
+        generation,
+    )
+    .unwrap();
+    let signature = URL_SAFE_NO_PAD.encode(ssk.sign(&input).to_bytes());
     serde_json::json!({
-        "principal_id": session["principal_id"],
-        "device_id": session["requesting_device_id"],
-        "device_public_key": "z6MkNewDevicePublicKeyPlaceholder",
-        "authorized_by": session["principal_id"],
-        "not_before": session["created_at"],
+        "principal_id": principal,
+        "device_id": device,
+        "device_public_key": device_public_key,
+        "authorized_by": principal,
+        // Canonical operation timestamps are seconds-precision UTC.
+        "not_before": "2026-05-30T00:00:00Z",
         "device_signature": "ZGV2aWNlLXNlbGYtc2lnbmF0dXJlLXBsYWNlaG9sZGVy",
         "recovery_session_id": session["recovery_session_id"],
         "cross_signing_binding": {
-            "verification_method": "did:key:zSSK#cx_self_signing_v1",
+            "verification_method": format!("{principal}#cx_self_signing_v1"),
             "alg": "EdDSA",
-            "ssk_generation": session["ssk_generation"],
-            "signature": "c3NrLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg",
+            "ssk_generation": generation,
+            "signature": signature,
         },
     })
+}
+
+/// Seed an accepted `cx.cross_signing.publish` (generation 1) into the server's
+/// DeviceManager so `/complete` can verify the device binding against the SSK.
+fn seed_cross_signing(
+    state: &AppState,
+    principal_id: &str,
+    vm: &str,
+    psk: &SigningKey,
+    ssk: &SigningKey,
+    usk: &SigningKey,
+) {
+    let publish = serde_json::json!({
+        "principal_id": principal_id,
+        "trust_domain": "cx:trust_domain:soland.local",
+        "principal_signing_key": {
+            "kid": vm, "alg": "EdDSA",
+            "public_key": test_ed25519_multibase_public(psk), "key_format": "multibase",
+        },
+        "self_signing_key": {
+            "kid": format!("{principal_id}#cx_self_signing_v1"), "alg": "EdDSA",
+            "public_key": test_ed25519_multibase_public(ssk), "key_format": "multibase",
+            "binding": { "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXItc2ln" },
+        },
+        "user_signing_key": {
+            "kid": format!("{principal_id}#cx_user_signing_v1"), "alg": "EdDSA",
+            "public_key": test_ed25519_multibase_public(usk), "key_format": "multibase",
+            "binding": { "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXItc2ln" },
+        },
+        "expected_previous_generation": 0,
+        "generation": 1,
+        "issued_at": "2026-05-30T00:00:00Z",
+    });
+    let content: contrix_sdk::CrossSigningPublishContent =
+        serde_json::from_value(publish).expect("cross-signing publish content");
+    state
+        .cross_signing
+        .lock()
+        .unwrap()
+        .record_cross_signing_publish(content)
+        .expect("seed cross-signing publish");
+}
+
+/// Open a session for `signing`, submit a valid principal_signing proof, return
+/// the verified session JSON + id. (No cross-signing seed.)
+async fn verified_session_for(
+    state: &AppState,
+    token: &str,
+    signing: &SigningKey,
+    principal_id: &str,
+    vm: &str,
+) -> (Value, String) {
+    let session = open_recovery_session(state.clone(), token, signing, principal_id, vm).await;
+    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
+    let challenge = session["challenge"].as_str().unwrap().to_owned();
+    let signature = sign_recovery_proof(signing, &session);
+    post_recovery(
+        state.clone(),
+        token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &serde_json::json!({
+            "proof": {
+                "kind": "principal_signing",
+                "challenge": challenge,
+                "verification_method": vm,
+                "alg": "EdDSA",
+                "signature": signature,
+            },
+        }),
+        StatusCode::OK,
+    )
+    .await;
+    (session, session_id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_complete_rejects_missing_cross_signing_state() {
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[115u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let ssk = SigningKey::from_bytes(&[215u8; 32]);
+    let token =
+        dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+    let (session, session_id) =
+        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
+    let body = post_recovery(
+        state,
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "cross_signing_state_missing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_complete_rejects_wrong_ssk_signature() {
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[116u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let ssk = SigningKey::from_bytes(&[216u8; 32]);
+    let usk = SigningKey::from_bytes(&[217u8; 32]);
+    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let token =
+        dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+    let (session, session_id) =
+        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
+    // Sign with an ATTACKER key, not the accepted SSK.
+    let attacker = SigningKey::from_bytes(&[218u8; 32]);
+    let body = post_recovery(
+        state,
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &attacker) }),
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "proof_invalid");
 }
 
 // ── C-P5 did_recovery ↔ active policy value binding ─────────────────────────

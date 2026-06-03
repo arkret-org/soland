@@ -683,11 +683,11 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                      (round-4 CAS wire break)",
                 );
             }
-            if operation.payload.get("new_generation").is_none() {
+            if operation.payload.get("generation").is_none() {
                 // DRIFT-ALLOW: error message string for the round-4 CAS contract.
-                return Err(
-                    "cx.cross_signing.publish payload requires new_generation (round-4 CAS)",
-                );
+                // Spec cross-signing-publish.schema.json uses `generation`
+                // (monotonic counter) + `expected_previous_generation` (CAS).
+                return Err("cx.cross_signing.publish payload requires generation (round-4 CAS)");
             }
             if operation.payload.get("trust_domain").is_none() {
                 // DRIFT-ALLOW: error message string for the round-4 wire break.
@@ -1774,6 +1774,14 @@ pub async fn validate_operation_policy(
         if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
             validate_morph_schema_migrate_capability(operation)?;
         }
+        validate_principal_control_realm_binding(operation)?;
+        if kinds::canonical_kind_string(operation) == "cx.cross_signing.publish" {
+            crate::routing::identity::cross_signing::validate_cross_signing_publish(
+                state,
+                &operation.payload,
+            )
+            .await?;
+        }
         validate_member_state_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
@@ -1826,6 +1834,37 @@ fn validate_reaction_scope_policy(
         Ok(())
     } else {
         Err(contrix_sdk::error::REASON_REACTION_SCOPE_MISMATCH)
+    }
+}
+
+/// Control-stream events carry their owning principal in `payload.principal_id`.
+const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
+    "cx.device.authorize",
+    "cx.device.list_update",
+    "cx.device.revoke",
+    "cx.cross_signing.publish",
+    "cx.cross_signing.reset",
+];
+
+/// Phase 2 — principal control realm isolation (key-management.md §4.1). A
+/// control-stream event MUST land on its principal's deterministic control realm
+/// (`principal_control_realm_for_did(payload.principal_id)`); it cannot be
+/// written into a collaboration realm or another principal's control realm.
+fn validate_principal_control_realm_binding(operation: &Operation) -> Result<(), &'static str> {
+    let kind = kinds::canonical_kind_string(operation);
+    if !PRINCIPAL_CONTROL_EVENT_KINDS.contains(&kind.as_str()) {
+        return Ok(());
+    }
+    let principal = operation
+        .payload
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .ok_or("principal_control_event_missing_principal_id")?;
+    let expected = crate::routing::identity::recovery::principal_control_realm_for_did(principal);
+    if realm_ids_match(operation.realm_id.as_str(), &expected) {
+        Ok(())
+    } else {
+        Err("principal_control_realm_mismatch")
     }
 }
 
@@ -4245,5 +4284,46 @@ mod wire_payload_tests {
             contrix_sdk::FlowId::new("cx:flow:01904100-0000-7000-8000-000000000001").unwrap();
         assert_eq!(flow_update_subject(&flow), flow.as_str());
         assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
+    }
+
+    #[test]
+    fn principal_control_realm_binding_enforced() {
+        let principal = "did:web:alice.example";
+        let correct =
+            crate::routing::identity::recovery::principal_control_realm_for_did(principal);
+        let payload = serde_json::json!({
+            "principal_id": principal,
+            "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
+        });
+        let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
+            contrix_sdk::Operation::create(
+                contrix_sdk::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
+                contrix_sdk::RealmId::new(realm.to_owned()).unwrap(),
+                kind,
+                payload,
+            )
+        };
+        assert!(
+            validate_principal_control_realm_binding(&mk(
+                &correct,
+                "cx.device.authorize",
+                payload.clone()
+            ))
+            .is_ok()
+        );
+        let wrong = "cx:realm:01904100-0000-7000-8000-0000000000ff";
+        assert_eq!(
+            validate_principal_control_realm_binding(&mk(wrong, "cx.device.authorize", payload))
+                .unwrap_err(),
+            "principal_control_realm_mismatch"
+        );
+        assert!(
+            validate_principal_control_realm_binding(&mk(
+                wrong,
+                "cx.message.create",
+                serde_json::json!({})
+            ))
+            .is_ok()
+        );
     }
 }

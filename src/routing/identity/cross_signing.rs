@@ -180,7 +180,7 @@ fn resolve_psk_in_control_set(
 
 /// Decode an Ed25519 public key in the declared `key_format`
 /// (`multibase` z-base58btc with the 0xed01 multicodec, or `raw_base64url`).
-fn decode_ed25519_key(material: &str, key_format: &str) -> Result<VerifyingKey, String> {
+pub(crate) fn decode_ed25519_key(material: &str, key_format: &str) -> Result<VerifyingKey, String> {
     let raw: Vec<u8> = match key_format {
         "multibase" => {
             let stripped = material
