@@ -579,7 +579,7 @@ table. The reducer materializes new rows as events arrive.
 
 ### Agent FSM cell upgrade
 
-The agent FSM is owned by a cell (`cx.component.agent_state.v1`). Pre-R3
+The agent FSM is owned by a cell (`ck.component.agent_state.v1`). Pre-R3
 deployments don't carry that cell. Migration
 `20260523_agent_fsm_cell_upgrade.sql`:
 

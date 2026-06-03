@@ -21,8 +21,8 @@ use cokret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
-    CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE, CX_CIRCLE_UPDATE,
-    CX_FLOW_CREATE, CX_MESSAGE_CREATE, CX_REALM_CREATE,
+    CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
+    CK_FLOW_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE,
 };
 use soland::reducer::{CircleLifecycleState, MembershipState, ProjectionEffect, ProjectionState};
 
@@ -47,7 +47,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
     state.apply(
         &op(
-            CX_REALM_CREATE,
+            CK_REALM_CREATE,
             realm_id,
             json!({
                 "action": "create",
@@ -62,7 +62,7 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
 fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
     state.apply(
         &op(
-            CX_REALM_CREATE,
+            CK_REALM_CREATE,
             realm_id,
             json!({
                 "action": "create",
@@ -105,7 +105,7 @@ fn circle_create_writes_projection() {
 
     let effect = state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -142,7 +142,7 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
 
     let rejected = state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -171,7 +171,7 @@ fn circle_update_rejects_encryption_profile_patch() {
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -188,7 +188,7 @@ fn circle_update_rejects_encryption_profile_patch() {
 
     let rejected = state.apply(
         &op(
-            CX_CIRCLE_UPDATE,
+            CK_CIRCLE_UPDATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -218,7 +218,7 @@ fn circle_member_must_be_realm_member() {
     add_realm_member(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -234,7 +234,7 @@ fn circle_member_must_be_realm_member() {
 
     let rejected = state.apply(
         &op(
-            CX_CIRCLE_MEMBER_STATE,
+            CK_CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -254,7 +254,7 @@ fn circle_member_must_be_realm_member() {
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
     let accepted = state.apply(
         &op(
-            CX_CIRCLE_MEMBER_STATE,
+            CK_CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -282,7 +282,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -297,7 +297,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     );
     state.apply(
         &op(
-            CX_CIRCLE_MEMBER_STATE,
+            CK_CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -314,7 +314,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
 
     let removed = state.apply(
         &op(
-            CX_CIRCLE_MEMBER_STATE,
+            CK_CIRCLE_MEMBER_STATE,
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
@@ -347,7 +347,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     }
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -363,7 +363,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     for actor in [ALICE, BOB] {
         state.apply(
             &op(
-                CX_CIRCLE_MEMBER_STATE,
+                CK_CIRCLE_MEMBER_STATE,
                 REALM_A,
                 json!({
                     "circle_id": CIRCLE_A,
@@ -380,7 +380,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     // to the Circle, then post a message to that Flow WITHOUT any scope field.
     let flow_created = state.apply(
         &op(
-            CX_FLOW_CREATE,
+            CK_FLOW_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -400,7 +400,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
 
     let effect = state.apply(
         &op(
-            CX_MESSAGE_CREATE,
+            CK_MESSAGE_CREATE,
             REALM_A,
             json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-c1c1eeee0001",
@@ -439,7 +439,7 @@ fn flow_scope_circle_id_rejects_cross_realm() {
     // Circle B belongs to Realm B.
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_B,
             json!({
                 "object": {
@@ -458,7 +458,7 @@ fn flow_scope_circle_id_rejects_cross_realm() {
     // `circle_realm_mismatch`.
     let rejected = state.apply(
         &op(
-            CX_FLOW_CREATE,
+            CK_FLOW_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -485,7 +485,7 @@ fn circle_tombstone_hides_from_read_helper() {
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
     state.apply(
         &op(
-            CX_CIRCLE_CREATE,
+            CK_CIRCLE_CREATE,
             REALM_A,
             json!({
                 "object": {
@@ -501,7 +501,7 @@ fn circle_tombstone_hides_from_read_helper() {
     assert!(state.circle(CIRCLE_A).is_some(), "live Circle visible");
 
     state.apply(
-        &op(CX_CIRCLE_TOMBSTONE, REALM_A, json!({"circle_id": CIRCLE_A})),
+        &op(CK_CIRCLE_TOMBSTONE, REALM_A, json!({"circle_id": CIRCLE_A})),
         &hlc,
     );
     assert!(

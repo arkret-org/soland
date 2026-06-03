@@ -34,14 +34,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::state_res::{CellRegistry, CellStore, StoreError};
-use cokret_sdk::{CellRef, Operation, SpaceId};
+use cokret_sdk::{CellRef, Operation, RealmId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
 use crate::wire::{ReadCursorPositionWire, ReadScopeWire};
 
-pub const CHILD_ORDER_CELL_FAMILY: &str = "cx.component.child_order.v1";
+pub const CHILD_ORDER_CELL_FAMILY: &str = "ck.component.child_order.v1";
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
@@ -90,7 +90,7 @@ pub struct ProjectionState {
     /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
-    /// `ck:cell:cx.component.space.read_receipt_policy.v1:<space_id>`).
+    /// `ck:cell:ck.component.space.read_receipt_policy.v1:<space_id>`).
     /// Each successful apply_anchor (`routing::federation::move_anchor::submit_anchor` or
     /// `crate::anchorer::AnchorerWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -119,7 +119,7 @@ pub struct ProjectionState {
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
-    /// `cokret-spec/v1/zh/models/common-fields.md §5.1` for `cx.space.*`
+    /// `cokret-spec/v1/zh/models/common-fields.md §5.1` for `ck.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
     /// `ck.space.create` / update / parent / archive / restore / tombstone;
@@ -127,12 +127,12 @@ pub struct ProjectionState {
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Flow projection. Mirrors the canonical state-machine
     /// for ck.flow.create / update / archive / restore. Unlike Place
-    /// there is no dedicated `cx.flow.tombstone` event; terminal state
-    /// is reached via `cx.redaction`. Mirror table is `projection_flows`
+    /// there is no dedicated `ck.flow.tombstone` event; terminal state
+    /// is reached via `ck.redaction`. Mirror table is `projection_flows`
     /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
     /// CXP-0007 — server-side Circle projection. Mirrors the canonical
-    /// state-machine for `cx.circle.*` lifecycle / membership events
+    /// state-machine for `ck.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
     /// (`ck:circle:<uuid>`); membership and parent-Realm binding live in
     /// the struct so the wire layer can enforce
@@ -147,7 +147,7 @@ pub struct ProjectionState {
     /// `ck.applet.registration` (initial registration / re-registration)
     /// and updated by `ck.applet.discovery` (manifest refresh). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
-    /// events (`cx.applet.protocol_session.{start,status}`,
+    /// events (`ck.applet.protocol_session.{start,status}`,
     /// `ck.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
@@ -159,7 +159,7 @@ pub struct ProjectionState {
     pub agents: BTreeMap<String, AgentProjection>,
     /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_principal_id. Driven by
-    /// `cx.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
+    /// `ck.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
@@ -712,7 +712,7 @@ pub struct AgentProjection {
 }
 
 /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM-lattice state
-/// for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
+/// for `ck.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 /// `Deactivated` is terminal (no transition out). Reducer enforcement
 /// lives in [`ProjectionState::apply_agent_lifecycle`] (REDU-1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1229,7 +1229,7 @@ pub enum ProjectionEffect {
         realm_id: String,
     },
     /// R3.3 — `ck.realm.audit_policy_downgrade` event was appended to
-    /// the `cx.component.realm.audit_policy_downgrade.v1` ordered-log
+    /// the `ck.component.realm.audit_policy_downgrade.v1` ordered-log
     /// audit cell + the structured side-band cache.
     RealmAuditPolicyDowngradeProjected {
         realm_id: String,
@@ -1358,7 +1358,7 @@ enum ObjectLifecycleTransition {
     Restore,
 }
 
-/// Extract the typed-id object reference from a `cx.redaction` event
+/// Extract the typed-id object reference from a `ck.redaction` event
 /// payload, used by both the reducer (`apply_redaction`) and the preflight
 /// (`check_redaction_target_transition`). Returns `None` for redactions
 /// that only carry a `target_event_id` (message redaction path), or when no
@@ -1478,28 +1478,28 @@ fn apply_realm_create_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_CREATE)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_CREATE)
 }
 fn apply_realm_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_UPDATE)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_UPDATE)
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_TOMBSTONE)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_TOMBSTONE)
 }
 fn apply_realm_destroy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CX_REALM_DESTROY)
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_DESTROY)
 }
 fn apply_erasure_receipt_dispatch(
     s: &mut ProjectionState,
@@ -1715,7 +1715,7 @@ fn apply_agent_endpoint_dispatch(
 }
 
 // REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — FSM-lattice
-// dispatch for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
+// dispatch for `ck.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 // `Deactivated` is terminal (no transition out, no resume after).
 fn apply_agent_pause_dispatch(
     s: &mut ProjectionState,
@@ -1750,7 +1750,7 @@ fn apply_agent_draft_propose_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CX_AGENT_DRAFT_PROPOSE,
+        kind: crate::kinds::CK_AGENT_DRAFT_PROPOSE,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -1760,7 +1760,7 @@ fn apply_agent_action_request_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CX_AGENT_ACTION_REQUEST,
+        kind: crate::kinds::CK_AGENT_ACTION_REQUEST,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -1770,7 +1770,7 @@ fn apply_agent_action_approve_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CX_AGENT_ACTION_APPROVE,
+        kind: crate::kinds::CK_AGENT_ACTION_APPROVE,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -1780,7 +1780,7 @@ fn apply_agent_action_reject_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: crate::kinds::CX_AGENT_ACTION_REJECT,
+        kind: crate::kinds::CK_AGENT_ACTION_REJECT,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -1833,7 +1833,7 @@ fn apply_member_identity_update_dispatch(
 }
 
 /// R1.2 — dispatch for `ck.realm.delivery_binding_policy`. Renamed from
-/// the pre-rename `cx.space.delivery_binding_policy`; cell family is
+/// the pre-rename `ck.space.delivery_binding_policy`; cell family is
 /// `ck.component.realm.delivery_binding_policy.v1`.
 fn apply_delivery_binding_policy_dispatch(
     s: &mut ProjectionState,
@@ -2532,19 +2532,19 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     use crate::kinds::*;
     let mut m: std::collections::HashMap<&'static str, ApplyFn> =
         std::collections::HashMap::with_capacity(40);
-    m.insert(CX_MESSAGE_CREATE, apply_message_dispatch as ApplyFn);
-    m.insert(CX_MESSAGE_REVISE, apply_message_revise_dispatch);
-    m.insert(CX_MESSAGE_REDACT, apply_redaction_dispatch);
-    m.insert(CX_REDACTION, apply_redaction_dispatch);
-    m.insert(CX_REACTION_ADD, apply_reaction_add_dispatch);
-    m.insert(CX_REACTION_REMOVE, apply_reaction_remove_dispatch);
-    m.insert(CX_READ_MARKER, apply_read_cursor_dispatch);
-    m.insert(CX_RELATION_CREATE, apply_relation_create_dispatch);
-    m.insert(CX_RELATION_UPDATE, apply_relation_update_dispatch);
-    m.insert(CX_RELATION_DELETE, apply_relation_delete_dispatch);
-    m.insert(CX_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
-    m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
-    m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
+    m.insert(CK_MESSAGE_CREATE, apply_message_dispatch as ApplyFn);
+    m.insert(CK_MESSAGE_REVISE, apply_message_revise_dispatch);
+    m.insert(CK_MESSAGE_REDACT, apply_redaction_dispatch);
+    m.insert(CK_REDACTION, apply_redaction_dispatch);
+    m.insert(CK_REACTION_ADD, apply_reaction_add_dispatch);
+    m.insert(CK_REACTION_REMOVE, apply_reaction_remove_dispatch);
+    m.insert(CK_READ_MARKER, apply_read_cursor_dispatch);
+    m.insert(CK_RELATION_CREATE, apply_relation_create_dispatch);
+    m.insert(CK_RELATION_UPDATE, apply_relation_update_dispatch);
+    m.insert(CK_RELATION_DELETE, apply_relation_delete_dispatch);
+    m.insert(CK_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
+    m.insert(CK_CONTAINER_REBALANCE, apply_container_position_dispatch);
+    m.insert(CK_MEMBER_STATE, apply_membership_dispatch);
     // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
     // `ck.member.identity.update`. Cell family
     // `ck.component.member.identity.v1`, lattice `ordered_log`, bottom
@@ -2555,99 +2555,99 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // because it spans cells; the in-process reducer just records that
     // the event was accepted so subscribers observe the lifecycle effect.
     m.insert(
-        CX_MEMBER_IDENTITY_UPDATE,
+        CK_MEMBER_IDENTITY_UPDATE,
         apply_member_identity_update_dispatch,
     );
-    m.insert(CX_REALM_CREATE, apply_realm_create_dispatch);
-    m.insert(CX_REALM_UPDATE, apply_realm_update_dispatch);
-    m.insert(CX_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
-    m.insert(CX_REALM_DESTROY, apply_realm_destroy_dispatch);
-    m.insert(CX_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
-    m.insert(CX_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
+    m.insert(CK_REALM_CREATE, apply_realm_create_dispatch);
+    m.insert(CK_REALM_UPDATE, apply_realm_update_dispatch);
+    m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
+    m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
+    m.insert(CK_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
+    m.insert(CK_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
     m.insert(
-        CX_SPACE_CONTAINER_CREATE,
+        CK_SPACE_CONTAINER_CREATE,
         apply_space_container_create_dispatch,
     );
     m.insert(
-        CX_SPACE_CONTAINER_UPDATE,
+        CK_SPACE_CONTAINER_UPDATE,
         apply_space_container_update_dispatch,
     );
     m.insert(
-        CX_SPACE_CONTAINER_PARENT,
+        CK_SPACE_CONTAINER_PARENT,
         apply_space_container_parent_dispatch,
     );
     m.insert(
-        CX_SPACE_CONTAINER_ARCHIVE,
+        CK_SPACE_CONTAINER_ARCHIVE,
         apply_space_container_archive_dispatch,
     );
     m.insert(
-        CX_SPACE_CONTAINER_RESTORE,
+        CK_SPACE_CONTAINER_RESTORE,
         apply_space_container_restore_dispatch,
     );
     m.insert(
-        CX_SPACE_CONTAINER_TOMBSTONE,
+        CK_SPACE_CONTAINER_TOMBSTONE,
         apply_space_container_tombstone_dispatch,
     );
-    m.insert(CX_FLOW_CREATE, apply_flow_create_dispatch);
-    m.insert(CX_FLOW_UPDATE, apply_flow_update_dispatch);
-    m.insert(CX_FLOW_ARCHIVE, apply_flow_archive_dispatch);
-    m.insert(CX_FLOW_RESTORE, apply_flow_restore_dispatch);
-    m.insert(CX_FLOW_MOVE, apply_flow_position_touch_dispatch);
-    m.insert(CX_FLOW_REORDER, apply_flow_position_touch_dispatch);
-    m.insert(CX_FLOW_WATCH_SET, apply_flow_watch_set_dispatch);
+    m.insert(CK_FLOW_CREATE, apply_flow_create_dispatch);
+    m.insert(CK_FLOW_UPDATE, apply_flow_update_dispatch);
+    m.insert(CK_FLOW_ARCHIVE, apply_flow_archive_dispatch);
+    m.insert(CK_FLOW_RESTORE, apply_flow_restore_dispatch);
+    m.insert(CK_FLOW_MOVE, apply_flow_position_touch_dispatch);
+    m.insert(CK_FLOW_REORDER, apply_flow_position_touch_dispatch);
+    m.insert(CK_FLOW_WATCH_SET, apply_flow_watch_set_dispatch);
     // Unified tracks patch. Payload-shape validation (presence of `tracks`
     // patch map) lives in the wire validator. TODO: apply patch ops
     // against soland-side Flow.tracks projection once the server-side
     // projection carries the tracks map.
-    m.insert(CX_FLOW_TRACKS_UPDATE, apply_flow_track_touch_dispatch);
-    m.insert(CX_MORPH_CREATE, apply_morph_create_dispatch);
-    m.insert(CX_MORPH_UPDATE, apply_morph_update_dispatch);
-    m.insert(CX_MORPH_ARCHIVE, apply_morph_archive_dispatch);
-    m.insert(CX_MORPH_RESTORE, apply_morph_restore_dispatch);
+    m.insert(CK_FLOW_TRACKS_UPDATE, apply_flow_track_touch_dispatch);
+    m.insert(CK_MORPH_CREATE, apply_morph_create_dispatch);
+    m.insert(CK_MORPH_UPDATE, apply_morph_update_dispatch);
+    m.insert(CK_MORPH_ARCHIVE, apply_morph_archive_dispatch);
+    m.insert(CK_MORPH_RESTORE, apply_morph_restore_dispatch);
     // CXP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ck.circle.anchor_commit`, is reducer-derived (sub-
     // anchor on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
-    m.insert(CX_CIRCLE_CREATE, apply_circle_create_dispatch);
-    m.insert(CX_CIRCLE_UPDATE, apply_circle_update_dispatch);
-    m.insert(CX_CIRCLE_ARCHIVE, apply_circle_archive_dispatch);
-    m.insert(CX_CIRCLE_RESTORE, apply_circle_restore_dispatch);
-    m.insert(CX_CIRCLE_TOMBSTONE, apply_circle_tombstone_dispatch);
-    m.insert(CX_CIRCLE_MEMBER_STATE, apply_circle_member_state_dispatch);
-    m.insert(CX_APPLET_REGISTRATION, apply_applet_registration_dispatch);
-    m.insert(CX_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
-    m.insert(CX_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
+    m.insert(CK_CIRCLE_CREATE, apply_circle_create_dispatch);
+    m.insert(CK_CIRCLE_UPDATE, apply_circle_update_dispatch);
+    m.insert(CK_CIRCLE_ARCHIVE, apply_circle_archive_dispatch);
+    m.insert(CK_CIRCLE_RESTORE, apply_circle_restore_dispatch);
+    m.insert(CK_CIRCLE_TOMBSTONE, apply_circle_tombstone_dispatch);
+    m.insert(CK_CIRCLE_MEMBER_STATE, apply_circle_member_state_dispatch);
+    m.insert(CK_APPLET_REGISTRATION, apply_applet_registration_dispatch);
+    m.insert(CK_APPLET_DISCOVERY, apply_applet_discovery_dispatch);
+    m.insert(CK_AGENT_ENDPOINT, apply_agent_endpoint_dispatch);
     // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
     // deactivate is terminal.
-    m.insert(CX_AGENT_PAUSE, apply_agent_pause_dispatch);
-    m.insert(CX_AGENT_RESUME, apply_agent_resume_dispatch);
-    m.insert(CX_AGENT_DEACTIVATE, apply_agent_deactivate_dispatch);
+    m.insert(CK_AGENT_PAUSE, apply_agent_pause_dispatch);
+    m.insert(CK_AGENT_RESUME, apply_agent_resume_dispatch);
+    m.insert(CK_AGENT_DEACTIVATE, apply_agent_deactivate_dispatch);
     // REDU-2 — actor_private_event kinds (reducer_input=false). These
     // accept but do NOT advance the anchor frontier / actor_seq;
     // downstream consumers read them from the audit log.
-    m.insert(CX_AGENT_DRAFT_PROPOSE, apply_agent_draft_propose_dispatch);
-    m.insert(CX_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
-    m.insert(CX_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
-    m.insert(CX_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
+    m.insert(CK_AGENT_DRAFT_PROPOSE, apply_agent_draft_propose_dispatch);
+    m.insert(CK_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
+    m.insert(CK_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
+    m.insert(CK_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
     // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
-    // `cx.realm.*` with cell_family `ck.component.realm.delivery_binding_policy.v1`.
+    // `ck.realm.*` with cell_family `ck.component.realm.delivery_binding_policy.v1`.
     m.insert(
-        CX_REALM_DELIVERY_BINDING_POLICY,
+        CK_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
     );
-    m.insert(CX_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
+    m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
-    m.insert(CX_REALM_LINK, apply_realm_link_dispatch);
+    m.insert(CK_REALM_LINK, apply_realm_link_dispatch);
     m.insert(
-        CX_REALM_INHERITANCE_POLICY,
+        CK_REALM_INHERITANCE_POLICY,
         apply_realm_inheritance_policy_dispatch,
     );
-    m.insert(CX_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
+    m.insert(CK_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
     m.insert(
-        CX_REALM_AUDIT_POLICY_DOWNGRADE,
+        CK_REALM_AUDIT_POLICY_DOWNGRADE,
         apply_realm_audit_policy_downgrade_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
@@ -2659,21 +2659,21 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // only the canonical `ck.mls.keypackage` kind.
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
-    m.insert(CX_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
-    m.insert(CX_MLS_WELCOME, apply_mls_welcome_dispatch);
-    m.insert(CX_MLS_GENESIS, apply_mls_genesis_dispatch);
-    m.insert(CX_MLS_COMMIT, apply_mls_commit_dispatch);
+    m.insert(CK_MLS_KEYPACKAGE, apply_mls_keypackage_dispatch);
+    m.insert(CK_MLS_WELCOME, apply_mls_welcome_dispatch);
+    m.insert(CK_MLS_GENESIS, apply_mls_genesis_dispatch);
+    m.insert(CK_MLS_COMMIT, apply_mls_commit_dispatch);
     // G3.S9: extensions (applet/bot/tsp)
-    m.insert(CX_EXTENSIONS_BOT_REGISTER, apply_bot_register);
-    m.insert(CX_EXTENSIONS_BOT_REVOKE, apply_bot_revoke);
+    m.insert(CK_EXTENSIONS_BOT_REGISTER, apply_bot_register);
+    m.insert(CK_EXTENSIONS_BOT_REVOKE, apply_bot_revoke);
     m.insert(
-        CX_EXTENSIONS_TSP_TRANSPORT_DECLARE,
+        CK_EXTENSIONS_TSP_TRANSPORT_DECLARE,
         apply_tsp_transport_declare,
     );
-    m.insert(CX_EXTENSIONS_TSP_ROUTE_ESTABLISH, apply_tsp_route_establish);
-    m.insert(CX_EXTENSIONS_TSP_AUDIT_APPEND, apply_tsp_audit_append);
+    m.insert(CK_EXTENSIONS_TSP_ROUTE_ESTABLISH, apply_tsp_route_establish);
+    m.insert(CK_EXTENSIONS_TSP_AUDIT_APPEND, apply_tsp_audit_append);
     // G3.S2: policy server cell
-    m.insert(CX_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
+    m.insert(CK_REALM_POLICY_SERVER, apply_realm_policy_server_dispatch);
     m
 }
 
@@ -3578,7 +3578,7 @@ impl ProjectionState {
     /// state cells are exclusively a Move/Anchor surface per spec.
     pub fn reload_cells_from_store(
         &mut self,
-        space_id: &SpaceId,
+        space_id: &RealmId,
         cell_store: &dyn CellStore,
         cell_registry: &dyn CellRegistry,
     ) -> Result<(), StoreError> {
@@ -3611,7 +3611,7 @@ impl ProjectionState {
     /// branch.
     ///
     /// All cell-state events (ck.realm.policy / ck.realm.read_receipt_policy /
-    /// cx.consent.* / ck.member.state / cx.realm.* facets) are routed via
+    /// ck.consent.* / ck.member.state / ck.realm.* facets) are routed via
     /// the Move/Anchor pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
@@ -3643,7 +3643,7 @@ impl ProjectionState {
     ///   ARE the projection — the registry only validates that the spec maps this event_kind to a
     ///   known cell family, then we trust the inline dispatcher to handle the per-domain effect).
     /// - **No mapping in registry but a known canonical kind**: the kind is durable-Event-only
-    ///   (`cx.message.*` / `cx.reaction.*` etc.); fall through to inline `apply()` exactly as
+    ///   (`ck.message.*` / `ck.reaction.*` etc.); fall through to inline `apply()` exactly as
     ///   before. No log noise.
     /// - **Unknown canonical kind**: spec compliance requires us to fail closed — log at `error`
     ///   level and project as `ProjectionEffect:: Ignored` with `bottom = reject` semantics.
@@ -3726,7 +3726,7 @@ impl ProjectionState {
             Some("ck.content.poll.response") => {
                 return self.apply_poll_response(&content, &sender, now);
             }
-            Some("cx.content.poll.close") => {
+            Some("ck.content.poll.close") => {
                 return self.apply_poll_close(&content, now);
             }
             _ => {}
@@ -4837,12 +4837,12 @@ impl ProjectionState {
     }
 
     /// R3.3 — project a `ck.realm.audit_policy_downgrade` event into the
-    /// `cx.component.realm.audit_policy_downgrade.v1` ordered-log cell
+    /// `ck.component.realm.audit_policy_downgrade.v1` ordered-log cell
     /// + the `realm_audit_downgrades` audit cache.
     ///
     /// Full audit closure (notify `ck.realm.notification.audit` holder,
     /// trigger UI banner) is TODO(realm-rework) — see
-    /// `kinds.rs::CX_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
+    /// `kinds.rs::CK_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
     /// attestation-chain pipeline that drives this downgrade.
     fn apply_realm_audit_policy_downgrade(
         &mut self,
@@ -4880,7 +4880,7 @@ impl ProjectionState {
             "operation_id": operation.operation_id.as_str(),
         });
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{realm_id}"
+            "ck:cell:ck.component.realm.audit_policy_downgrade.v1:{realm_id}"
         )) {
             let new_log = match self.cells.get(&cell_id) {
                 Some(CellState::Value(Value::Array(existing))) => {
@@ -5180,7 +5180,7 @@ impl ProjectionState {
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(crate::kinds::CX_REALM_UPDATE) => {
+            Some(crate::kinds::CK_REALM_UPDATE) => {
                 let realm_id = operation.realm_id.to_string();
                 if let Some(cell_id) = Self::realm_organization_cell_id(&realm_id)
                     && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
@@ -5189,7 +5189,7 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            Some(crate::kinds::CX_CONFLICT_REPAIR) => {
+            Some(crate::kinds::CK_CONFLICT_REPAIR) => {
                 self.validate_conflict_repair_operation(operation)
             }
             _ => Ok(()),
@@ -5285,7 +5285,7 @@ impl ProjectionState {
         ProjectionEffect::Ignored
     }
 
-    /// Apply a `cx.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
+    /// Apply a `ck.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former `apply_space_lifecycle`: the function is now
     /// restricted to the four canonical Realm lifecycle kinds
     /// (`ck.realm.create`, `ck.realm.update`, `ck.realm.tombstone`,
@@ -5312,17 +5312,17 @@ impl ProjectionState {
         debug_assert!(
             matches!(
                 kind,
-                crate::kinds::CX_REALM_CREATE
-                    | crate::kinds::CX_REALM_UPDATE
-                    | crate::kinds::CX_REALM_TOMBSTONE
-                    | crate::kinds::CX_REALM_DESTROY
+                crate::kinds::CK_REALM_CREATE
+                    | crate::kinds::CK_REALM_UPDATE
+                    | crate::kinds::CK_REALM_TOMBSTONE
+                    | crate::kinds::CK_REALM_DESTROY
             ),
             "apply_realm_lifecycle dispatched with non-realm kind: {kind}",
         );
 
         // Keep the structured cache and the canonical cells map in sync.
         //
-        // Per spec event-kind-registry, each cx.realm.* lifecycle event
+        // Per spec event-kind-registry, each ck.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
         //   ck.realm.create     → ck.component.realm.create.v1  (ordered-log, singleton)
         //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
@@ -5410,7 +5410,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned);
         let payload_encryption_profile =
             operation_encryption_profile(operation).map(ToOwned::to_owned);
-        if kind == crate::kinds::CX_REALM_UPDATE && operation_touches_encryption_profile(operation)
+        if kind == crate::kinds::CK_REALM_UPDATE && operation_touches_encryption_profile(operation)
         {
             return ProjectionEffect::Rejected {
                 reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
@@ -5469,7 +5469,7 @@ impl ProjectionState {
             && existing.terminal_state.is_some()
             && matches!(
                 kind,
-                crate::kinds::CX_REALM_TOMBSTONE | crate::kinds::CX_REALM_DESTROY
+                crate::kinds::CK_REALM_TOMBSTONE | crate::kinds::CK_REALM_DESTROY
             )
         {
             return ProjectionEffect::Rejected {
@@ -5487,7 +5487,7 @@ impl ProjectionState {
             .get("successor_realm_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if kind == crate::kinds::CX_REALM_TOMBSTONE {
+        if kind == crate::kinds::CK_REALM_TOMBSTONE {
             match payload_successor_realm_id.as_deref() {
                 None => {
                     return ProjectionEffect::Rejected {
@@ -5509,13 +5509,13 @@ impl ProjectionState {
             }
         }
         // ck.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
-        if kind == crate::kinds::CX_REALM_DESTROY && payload_successor_realm_id.is_some() {
+        if kind == crate::kinds::CK_REALM_DESTROY && payload_successor_realm_id.is_some() {
             return ProjectionEffect::Rejected {
                 reason: cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION.to_owned(),
             };
         }
 
-        if kind == crate::kinds::CX_REALM_UPDATE
+        if kind == crate::kinds::CK_REALM_UPDATE
             && let Some(effect) = self.maybe_project_realm_update_bottom(
                 operation,
                 now,
@@ -5555,19 +5555,19 @@ impl ProjectionState {
         let is_destroy = matches!(
             action.as_str(),
             "delete" | "space.delete" | "destroy" | "space.destroy"
-        ) || kind == crate::kinds::CX_REALM_DESTROY;
+        ) || kind == crate::kinds::CK_REALM_DESTROY;
         // Stream-F (Wave 1B): both terminal-state events flip the
         // legacy `deleted` flag so existing admin/audit tooling that
         // queries `space_states[id].deleted` keeps working. The richer
         // `terminal_state` / `successor_realm_id` fields are the new
         // source of truth.
-        if is_destroy || kind == crate::kinds::CX_REALM_TOMBSTONE {
+        if is_destroy || kind == crate::kinds::CK_REALM_TOMBSTONE {
             space.deleted = true;
         }
-        if kind == crate::kinds::CX_REALM_TOMBSTONE {
+        if kind == crate::kinds::CK_REALM_TOMBSTONE {
             space.terminal_state = Some("tombstoned".to_owned());
             space.successor_realm_id = payload_successor_realm_id.clone();
-        } else if kind == crate::kinds::CX_REALM_DESTROY {
+        } else if kind == crate::kinds::CK_REALM_DESTROY {
             space.terminal_state = Some("destroyed".to_owned());
             space.successor_realm_id = None;
         }
@@ -5582,7 +5582,7 @@ impl ProjectionState {
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
         match kind {
-            k if k == crate::kinds::CX_REALM_CREATE => {
+            k if k == crate::kinds::CK_REALM_CREATE => {
                 // ordered-log: append entries. We model the log here as
                 // an array of envelopes; each create event appends. For
                 // most Spaces there's exactly one create entry, but the
@@ -5611,7 +5611,7 @@ impl ProjectionState {
                     self.cells.insert(cell_id, new_log);
                 }
             }
-            k if k == crate::kinds::CX_REALM_UPDATE => {
+            k if k == crate::kinds::CK_REALM_UPDATE => {
                 // cas-register: latest value wins. Composite of
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
@@ -5646,7 +5646,7 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
-            k if k == crate::kinds::CX_REALM_TOMBSTONE => {
+            k if k == crate::kinds::CK_REALM_TOMBSTONE => {
                 // Stream-F (Wave 1B): tombstone writes the same cell
                 // family as destroy but with `terminal_kind=tombstoned`
                 // + `successor_realm_id` so peers hydrating from cells
@@ -5670,7 +5670,7 @@ impl ProjectionState {
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
-            k if k == crate::kinds::CX_REALM_DESTROY => {
+            k if k == crate::kinds::CK_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
                     "ck:cell:ck.component.realm.destroy.v1:{realm_id}"
@@ -5920,7 +5920,7 @@ impl ProjectionState {
         }
     }
 
-    /// Read-only state-machine preflight for a `cx.space.*` container lifecycle
+    /// Read-only state-machine preflight for a `ck.space.*` container lifecycle
     /// operation. Returns `Err(reason_code)` if the projection's current
     /// Space-container state forbids the transition per `common-fields.md §5.1`,
     /// else `Ok(())`. Used by `event_log::submit_event` to short-circuit
@@ -5946,18 +5946,18 @@ impl ProjectionState {
         // `ck.space.restore` requires Archived.
         // `ck.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            CX_SPACE_CONTAINER_CREATE => return Ok(()),
-            CX_SPACE_CONTAINER_UPDATE | CX_SPACE_CONTAINER_PARENT => {
+            CK_SPACE_CONTAINER_CREATE => return Ok(()),
+            CK_SPACE_CONTAINER_UPDATE | CK_SPACE_CONTAINER_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "place_not_active")
             }
-            CX_SPACE_CONTAINER_ARCHIVE => {
+            CK_SPACE_CONTAINER_ARCHIVE => {
                 (&[SpaceContainerLifecycleState::Active], "place_not_active")
             }
-            CX_SPACE_CONTAINER_RESTORE => (
+            CK_SPACE_CONTAINER_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
                 "place_not_archived",
             ),
-            CX_SPACE_CONTAINER_TOMBSTONE => (
+            CK_SPACE_CONTAINER_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -6368,7 +6368,7 @@ impl ProjectionState {
 
     // ── Flow / Morph projection state machine ──
 
-    /// Read-only state-machine preflight for a `cx.flow.*` lifecycle event.
+    /// Read-only state-machine preflight for a `ck.flow.*` lifecycle event.
     /// Mirror of `check_space_container_lifecycle_transition` — used by
     /// `event_log::submit_event` to short-circuit HTTP admission with 412
     /// failed_precondition. Unknown Flow returns `Ok` (causal/backfill
@@ -6387,10 +6387,10 @@ impl ProjectionState {
         // `ck.flow.archive` requires Active source.
         // `ck.flow.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            CX_FLOW_CREATE => return Ok(()),
-            CX_FLOW_UPDATE => (&[ObjectLifecycleState::Active], "flow_not_active"),
-            CX_FLOW_ARCHIVE => (&[ObjectLifecycleState::Active], "flow_not_active"),
-            CX_FLOW_RESTORE => (&[ObjectLifecycleState::Archived], "flow_not_archived"),
+            CK_FLOW_CREATE => return Ok(()),
+            CK_FLOW_UPDATE => (&[ObjectLifecycleState::Active], "flow_not_active"),
+            CK_FLOW_ARCHIVE => (&[ObjectLifecycleState::Active], "flow_not_active"),
+            CK_FLOW_RESTORE => (&[ObjectLifecycleState::Archived], "flow_not_archived"),
             _ => return Ok(()),
         };
         let Some(flow_id) = flow_id_from_payload(&operation.payload) else {
@@ -6413,7 +6413,7 @@ impl ProjectionState {
     /// unknown/custom statuses to Realm profiles.
     pub fn check_flow_status_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CX_FLOW_UPDATE)
+            != Some(crate::kinds::CK_FLOW_UPDATE)
         {
             return Ok(());
         }
@@ -6435,7 +6435,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CX_FLOW_UPDATE)
+            != Some(crate::kinds::CK_FLOW_UPDATE)
         {
             return None;
         }
@@ -6460,7 +6460,7 @@ impl ProjectionState {
         }))
     }
 
-    /// Read-only preflight for `cx.redaction` events that
+    /// Read-only preflight for `ck.redaction` events that
     /// target a Flow / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;
     /// terminal source MUST `failed_precondition` with
@@ -6471,7 +6471,7 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CX_REDACTION)
+        if crate::kinds::canonical_kind_for_operation(operation) != Some(crate::kinds::CK_REDACTION)
         {
             return Ok(());
         }
@@ -6493,7 +6493,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Read-only state-machine preflight for a `cx.morph.*` lifecycle event.
+    /// Read-only state-machine preflight for a `ck.morph.*` lifecycle event.
     /// Same shape as `check_flow_lifecycle_transition`.
     pub fn check_morph_lifecycle_transition(
         &self,
@@ -6505,10 +6505,10 @@ impl ProjectionState {
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            CX_MORPH_CREATE => return Ok(()),
-            CX_MORPH_UPDATE => (&[ObjectLifecycleState::Active], "morph_not_active"),
-            CX_MORPH_ARCHIVE => (&[ObjectLifecycleState::Active], "morph_not_active"),
-            CX_MORPH_RESTORE => (&[ObjectLifecycleState::Archived], "morph_not_archived"),
+            CK_MORPH_CREATE => return Ok(()),
+            CK_MORPH_UPDATE => (&[ObjectLifecycleState::Active], "morph_not_active"),
+            CK_MORPH_ARCHIVE => (&[ObjectLifecycleState::Active], "morph_not_active"),
+            CK_MORPH_RESTORE => (&[ObjectLifecycleState::Archived], "morph_not_archived"),
             _ => return Ok(()),
         };
         let Some(morph_id) = operation.payload.get("morph_id").and_then(|v| v.as_str()) else {
@@ -7679,7 +7679,7 @@ impl ProjectionState {
     }
 
     /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — apply
-    /// an `cx.agent.{pause,resume,deactivate}` FSM transition. The
+    /// an `ck.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
     ///   - Active → Paused                 via `ck.agent.pause`
     ///   - Paused → Active                 via `ck.agent.resume`
@@ -7927,13 +7927,13 @@ impl ProjectionState {
 
     // ── Cell-keyed query helpers ──
 
-    /// Read the effective `cx.space.read_receipt_policy` value out of the
+    /// Read the effective `ck.space.read_receipt_policy` value out of the
     /// cells map. Returns `None` when:
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
+            "ck:cell:ck.component.space.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -8243,8 +8243,7 @@ mod tests {
 
     fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
-            cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
-                .unwrap(),
+            cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             cokret_sdk::RealmId::new(realm_id).unwrap(),
             object_type,
             payload,
@@ -8256,7 +8255,7 @@ mod tests {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
         let op = make_operation(
-            crate::kinds::CX_MESSAGE_CREATE,
+            crate::kinds::CK_MESSAGE_CREATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8283,7 +8282,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_CREATE,
+                crate::kinds::CK_MESSAGE_CREATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8296,7 +8295,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8339,7 +8338,7 @@ mod tests {
     fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &str) {
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_CREATE,
+                crate::kinds::CK_MESSAGE_CREATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": event_id,
@@ -8360,7 +8359,7 @@ mod tests {
         redact_make_message(&mut state, &hlc, event_id);
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
@@ -8388,7 +8387,7 @@ mod tests {
         redact_make_message(&mut state, &hlc, event_id);
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
@@ -8411,7 +8410,7 @@ mod tests {
         // Redact.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
@@ -8424,7 +8423,7 @@ mod tests {
         // Un-redact via cas-register set null.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
@@ -8459,7 +8458,7 @@ mod tests {
         // Now a delayed redaction arrives.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REDACT,
+                crate::kinds::CK_MESSAGE_REDACT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
@@ -8490,7 +8489,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_REACTION_ADD,
+                crate::kinds::CK_REACTION_ADD,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8509,7 +8508,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_REACTION_REMOVE,
+                crate::kinds::CK_REACTION_REMOVE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8540,7 +8539,7 @@ mod tests {
         // suite).
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBER_STATE,
+                crate::kinds::CK_MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
@@ -8560,7 +8559,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBER_STATE,
+                crate::kinds::CK_MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
@@ -8584,7 +8583,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_CREATE,
+                crate::kinds::CK_MESSAGE_CREATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8598,7 +8597,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MESSAGE_REVISE,
+                crate::kinds::CK_MESSAGE_REVISE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
@@ -8627,7 +8626,7 @@ mod tests {
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:ck.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         assert!(state.cell(&cell_id).is_none());
@@ -8639,7 +8638,7 @@ mod tests {
         use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:cx.component.space.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
+            "ck:cell:ck.component.space.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
                 .to_owned(),
         )
         .unwrap();
@@ -8677,7 +8676,7 @@ mod tests {
         // realm delivery-binding policy.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBER_STATE,
+                crate::kinds::CK_MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:alice",
@@ -8723,7 +8722,7 @@ mod tests {
         for membership in ["join", "ban"] {
             state.apply(
                 &make_operation(
-                    crate::kinds::CX_MEMBER_STATE,
+                    crate::kinds::CK_MEMBER_STATE,
                     "ck:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({
                         "actor_id": "did:web:bob",
@@ -8757,7 +8756,7 @@ mod tests {
         // invite returns the actor to the invite state.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBER_STATE,
+                crate::kinds::CK_MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
             ),
@@ -8789,7 +8788,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_REALM_CREATE,
+                crate::kinds::CK_REALM_CREATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "create",
@@ -8826,7 +8825,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_REALM_UPDATE,
+                crate::kinds::CK_REALM_UPDATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "update",
@@ -8860,7 +8859,7 @@ mod tests {
         let basis =
             "ck:anchor:sha256:0000000000000000000000000000000000000000000000000000000000000000";
         let first = make_operation(
-            crate::kinds::CX_REALM_UPDATE,
+            crate::kinds::CK_REALM_UPDATE,
             realm,
             serde_json::json!({
                 "patch": {"title": {"$op": "set", "value": "renamed by alice"}},
@@ -8871,7 +8870,7 @@ mod tests {
         state.apply(&first, &hlc);
 
         let second = make_operation(
-            crate::kinds::CX_REALM_UPDATE,
+            crate::kinds::CK_REALM_UPDATE,
             realm,
             serde_json::json!({
                 "patch": {"title": {"$op": "set", "value": "renamed by bob"}},
@@ -8897,7 +8896,7 @@ mod tests {
         );
         assert_eq!(
             state.check_bottom_cell_transition(&make_operation(
-                crate::kinds::CX_REALM_UPDATE,
+                crate::kinds::CK_REALM_UPDATE,
                 realm,
                 serde_json::json!({
                     "patch": {"title": {"$op": "set", "value": "blocked while bottom"}},
@@ -8907,7 +8906,7 @@ mod tests {
         );
 
         let repair = make_operation(
-            crate::kinds::CX_CONFLICT_REPAIR,
+            crate::kinds::CK_CONFLICT_REPAIR,
             realm,
             serde_json::json!({
                 "cell_id": cell.as_str(),
@@ -8940,7 +8939,7 @@ mod tests {
         // First create...
         state.apply(
             &make_operation(
-                crate::kinds::CX_REALM_CREATE,
+                crate::kinds::CK_REALM_CREATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "create", "owner": "did:web:alice"}),
             ),
@@ -8951,7 +8950,7 @@ mod tests {
         // ...then destroy.
         state.apply(
             &make_operation(
-                crate::kinds::CX_REALM_DESTROY,
+                crate::kinds::CK_REALM_DESTROY,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "destroy"}),
             ),
@@ -8985,7 +8984,7 @@ mod tests {
         // Container hosted inside Realm A (the to-be-destroyed Realm).
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_a,
                 serde_json::json!({
                     "object": {
@@ -9002,7 +9001,7 @@ mod tests {
         // the Realm-A container.
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_b,
                 serde_json::json!({
                     "object": {
@@ -9025,7 +9024,7 @@ mod tests {
         // Destroy Realm A.
         state.apply(
             &make_operation(
-                crate::kinds::CX_REALM_DESTROY,
+                crate::kinds::CK_REALM_DESTROY,
                 realm_a,
                 serde_json::json!({"action": "destroy"}),
             ),
@@ -9064,7 +9063,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+                crate::kinds::CK_AUDIT_ERASURE_RECEIPT,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "receipt_id": "ck:receipt:01",
@@ -9103,7 +9102,7 @@ mod tests {
         for owner in ["did:web:alice", "did:web:bob"] {
             state.apply(
                 &make_operation(
-                    crate::kinds::CX_REALM_CREATE,
+                    crate::kinds::CK_REALM_CREATE,
                     "ck:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({"action": "create", "owner": owner}),
                 ),
@@ -9138,7 +9137,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         state.apply(
             &make_operation(
-                crate::kinds::CX_MEMBER_STATE,
+                crate::kinds::CK_MEMBER_STATE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
             ),
@@ -9159,7 +9158,7 @@ mod tests {
         use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:ck.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         state.cells.insert(
@@ -9204,7 +9203,7 @@ mod tests {
         // create
         let create_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -9233,7 +9232,7 @@ mod tests {
         // archive
         let archive_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
                 space_id,
                 serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
@@ -9254,7 +9253,7 @@ mod tests {
         // restore
         let restore_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+                crate::kinds::CK_SPACE_CONTAINER_RESTORE,
                 space_id,
                 serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
@@ -9275,7 +9274,7 @@ mod tests {
         // tombstone
         let tombstone_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
+                crate::kinds::CK_SPACE_CONTAINER_TOMBSTONE,
                 space_id,
                 serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
             ),
@@ -9307,7 +9306,7 @@ mod tests {
         // Create the place (Active).
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -9324,7 +9323,7 @@ mod tests {
 
         // restore on Active → place_not_archived
         let restore_op = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+            crate::kinds::CK_SPACE_CONTAINER_RESTORE,
             space_id,
             serde_json::json!({ "space_id": container_space_id }),
         );
@@ -9336,14 +9335,14 @@ mod tests {
         // Archive then try archive again → place_not_active
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
                 space_id,
                 serde_json::json!({ "space_id": container_space_id }),
             ),
             &hlc,
         );
         let archive_op = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+            crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
             space_id,
             serde_json::json!({ "space_id": container_space_id }),
         );
@@ -9355,7 +9354,7 @@ mod tests {
         // Tombstone (legal from Archived).
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
+                crate::kinds::CK_SPACE_CONTAINER_TOMBSTONE,
                 space_id,
                 serde_json::json!({ "space_id": container_space_id }),
             ),
@@ -9363,7 +9362,7 @@ mod tests {
         );
         // Now restore on Tombstoned → still place_not_archived.
         let restore_again = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+            crate::kinds::CK_SPACE_CONTAINER_RESTORE,
             space_id,
             serde_json::json!({ "space_id": container_space_id }),
         );
@@ -9373,7 +9372,7 @@ mod tests {
         );
         // Tombstone on Tombstoned → place_already_terminal.
         let tombstone_again = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_TOMBSTONE,
+            crate::kinds::CK_SPACE_CONTAINER_TOMBSTONE,
             space_id,
             serde_json::json!({ "space_id": container_space_id }),
         );
@@ -9383,7 +9382,7 @@ mod tests {
         );
         // Update on Tombstoned → place_not_active.
         let update_op = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_UPDATE,
+            crate::kinds::CK_SPACE_CONTAINER_UPDATE,
             space_id,
             serde_json::json!({
                 "space_id": container_space_id,
@@ -9403,7 +9402,7 @@ mod tests {
     fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+            crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "space_id": "ck:space:01904100-0000-7000-8000-cfc039892039" }),
         );
@@ -9423,7 +9422,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_space_id,
                 serde_json::json!({
                     "object": {
@@ -9439,7 +9438,7 @@ mod tests {
         );
 
         let update = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_UPDATE,
+            crate::kinds::CK_SPACE_CONTAINER_UPDATE,
             realm_space_id,
             serde_json::json!({
                 "space_id": container_space_id,
@@ -9458,7 +9457,7 @@ mod tests {
         assert_eq!(projection.rank.as_deref(), Some("mV"));
 
         let parent = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_PARENT,
+            crate::kinds::CK_SPACE_CONTAINER_PARENT,
             realm_space_id,
             serde_json::json!({
                 "space_id": container_space_id,
@@ -9479,7 +9478,7 @@ mod tests {
         );
 
         let detach = make_operation(
-            crate::kinds::CX_SPACE_CONTAINER_PARENT,
+            crate::kinds::CK_SPACE_CONTAINER_PARENT,
             realm_space_id,
             serde_json::json!({
                 "space_id": container_space_id,
@@ -9512,7 +9511,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9533,7 +9532,7 @@ mod tests {
         ] {
             state.apply(
                 &make_operation(
-                    crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                    crate::kinds::CK_SPACE_CONTAINER_CREATE,
                     realm_id,
                     serde_json::json!({
                         "object": {
@@ -9553,7 +9552,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_UPDATE,
+                crate::kinds::CK_SPACE_CONTAINER_UPDATE,
                 realm_id,
                 serde_json::json!({
                     "space_id": third_id,
@@ -9588,7 +9587,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9604,7 +9603,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9622,7 +9621,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9645,7 +9644,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
                 realm_id,
                 serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
             ),
@@ -9671,7 +9670,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+                crate::kinds::CK_SPACE_CONTAINER_RESTORE,
                 realm_id,
                 serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
             ),
@@ -9701,7 +9700,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9717,7 +9716,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_CREATE,
+                crate::kinds::CK_SPACE_CONTAINER_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9735,7 +9734,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -9758,7 +9757,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
                 realm_id,
                 serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
             ),
@@ -9776,7 +9775,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_SPACE_CONTAINER_RESTORE,
+                crate::kinds::CK_SPACE_CONTAINER_RESTORE,
                 realm_id,
                 serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
             ),
@@ -9812,7 +9811,7 @@ mod tests {
 
         let create_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -9836,7 +9835,7 @@ mod tests {
 
         let archive_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_ARCHIVE,
+                crate::kinds::CK_FLOW_ARCHIVE,
                 space_id,
                 serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
             ),
@@ -9853,7 +9852,7 @@ mod tests {
 
         let restore_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_RESTORE,
+                crate::kinds::CK_FLOW_RESTORE,
                 space_id,
                 serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
             ),
@@ -9881,7 +9880,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -9897,7 +9896,7 @@ mod tests {
 
         // restore on Active → flow_not_archived
         let restore_op = make_operation(
-            crate::kinds::CX_FLOW_RESTORE,
+            crate::kinds::CK_FLOW_RESTORE,
             space_id,
             serde_json::json!({ "flow_id": flow_id }),
         );
@@ -9909,14 +9908,14 @@ mod tests {
         // Archive then re-archive → flow_not_active
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_ARCHIVE,
+                crate::kinds::CK_FLOW_ARCHIVE,
                 space_id,
                 serde_json::json!({ "flow_id": flow_id }),
             ),
             &hlc,
         );
         let archive_again = make_operation(
-            crate::kinds::CX_FLOW_ARCHIVE,
+            crate::kinds::CK_FLOW_ARCHIVE,
             space_id,
             serde_json::json!({ "flow_id": flow_id }),
         );
@@ -9927,7 +9926,7 @@ mod tests {
 
         // Update on Archived → flow_not_active
         let update_op = make_operation(
-            crate::kinds::CX_FLOW_UPDATE,
+            crate::kinds::CK_FLOW_UPDATE,
             space_id,
             serde_json::json!({
                 "flow_id": flow_id,
@@ -9944,7 +9943,7 @@ mod tests {
     fn flow_lifecycle_preflight_tolerates_unknown_flow() {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
-            crate::kinds::CX_FLOW_ARCHIVE,
+            crate::kinds::CK_FLOW_ARCHIVE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "flow_id": "ck:flow:nope-not-here" }),
         );
@@ -9965,7 +9964,7 @@ mod tests {
 
         let create_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_CREATE,
+                crate::kinds::CK_MORPH_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -9990,7 +9989,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_ARCHIVE,
+                crate::kinds::CK_MORPH_ARCHIVE,
                 space_id,
                 serde_json::json!({ "morph_id": morph_id }),
             ),
@@ -10000,7 +9999,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_RESTORE,
+                crate::kinds::CK_MORPH_RESTORE,
                 space_id,
                 serde_json::json!({ "morph_id": morph_id }),
             ),
@@ -10018,7 +10017,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_CREATE,
+                crate::kinds::CK_MORPH_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10035,7 +10034,7 @@ mod tests {
 
         // restore on Active → morph_not_archived
         let restore_op = make_operation(
-            crate::kinds::CX_MORPH_RESTORE,
+            crate::kinds::CK_MORPH_RESTORE,
             space_id,
             serde_json::json!({ "morph_id": morph_id }),
         );
@@ -10046,14 +10045,14 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_ARCHIVE,
+                crate::kinds::CK_MORPH_ARCHIVE,
                 space_id,
                 serde_json::json!({ "morph_id": morph_id }),
             ),
             &hlc,
         );
         let archive_again = make_operation(
-            crate::kinds::CX_MORPH_ARCHIVE,
+            crate::kinds::CK_MORPH_ARCHIVE,
             space_id,
             serde_json::json!({ "morph_id": morph_id }),
         );
@@ -10064,7 +10063,7 @@ mod tests {
 
         // Update on Archived → morph_not_active
         let update_op = make_operation(
-            crate::kinds::CX_MORPH_UPDATE,
+            crate::kinds::CK_MORPH_UPDATE,
             space_id,
             serde_json::json!({
                 "morph_id": morph_id,
@@ -10081,7 +10080,7 @@ mod tests {
     fn morph_lifecycle_preflight_tolerates_unknown_morph() {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
-            crate::kinds::CX_MORPH_ARCHIVE,
+            crate::kinds::CK_MORPH_ARCHIVE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({ "morph_id": "ck:morph:nope-not-here" }),
         );
@@ -10106,7 +10105,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10130,7 +10129,7 @@ mod tests {
         // ck.flow.move — state unchanged, updated_at advances.
         let move_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_MOVE,
+                crate::kinds::CK_FLOW_MOVE,
                 space_id,
                 serde_json::json!({
                     "flow_id": flow_id,
@@ -10162,7 +10161,7 @@ mod tests {
         // ck.flow.reorder — same family, same effect.
         let reorder_effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_REORDER,
+                crate::kinds::CK_FLOW_REORDER,
                 space_id,
                 serde_json::json!({
                     "flow_id": flow_id,
@@ -10192,7 +10191,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_MOVE,
+                crate::kinds::CK_FLOW_MOVE,
                 "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "flow_id": "ck:flow:nope-not-here",
@@ -10206,9 +10205,9 @@ mod tests {
         assert!(matches!(effect, ProjectionEffect::Ignored));
     }
 
-    // ── cx.redaction -> Flow / Morph terminal-state push ──
+    // ── ck.redaction -> Flow / Morph terminal-state push ──
 
-    /// `cx.redaction` carrying `object_ref: ck:flow:...` flips the
+    /// `ck.redaction` carrying `object_ref: ck:flow:...` flips the
     /// FlowProjection state to Redacted (terminal) per spec
     /// common-fields.md §5.1.
     #[test]
@@ -10220,7 +10219,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10237,7 +10236,7 @@ mod tests {
 
         let effect = state.apply(
             &make_operation(
-                crate::kinds::CX_REDACTION,
+                crate::kinds::CK_REDACTION,
                 space_id,
                 serde_json::json!({
                     "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000001",
@@ -10269,7 +10268,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_CREATE,
+                crate::kinds::CK_MORPH_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10285,7 +10284,7 @@ mod tests {
         );
         let effect = state.apply(
             &make_operation(
-                crate::kinds::CX_REDACTION,
+                crate::kinds::CK_REDACTION,
                 space_id,
                 serde_json::json!({
                     "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000002",
@@ -10305,7 +10304,7 @@ mod tests {
         assert_eq!(state.morphs[morph_id].state, ObjectLifecycleState::Redacted);
     }
 
-    /// Preflight rejects `cx.redaction` against an already-terminal
+    /// Preflight rejects `ck.redaction` against an already-terminal
     /// Flow with `flow_already_terminal`. Mirror for Morph also covered.
     #[test]
     fn redaction_preflight_rejects_against_already_terminal() {
@@ -10318,7 +10317,7 @@ mod tests {
         // Materialise + redact a Flow once (legal first redaction).
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10333,7 +10332,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_REDACTION,
+                crate::kinds::CK_REDACTION,
                 space_id,
                 serde_json::json!({
                     "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000003",
@@ -10346,7 +10345,7 @@ mod tests {
 
         // Second redaction against the now-Redacted Flow → preflight rejects.
         let second_redact = make_operation(
-            crate::kinds::CX_REDACTION,
+            crate::kinds::CK_REDACTION,
             space_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000004",
@@ -10361,7 +10360,7 @@ mod tests {
         // Same path for Morph.
         state.apply(
             &make_operation(
-                crate::kinds::CX_MORPH_CREATE,
+                crate::kinds::CK_MORPH_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10377,7 +10376,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_REDACTION,
+                crate::kinds::CK_REDACTION,
                 space_id,
                 serde_json::json!({
                     "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000005",
@@ -10387,7 +10386,7 @@ mod tests {
             &hlc,
         );
         let second_morph_redact = make_operation(
-            crate::kinds::CX_REDACTION,
+            crate::kinds::CK_REDACTION,
             space_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000006",
@@ -10415,7 +10414,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10431,7 +10430,7 @@ mod tests {
 
         let effect = state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_TRACKS_UPDATE,
+                crate::kinds::CK_FLOW_TRACKS_UPDATE,
                 space_id,
                 serde_json::json!({
                     "flow_id": flow_id,
@@ -10468,7 +10467,7 @@ mod tests {
 
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_CREATE,
+                crate::kinds::CK_FLOW_CREATE,
                 space_id,
                 serde_json::json!({
                     "object": {
@@ -10483,7 +10482,7 @@ mod tests {
         );
         state.apply(
             &make_operation(
-                crate::kinds::CX_FLOW_ARCHIVE,
+                crate::kinds::CK_FLOW_ARCHIVE,
                 space_id,
                 serde_json::json!({ "flow_id": flow_id }),
             ),
@@ -10492,7 +10491,7 @@ mod tests {
         assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
 
         let tracks_op = make_operation(
-            crate::kinds::CX_FLOW_TRACKS_UPDATE,
+            crate::kinds::CK_FLOW_TRACKS_UPDATE,
             space_id,
             serde_json::json!({
                 "flow_id": flow_id,
@@ -10517,7 +10516,7 @@ mod tests {
     fn flow_tracks_preflight_tolerates_unknown_flow() {
         let state = ProjectionState::new();
         let tracks_op = make_operation(
-            crate::kinds::CX_FLOW_TRACKS_UPDATE,
+            crate::kinds::CK_FLOW_TRACKS_UPDATE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
                 "flow_id": "ck:flow:nope-not-here",
@@ -10536,7 +10535,7 @@ mod tests {
         let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         // Unknown object_ref.
         let unknown = make_operation(
-            crate::kinds::CX_REDACTION,
+            crate::kinds::CK_REDACTION,
             space_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000007",
@@ -10546,7 +10545,7 @@ mod tests {
         assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
         // Missing object_ref (message redaction path).
         let message_redact = make_operation(
-            crate::kinds::CX_REDACTION,
+            crate::kinds::CK_REDACTION,
             space_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000008",

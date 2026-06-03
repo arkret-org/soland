@@ -3,7 +3,8 @@
 //! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
 //!
 //! - `POST /_cokret/root/identity/recovery-policy`  — persist + advance a recovery policy.
-//! - `POST /_cokret/root/identity/recovery-receipt` — record a recovery receipt for a witnessed session.
+//! - `POST /_cokret/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
+//!   session.
 //!
 //! Wire-level validation lands here (proof_kind enum, recovery_session
 //! uuid pattern, expires/policy_version monotonicity,
@@ -54,8 +55,8 @@ const RECOVERY_WITNESS_FRESHNESS_SECS: i64 = 86_400;
 /// `expired`. Matches the device-lifecycle interactive recovery window.
 const RECOVERY_SESSION_TTL_SECS: i64 = 900;
 
-const POLICY_SIGNATURE_TYPE: &str = "cx.identity.recovery_policy.signature.v1";
-const RECEIPT_SIGNATURE_TYPE: &str = "cx.identity.recovery_receipt.signature.v1";
+const POLICY_SIGNATURE_TYPE: &str = "ck.identity.recovery_policy.signature.v1";
+const RECEIPT_SIGNATURE_TYPE: &str = "ck.identity.recovery_receipt.signature.v1";
 
 const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "schema",
@@ -126,8 +127,7 @@ pub(super) fn router() -> Router {
             Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
         )
         .push(
-            Router::with_path("recovery-sessions/{recovery_session_id}")
-                .get(recovery_session_get),
+            Router::with_path("recovery-sessions/{recovery_session_id}").get(recovery_session_get),
         )
         .push(
             Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
@@ -180,12 +180,15 @@ fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_policy.get",
+    operation_id = "ck.extension.soland.identity.recovery_policy.get",
     tags("identity", "recovery"),
     summary = "Read the currently accepted recovery policy (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_policy.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_policy.get")
+)]
 async fn recovery_policy_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -205,12 +208,15 @@ async fn recovery_policy_get(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_policies.get",
+    operation_id = "ck.extension.soland.identity.recovery_policies.get",
     tags("identity", "recovery"),
     summary = "List recovery policy history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_policies.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_policies.get")
+)]
 async fn recovery_policies_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -231,12 +237,15 @@ async fn recovery_policies_get(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_receipts.get",
+    operation_id = "ck.extension.soland.identity.recovery_receipts.get",
     tags("identity", "recovery"),
     summary = "List recovery receipt history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_receipts.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_receipts.get")
+)]
 async fn recovery_receipts_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -390,12 +399,15 @@ async fn load_owned_recovery_session(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_session.create",
+    operation_id = "ck.extension.soland.identity.recovery_session.create",
     tags("identity", "recovery"),
     summary = "Open a recovery session bound to the active policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.create"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_session.create")
+)]
 async fn recovery_session_create(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -510,7 +522,7 @@ async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.extension.soland.identity.recovery_session.create",
+        "ck.extension.soland.identity.recovery_session.create",
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -526,12 +538,15 @@ async fn recovery_session_create(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_session.get",
+    operation_id = "ck.extension.soland.identity.recovery_session.get",
     tags("identity", "recovery"),
     summary = "Read a recovery session status (REC-1)",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.get"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_session.get")
+)]
 async fn recovery_session_get(
     aa: AuthArgs,
     recovery_session_id: PathParam<String>,
@@ -546,12 +561,15 @@ async fn recovery_session_get(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_session.proof_submit",
+    operation_id = "ck.extension.soland.identity.recovery_session.proof_submit",
     tags("identity", "recovery"),
     summary = "Submit a recovery proof for a pending session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.proof_submit"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_session.proof_submit")
+)]
 async fn recovery_session_proof_submit(
     aa: AuthArgs,
     recovery_session_id: PathParam<String>,
@@ -581,9 +599,9 @@ async fn recovery_session_proof_submit(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("proof.kind is required"))?;
     if !ALLOWED_PROOF_KINDS.contains(&proof_kind) {
-        return Err(AppError::invalid_param(format!(
-            "proof.kind `{proof_kind}` not in spec enum",
-        ))
+        return Err(AppError::invalid_param(
+            format!("proof.kind `{proof_kind}` not in spec enum",),
+        )
         .with_wire_code("recovery_proof_kind_unknown"));
     }
     // The proof kind MUST be one the bound policy snapshot permits.
@@ -705,8 +723,10 @@ async fn verify_principal_signing_proof(
     })?;
 
     let transcript = recovery_proof_transcript(record, "principal_signing");
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
-        .map_err(|error| AppError::internal(format!("recovery proof transcript failed: {error}")))?;
+    let transcript_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+            AppError::internal(format!("recovery proof transcript failed: {error}"))
+        })?;
 
     let signature_b64 = proof
         .get("signature")
@@ -750,12 +770,15 @@ fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Valu
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_session.complete",
+    operation_id = "ck.extension.soland.identity.recovery_session.complete",
     tags("identity", "recovery"),
     summary = "Finalize a verified recovery session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.identity.recovery_session.complete"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.extension.soland.identity.recovery_session.complete")
+)]
 async fn recovery_session_complete(
     aa: AuthArgs,
     recovery_session_id: PathParam<String>,
@@ -794,8 +817,11 @@ async fn recovery_session_complete(
 
     // Resolve + verify the referenced ck.device.authorize.
     let authorize_payload =
-        resolve_control_event_payload(state, &authorization_event_id, "ck.device.authorize").await?;
-    if authorize_payload.get("principal_id").and_then(Value::as_str)
+        resolve_control_event_payload(state, &authorization_event_id, "ck.device.authorize")
+            .await?;
+    if authorize_payload
+        .get("principal_id")
+        .and_then(Value::as_str)
         != Some(record.principal_id.as_str())
     {
         return Err(AppError::conflict("authorize event principal_id mismatch")
@@ -807,11 +833,15 @@ async fn recovery_session_complete(
         return Err(AppError::conflict("authorize event device_id mismatch")
             .with_wire_code("recovery_authorization_device_mismatch"));
     }
-    if authorize_payload.get("recovery_session_id").and_then(Value::as_str)
+    if authorize_payload
+        .get("recovery_session_id")
+        .and_then(Value::as_str)
         != Some(record.recovery_session_id.as_str())
     {
-        return Err(AppError::conflict("authorize event recovery_session_id mismatch")
-            .with_wire_code("recovery_authorization_session_mismatch"));
+        return Err(
+            AppError::conflict("authorize event recovery_session_id mismatch")
+                .with_wire_code("recovery_authorization_session_mismatch"),
+        );
     }
     let device_public_key = authorize_payload
         .get("device_public_key")
@@ -821,9 +851,7 @@ async fn recovery_session_complete(
     let binding = authorize_payload
         .get("cross_signing_binding")
         .and_then(Value::as_object)
-        .ok_or_else(|| {
-            AppError::invalid_param("authorize event missing cross_signing_binding")
-        })?;
+        .ok_or_else(|| AppError::invalid_param("authorize event missing cross_signing_binding"))?;
     // Defense-in-depth: re-verify the binding against the accepted SSK (ingest
     // already verified it via §3a, but completion is the irreversible step).
     crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
@@ -838,11 +866,15 @@ async fn recovery_session_complete(
     let list_update_payload =
         resolve_control_event_payload(state, &device_list_update_event_id, "ck.device.list_update")
             .await?;
-    if list_update_payload.get("principal_id").and_then(Value::as_str)
+    if list_update_payload
+        .get("principal_id")
+        .and_then(Value::as_str)
         != Some(record.principal_id.as_str())
     {
-        return Err(AppError::conflict("list_update event principal_id mismatch")
-            .with_wire_code("recovery_list_update_principal_mismatch"));
+        return Err(
+            AppError::conflict("list_update event principal_id mismatch")
+                .with_wire_code("recovery_list_update_principal_mismatch"),
+        );
     }
     let list_update_covers_device = list_update_payload
         .get("changed")
@@ -853,8 +885,10 @@ async fn recovery_session_complete(
                 .any(|d| d.as_str() == Some(record.requesting_device_id.as_str()))
         });
     if !list_update_covers_device {
-        return Err(AppError::conflict("list_update event does not cover the recovered device")
-            .with_wire_code("recovery_list_update_device_mismatch"));
+        return Err(
+            AppError::conflict("list_update event does not cover the recovered device")
+                .with_wire_code("recovery_list_update_device_mismatch"),
+        );
     }
 
     let now = chrono::Utc::now();
@@ -919,7 +953,7 @@ async fn recovery_session_complete(
     append_audit_log(
         state,
         Some(&completed.principal_id),
-        "cx.extension.soland.identity.recovery_session.complete",
+        "ck.extension.soland.identity.recovery_session.complete",
         json!({
             "recovery_session_id": completed.recovery_session_id,
             "device_id": completed.requesting_device_id,
@@ -957,9 +991,8 @@ pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     // Force UUIDv7 version (0x7) + RFC-9562 variant (0b10).
     bytes[6] = (bytes[6] & 0x0F) | 0x70;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
-    let group = |slice: &[u8]| -> String {
-        slice.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    };
+    let group =
+        |slice: &[u8]| -> String { slice.iter().map(|b| format!("{b:02x}")).collect::<String>() };
     format!(
         "ck:realm:{}-{}-{}-{}-{}",
         group(&bytes[0..4]),
@@ -1052,14 +1085,14 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_policy.put",
+    operation_id = "ck.extension.soland.identity.recovery_policy.put",
     tags("identity", "recovery"),
     summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.identity.recovery_policy.put")
+    fields(op = "ck.extension.soland.identity.recovery_policy.put")
 )]
 async fn recovery_policy_put(
     aa: AuthArgs,
@@ -1130,7 +1163,7 @@ async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.extension.soland.identity.recovery_policy.put",
+        "ck.extension.soland.identity.recovery_policy.put",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -1152,14 +1185,14 @@ async fn recovery_policy_put(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.recovery_receipt.put",
+    operation_id = "ck.extension.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
     summary = "Record a ck.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.identity.recovery_receipt.put")
+    fields(op = "ck.extension.soland.identity.recovery_receipt.put")
 )]
 async fn recovery_receipt_put(
     aa: AuthArgs,
@@ -1258,7 +1291,7 @@ async fn recovery_receipt_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.extension.soland.identity.recovery_receipt.put",
+        "ck.extension.soland.identity.recovery_receipt.put",
         json!({
             "receipt_id": record.receipt_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -1451,7 +1484,10 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
     // recovery-receipt.schema.json conditional reqs: threshold_recovery binds
     // quorum_size + share_ids; device_quorum binds quorum_size.
     if matches!(proof_kind, "threshold_recovery" | "device_quorum")
-        && proof_summary.get("quorum_size").and_then(Value::as_u64).is_none()
+        && proof_summary
+            .get("quorum_size")
+            .and_then(Value::as_u64)
+            .is_none()
     {
         return Err(AppError::invalid_param(format!(
             "proof_summary.quorum_size is required for kind `{proof_kind}`",
@@ -1523,7 +1559,11 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         }
     }
     // welcome_count — number of MLS Welcomes replayed for the recovering device.
-    if payload.get("welcome_count").and_then(Value::as_u64).is_none() {
+    if payload
+        .get("welcome_count")
+        .and_then(Value::as_u64)
+        .is_none()
+    {
         return Err(AppError::invalid_param(
             "welcome_count is required (integer >= 0)",
         ));
@@ -1595,8 +1635,10 @@ async fn verify_recovery_receipt_device_signature(
         payload,
     )?;
     let transcript = recovery_signature_transcript(RECEIPT_SIGNATURE_TYPE, payload, &signed_fields);
-    let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript)
-        .map_err(|error| AppError::internal(format!("recovery receipt transcript failed: {error}")))?;
+    let transcript_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+            AppError::internal(format!("recovery receipt transcript failed: {error}"))
+        })?;
     let signature_b64 = auth_data
         .get("signature")
         .and_then(Value::as_str)
@@ -1607,10 +1649,14 @@ async fn verify_recovery_receipt_device_signature(
         .map_err(|_| recovery_signature_error("auth_data.signature is not base64/base64url"))?;
     let signature = Signature::from_slice(&raw)
         .map_err(|_| recovery_signature_error("auth_data.signature must be 64 Ed25519 bytes"))?;
-    device_key.verify(&transcript_bytes, &signature).map_err(|_| {
-        crate::metrics::record_digest_mismatch("recovery_receipt_digest");
-        recovery_signature_error("recovery receipt signature does not verify against the authorized device key")
-    })
+    device_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_receipt_digest");
+            recovery_signature_error(
+                "recovery receipt signature does not verify against the authorized device key",
+            )
+        })
 }
 
 /// Resolve the Ed25519 public key recorded when `device_id` was authorized for
@@ -1908,4 +1954,3 @@ fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
     }
     Ok(())
 }
-

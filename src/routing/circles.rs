@@ -1,7 +1,7 @@
 //! CXP-0007 — Circle administration HTTP surface.
 //!
 //! Hosts the canonical `/_cokret/self/circles/*` admin/CRUD layer. Each handler
-//! builds a `cx.circle.*` Operation and routes it through the standard
+//! builds a `ck.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
@@ -10,8 +10,8 @@
 //! Routes (mirror of `/_cokret/self/realms` / `/_cokret/self/spaces` style):
 //!
 //! - `POST   /_cokret/self/circles`                              create Circle
-//! - `GET    /_cokret/self/circles`                              list Circles (filtered by `realm_id`
-//!   query)
+//! - `GET    /_cokret/self/circles`                              list Circles (filtered by
+//!   `realm_id` query)
 //! - `GET    /_cokret/self/circles/{circle_id}`                  read Circle
 //! - `POST   /_cokret/self/circles/{circle_id}/members`          add member
 //! - `DELETE /_cokret/self/circles/{circle_id}/members/{actor}`  remove member
@@ -34,7 +34,7 @@ use super::{AuthArgs, accept_local_operations};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::kinds::{
-    CX_CIRCLE_ARCHIVE, CX_CIRCLE_CREATE, CX_CIRCLE_MEMBER_STATE, CX_CIRCLE_TOMBSTONE,
+    CK_CIRCLE_ARCHIVE, CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE,
 };
 use crate::reducer::CircleProjection;
 use crate::result::{JsonResult, json_ok};
@@ -157,11 +157,11 @@ impl From<&CircleProjection> for CircleResponse {
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.circles.list",
+    operation_id = "ck.circles.list",
     tags("circles"),
     summary = "List Circles visible to the caller within a given Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.list"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,
@@ -181,11 +181,11 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.get",
+    operation_id = "ck.circles.get",
     tags("circles"),
     summary = "Fetch a single Circle by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.get"))]
 async fn get_circle(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -203,11 +203,11 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.create",
+    operation_id = "ck.circles.create",
     tags("circles"),
     summary = "Create a Circle (ck.circle.create)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.create"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.create"))]
 async fn post_circle(
     aa: AuthArgs,
     body: JsonBody<CreateCircleRequest>,
@@ -235,7 +235,7 @@ async fn post_circle(
     let payload = json!({"object": object, "sender": session.actor.clone()});
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_CREATE, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_CREATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -247,11 +247,11 @@ async fn post_circle(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.members.add",
+    operation_id = "ck.circles.members.add",
     tags("circles"),
     summary = "Add or change a Circle member (ck.circle.member.state)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.members.add"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.members.add"))]
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -273,7 +273,7 @@ async fn post_circle_member(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -285,11 +285,11 @@ async fn post_circle_member(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.members.remove",
+    operation_id = "ck.circles.members.remove",
     tags("circles"),
     summary = "Remove a Circle member (ck.circle.member.state → removed)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.members.remove"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.members.remove"))]
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -310,7 +310,7 @@ async fn delete_circle_member(
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_CIRCLE_MEMBER_STATE, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_CIRCLE_MEMBER_STATE, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -322,11 +322,11 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.scope_rotate",
+    operation_id = "ck.circles.scope_rotate",
     tags("circles"),
     summary = "Rotate the Circle's bound MLS group (CXP-0007)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.scope_rotate"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.scope_rotate"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -349,33 +349,33 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "cx.circles.archive",
+    operation_id = "ck.circles.archive",
     tags("circles"),
     summary = "Archive a Circle (ck.circle.archive)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.archive"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.archive"))]
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleResponse> {
-    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CX_CIRCLE_ARCHIVE).await
+    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_ARCHIVE).await
 }
 
 #[endpoint(
-    operation_id = "cx.circles.tombstone",
+    operation_id = "ck.circles.tombstone",
     tags("circles"),
     summary = "Tombstone a Circle (ck.circle.tombstone)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.circles.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ck.circles.tombstone"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleResponse> {
-    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CX_CIRCLE_TOMBSTONE).await
+    submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_TOMBSTONE).await
 }
 
 async fn submit_circle_lifecycle(

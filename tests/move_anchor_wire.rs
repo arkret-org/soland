@@ -29,7 +29,7 @@ use cokret_sdk::lattice::CellState;
 use cokret_sdk::state_res::compute_state_root;
 use cokret_sdk::state_res::state_root::EMPTY_STATE_ROOT;
 use cokret_sdk::{
-    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
+    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, RealmId,
     canonical,
 };
 use ed25519_dalek::{Signer, SigningKey};
@@ -100,11 +100,11 @@ fn test_config() -> AppConfig {
     }
 }
 
-fn realm_id() -> SpaceId {
-    SpaceId::new("ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
+fn realm_id() -> RealmId {
+    RealmId::new("ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
 }
 
-fn space_id() -> SpaceId {
+fn space_id() -> RealmId {
     realm_id()
 }
 
@@ -645,8 +645,8 @@ fn sha256_json(value: &Value) -> String {
 
 /// events.subscribe is a streaming NDJSON
 /// response. This test:
-///   1. Calls GET /_cokret/self/events/subscribe with `max_duration_ms=500` so the stream auto-closes
-///      quickly enough for TestClient to collect the full body.
+///   1. Calls GET /_cokret/self/events/subscribe with `max_duration_ms=500` so the stream
+///      auto-closes quickly enough for TestClient to collect the full body.
 ///   2. (Concurrently) submits a message Event via /_cokret/self/events which triggers
 ///      `project_accepted_operations` → broadcast notification.
 ///   3. Asserts the response body contains:
@@ -1479,9 +1479,9 @@ async fn admin_list_cells_filters_by_prefix() {
         .await
         .unwrap();
 
-    // List with prefix=cx.component.consent. → only the consent.grant cell.
+    // List with prefix=ck.component.consent. → only the consent.grant cell.
     let mut resp = TestClient::get(format!(
-        "http://server/_soland/admin/cells?space_id={}&prefix=cx.component.consent.",
+        "http://server/_soland/admin/cells?space_id={}&prefix=ck.component.consent.",
         space_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1501,7 +1501,7 @@ async fn admin_list_cells_filters_by_prefix() {
     for cell in cells {
         let cid = cell["cell_id"].as_str().unwrap_or("");
         assert!(
-            cid.contains(":cx.component.consent."),
+            cid.contains(":ck.component.consent."),
             "every listed cell must match the prefix filter; got `{cid}`"
         );
     }
@@ -1546,7 +1546,7 @@ async fn admin_list_cells_requires_space_id_query_param() {
     let app = service(state.clone());
 
     // Missing space_id → 400 missing_param.
-    let mut resp = TestClient::get("http://server/_soland/admin/cells?prefix=cx.")
+    let mut resp = TestClient::get("http://server/_soland/admin/cells?prefix=ck.")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;

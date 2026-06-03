@@ -3,8 +3,8 @@
 //! Mounted under `/_soland/admin/moderation/...`:
 //!
 //! ### Queue
-//! - `GET /queue` — canonical queue read (`ck.admin.get_moderation_queue`)
-//!   is served by [`super::spec`]; this suite does NOT re-bind it.
+//! - `GET /queue` — canonical queue read (`ck.admin.get_moderation_queue`) is served by
+//!   [`super::spec`]; this suite does NOT re-bind it.
 //! - `POST /queue/{id}/assign` — assign reviewer DIDs.
 //! - `POST /queue/{id}/priority` — set priority.
 //!
@@ -73,13 +73,13 @@ pub struct AssignReviewerReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.queue.assign",
+    operation_id = "ck.extension.soland.admin.moderation.queue.assign",
     tags("admin", "moderation"),
     summary = "Assign reviewer DIDs to a queue item"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.queue.assign")
+    fields(op = "ck.extension.soland.admin.moderation.queue.assign")
 )]
 async fn assign_queue_item(
     aa: AuthArgs,
@@ -130,13 +130,13 @@ pub struct PrioritiseReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.queue.priority",
+    operation_id = "ck.extension.soland.admin.moderation.queue.priority",
     tags("admin", "moderation"),
     summary = "Set priority on a queue item"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.queue.priority")
+    fields(op = "ck.extension.soland.admin.moderation.queue.priority")
 )]
 async fn prioritise_queue_item(
     aa: AuthArgs,
@@ -207,11 +207,11 @@ pub struct DecisionResBody {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.decision",
+    operation_id = "ck.extension.soland.admin.moderation.decision",
     tags("admin", "moderation"),
     summary = "Issue a moderation decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.moderation.decision"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.moderation.decision"))]
 async fn issue_decision(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -287,13 +287,13 @@ pub struct LiftDecisionReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.decision.lift",
+    operation_id = "ck.extension.soland.admin.moderation.decision.lift",
     tags("admin", "moderation"),
     summary = "Lift a previously-issued moderation decision"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.decision.lift")
+    fields(op = "ck.extension.soland.admin.moderation.decision.lift")
 )]
 async fn lift_decision(
     aa: AuthArgs,
@@ -345,13 +345,13 @@ async fn lift_decision(
 // ── Appeals ──────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.appeals.list",
+    operation_id = "ck.extension.soland.admin.moderation.appeals.list",
     tags("admin", "moderation"),
     summary = "List moderation appeals (latest event per appeal)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.appeals.list")
+    fields(op = "ck.extension.soland.admin.moderation.appeals.list")
 )]
 async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -367,13 +367,13 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.appeals.get",
+    operation_id = "ck.extension.soland.admin.moderation.appeals.get",
     tags("admin", "moderation"),
     summary = "Full history of one moderation appeal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.appeals.get")
+    fields(op = "ck.extension.soland.admin.moderation.appeals.get")
 )]
 async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let appeal_id = req
@@ -425,13 +425,13 @@ pub struct ReviewAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.appeal.review",
+    operation_id = "ck.extension.soland.admin.moderation.appeal.review",
     tags("admin", "moderation"),
     summary = "Reviewer takes a moderation appeal under review"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.appeal.review")
+    fields(op = "ck.extension.soland.admin.moderation.appeal.review")
 )]
 async fn review_appeal(
     aa: AuthArgs,
@@ -518,13 +518,13 @@ pub struct DecideAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.appeal.decision",
+    operation_id = "ck.extension.soland.admin.moderation.appeal.decision",
     tags("admin", "moderation"),
     summary = "Reviewer issues verdict on a moderation appeal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.appeal.decision")
+    fields(op = "ck.extension.soland.admin.moderation.appeal.decision")
 )]
 async fn decide_appeal(
     aa: AuthArgs,
@@ -653,13 +653,13 @@ pub struct CloseAppealReq {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.appeal.close",
+    operation_id = "ck.extension.soland.admin.moderation.appeal.close",
     tags("admin", "moderation"),
     summary = "Close a decided moderation appeal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.appeal.close")
+    fields(op = "ck.extension.soland.admin.moderation.appeal.close")
 )]
 async fn close_appeal(
     aa: AuthArgs,
@@ -740,7 +740,7 @@ pub const APPEAL_AUTO_CLOSE_COOL_OFF_DAYS: i64 = 30;
 /// Build the canonical cell id for an appeal. Spec T06.
 #[allow(dead_code)]
 pub fn appeal_cell_id(appeal_id: &str) -> String {
-    format!("ck:cell:cx.component.moderation.appeal.v1:{appeal_id}")
+    format!("ck:cell:ck.component.moderation.appeal.v1:{appeal_id}")
 }
 
 /// Spec T06 — when an appeal `decision` event has `verdict=overturn`, the

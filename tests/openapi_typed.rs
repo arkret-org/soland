@@ -97,12 +97,12 @@ async fn typed_describe_handlers_publish_response_schemas() {
 
     // 3. carry generated operation_ids for typed handlers,
     for typed_only in [
-        "cx.auth.bridge.describe",
-        "cx.authz.describe",
-        "cx.extension.soland.policies.describe",
-        "cx.device_messages.describe",
-        "cx.keys.backups.describe",
-        "cx.integration.describe",
+        "ck.auth.bridge.describe",
+        "ck.authz.describe",
+        "ck.extension.soland.policies.describe",
+        "ck.device_messages.describe",
+        "ck.keys.backups.describe",
+        "ck.integration.describe",
     ] {
         assert!(
             body.contains(&format!("operationId: {typed_only}")),
@@ -221,11 +221,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "cx.extension.soland.federation.transaction",
-        "cx.extension.soland.federation.push_operations",
-        "cx.extension.soland.federation.pull_operations",
-        "cx.extension.soland.federation.space_members",
-        "cx.extension.soland.federation.verify_actor",
+        "ck.extension.soland.federation.transaction",
+        "ck.extension.soland.federation.push_operations",
+        "ck.extension.soland.federation.pull_operations",
+        "ck.extension.soland.federation.space_members",
+        "ck.extension.soland.federation.verify_actor",
         "ck.events.frontier",
     ] {
         assert!(
@@ -261,12 +261,12 @@ async fn typed_describe_handlers_publish_response_schemas() {
     for operation_id in [
         "ck.moderation.report",
         "ck.push.unregister_device",
-        "cx.push.delete_rule",
+        "ck.push.delete_rule",
         "ck.push.notify",
-        "cx.extension.soland.webrtc.create_session",
-        "cx.extension.soland.webrtc.send_signal",
-        "cx.extension.soland.webrtc.get_signals",
-        "cx.extension.soland.webrtc.close_session",
+        "ck.extension.soland.webrtc.create_session",
+        "ck.extension.soland.webrtc.send_signal",
+        "ck.extension.soland.webrtc.get_signals",
+        "ck.extension.soland.webrtc.close_session",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -295,10 +295,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "cx.extension.soland.policies.list",
-        "cx.extension.soland.policies.get",
-        "cx.extension.soland.policies.upsert",
-        "cx.extension.soland.policies.delete",
+        "ck.extension.soland.policies.list",
+        "ck.extension.soland.policies.get",
+        "ck.extension.soland.policies.upsert",
+        "ck.extension.soland.policies.delete",
         "ck.policy.check",
         "ck.authz.check",
     ] {
@@ -330,7 +330,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.keys.backups.list",
         "ck.keys.backups.get",
         "ck.keys.backups.delete",
-        "cx.profile.presence",
+        "ck.profile.presence",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -436,24 +436,24 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.directory.push.register",
         "ck.relation.create",
         "ck.relation.tombstone",
-        "cx.relation.list",
-        "cx.extension.soland.index.object",
-        "cx.extension.soland.index.thread",
-        "cx.extension.soland.index.notifications",
-        "cx.extension.soland.index.search",
-        "cx.extension.soland.index.space_hierarchy",
-        "cx.extension.soland.index.query",
-        "cx.extension.soland.index.debug_reducer",
+        "ck.relation.list",
+        "ck.extension.soland.index.object",
+        "ck.extension.soland.index.thread",
+        "ck.extension.soland.index.notifications",
+        "ck.extension.soland.index.search",
+        "ck.extension.soland.index.space_hierarchy",
+        "ck.extension.soland.index.query",
+        "ck.extension.soland.index.debug_reducer",
         "ck.push.register_device",
-        "cx.extension.soland.push.rules",
-        "cx.push.upsert_rule",
-        "cx.extension.soland.push.outbound_bridge_resolve",
-        "cx.extension.soland.push.outbound_bridge_fetch",
-        "cx.extension.soland.push.outbound_bridge_cache_import",
-        "cx.extension.soland.push.outbound_bridge_cache_invalidate",
-        "cx.extension.soland.audit.user_action",
-        "cx.extension.soland.audit.events",
-        "cx.extension.soland.admin.collection",
+        "ck.extension.soland.push.rules",
+        "ck.push.upsert_rule",
+        "ck.extension.soland.push.outbound_bridge_resolve",
+        "ck.extension.soland.push.outbound_bridge_fetch",
+        "ck.extension.soland.push.outbound_bridge_cache_import",
+        "ck.extension.soland.push.outbound_bridge_cache_invalidate",
+        "ck.extension.soland.audit.user_action",
+        "ck.extension.soland.audit.events",
+        "ck.extension.soland.admin.collection",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -520,7 +520,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15aa typed signature did not publish its schema"
         );
     }
-    for operation_id in ["cx.authz.create_grant", "cx.authz.revoke_grant"] {
+    for operation_id in ["ck.authz.create_grant", "ck.authz.revoke_grant"] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15aa typed conversion"
@@ -540,15 +540,15 @@ async fn typed_describe_handlers_publish_response_schemas() {
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
     // the SOLAND_EXTENSION_OPERATIONS registry (`ck.snapshot.head`
-    // / `cx.extension.soland.sync.get_snapshot_chunk`), not from my handler annotation.
+    // / `ck.extension.soland.sync.get_snapshot_chunk`), not from my handler annotation.
     for operation_id in [
         "ck.events.get",
         "ck.events.resolve",
         "ck.account.subscribe",
         "ck.events.query",
-        "cx.extension.soland.sync.backfill_gap",
+        "ck.extension.soland.sync.backfill_gap",
         "ck.snapshot.head",
-        "cx.extension.soland.sync.get_snapshot_chunk",
+        "ck.extension.soland.sync.get_snapshot_chunk",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),

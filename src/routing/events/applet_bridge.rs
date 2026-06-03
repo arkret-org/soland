@@ -64,7 +64,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
-    if kind != kinds::CX_APPLET_PROTOCOL_SESSION_START {
+    if kind != kinds::CK_APPLET_PROTOCOL_SESSION_START {
         return;
     }
     let body = match operation.payload.as_object() {
@@ -131,7 +131,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     let record = ProjectionEventRecord {
         event_id: synthetic_event_id,
         realm_id: realm_id_str,
-        event_kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS.to_owned(),
+        event_kind: kinds::CK_APPLET_PROTOCOL_SESSION_STATUS.to_owned(),
         operation_type: "echo_bridge_response".to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -240,7 +240,7 @@ async fn emit_applet_outcome_event(
 ) {
     let (event_kind, payload, op_type) = match outcome {
         AppletBridgeOutcome::UpstreamSuccess { response_body } => (
-            kinds::CX_APPLET_PROTOCOL_SESSION_STATUS,
+            kinds::CK_APPLET_PROTOCOL_SESSION_STATUS,
             json!({
                 "session_id": session_id,
                 "status": "completed",
@@ -254,7 +254,7 @@ async fn emit_applet_outcome_event(
             "applet_bridge_response",
         ),
         AppletBridgeOutcome::UpstreamFailure { code, message } => (
-            kinds::CX_APPLET_BRIDGE_ERROR,
+            kinds::CK_APPLET_BRIDGE_ERROR,
             json!({
                 "session_id": session_id,
                 "applet_id": applet_id,

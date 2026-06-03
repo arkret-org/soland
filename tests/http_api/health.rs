@@ -44,7 +44,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.profile.soland_limited_server.v1")
+            .any(|profile| profile == "ck.profile.soland_limited_server.v1")
     );
     assert!(
         describe["unsupported_profiles"]
@@ -52,7 +52,7 @@ async fn health_and_describe_work() {
             .unwrap()
             .iter()
             .any(
-                |profile| profile["profile"] == "cx.profile.soland_limited_server.v1"
+                |profile| profile["profile"] == "ck.profile.soland_limited_server.v1"
                     && profile["status"] == "unsupported"
             )
     );
@@ -61,14 +61,14 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.schema.core.v1" || profile == "ck.reducer.v1")
+            .any(|profile| profile == "ck.schema.core.v1" || profile == "ck.reducer.v1")
     );
     assert!(
         describe["supported_schema_profiles"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.schema.core.v1")
+            .any(|profile| profile == "ck.schema.core.v1")
     );
     assert!(
         describe["supported_reducer_profiles"]
@@ -144,7 +144,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "cx.extension.soland.admin.actors")
+            .any(|operation| operation == "ck.extension.soland.admin.actors")
     );
     assert!(
         describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
@@ -158,7 +158,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "cx.profile.index_node.v1")
+            .any(|profile| profile == "ck.profile.index_node.v1")
     );
     assert!(
         describe["limits"]["profile_status"]["full_profiles_not_claimed"]

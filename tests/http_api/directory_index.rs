@@ -23,10 +23,11 @@ async fn sync_directory_and_index_share_demo_space() {
         );
     }
 
-    let invalid_profile = TestClient::post("http://server/_cokret/self/account/subscribe?catchup=true")
-        .json(&serde_json::json!({"profile": "invalid"}))
-        .send(&app())
-        .await;
+    let invalid_profile =
+        TestClient::post("http://server/_cokret/self/account/subscribe?catchup=true")
+            .json(&serde_json::json!({"profile": "invalid"}))
+            .send(&app())
+            .await;
     assert_eq!(invalid_profile.status_code.unwrap().as_u16(), 405);
 
     let sync = account_subscribe_frame(
@@ -353,22 +354,24 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(object["object"]["kind"], "space");
 
-    let thread: Value = TestClient::get("http://server/_cokret/self/index/thread?thread_id=ck:flow:demo")
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(thread["thread"]["thread_id"], "ck:flow:demo");
-    assert!(thread["events"].as_array().unwrap().is_empty());
-
-    let notifications: Value =
-        TestClient::get("http://server/_cokret/self/index/notifications?actor=did:web:alice.example")
+    let thread: Value =
+        TestClient::get("http://server/_cokret/self/index/thread?thread_id=ck:flow:demo")
             .send(&app())
             .await
             .take_json()
             .await
             .unwrap();
+    assert_eq!(thread["thread"]["thread_id"], "ck:flow:demo");
+    assert!(thread["events"].as_array().unwrap().is_empty());
+
+    let notifications: Value = TestClient::get(
+        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+    )
+    .send(&app())
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(notifications["unread_count"], 0);
 
     let inbox: Value = TestClient::get("http://server/_cokret/self/index/inbox")
@@ -411,12 +414,13 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
 
 #[tokio::test]
 async fn broader_protocol_surface_returns_contract_shapes() {
-    let directory_describe: Value = TestClient::get("http://server/_cokret/find/directory/describe")
-        .send(&app())
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let directory_describe: Value =
+        TestClient::get("http://server/_cokret/find/directory/describe")
+            .send(&app())
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(directory_describe["service_did"], "did:web:soland.local");
 
     let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
@@ -501,13 +505,14 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         ("media", "media"),
     ];
     for (resource, field) in collections {
-        let body: Value = TestClient::get(format!("http://server/_soland/admin/{resource}?limit=5"))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+        let body: Value =
+            TestClient::get(format!("http://server/_soland/admin/{resource}?limit=5"))
+                .add_header("authorization", format!("Bearer {token}"), true)
+                .send(&app_from_state(state.clone()))
+                .await
+                .take_json()
+                .await
+                .unwrap();
         assert_eq!(body["resource"], resource);
         assert!(body["items"].is_array(), "admin {resource} missing items");
         assert!(

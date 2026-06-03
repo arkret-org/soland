@@ -42,19 +42,20 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         "device_pairing_proof_verification"
     );
 
-    let authorized: Value = TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "challenge_id": challenge["challenge_id"],
-            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
-            "display_name": "Paired Phone",
-            "proof": {"alg": "dev-none"}
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let authorized: Value =
+        TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "challenge_id": challenge["challenge_id"],
+                "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
+                "display_name": "Paired Phone",
+                "proof": {"alg": "dev-none"}
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(authorized["status"], "authorized");
     assert_eq!(
         authorized["device"]["device_id"],
@@ -62,7 +63,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     );
     assert_eq!(
         authorized["authorization_event"]["event_kind"],
-        "cx.device.pairing.authorized"
+        "ck.device.pairing.authorized"
     );
     assert_eq!(
         authorized["production_gap"],
@@ -133,26 +134,32 @@ async fn device_rename_updates_display_name() {
         .unwrap();
 
     // Unauthenticated rename is rejected.
-    let unauth = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
-        .json(&serde_json::json!({ "display_name": "Hacker" }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let unauth = TestClient::post(format!(
+        "http://server/_cokret/self/devices/{sibling}/rename"
+    ))
+    .json(&serde_json::json!({ "display_name": "Hacker" }))
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(unauth.status_code, Some(StatusCode::UNAUTHORIZED));
 
     // Empty display_name is rejected.
-    let empty = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({ "display_name": "   " }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let empty = TestClient::post(format!(
+        "http://server/_cokret/self/devices/{sibling}/rename"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({ "display_name": "   " }))
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(empty.status_code, Some(StatusCode::BAD_REQUEST));
 
     // Over-long display_name (>128 chars) is rejected.
-    let too_long = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({ "display_name": "x".repeat(129) }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let too_long = TestClient::post(format!(
+        "http://server/_cokret/self/devices/{sibling}/rename"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({ "display_name": "x".repeat(129) }))
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(too_long.status_code, Some(StatusCode::BAD_REQUEST));
 
     // Renaming an unknown device is a 404.
@@ -166,14 +173,16 @@ async fn device_rename_updates_display_name() {
     assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
 
     // Happy path: rename succeeds and the new name is returned + listed.
-    let renamed: Value = TestClient::post(format!("http://server/_cokret/self/devices/{sibling}/rename"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({ "display_name": "  Work Phone  " }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let renamed: Value = TestClient::post(format!(
+        "http://server/_cokret/self/devices/{sibling}/rename"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({ "display_name": "  Work Phone  " }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(renamed["device_id"], sibling);
     assert_eq!(renamed["display_name"], "Work Phone");
 
@@ -429,14 +438,15 @@ async fn webrtc_signaling_contracts_work() {
             .starts_with("ck:blob:sha256:")
     );
 
-    let closed: Value =
-        TestClient::delete(format!("http://server/_cokret/self/webrtc/sessions/{session_id}"))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let closed: Value = TestClient::delete(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(closed["ok"], true);
 
     let after_close = TestClient::get(format!(

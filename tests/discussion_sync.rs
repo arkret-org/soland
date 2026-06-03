@@ -71,13 +71,15 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
-    let body = TestClient::get(format!("http://server/_cokret/self/account/subscribe?{query}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
-        .await
-        .take_string()
-        .await
-        .unwrap();
+    let body = TestClient::get(format!(
+        "http://server/_cokret/self/account/subscribe?{query}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await
+    .take_string()
+    .await
+    .unwrap();
     serde_json::from_str(body.lines().next().unwrap()).unwrap()
 }
 
@@ -1021,7 +1023,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
             "flow_id": flow_id_for_realm(&space_id),
             "track_name": "discussion",
             "content": {
-                "kind": "cx.content.poll.close",
+                "kind": "ck.content.poll.close",
                 "body": "poll closed",
                 "poll_id": poll_id
             }

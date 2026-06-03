@@ -28,7 +28,7 @@ fn audit_policy_downgrade_projects_log_and_cache() {
     });
     let effect = state.apply(
         &op(
-            soland::kinds::CX_REALM_AUDIT_POLICY_DOWNGRADE,
+            soland::kinds::CK_REALM_AUDIT_POLICY_DOWNGRADE,
             REALM_A,
             payload,
         ),
@@ -52,7 +52,7 @@ fn audit_policy_downgrade_projects_log_and_cache() {
 
     // Cell projection.
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
+        "ck:cell:ck.component.realm.audit_policy_downgrade.v1:{REALM_A}"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell present");
@@ -71,7 +71,7 @@ fn audit_policy_downgrade_appends_to_existing_log() {
     for reason in ["attestation_deadline_missed", "operator_request"] {
         state.apply(
             &op(
-                soland::kinds::CX_REALM_AUDIT_POLICY_DOWNGRADE,
+                soland::kinds::CK_REALM_AUDIT_POLICY_DOWNGRADE,
                 REALM_A,
                 json!({
                     "from_policy": "attested_hardware",
@@ -85,7 +85,7 @@ fn audit_policy_downgrade_appends_to_existing_log() {
     let entries = state.realm_audit_downgrades(REALM_A);
     assert_eq!(entries.len(), 2);
     let cell_id = cokret_sdk::CellRef::new(format!(
-        "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
+        "ck:cell:ck.component.realm.audit_policy_downgrade.v1:{REALM_A}"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell present");

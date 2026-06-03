@@ -1,8 +1,8 @@
 //! Read cursor + read receipt handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/read-cursors` — set the actor's read marker (durable persistent state per-actor;
-//!   spec discovery/read-receipts.md §6).
+//! - `POST /_cokret/self/read-cursors` — set the actor's read marker (durable persistent state
+//!   per-actor; spec discovery/read-receipts.md §6).
 //! - `GET  /_cokret/self/read-cursors` — list the actor's read markers, optionally filtered by
 //!   `?space_id=...`.
 
@@ -24,11 +24,11 @@ use crate::wire::{
 use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
-    operation_id = "cx.read_cursors.set",
+    operation_id = "ck.read_cursors.set",
     tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.read_cursors.set"))]
+#[tracing::instrument(skip_all, fields(op = "ck.read_cursors.set"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -59,7 +59,7 @@ pub(super) async fn set_read_cursor(
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(realm_id.clone()).unwrap(),
-        kinds::CX_READ_MARKER,
+        kinds::CK_READ_MARKER,
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
@@ -94,11 +94,11 @@ pub(super) async fn set_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "cx.read_cursors.list",
+    operation_id = "ck.read_cursors.list",
     tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.read_cursors.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.read_cursors.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

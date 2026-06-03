@@ -74,7 +74,7 @@ async fn events_describe_and_single_event_submit_work() {
             .iter()
             .any(|kind| kind == "ck.flow.create")
     );
-    assert_eq!(describe["schema_profile"], "cx.schema.core.v1");
+    assert_eq!(describe["schema_profile"], "ck.schema.core.v1");
     assert_eq!(describe["reducer_profile"], "ck.reducer.v1");
     assert_eq!(describe["capabilities"]["batch_receipt"], false);
     assert_eq!(describe["capabilities"]["snapshot"], false);
@@ -198,7 +198,7 @@ async fn events_describe_and_single_event_submit_work() {
         4,
         Vec::new(),
     );
-    unknown_schema["schema_id"] = Value::String("cx.schema.not_registered.v1".to_owned());
+    unknown_schema["schema_id"] = Value::String("ck.schema.not_registered.v1".to_owned());
     unknown_schema["canonical_digest"] = Value::String(event_canonical_digest(&unknown_schema));
     let mut unknown_schema_response = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -392,13 +392,13 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
     assert!(body.contains("x-cokret-artifacts"));
     assert!(body.contains("allowed_object_facets"));
     let expected_operation_ids = [
-        "cx.system.health",
-        "cx.extension.soland.account.register",
-        "cx.extension.soland.account.me",
-        "cx.extension.soland.auth.logout",
-        "cx.extension.soland.contacts.request",
-        "cx.extension.soland.contacts.respond",
-        "cx.extension.soland.contacts.list",
+        "ck.system.health",
+        "ck.extension.soland.account.register",
+        "ck.extension.soland.account.me",
+        "ck.extension.soland.auth.logout",
+        "ck.extension.soland.contacts.request",
+        "ck.extension.soland.contacts.respond",
+        "ck.extension.soland.contacts.list",
         "ck.server.describe",
         "ck.events.describe",
         "ck.events.submit",
@@ -407,20 +407,20 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.events.query",
         "ck.events.subscribe",
         "ck.events.frontier",
-        "cx.extension.soland.index.query",
+        "ck.extension.soland.index.query",
         "ck.authz.get_effective_grants",
         "ck.authz.get_invites",
-        "cx.extension.soland.federation.transaction",
-        "cx.extension.soland.federation.push_operations",
-        "cx.extension.soland.federation.pull_operations",
-        "cx.extension.soland.federation.space_members",
-        "cx.extension.soland.federation.verify_actor",
+        "ck.extension.soland.federation.transaction",
+        "ck.extension.soland.federation.push_operations",
+        "ck.extension.soland.federation.pull_operations",
+        "ck.extension.soland.federation.space_members",
+        "ck.extension.soland.federation.verify_actor",
         "ck.account.subscribe",
         "ck.ephemeral.send",
         "ck.events.query_post",
-        "cx.extension.soland.sync.backfill_gap",
+        "ck.extension.soland.sync.backfill_gap",
         "ck.snapshot.head",
-        "cx.extension.soland.sync.get_snapshot_chunk",
+        "ck.extension.soland.sync.get_snapshot_chunk",
         "ck.directory.describe",
         "ck.directory.search_realms",
         "ck.directory.resolve_realm",
@@ -428,38 +428,38 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.directory.announce",
         "ck.directory.withdraw",
         "ck.directory.push.register",
-        "cx.extension.soland.index.describe",
-        "cx.extension.soland.index.debug_reducer",
-        "cx.extension.soland.admin.actors",
-        "cx.extension.soland.admin.spaces",
-        "cx.extension.soland.admin.devices",
-        "cx.extension.soland.admin.capabilities",
-        "cx.extension.soland.admin.federation",
-        "cx.extension.soland.admin.applets",
-        "cx.extension.soland.admin.agents",
-        "cx.extension.soland.admin.reports",
-        "cx.extension.soland.admin.invite_tokens",
-        "cx.extension.soland.admin.audit",
-        "cx.extension.soland.admin.policy",
-        "cx.extension.soland.admin.media",
+        "ck.extension.soland.index.describe",
+        "ck.extension.soland.index.debug_reducer",
+        "ck.extension.soland.admin.actors",
+        "ck.extension.soland.admin.spaces",
+        "ck.extension.soland.admin.devices",
+        "ck.extension.soland.admin.capabilities",
+        "ck.extension.soland.admin.federation",
+        "ck.extension.soland.admin.applets",
+        "ck.extension.soland.admin.agents",
+        "ck.extension.soland.admin.reports",
+        "ck.extension.soland.admin.invite_tokens",
+        "ck.extension.soland.admin.audit",
+        "ck.extension.soland.admin.policy",
+        "ck.extension.soland.admin.media",
         "ck.authz.check",
-        "cx.extension.soland.policies.list",
-        "cx.extension.soland.policies.get",
-        "cx.extension.soland.policies.upsert",
-        "cx.extension.soland.policies.delete",
+        "ck.extension.soland.policies.list",
+        "ck.extension.soland.policies.get",
+        "ck.extension.soland.policies.upsert",
+        "ck.extension.soland.policies.delete",
         "ck.push.register_device",
-        "cx.extension.soland.devices.pairing_challenge",
-        "cx.extension.soland.devices.authorize_pairing",
+        "ck.extension.soland.devices.pairing_challenge",
+        "ck.extension.soland.devices.authorize_pairing",
         "ck.push.unregister_device",
-        "cx.extension.soland.push.rules",
+        "ck.extension.soland.push.rules",
         "ck.push.notify",
         "ck.blob.upload",
         "ck.blob.presign",
         "ck.blob.head",
         "ck.blob.get",
-        "cx.extension.soland.webrtc.create_session",
-        "cx.extension.soland.webrtc.send_signal",
-        "cx.extension.soland.webrtc.close_session",
+        "ck.extension.soland.webrtc.create_session",
+        "ck.extension.soland.webrtc.send_signal",
+        "ck.extension.soland.webrtc.close_session",
         "ck.policy.check",
         "ck.moderation.report",
         "ck.mimi.provider_directory",
@@ -488,12 +488,12 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         );
     }
     for removed_operation_id in [
-        "cx.extension.soland.spaces.create",
-        "cx.extension.soland.spaces.update",
-        "cx.extension.soland.spaces.set_policy",
-        "cx.extension.soland.spaces.delete",
-        "cx.extension.soland.spaces.add_member",
-        "cx.extension.soland.spaces.remove_member",
+        "ck.extension.soland.spaces.create",
+        "ck.extension.soland.spaces.update",
+        "ck.extension.soland.spaces.set_policy",
+        "ck.extension.soland.spaces.delete",
+        "ck.extension.soland.spaces.add_member",
+        "ck.extension.soland.spaces.remove_member",
     ] {
         assert!(
             !body.contains(&format!("operationId: {removed_operation_id}")),
@@ -568,7 +568,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
     assert_eq!(debug["reducer_profile"], "ck.reducer.v1");
     assert_eq!(
         debug["schema_profiles"],
-        serde_json::json!(["cx.schema.core.v1"])
+        serde_json::json!(["ck.schema.core.v1"])
     );
     assert_eq!(debug["realm_id"], space_id);
     assert_eq!(debug["frontier"]["message_count"], 1);
@@ -657,7 +657,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let cursor = first["cursor"].as_str().unwrap();
 
     let filter_changed = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22cx%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22ck%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
     ))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))

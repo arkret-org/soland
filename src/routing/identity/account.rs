@@ -42,7 +42,7 @@ use crate::wire::{
 /// can swap to a longer constant or env-driven value once the persistent
 /// release ledger lands.
 pub const HANDLE_GRACE_PERIOD_SECONDS: i64 = 5;
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
 
 fn handle_in_grace_period(state: &AppState, handle: &str) -> bool {
     let releases = state.handle_releases.lock().expect("handle_releases lock");
@@ -87,12 +87,12 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.register",
+    operation_id = "ck.extension.soland.account.register",
     tags("account"),
     summary = "Register a new account record",
     status_codes(201, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.register"))]
 async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
@@ -180,11 +180,11 @@ async fn account_register(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.me",
+    operation_id = "ck.extension.soland.account.me",
     tags("account"),
     summary = "Get the authenticated principal's account record"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.me"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.me"))]
 async fn account_me(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -205,12 +205,12 @@ async fn account_me(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.claim_handle",
+    operation_id = "ck.extension.soland.account.claim_handle",
     tags("account"),
     summary = "Claim or rename the authenticated principal's handle",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.claim_handle"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.claim_handle"))]
 async fn claim_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -289,12 +289,12 @@ async fn claim_handle(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.update_profile",
+    operation_id = "ck.extension.soland.account.update_profile",
     tags("account"),
     summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.update_profile"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -367,12 +367,12 @@ fn empty_to_none(value: String) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.transfer_handle",
+    operation_id = "ck.extension.soland.account.transfer_handle",
     tags("account"),
     summary = "Transfer the authenticated principal's handle to another account",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.transfer_handle"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.transfer_handle"))]
 async fn transfer_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -461,12 +461,12 @@ async fn transfer_handle(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.export",
+    operation_id = "ck.extension.soland.account.export",
     tags("account"),
     summary = "GDPR export: assemble the authenticated principal's data bundle",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.export"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.export"))]
 async fn export_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -475,7 +475,7 @@ async fn export_account(
     // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
     // include account / profile / spaces / messages / devices / audit_log
     // facets. We assemble each from the existing persistence stores; the
-    // bundle is shipped as a single JSON blob, and a `cx.audit.exported`
+    // bundle is shipped as a single JSON blob, and a `ck.audit.exported`
     // audit entry records the operation so subsequent governance reviews
     // can see who requested an export.
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -535,13 +535,13 @@ async fn export_account(
         .collect();
 
     // Append the audit entry FIRST so the export bundle (assembled
-    // immediately after) carries the cx.audit.exported row inline.
+    // immediately after) carries the ck.audit.exported row inline.
     // After erasure the actor's session token is invalidated, so the
     // export-bundle slot is the only path back to the audit trail.
     append_audit_log(
         state,
         Some(&actor),
-        "cx.audit.exported",
+        "ck.audit.exported",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -702,7 +702,7 @@ async fn append_account_state_change_audit(
     devices_revoked: usize,
 ) {
     let payload = json!({
-        "schema": "cx.account.state_change.v1",
+        "schema": "ck.account.state_change.v1",
         "actor": did,
         "subject": did,
         "from": previous_state,
@@ -716,7 +716,7 @@ async fn append_account_state_change_audit(
     append_audit_log(
         state,
         Some(did),
-        "cx.account.state_change",
+        "ck.account.state_change",
         payload.clone(),
         "accepted",
     )
@@ -725,7 +725,7 @@ async fn append_account_state_change_audit(
         append_audit_log(
             state,
             Some(changed_by),
-            "cx.account.state_change",
+            "ck.account.state_change",
             payload,
             "accepted",
         )
@@ -734,12 +734,12 @@ async fn append_account_state_change_audit(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.deactivate",
+    operation_id = "ck.extension.soland.account.deactivate",
     tags("account"),
     summary = "Deactivate the authenticated principal and revoke active access",
     status_codes(200, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.deactivate"))]
 async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -767,12 +767,12 @@ async fn deactivate_account(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account.erase",
+    operation_id = "ck.extension.soland.account.erase",
     tags("account"),
     summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.erase"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.erase"))]
 async fn erase_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -792,7 +792,7 @@ async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "cx.audit.erasure_initiated",
+        "ck.audit.erasure_initiated",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -874,7 +874,7 @@ async fn erase_account(
     let completed_at = now();
     let completed_at_wire = completed_at.to_rfc3339_opts(SecondsFormat::Millis, true);
     let retained_stub = json!({
-        "schema": "cx.schema.erasure_receipt.stub.v1",
+        "schema": "ck.schema.erasure_receipt.stub.v1",
         "issuer": state.config.service_did.clone(),
         "subject": {"kind": "principal", "ref": actor.clone()},
         "storage_boundary": "account_private_store",
@@ -962,7 +962,7 @@ async fn erase_account(
         append_audit_log(
             state,
             Some(&actor),
-            "cx.audit.erasure_receipt.fanout_failed",
+            "ck.audit.erasure_receipt.fanout_failed",
             json!({
                 "actor": actor.clone(),
                 "affected_realms": affected_realms,
@@ -1047,7 +1047,7 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     append_audit_log(
         state,
         Some(actor),
-        "cx.audit.actor_audit_redacted",
+        "ck.audit.actor_audit_redacted",
         json!({
             "actor": actor,
             "redacted_entry_count": entries.len(),
@@ -1158,7 +1158,7 @@ fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
     Some(cokret_sdk::Operation::create(
         operation_id,
         realm_id,
-        crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+        crate::kinds::CK_AUDIT_ERASURE_RECEIPT,
         receipt,
     ))
 }
@@ -1200,11 +1200,11 @@ fn short_actor_tag(did: &str) -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.notifications.list",
+    operation_id = "ck.extension.soland.notifications.list",
     tags("notifications"),
     summary = "List notifications visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.notifications.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.notifications.list"))]
 async fn list_notifications(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1685,13 +1685,13 @@ fn mention_token_matches(text: &str, actor: &str, actor_handle: &str) -> bool {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.notifications.mark_all_read",
+    operation_id = "ck.extension.soland.notifications.mark_all_read",
     tags("notifications"),
     summary = "Stamp the authenticated actor's `last_read_at` marker to Utc::now()"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.notifications.mark_all_read")
+    fields(op = "ck.extension.soland.notifications.mark_all_read")
 )]
 async fn notifications_mark_all_read(
     aa: AuthArgs,
@@ -1733,12 +1733,12 @@ async fn notifications_mark_all_read(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.contacts.request",
+    operation_id = "ck.extension.soland.contacts.request",
     tags("contacts"),
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.request"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.request"))]
 async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1816,11 +1816,11 @@ async fn contact_request(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.contacts.respond",
+    operation_id = "ck.extension.soland.contacts.respond",
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.respond"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.respond"))]
 async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1869,11 +1869,11 @@ async fn contact_respond(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.contacts.list",
+    operation_id = "ck.extension.soland.contacts.list",
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.contacts.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.list"))]
 async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1935,11 +1935,11 @@ pub struct PrincipalSpaceResponse {
 /// so a future `principal_space_overrides` table can backfill from the audit
 /// trail and the deterministic mapping stays the offline default.
 #[endpoint(
-    operation_id = "cx.extension.soland.account.principal_space",
+    operation_id = "ck.extension.soland.account.principal_space",
     tags("account"),
     summary = "Resolve the principal control Space for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account.principal_space"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.principal_space"))]
 async fn account_principal_space(
     aa: AuthArgs,
     depot: &mut Depot,

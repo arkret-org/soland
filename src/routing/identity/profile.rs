@@ -1,8 +1,8 @@
 //! Profile / presence handlers.
 //!
 //! Surfaces:
-//! - `GET /_cokret/self/profile/presence?did=…` — render the actor's current presence record together
-//!   with display name and avatar.
+//! - `GET /_cokret/self/profile/presence?did=…` — render the actor's current presence record
+//!   together with display name and avatar.
 //!
 //! Production note: presence is currently in-memory (see
 //! `AppState.presence`). Durable presence + ephemeral/durable channel
@@ -33,11 +33,11 @@ pub struct ProfilePresenceResponse {
 }
 
 #[endpoint(
-    operation_id = "cx.profile.presence",
+    operation_id = "ck.profile.presence",
     tags("profile"),
     summary = "Read an actor's presence record + display name"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.profile.presence"))]
+#[tracing::instrument(skip_all, fields(op = "ck.profile.presence"))]
 async fn profile_presence(
     did: QueryParam<String, false>,
     depot: &mut Depot,

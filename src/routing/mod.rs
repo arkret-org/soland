@@ -121,7 +121,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // `_soland` parent prepends the new namespace segment in one place.
         // Four sibling sub-trees are resolved by salvo fallthrough; ordering
         // matters only where paths overlap:
-        //   1. `spec_router`   — canonical `cx.admin.*` (server/status,
+        //   1. `spec_router`   — canonical `ck.admin.*` (server/status,
         //      accounts, devices, moderation/queue).
         //   2. `admin_router`  — operator surface (anchorer / multisig /
         //      bottom / anchor-dag / gc-candidates / delivery-binding /
@@ -264,7 +264,7 @@ fn cokret_openapi_doc(router: &Router) -> OpenApi {
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
                 // abstraction. View facets are now declared by individual
-                // spec event kinds (`cx.view.*` / `cx.flow.*` / `cx.space.*`)
+                // spec event kinds (`ck.view.*` / `ck.flow.*` / `ck.space.*`)
                 // and bound through cell-family registry mappings.
                 "authz_constraint_kinds": ["allowed_object_facets"],
             }),
@@ -289,7 +289,7 @@ pub(crate) fn soland_extension_operation_ids() -> Vec<String> {
     SOLAND_EXTENSION_OPERATIONS
         .iter()
         .map(|(_, _, _, operation_id, _)| *operation_id)
-        .filter(|operation_id| operation_id.starts_with("cx.extension.soland."))
+        .filter(|operation_id| operation_id.starts_with("ck.extension.soland."))
         .filter(|operation_id| seen.insert((*operation_id).to_owned()))
         .map(ToOwned::to_owned)
         .collect()
@@ -320,56 +320,56 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/health",
         PathItemType::Get,
         "system",
-        "cx.system.health",
+        "ck.system.health",
         "health and liveness",
     ),
     (
         "/_cokret/self/account/register",
         PathItemType::Post,
         "account",
-        "cx.extension.soland.account.register",
+        "ck.extension.soland.account.register",
         "register account",
     ),
     (
         "/_cokret/self/account/me",
         PathItemType::Get,
         "account",
-        "cx.extension.soland.account.me",
+        "ck.extension.soland.account.me",
         "get current account",
     ),
     (
         "/_cokret/gate/auth/session-grant/exchange",
         PathItemType::Post,
         "auth",
-        "cx.extension.soland.auth.exchange_session_grant",
+        "ck.extension.soland.auth.exchange_session_grant",
         "exchange coauth session grant for principal bearer session",
     ),
     (
         "/_cokret/gate/auth/logout",
         PathItemType::Post,
         "auth",
-        "cx.extension.soland.auth.logout",
+        "ck.extension.soland.auth.logout",
         "logout active session",
     ),
     (
         "/_cokret/self/contacts/request",
         PathItemType::Post,
         "contacts",
-        "cx.extension.soland.contacts.request",
+        "ck.extension.soland.contacts.request",
         "request contact",
     ),
     (
         "/_cokret/self/contacts/respond",
         PathItemType::Post,
         "contacts",
-        "cx.extension.soland.contacts.respond",
+        "ck.extension.soland.contacts.respond",
         "respond to contact request",
     ),
     (
         "/_cokret/self/contacts",
         PathItemType::Get,
         "contacts",
-        "cx.extension.soland.contacts.list",
+        "ck.extension.soland.contacts.list",
         "list contacts",
     ),
     (
@@ -380,61 +380,61 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "server feature description",
     ),
     // CXP-0007 (P2A.3) — Circle admin surface. Operation ids align with
-    // `cx.circles.*` (sibling of `cx.realms.*` / `cx.spaces.*`).
+    // `ck.circles.*` (sibling of `ck.realms.*` / `ck.spaces.*`).
     (
         "/_cokret/self/circles",
         PathItemType::Post,
         "circles",
-        "cx.circles.create",
+        "ck.circles.create",
         "create a Circle (ck.circle.create)",
     ),
     (
         "/_cokret/self/circles",
         PathItemType::Get,
         "circles",
-        "cx.circles.list",
+        "ck.circles.list",
         "list Circles for a Realm",
     ),
     (
         "/_cokret/self/circles/{circle_id}",
         PathItemType::Get,
         "circles",
-        "cx.circles.get",
+        "ck.circles.get",
         "fetch a Circle by id",
     ),
     (
         "/_cokret/self/circles/{circle_id}/members",
         PathItemType::Post,
         "circles",
-        "cx.circles.members.add",
+        "ck.circles.members.add",
         "add or change a Circle member",
     ),
     (
         "/_cokret/self/circles/{circle_id}/members/{actor_id}",
         PathItemType::Delete,
         "circles",
-        "cx.circles.members.remove",
+        "ck.circles.members.remove",
         "remove a Circle member",
     ),
     (
         "/_cokret/self/circles/{circle_id}/scope-rotate",
         PathItemType::Post,
         "circles",
-        "cx.circles.scope_rotate",
+        "ck.circles.scope_rotate",
         "rotate the Circle's bound MLS group",
     ),
     (
         "/_cokret/self/circles/{circle_id}/archive",
         PathItemType::Post,
         "circles",
-        "cx.circles.archive",
+        "ck.circles.archive",
         "archive a Circle (ck.circle.archive)",
     ),
     (
         "/_cokret/self/circles/{circle_id}/tombstone",
         PathItemType::Post,
         "circles",
-        "cx.circles.tombstone",
+        "ck.circles.tombstone",
         "tombstone a Circle (ck.circle.tombstone)",
     ),
     (
@@ -511,21 +511,21 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/index/describe",
         PathItemType::Get,
         "index",
-        "cx.extension.soland.index.describe",
+        "ck.extension.soland.index.describe",
         "describe index profile",
     ),
     (
         "/_cokret/self/index/query",
         PathItemType::Post,
         "index",
-        "cx.extension.soland.index.query",
+        "ck.extension.soland.index.query",
         "query the projection index",
     ),
     (
         "/_cokret/self/index/debug/reducer",
         PathItemType::Get,
         "index",
-        "cx.extension.soland.index.debug_reducer",
+        "ck.extension.soland.index.debug_reducer",
         "debug reducer frontier",
     ),
     (
@@ -546,35 +546,35 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/peer/federation/transactions/{txn_id}",
         PathItemType::Put,
         "federation",
-        "cx.extension.soland.federation.transaction",
+        "ck.extension.soland.federation.transaction",
         "submit federation transaction",
     ),
     (
         "/_cokret/peer/federation/push-operations",
         PathItemType::Post,
         "federation",
-        "cx.extension.soland.federation.push_operations",
+        "ck.extension.soland.federation.push_operations",
         "push federation operations",
     ),
     (
         "/_cokret/peer/federation/pull-operations",
         PathItemType::Get,
         "federation",
-        "cx.extension.soland.federation.pull_operations",
+        "ck.extension.soland.federation.pull_operations",
         "pull federation operations",
     ),
     (
         "/_cokret/peer/federation/space-members",
         PathItemType::Get,
         "federation",
-        "cx.extension.soland.federation.space_members",
+        "ck.extension.soland.federation.space_members",
         "list space memberships",
     ),
     (
         "/_cokret/peer/federation/verify-actor",
         PathItemType::Post,
         "federation",
-        "cx.extension.soland.federation.verify_actor",
+        "ck.extension.soland.federation.verify_actor",
         "verify federation actor",
     ),
     (
@@ -595,7 +595,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/sync/backfill/gap",
         PathItemType::Get,
         "sync",
-        "cx.extension.soland.sync.backfill_gap",
+        "ck.extension.soland.sync.backfill_gap",
         "sync gap backfill (deployment-local)",
     ),
     (
@@ -609,7 +609,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/sync/snapshot-chunk",
         PathItemType::Get,
         "sync",
-        "cx.extension.soland.sync.get_snapshot_chunk",
+        "ck.extension.soland.sync.get_snapshot_chunk",
         "snapshot chunk",
     ),
     (
@@ -637,84 +637,84 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_soland/admin/actors",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.actors",
+        "ck.extension.soland.admin.actors",
         "admin actor snapshot",
     ),
     (
         "/_soland/admin/spaces",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.spaces",
+        "ck.extension.soland.admin.spaces",
         "admin space snapshot",
     ),
     (
         "/_soland/admin/devices",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.devices",
+        "ck.extension.soland.admin.devices",
         "admin device snapshot",
     ),
     (
         "/_soland/admin/capabilities",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.capabilities",
+        "ck.extension.soland.admin.capabilities",
         "admin capability snapshot",
     ),
     (
         "/_soland/admin/federation",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.federation",
+        "ck.extension.soland.admin.federation",
         "admin federation snapshot",
     ),
     (
         "/_soland/admin/applets",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.applets",
+        "ck.extension.soland.admin.applets",
         "admin applet snapshot",
     ),
     (
         "/_soland/admin/agents",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.agents",
+        "ck.extension.soland.admin.agents",
         "admin agent snapshot",
     ),
     (
         "/_soland/admin/reports",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.reports",
+        "ck.extension.soland.admin.reports",
         "admin report snapshot",
     ),
     (
         "/_soland/admin/invite-tokens",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.invite_tokens",
+        "ck.extension.soland.admin.invite_tokens",
         "admin invite token snapshot",
     ),
     (
         "/_soland/admin/audit",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.audit",
+        "ck.extension.soland.admin.audit",
         "admin audit snapshot",
     ),
     (
         "/_soland/admin/policy",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.policy",
+        "ck.extension.soland.admin.policy",
         "admin policy snapshot",
     ),
     (
         "/_soland/admin/media",
         PathItemType::Get,
         "admin",
-        "cx.extension.soland.admin.media",
+        "ck.extension.soland.admin.media",
         "admin media snapshot",
     ),
     (
@@ -728,28 +728,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/policies",
         PathItemType::Get,
         "policy",
-        "cx.extension.soland.policies.list",
+        "ck.extension.soland.policies.list",
         "list policies",
     ),
     (
         "/_cokret/self/policies/{policy_id}",
         PathItemType::Get,
         "policy",
-        "cx.extension.soland.policies.get",
+        "ck.extension.soland.policies.get",
         "get policy",
     ),
     (
         "/_cokret/self/policies",
         PathItemType::Post,
         "policy",
-        "cx.extension.soland.policies.upsert",
+        "ck.extension.soland.policies.upsert",
         "upsert policy",
     ),
     (
         "/_cokret/self/policies/{policy_id}",
         PathItemType::Delete,
         "policy",
-        "cx.extension.soland.policies.delete",
+        "ck.extension.soland.policies.delete",
         "delete policy",
     ),
     (
@@ -763,14 +763,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/edge/push/outbound/bridge/cache/export",
         PathItemType::Get,
         "push",
-        "cx.extension.soland.push.outbound_bridge_cache_export",
+        "ck.extension.soland.push.outbound_bridge_cache_export",
         "export outbound push bridge cache snapshots",
     ),
     (
         "/_cokret/edge/push/outbound/bridge/cache/import",
         PathItemType::Post,
         "push",
-        "cx.extension.soland.push.outbound_bridge_cache_import",
+        "ck.extension.soland.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
     ),
     (
@@ -805,14 +805,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/devices/pairing-challenge",
         PathItemType::Post,
         "devices",
-        "cx.extension.soland.devices.pairing_challenge",
+        "ck.extension.soland.devices.pairing_challenge",
         "create device pairing challenge",
     ),
     (
         "/_cokret/self/devices/authorize-pairing",
         PathItemType::Post,
         "devices",
-        "cx.extension.soland.devices.authorize_pairing",
+        "ck.extension.soland.devices.authorize_pairing",
         "authorize device pairing",
     ),
     (
@@ -826,7 +826,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/edge/push/rules",
         PathItemType::Get,
         "push",
-        "cx.extension.soland.push.rules",
+        "ck.extension.soland.push.rules",
         "list push rules",
     ),
     (
@@ -861,21 +861,21 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/self/webrtc/sessions",
         PathItemType::Post,
         "webrtc",
-        "cx.extension.soland.webrtc.create_session",
+        "ck.extension.soland.webrtc.create_session",
         "create WebRTC session",
     ),
     (
         "/_cokret/self/webrtc/sessions/{session_id}/signals",
         PathItemType::Post,
         "webrtc",
-        "cx.extension.soland.webrtc.send_signal",
+        "ck.extension.soland.webrtc.send_signal",
         "send WebRTC signal",
     ),
     (
         "/_cokret/self/webrtc/sessions/{session_id}",
         PathItemType::Delete,
         "webrtc",
-        "cx.extension.soland.webrtc.close_session",
+        "ck.extension.soland.webrtc.close_session",
         "close WebRTC session",
     ),
     (
@@ -1066,14 +1066,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/root/identity/recovery-policy",
         PathItemType::Post,
         "identity",
-        "cx.extension.soland.identity.recovery_policy.put",
+        "ck.extension.soland.identity.recovery_policy.put",
         "submit a ck.schema.recovery_policy.v1 policy",
     ),
     (
         "/_cokret/root/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
-        "cx.extension.soland.identity.recovery_receipt.put",
+        "ck.extension.soland.identity.recovery_receipt.put",
         "submit a ck.schema.recovery_receipt.v1 receipt",
     ),
 ];
@@ -1438,8 +1438,8 @@ pub(crate) async fn snapshot_bundle_for_space(
         .unwrap_or_else(now);
     let message_events = messages.iter().map(message_event).collect::<Vec<_>>();
     let state_document = json!({
-        "type": "cx.snapshot.realm_state.v1",
-        "schema_profiles": ["cx.schema.core.v1"],
+        "type": "ck.snapshot.realm_state.v1",
+        "schema_profiles": ["ck.schema.core.v1"],
         "reducer_profile": "ck.reducer.v1",
         "realm_id": space_id,
         "title": title,
@@ -1509,7 +1509,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     });
     let manifest = json!({
         "snapshot_ref": snapshot_ref,
-        "schema_profiles": ["cx.schema.core.v1"],
+        "schema_profiles": ["ck.schema.core.v1"],
         "reducer_profile": "ck.reducer.v1",
         "covers_frontier": frontier,
         "chunk_digests": chunks.iter().map(|c| c.digest.as_str().to_owned()).collect::<Vec<_>>(),
@@ -1674,7 +1674,7 @@ mod operation_conformance_tests {
         let vectors = vec![
             OperationVector {
                 name: "message create",
-                kind: kinds::CX_MESSAGE_CREATE,
+                kind: kinds::CK_MESSAGE_CREATE,
                 payload: json!({
                     "message_id": "ck:message:01904100-0000-7000-8000-79a90338768b",
                     "flow_id": "ck:flow:01904100-0000-7000-8000-6c663fa0205f",
@@ -1686,79 +1686,79 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "message revise",
-                kind: kinds::CX_MESSAGE_REVISE,
+                kind: kinds::CK_MESSAGE_REVISE,
                 payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ck.content.text", "body": "edited"}}),
                 valid: true,
             },
             OperationVector {
                 name: "message redact",
-                kind: kinds::CX_MESSAGE_REDACT,
+                kind: kinds::CK_MESSAGE_REDACT,
                 payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "generic redaction",
-                kind: kinds::CX_REDACTION,
+                kind: kinds::CK_REDACTION,
                 payload: json!({"redacts": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction add",
-                kind: kinds::CX_REACTION_ADD,
+                kind: kinds::CK_REACTION_ADD,
                 payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example", "key": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction remove",
-                kind: kinds::CX_REACTION_REMOVE,
+                kind: kinds::CK_REACTION_REMOVE,
                 payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "reaction": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation create",
-                kind: kinds::CX_RELATION_CREATE,
+                kind: kinds::CK_RELATION_CREATE,
                 payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation update",
-                kind: kinds::CX_RELATION_UPDATE,
+                kind: kinds::CK_RELATION_UPDATE,
                 payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "fields": {"weight": 1}}),
                 valid: true,
             },
             OperationVector {
                 name: "relation delete",
-                kind: kinds::CX_RELATION_DELETE,
+                kind: kinds::CK_RELATION_DELETE,
                 payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b"}),
                 valid: true,
             },
             OperationVector {
                 name: "member state join",
-                kind: kinds::CX_MEMBER_STATE,
+                kind: kinds::CK_MEMBER_STATE,
                 payload: json!({"actor_id": "did:web:alice.example", "membership": "join"}),
                 valid: true,
             },
             OperationVector {
                 name: "member state leave",
-                kind: kinds::CX_MEMBER_STATE,
+                kind: kinds::CK_MEMBER_STATE,
                 payload: json!({"actor_id": "did:web:alice.example", "membership": "leave"}),
                 valid: true,
             },
             OperationVector {
                 name: "member state ban",
-                kind: kinds::CX_MEMBER_STATE,
+                kind: kinds::CK_MEMBER_STATE,
                 payload: json!({"actor_id": "did:web:bob.example", "membership": "ban"}),
                 valid: true,
             },
             OperationVector {
                 name: "member state knock",
-                kind: kinds::CX_MEMBER_STATE,
+                kind: kinds::CK_MEMBER_STATE,
                 payload: json!({"actor_id": "did:web:bob.example", "membership": "knock"}),
                 valid: true,
             },
             OperationVector {
                 name: "read marker missing event_id",
-                kind: kinds::CX_READ_MARKER,
+                kind: kinds::CK_READ_MARKER,
                 payload: json!({
                     "actor_id": "did:web:alice.example",
                     "read_scope": {"kind": "realm"},
@@ -1768,7 +1768,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "read marker valid",
-                kind: kinds::CX_READ_MARKER,
+                kind: kinds::CK_READ_MARKER,
                 payload: json!({
                     "actor_id": "did:web:alice.example",
                     "read_scope": {"kind": "realm"},
@@ -1781,7 +1781,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "space create",
-                kind: kinds::CX_REALM_CREATE,
+                kind: kinds::CK_REALM_CREATE,
                 payload: json!({"object": {
                     "id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                     "schema": "ck.schema.realm.v1",
@@ -1810,7 +1810,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "space update",
-                kind: kinds::CX_REALM_UPDATE,
+                kind: kinds::CK_REALM_UPDATE,
                 payload: json!({
                     "target_ref": "ck:realm:01904100-0000-7000-8000-000000000001",
                     "patch": {
@@ -1821,69 +1821,69 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "space destroy",
-                kind: kinds::CX_REALM_DESTROY,
+                kind: kinds::CK_REALM_DESTROY,
                 payload: json!({"action": "destroy"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container archive",
-                kind: kinds::CX_SPACE_CONTAINER_ARCHIVE,
+                kind: kinds::CK_SPACE_CONTAINER_ARCHIVE,
                 payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container restore",
-                kind: kinds::CX_SPACE_CONTAINER_RESTORE,
+                kind: kinds::CK_SPACE_CONTAINER_RESTORE,
                 payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container tombstone",
-                kind: kinds::CX_SPACE_CONTAINER_TOMBSTONE,
+                kind: kinds::CK_SPACE_CONTAINER_TOMBSTONE,
                 payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container restore missing space_id",
-                kind: kinds::CX_SPACE_CONTAINER_RESTORE,
+                kind: kinds::CK_SPACE_CONTAINER_RESTORE,
                 payload: json!({"reason": "release_reopened"}),
                 valid: false,
             },
             // Flow / Morph lifecycle conformance vectors.
             OperationVector {
                 name: "flow create",
-                kind: kinds::CX_FLOW_CREATE,
+                kind: kinds::CK_FLOW_CREATE,
                 payload: json!({"object": {"id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
                 valid: true,
             },
             OperationVector {
                 name: "flow update",
-                kind: kinds::CX_FLOW_UPDATE,
+                kind: kinds::CK_FLOW_UPDATE,
                 payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
                 valid: true,
             },
             OperationVector {
                 name: "flow archive",
-                kind: kinds::CX_FLOW_ARCHIVE,
+                kind: kinds::CK_FLOW_ARCHIVE,
                 payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
                 name: "flow restore",
-                kind: kinds::CX_FLOW_RESTORE,
+                kind: kinds::CK_FLOW_RESTORE,
                 payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
                 name: "flow archive missing flow_id",
-                kind: kinds::CX_FLOW_ARCHIVE,
+                kind: kinds::CK_FLOW_ARCHIVE,
                 payload: json!({"reason": "stale_room"}),
                 valid: false,
             },
             // Flow position event vectors.
             OperationVector {
                 name: "flow move",
-                kind: kinds::CX_FLOW_MOVE,
+                kind: kinds::CK_FLOW_MOVE,
                 payload: json!({
                     "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
                     "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
@@ -1894,7 +1894,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "flow reorder",
-                kind: kinds::CX_FLOW_REORDER,
+                kind: kinds::CK_FLOW_REORDER,
                 payload: json!({
                     "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
                     "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
@@ -1905,50 +1905,50 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "flow move missing board_space_id",
-                kind: kinds::CX_FLOW_MOVE,
+                kind: kinds::CK_FLOW_MOVE,
                 payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: false,
             },
             OperationVector {
                 name: "flow reorder missing flow_id",
-                kind: kinds::CX_FLOW_REORDER,
+                kind: kinds::CK_FLOW_REORDER,
                 payload: json!({"board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
                 valid: false,
             },
             OperationVector {
                 name: "morph create",
-                kind: kinds::CX_MORPH_CREATE,
+                kind: kinds::CK_MORPH_CREATE,
                 payload: json!({"object": {"id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["ck.schema.morph.v1"]}}),
                 valid: true,
             },
             OperationVector {
                 name: "morph update",
-                kind: kinds::CX_MORPH_UPDATE,
+                kind: kinds::CK_MORPH_UPDATE,
                 payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
                 valid: true,
             },
             OperationVector {
                 name: "morph archive",
-                kind: kinds::CX_MORPH_ARCHIVE,
+                kind: kinds::CK_MORPH_ARCHIVE,
                 payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "morph restore",
-                kind: kinds::CX_MORPH_RESTORE,
+                kind: kinds::CK_MORPH_RESTORE,
                 payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "morph restore missing morph_id",
-                kind: kinds::CX_MORPH_RESTORE,
+                kind: kinds::CK_MORPH_RESTORE,
                 payload: json!({"reason": "reopen"}),
                 valid: false,
             },
             // Applet protocol family conformance vectors.
             OperationVector {
                 name: "applet registration",
-                kind: kinds::CX_APPLET_REGISTRATION,
+                kind: kinds::CK_APPLET_REGISTRATION,
                 payload: json!({
                     "service_did": "did:web:applet.example",
                     "namespace": "extensions",
@@ -1958,13 +1958,13 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet registration missing namespace",
-                kind: kinds::CX_APPLET_REGISTRATION,
+                kind: kinds::CK_APPLET_REGISTRATION,
                 payload: json!({"service_did": "did:web:applet.example"}),
                 valid: false,
             },
             OperationVector {
                 name: "applet discovery",
-                kind: kinds::CX_APPLET_DISCOVERY,
+                kind: kinds::CK_APPLET_DISCOVERY,
                 payload: json!({
                     "service_did": "did:web:applet.example",
                     "manifest": {"version": 1},
@@ -1973,7 +1973,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet session start",
-                kind: kinds::CX_APPLET_PROTOCOL_SESSION_START,
+                kind: kinds::CK_APPLET_PROTOCOL_SESSION_START,
                 payload: json!({
                     "applet_id": "ck:applet:01904100-0000-7000-8000-aa55aa55aa55",
                     "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
@@ -1983,7 +1983,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet session status",
-                kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS,
+                kind: kinds::CK_APPLET_PROTOCOL_SESSION_STATUS,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "status": "running",
@@ -1993,7 +1993,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet bridge error",
-                kind: kinds::CX_APPLET_BRIDGE_ERROR,
+                kind: kinds::CK_APPLET_BRIDGE_ERROR,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "errcode": "bridge_unavailable",
@@ -2004,7 +2004,7 @@ mod operation_conformance_tests {
             // Agent protocol family conformance vectors.
             OperationVector {
                 name: "agent endpoint",
-                kind: kinds::CX_AGENT_ENDPOINT,
+                kind: kinds::CK_AGENT_ENDPOINT,
                 payload: json!({
                     "agent_id": "did:web:agent.example",
                     "endpoints": [{"protocol": "http_custom", "url": "https://agent.example/runtime"}],
@@ -2013,13 +2013,13 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent endpoint missing endpoints",
-                kind: kinds::CX_AGENT_ENDPOINT,
+                kind: kinds::CK_AGENT_ENDPOINT,
                 payload: json!({"agent_id": "did:web:agent.example"}),
                 valid: false,
             },
             OperationVector {
                 name: "agent session start",
-                kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
+                kind: kinds::CK_AGENT_PROTOCOL_SESSION_START,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
@@ -2030,7 +2030,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session start missing capability_grant",
-                kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
+                kind: kinds::CK_AGENT_PROTOCOL_SESSION_START,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
@@ -2040,7 +2040,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session status",
-                kind: kinds::CX_AGENT_PROTOCOL_SESSION_STATUS,
+                kind: kinds::CK_AGENT_PROTOCOL_SESSION_STATUS,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "status": "working",
@@ -2050,7 +2050,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session result",
-                kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
+                kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},
@@ -2060,7 +2060,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session result missing audit_binding",
-                kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
+                kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},
@@ -2069,13 +2069,13 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "unknown kind",
-                kind: "cx.unknown.operation",
+                kind: "ck.unknown.operation",
                 payload: json!({"body": "bad"}),
                 valid: false,
             },
             OperationVector {
                 name: "reaction missing key",
-                kind: kinds::CX_REACTION_ADD,
+                kind: kinds::CK_REACTION_ADD,
                 payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example"}),
                 valid: false,
             },
@@ -2277,6 +2277,24 @@ mod canonical_conformance_vectors {
         assert!(validate_canonical_json_value(&value).is_ok());
     }
 
+    #[test]
+    fn validator_accepts_dotted_patch_path_keys() {
+        // event-and-patch.md §4.2.1: `patch` map keys are dotted snake_case
+        // patch *paths*, not canonical JSON field names.
+        let value = json!({
+            "morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5",
+            "patch": {"metadata.title": "Backfill v2"},
+        });
+        assert!(validate_canonical_json_value(&value).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_non_snake_case_patch_path_segment() {
+        // A camelCase segment is not a valid §4.2.1 identifier.
+        let value = json!({"patch": {"metadata.Title": "x"}});
+        assert!(validate_canonical_json_value(&value).is_err());
+    }
+
     // ── DID service endpoint validation vectors ──────────────────────────
 
     #[test]
@@ -2327,8 +2345,14 @@ mod framework_error_routing_tests {
 
     #[test]
     fn pattern_matches_concrete_path() {
-        assert!(pattern_matches_path("/_cokret/self/events", "/_cokret/self/events"));
-        assert!(!pattern_matches_path("/_cokret/self/events", "/_cokret/self/other"));
+        assert!(pattern_matches_path(
+            "/_cokret/self/events",
+            "/_cokret/self/events"
+        ));
+        assert!(!pattern_matches_path(
+            "/_cokret/self/events",
+            "/_cokret/self/other"
+        ));
     }
 
     #[test]
@@ -2371,8 +2395,14 @@ mod framework_error_routing_tests {
         // the entire service router; the helper logic under test is
         // pattern-matching, not OpenAPI introspection.
         let _ = KNOWN_ROUTES.set(vec![
-            ("/_cokret/self/events".to_owned(), vec![Method::GET, Method::POST]),
-            ("/_cokret/self/spaces/{space_id}".to_owned(), vec![Method::GET]),
+            (
+                "/_cokret/self/events".to_owned(),
+                vec![Method::GET, Method::POST],
+            ),
+            (
+                "/_cokret/self/spaces/{space_id}".to_owned(),
+                vec![Method::GET],
+            ),
         ]);
 
         // Known path → returns the canonical method set (in

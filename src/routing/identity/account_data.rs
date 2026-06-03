@@ -71,7 +71,7 @@ pub(super) fn router() -> Router {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AccountDataSetRequest {
     /// Caller-supplied opaque payload. Server stores it verbatim; canonical
-    /// encoding and (for sensitive keys like `cx.contacts.*` /
+    /// encoding and (for sensitive keys like `ck.contacts.*` /
     /// `ck.account.blocklist`) client-side encryption are the client's
     /// responsibility.
     pub content: Value,
@@ -96,7 +96,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     if data_type.len() > MAX_DATA_TYPE_LEN {
         return Err(AppError::invalid_param("data_type too long"));
     }
-    // Keys are dot-delimited namespaces (`cx.contacts.space.<space_id>` etc.).
+    // Keys are dot-delimited namespaces (`ck.contacts.space.<space_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
     // log-safe; everything else (including the `:` in `ck:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
@@ -121,7 +121,7 @@ fn entry_from(record: AccountDataRecord) -> AccountDataEntry {
 fn account_data_update_type(data_type: &str) -> &'static str {
     if matches!(
         data_type,
-        "ck.account.blocklist" | "cx.account.blocklist.v1"
+        "ck.account.blocklist" | "ck.account.blocklist.v1"
     ) {
         BLOCKLIST_UPDATE_TYPE
     } else {
@@ -130,12 +130,12 @@ fn account_data_update_type(data_type: &str) -> &'static str {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account_data.set",
+    operation_id = "ck.extension.soland.account_data.set",
     tags("account_data"),
     summary = "Upsert an actor-private account_data entry",
     status_codes(200, 201, 400, 401, 413, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.set"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account_data.set"))]
 async fn put_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -199,7 +199,7 @@ async fn put_account_data(
     };
     let is_blocklist_update = matches!(
         data_type.as_str(),
-        "ck.account.blocklist" | "cx.account.blocklist.v1"
+        "ck.account.blocklist" | "ck.account.blocklist.v1"
     );
     state
         .persistence
@@ -244,11 +244,11 @@ async fn put_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account_data.get",
+    operation_id = "ck.extension.soland.account_data.get",
     tags("account_data"),
     summary = "Fetch a single account_data entry by data_type"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account_data.get"))]
 async fn get_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -273,11 +273,11 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account_data.list",
+    operation_id = "ck.extension.soland.account_data.list",
     tags("account_data"),
     summary = "List every account_data entry owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account_data.list"))]
 async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -298,11 +298,11 @@ async fn list_account_data(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.account_data.delete",
+    operation_id = "ck.extension.soland.account_data.delete",
     tags("account_data"),
     summary = "Delete an account_data entry"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.account_data.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account_data.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,
     depot: &mut Depot,

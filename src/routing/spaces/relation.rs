@@ -88,7 +88,7 @@ async fn create_relation(
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(body.realm_id.clone()).unwrap(),
-        kinds::CX_RELATION_CREATE,
+        kinds::CK_RELATION_CREATE,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -135,7 +135,7 @@ async fn tombstone_relation(
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        kinds::CX_RELATION_DELETE,
+        kinds::CK_RELATION_DELETE,
         json!({ "relation_id": relation_id }),
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -148,11 +148,11 @@ async fn tombstone_relation(
 }
 
 #[endpoint(
-    operation_id = "cx.relation.list",
+    operation_id = "ck.relation.list",
     tags("relations"),
     summary = "List relations for a space, optionally filtered by `kind`"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.relation.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.relation.list"))]
 async fn list_relations(
     aa: AuthArgs,
     kind: QueryParam<String, false>,

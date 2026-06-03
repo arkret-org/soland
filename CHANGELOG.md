@@ -12,24 +12,24 @@ and the project tracks Cokret v1 spec revisions.
 
 ## R3.3 — Spec sync 2026-05-28 (cokret-spec @ cced4b8)
 
-- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CXP-0011 shareable object addressing / `cx.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CXP-0011 shareable object addressing / `ck.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3.2 — Spec sync 2026-05-28 (cokret-spec @ b56cab1)
 
 - Roster v2: `identity_state_digest` → `member_display_state_digest`; added disclosure-gated `subject_id` / `handle_claim_digests` / `handle_claims` / `handle_claims_limited` (omitted together unless subject disclosed).
-- `cx.member.identity.update` payload `identity_state_digest` → `identity_payload_digest`; `expected_state_digest` uses the segment-inclusive effective-set formula; effective set stays multi-valued (no last-writer-wins).
+- `ck.member.identity.update` payload `identity_state_digest` → `identity_payload_digest`; `expected_state_digest` uses the segment-inclusive effective-set formula; effective set stays multi-valued (no last-writer-wins).
 - New wire validators reject MemberIdentity `primary_handle`/`handles[]` (`member_identity_handle_field_forbidden`), handle-claim `service_handle` / non-principal subject, and legacy mention shape (`mention_reference_legacy_shape`).
 - Real handle-claim evidence population + Realm subject_id disclosure policy deferred `TODO(R3.2.1)` (fails closed).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3 — Spec sync 2026-05-27 (cokret-spec @ b47ff6ec)
 
-- HTTP-1: `POST /api/v1/rtc/token` (cx.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
+- HTTP-1: `POST /api/v1/rtc/token` (ck.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: all 20 R3 reason codes (`pairing_request_expired`, `proof_invalid`, agent / media-binding / recovery / handle homograph families) exposed as `pub const` strings under `crate::error::reasons` and grouped in `R3_NEW_REASONS`; per-handler wiring deferred to R3.1.
-- PROF-1: `cx.profile.media_service_binding.v1` and `cx.profile.accountable_principals.strict_reject.v1` advertised in `cx.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
+- PROF-1: `ck.profile.media_service_binding.v1` and `ck.profile.accountable_principals.strict_reject.v1` advertised in `ck.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 
@@ -38,15 +38,15 @@ and the project tracks Cokret v1 spec revisions.
 ### CXP-0007 — Circle primitive rollout (P2A; cokret-spec floor `2b0d70d`)
 
 Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
-(`circle-rollout` branch) and consumes the seven `cx.circle.*` durable event
-kinds, six `cx.circle.*` capability actions, and six new failed-precondition
+(`circle-rollout` branch) and consumes the seven `ck.circle.*` durable event
+kinds, six `ck.circle.*` capability actions, and six new failed-precondition
 reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 
 - **BREAKING** `Flow.discussion_realm_ref` is no longer accepted on the wire.
   The legacy cross-Realm discussion routing has been removed (CXP-0007 hard
   delete; intra-Realm discussion boundaries now live on a Circle via
   `scope_circle_id`). The reducer's `flow_discussion_realms` projection
-  field, the `discussion_realm_patch` dispatch, and the `cx.realm.destroy`
+  field, the `discussion_realm_patch` dispatch, and the `ck.realm.destroy`
   cross-Realm discussion-edge cascade have all been deleted outright.
 - The wire validator (`POST /api/v1/events`) now hard-rejects any payload
   whose object/patch sub-tree carries a key listed in the SDK's
@@ -64,7 +64,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
   `Circle.members ⊆ Realm.members` and the four canonical CXP-0007
   reasons (`circle_realm_mismatch`, `circle_not_active`,
   `circle_already_terminal`, `circle_member_must_be_realm_member`).
-- 7 active `cx.circle.*` event kinds (`create` / `update` / `archive` /
+- 7 active `ck.circle.*` event kinds (`create` / `update` / `archive` /
   `restore` / `tombstone` / `member.state` / `anchor_commit`) wired into
   the reducer dispatch (`anchor_commit` is reducer-derived per
   `NON_REDUCER_EVENT_KINDS`).
@@ -77,7 +77,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
   diesel symmetry only — see `DEPLOYMENT.md` §11 for the disk-sizing
   estimate.
 - Authz: `allowed_circle_ids` constraint type added to the local
-  evaluator. Required by the six `cx.circle.*` capability actions per
+  evaluator. Required by the six `ck.circle.*` capability actions per
   the spec's `required_constraints` declaration.
 - 6 CXP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
   (`circle_realm_mismatch`, `circle_not_active`,
@@ -98,11 +98,11 @@ Aggressive mode; no compatibility shim. Closes 8 protocol-review commits
 on the reducer / federation / state-machine surfaces. See
 [`../_todos.md`](../_todos.md) for the workstream context.
 
-- **BREAKING** `cx.realm.create` reducer now captures and locks `trust_domain`
+- **BREAKING** `ck.realm.create` reducer now captures and locks `trust_domain`
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
-- **BREAKING** `ServiceDescribe` v2: `cx.server.describe` /
-  `cx.account.describe` / `cx.events.describe` / `cx.applet.describe` all return
+- **BREAKING** `ServiceDescribe` v2: `ck.server.describe` /
+  `ck.account.describe` / `ck.events.describe` / `ck.applet.describe` all return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty
@@ -129,7 +129,7 @@ on the reducer / federation / state-machine surfaces. See
   `delivery_binding_stale` + `new_recipient_service_did` +
   `handover_frontier`; post-handover replays emit
   `delivery_binding_handed_over`.
-- **BREAKING** `cx.cross_signing.publish` reducer enforces CAS
+- **BREAKING** `ck.cross_signing.publish` reducer enforces CAS
   (`expected_previous_generation == current && new_generation == current + 1`),
   evaluated before signature verification.
 - **BREAKING** `audit_policy_version_digest` switched to the 4-arg form
@@ -138,16 +138,16 @@ on the reducer / federation / state-machine surfaces. See
   `trust_domain`.
 - **BREAKING** `/blob/presign` requires `realm_id` for Realm-owned blobs;
   reducer cross-checks against blob metadata.
-- **BREAKING** `cx.space.archive` / `restore` / `tombstone` accept the new
+- **BREAKING** `ck.space.archive` / `restore` / `tombstone` accept the new
   `space_state_transition_payload` / `space_object_tombstone_payload`
   shapes; legacy top-level `target_ref` rejects as `schema_violation`.
 - **BREAKING** `ConsentRevoke` reducer requires `observed_dots[]`; implicit
   cascade rejects as `schema_violation`.
-- **BREAKING** `cx.flow.update` / `cx.flow.tracks_patch` reducer uses
+- **BREAKING** `ck.flow.update` / `ck.flow.tracks_patch` reducer uses
   CAS-register semantics on cell-subject `flow_id` (bottom=reject; empty
   field-set rejects).
 - **Added** Late key recovery path emits
-  `cx.audit.policy_access{access_kind=e2ee_late_recovery,
+  `ck.audit.policy_access{access_kind=e2ee_late_recovery,
   late_recovery_original_event_id}`.
 - **BREAKING** `agent_id` and `applet_id` MUST be DID-shaped (applet also
   accepts `ck:applet:<uuidv7>`); non-DID values reject.
@@ -165,7 +165,7 @@ below. Producers on the old wire MUST upgrade.
   for every Round R2/R3 normative requirement (T01–T23).
 - **`AppConfig.trust_domain`** field plumbed from `SOLAND_TRUST_DOMAIN`
   env var (default derived from `service_did`). Required by the
-  `cx.cross_signing.reset` cross-domain replay defence (T08).
+  `ck.cross_signing.reset` cross-domain replay defence (T08).
 - **15 new `ErrorCode` variants** mirroring the new spec registry:
   `RelaxedWindowExceedsCeiling`, `E2eeRelaxedDisallowedInComplianceProfile`,
   `CrossDomainReplayRejected`, `ResetEventIdMismatch`,
@@ -176,7 +176,7 @@ below. Producers on the old wire MUST upgrade.
   `ExpiredInviteToken`, `LateRecoveryRejectedMembership`.
 - **Moderation appeal state machine** (`AppealState`, `appeal_cell_id`,
   separation-of-duties + overturn/lift pairing checks) for the four new
-  `cx.moderation.appeal.{submit,review,decision,close}` event kinds (T06).
+  `ck.moderation.appeal.{submit,review,decision,close}` event kinds (T06).
 - **Account deactivation fanout projection** (`DeactivationFanoutProjection`)
   tracking the 7 fanout domains with `outcome=partially_completed` when
   some succeed and some fail (T07).
@@ -196,22 +196,22 @@ below. Producers on the old wire MUST upgrade.
 #### Changed (wire-breaking)
 
 - **`POST /api/v1/events` ephemeral kind reject** — the 12 ephemeral
-  kinds (`cx.call.signal`, `cx.presence`, `cx.typing`, `cx.receipt.read`,
-  `cx.key.verification.*`) hard-reject with `schema_violation`. Senders
-  MUST switch to `cx.schema.ephemeral_envelope.v1` (broadcast forms)
-  or `cx.schema.device_message.v1` (to-device key verification) (T02).
-- **`POST /api/v1/events` receipt-object reject** — `cx.event_batch_receipt`
+  kinds (`ck.call.signal`, `ck.presence`, `ck.typing`, `ck.receipt.read`,
+  `ck.key.verification.*`) hard-reject with `schema_violation`. Senders
+  MUST switch to `ck.schema.ephemeral_envelope.v1` (broadcast forms)
+  or `ck.schema.device_message.v1` (to-device key verification) (T02).
+- **`POST /api/v1/events` receipt-object reject** — `ck.event_batch_receipt`
   hard-rejects as Event.kind; it is a receipt object only (T23).
 - **`POST /api/v1/events` terminal Realm reject** — any non-audit-class
-  event on a Realm whose `cx.realm.destroy` has been applied returns
+  event on a Realm whose `ck.realm.destroy` has been applied returns
   `realm_terminal_state` (409) (T07).
-- **`cx.cross_signing.reset` payload** — `trust_domain` and
+- **`ck.cross_signing.reset` payload** — `trust_domain` and
   `reset_event_id` are now required wire fields. Verification order is
   `cross_domain_replay_rejected` → `reset_event_id_mismatch` →
   `invalid_signature` (T08).
-- **`cx.realm.policy_components` reducer** — `relaxed_window_max_ms`
+- **`ck.realm.policy_components` reducer** — `relaxed_window_max_ms`
   hard-rejects above 300 000 ms (`relaxed_window_exceeds_ceiling`);
-  `cx.profile.e2ee_relaxed.v1` is mutually exclusive with the audit
+  `ck.profile.e2ee_relaxed.v1` is mutually exclusive with the audit
   compliance profiles (`e2ee_relaxed_disallowed_in_compliance_profile`);
   `media_service_decrypts=true` requires the triple binding
   (policy_components ∧ plaintext_visible_services ∧ MLS governance
@@ -231,18 +231,18 @@ below. Producers on the old wire MUST upgrade.
 - **Cursor handle minimum length** raised from 16 → 22 base64url
   characters (≥128-bit entropy); shorter handles reject as
   `cursor_integrity_invalid` (T03).
-- **`cx.audit.ryw_receipt`** is durable-event-eligible only when
-  `cx.profile.attested_audit.e2ee.v1` is active in the Realm profile
+- **`ck.audit.ryw_receipt`** is durable-event-eligible only when
+  `ck.profile.attested_audit.e2ee.v1` is active in the Realm profile
   set (T23).
 
 #### Migration
 
 - Operators MUST set `SOLAND_TRUST_DOMAIN` (or rely on the
-  `service_did`-derived default) before processing `cx.cross_signing.reset`
+  `service_did`-derived default) before processing `ck.cross_signing.reset`
   events. The boot path validates the value via the SDK
   `TypedTrustDomainId` regex.
-- Producers MUST move ephemeral kinds off `cx.events.submit`; the
+- Producers MUST move ephemeral kinds off `ck.events.submit`; the
   endpoint no longer accepts them under any compatibility flag.
 - Producers MUST add `trust_domain` and `reset_event_id` to every
-  `cx.cross_signing.reset` payload (matching the enclosing
+  `ck.cross_signing.reset` payload (matching the enclosing
   `Event.event_id`).

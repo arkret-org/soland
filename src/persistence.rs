@@ -26,9 +26,8 @@ use crate::state::{
     FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
     PushRuleRecord, RealmMetaRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SessionRecord,
-    SpaceInviteRecord, TypingRecord, WebrtcSessionRecord, WebrtcSignalRecord, WebvhDocumentRecord,
-    WebvhLogRecord,
+    RecoverySessionRecord, SessionRecord, SpaceInviteRecord, TypingRecord, WebrtcSessionRecord,
+    WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
 /// Error type for persistence operations.
@@ -69,7 +68,7 @@ pub trait SessionStore: Send + Sync {
 /// Trait for actor-private account data storage.
 ///
 /// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
-/// `cx.contacts.space.<realm_id>`, `ck.read_receipt.preferences`). The
+/// `ck.contacts.space.<realm_id>`, `ck.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
 ///
@@ -7107,7 +7106,9 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         .bind::<Text, _>(principal_id)
         .get_results::<RecoveryPolicyRow>(&mut *conn)
         .await?;
-        rows.into_iter().map(RecoveryPolicyRecord::try_from).collect()
+        rows.into_iter()
+            .map(RecoveryPolicyRecord::try_from)
+            .collect()
     }
 
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
@@ -8747,7 +8748,7 @@ mod tests {
             actor_seq: seq,
             realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             kind: "ck.message.create".to_owned(),
-            schema_id: "cx.schema.event.message.v1".to_owned(),
+            schema_id: "ck.schema.event.message.v1".to_owned(),
             canonical_digest: "sha256:abc".to_owned(),
             canonical_bytes: b"canonical-bytes".to_vec(),
             envelope: serde_json::json!({"event_id": event_id}),

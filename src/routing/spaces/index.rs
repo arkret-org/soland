@@ -41,7 +41,7 @@ const QUERY_FEATURES: &[&str] = &[
     "debug_reducer_snapshot",
 ];
 const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -67,7 +67,7 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
         "profile_claim": "not_claimed",
         "service_did": state.config.service_did.clone(),
         "reducer_profile": "ck.reducer.v1",
-        "schema_profiles": ["cx.schema.core.v1"],
+        "schema_profiles": ["ck.schema.core.v1"],
         "query_features": QUERY_FEATURES,
         "supported_facets": SUPPORTED_FACETS,
         "supported_renderers": ["collection", "thread", "feed", "board"],
@@ -104,11 +104,11 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.object",
+    operation_id = "ck.extension.soland.index.object",
     tags("index"),
     summary = "Describe a typed object by its `ck:<kind>:...` id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.object"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.object"))]
 async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> {
     let object_id = object_id.into_inner();
     let kind = object_kind_for(&object_id)
@@ -117,17 +117,17 @@ async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> 
         "object": {
             "object_id": object_id,
             "kind": kind,
-            "schema": format!("cx.schema.{kind}.v1"),
+            "schema": format!("ck.schema.{kind}.v1"),
         },
     }))
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.thread",
+    operation_id = "ck.extension.soland.index.thread",
     tags("index"),
     summary = "List events for a thread (up to 100)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.thread"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.thread"))]
 async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let thread_id = thread_id.into_inner();
@@ -155,7 +155,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
     json_ok(json!({
         "thread": {
             "thread_id": thread_id,
-            "schema": "cx.schema.thread.v1",
+            "schema": "ck.schema.thread.v1",
             "message_count": events.len(),
         },
         "events": events,
@@ -164,11 +164,11 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.notifications",
+    operation_id = "ck.extension.soland.index.notifications",
     tags("index"),
     summary = "List inbox notifications for an actor across known spaces"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.notifications"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.notifications"))]
 async fn index_notifications(
     actor: QueryParam<String, false>,
     depot: &mut Depot,
@@ -315,11 +315,11 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.search",
+    operation_id = "ck.extension.soland.index.search",
     tags("index"),
     summary = "Substring-search messages + spaces for a query string"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.search"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.search"))]
 async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -425,11 +425,11 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.space_hierarchy",
+    operation_id = "ck.extension.soland.index.space_hierarchy",
     tags("index"),
     summary = "Walk the space hierarchy below a root space id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.space_hierarchy"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.space_hierarchy"))]
 async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonResult<Value> {
     let root_space_id = root_space_id.into_inner();
     json_ok(json!({
@@ -440,11 +440,11 @@ async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonR
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.query",
+    operation_id = "ck.extension.soland.index.query",
     tags("index"),
     summary = "Faceted projection query (renderer + filters + sort + cursor)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.query"))]
 async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -708,11 +708,11 @@ fn apply_index_sort(results: &mut [Value], sort: &Value) {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.index.debug_reducer",
+    operation_id = "ck.extension.soland.index.debug_reducer",
     tags("index"),
     summary = "Debug: dump recent reducer events for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.debug_reducer"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.debug_reducer"))]
 async fn index_debug_reducer(
     realm_id: QueryParam<String, true>,
     limit: QueryParam<usize, false>,
@@ -749,7 +749,7 @@ async fn index_debug_reducer(
         "service_did": state.config.service_did.clone(),
         "realm_id": realm_id,
         "reducer_profile": "ck.reducer.v1",
-        "schema_profiles": ["cx.schema.core.v1"],
+        "schema_profiles": ["ck.schema.core.v1"],
         "frontier": {
             "message_count": messages.len(),
             "projection_event_count": projection_events.len(),

@@ -28,13 +28,13 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.retention.policy.configure",
+    operation_id = "ck.extension.soland.admin.retention.policy.configure",
     tags("admin", "retention"),
     summary = "Configure a local Realm retention TTL policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.retention.policy.configure")
+    fields(op = "ck.extension.soland.admin.retention.policy.configure")
 )]
 async fn configure_retention_policy(
     aa: AuthArgs,
@@ -62,7 +62,7 @@ async fn configure_retention_policy(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.audit.retention_policy.updated",
+        "ck.audit.retention_policy.updated",
         json!({
             "realm_id": realm_id,
             "ttl_seconds": ttl_seconds,
@@ -74,11 +74,11 @@ async fn configure_retention_policy(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.retention.sweep",
+    operation_id = "ck.extension.soland.admin.retention.sweep",
     tags("admin", "retention"),
     summary = "Sweep expired retention-policy events into tombstones"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.retention.sweep"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.retention.sweep"))]
 async fn sweep_retention_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -107,7 +107,7 @@ async fn sweep_retention_policy(
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.realm_id == realm_id)
-        .filter(|event| event.event_kind == kinds::CX_MESSAGE_CREATE)
+        .filter(|event| event.event_kind == kinds::CK_MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();
     let mut created = Vec::new();
@@ -164,7 +164,7 @@ async fn sweep_retention_policy(
     append_audit_log(
         state,
         Some(&session.actor),
-        "cx.audit.retention_sweep",
+        "ck.audit.retention_sweep",
         json!({
             "realm_id": realm_id,
             "examined": examined,

@@ -13,7 +13,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let expires_at = sent_at + chrono::Duration::seconds(30);
     let unauth_presence = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
-            "kind": "cx.presence",
+            "kind": "ck.presence",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -29,7 +29,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let presence: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "cx.presence",
+            "kind": "ck.presence",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -44,7 +44,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(presence["accepted"], true);
-    assert_eq!(presence["kind"], "cx.presence");
+    assert_eq!(presence["kind"], "ck.presence");
 
     let profile: Value =
         TestClient::get("http://server/_cokret/self/profile/presence?did=did:web:alice.example")
@@ -78,7 +78,7 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
-            "kind": "cx.typing",
+            "kind": "ck.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -94,7 +94,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "cx.typing",
+            "kind": "ck.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -110,7 +110,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .await
         .unwrap();
     assert_eq!(typing["accepted"], true);
-    assert_eq!(typing["kind"], "cx.typing");
+    assert_eq!(typing["kind"], "ck.typing");
 
     let active_typing = state
         .persistence
@@ -127,7 +127,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let typing_stopped: Value = TestClient::post("http://server/_cokret/self/ephemeral")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "kind": "cx.typing",
+            "kind": "ck.typing",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
             "sent_at": stop_sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -228,13 +228,14 @@ async fn push_profile_and_moderation_contracts_work() {
             && device["reason"] == "unknown_device"
     }));
 
-    let deleted_rule: Value = TestClient::delete("http://server/_cokret/edge/push/rules/mute-device")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let deleted_rule: Value =
+        TestClient::delete("http://server/_cokret/edge/push/rules/mute-device")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(deleted_rule["ok"], true);
 
     let unmuted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
@@ -813,20 +814,21 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(!invisible_text.contains(locked_space["space_id"].as_str().unwrap()));
     assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
 
-    let push_registration: Value = TestClient::post("http://server/_cokret/edge/push/register-device")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "push_gateway": "https://push.example",
-            "push_key": "opaque",
-            "platform": "desktop",
-            "app_id": "yougen"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let push_registration: Value =
+        TestClient::post("http://server/_cokret/edge/push/register-device")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&serde_json::json!({
+                "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+                "push_gateway": "https://push.example",
+                "push_key": "opaque",
+                "platform": "desktop",
+                "app_id": "yougen"
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(push_registration["ok"], true);
 
     let plaintext_push = TestClient::post("http://server/_cokret/edge/push/notify")
@@ -880,7 +882,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "contract_digest": "sha256:stale",
             "fetched_at": stale_at,
             "remote_contract": {
-                "contract": "cx.push.bridge.describe",
+                "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
                 "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.push.notify"}
             },
@@ -942,7 +944,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "contract_digest": "sha256:fresh",
             "fetched_at": now,
             "remote_contract": {
-                "contract": "cx.push.bridge.describe",
+                "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
                 "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.push.notify"}
             },
@@ -1142,7 +1144,7 @@ async fn revoked_device_blocks_encrypted_writes() {
         "did:web:alice.example",
         DEMO_REALM_ID,
         DEMO_REALM_ID,
-        encrypted_envelope("cx.message.v1", "blocked-ciphertext"),
+        encrypted_envelope("ck.message.v1", "blocked-ciphertext"),
         true,
     )
     .await;
@@ -1181,8 +1183,8 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.application",
-                        "content": encrypted_envelope("cx.mls.application", ciphertext)
+                        "type": "ck.mls.application",
+                        "content": encrypted_envelope("ck.mls.application", ciphertext)
                     }
                 }
             }
@@ -1215,8 +1217,8 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "cx.mls.application",
-                        "content": encrypted_envelope("cx.mls.application", "ack-ciphertext")
+                        "type": "ck.mls.application",
+                        "content": encrypted_envelope("ck.mls.application", "ack-ciphertext")
                     }
                 }
             }

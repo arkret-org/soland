@@ -680,7 +680,7 @@ impl MergedAuthzDecision {
 /// runs the remote response's obligations through the executor.
 ///
 /// `realm_id` is the canonical Realm identifier the policy server
-/// keys decisions on (NOT the SDK `SpaceId` — pass the wire string).
+/// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
 #[allow(clippy::too_many_arguments)]
 pub async fn check_with_policy_server(
     engine: &AuthzEngine,

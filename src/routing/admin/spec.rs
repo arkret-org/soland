@@ -1,4 +1,4 @@
-//! Canonical `cx.admin.*` endpoints from the public service spec.
+//! Canonical `ck.admin.*` endpoints from the public service spec.
 //!
 //! Per cokret-spec `service-http-binding.md` §2.1 the admin surface is a
 //! deployment-local namespace served at the bare `/admin/*` path (NOT under
@@ -120,12 +120,12 @@ async fn update_account_status(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.lock_account",
+    operation_id = "ck.extension.soland.admin.lock_account",
     tags("admin"),
     summary = "Lock an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.lock_account"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.lock_account"))]
 async fn lock_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -137,12 +137,12 @@ async fn lock_account(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.unlock_account",
+    operation_id = "ck.extension.soland.admin.unlock_account",
     tags("admin"),
     summary = "Return a locked account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.unlock_account"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.unlock_account"))]
 async fn unlock_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -154,12 +154,12 @@ async fn unlock_account(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.suspend_account",
+    operation_id = "ck.extension.soland.admin.suspend_account",
     tags("admin"),
     summary = "Suspend an account while leaving existing sessions to expire naturally",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.suspend_account"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.suspend_account"))]
 async fn suspend_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -171,12 +171,12 @@ async fn suspend_account(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.unsuspend_account",
+    operation_id = "ck.extension.soland.admin.unsuspend_account",
     tags("admin"),
     summary = "Return a suspended account to active state",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.unsuspend_account"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.unsuspend_account"))]
 async fn unsuspend_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -188,12 +188,12 @@ async fn unsuspend_account(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.deactivate_account",
+    operation_id = "ck.extension.soland.admin.deactivate_account",
     tags("admin"),
     summary = "Deactivate an account and revoke active access",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.deactivate_account"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.deactivate_account"))]
 async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,

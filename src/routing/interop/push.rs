@@ -5,8 +5,8 @@
 //! - `POST /_cokret/edge/push/unregister-device` — remove an authenticated actor's device token
 //! - `GET / POST /_cokret/edge/push/rules` — list / upsert push rules
 //! - `DELETE /_cokret/edge/push/rules/{rule_id}` — drop one
-//! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the 12-fn
-//!   helper block at the bottom of this file).
+//! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the
+//!   12-fn helper block at the bottom of this file).
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Cokret-Session-Grant` header for clients that haven't yet picked up a
@@ -49,11 +49,11 @@ use crate::wire::{
 const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 
 #[endpoint(
-    operation_id = "cx.push.register_device",
+    operation_id = "ck.push.register_device",
     tags("push"),
     summary = "Register a device + push gateway token (bearer or session-grant bridge)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.register_device"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.register_device"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterRequest>,
     depot: &mut Depot,
@@ -147,11 +147,11 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
 }
 
 #[endpoint(
-    operation_id = "cx.push.unregister_device",
+    operation_id = "ck.push.unregister_device",
     tags("push"),
     summary = "Unregister a push device for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.unregister_device"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
     body: JsonBody<PushUnregisterRequest>,
@@ -191,11 +191,11 @@ pub(super) async fn push_unregister(
 }
 
 #[endpoint(
-    operation_id = "cx.push.rules",
+    operation_id = "ck.push.rules",
     tags("push"),
     summary = "List push notification rules for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.rules"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.rules"))]
 pub(super) async fn push_rules(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -219,11 +219,11 @@ pub(super) async fn push_rules(
 }
 
 #[endpoint(
-    operation_id = "cx.push.upsert_rule",
+    operation_id = "ck.push.upsert_rule",
     tags("push"),
     summary = "Idempotently create or update a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.upsert_rule"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.upsert_rule"))]
 pub(super) async fn upsert_push_rule(
     aa: AuthArgs,
     body: JsonBody<UpsertPushRuleRequest>,
@@ -273,11 +273,11 @@ pub(super) async fn upsert_push_rule(
 }
 
 #[endpoint(
-    operation_id = "cx.push.delete_rule",
+    operation_id = "ck.push.delete_rule",
     tags("push"),
     summary = "Delete a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.delete_rule"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.delete_rule"))]
 pub(super) async fn delete_push_rule(
     aa: AuthArgs,
     rule_id: PathParam<String>,
@@ -299,11 +299,11 @@ pub(super) async fn delete_push_rule(
 }
 
 #[endpoint(
-    operation_id = "cx.push.notify",
+    operation_id = "ck.push.notify",
     tags("push"),
     summary = "Fan out a push notification through the rule engine"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.push.notify"))]
+#[tracing::instrument(skip_all, fields(op = "ck.push.notify"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyReqBody>,
     depot: &mut Depot,
@@ -413,7 +413,8 @@ async fn verify_push_gateway_contract_drift(
     let Some(service_base_url) = derive_push_gateway_service_base_url(trimmed) else {
         return DriftResult::Unknown;
     };
-    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+    let bridge_describe_url =
+        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let cache = state.persistence.push_bridge_cache();
     let snapshot_digest = match cache.current_contract(&bridge_describe_url).await {
         Ok(Some(record)) => record.contract_digest,

@@ -5,7 +5,7 @@
 //!
 //! Endpoints:
 //! - `GET /_soland/admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /_soland/admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
+//! - `GET /_soland/admin/cells?space_id=...&prefix=ck.component.consent.` — list matching cells
 //!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
@@ -21,7 +21,7 @@
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::state_res::{CellRegistry, CellStore};
-use cokret_sdk::{CellRef, SpaceId};
+use cokret_sdk::{CellRef, RealmId};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -106,13 +106,13 @@ fn state_response_from(
     }
 }
 
-/// Synthesise a SpaceId for cell-registry resolution. If the cell's subject
-/// looks like a `ck:space:...` id (space-scoped families: `cx.component.space.*`)
+/// Synthesise a RealmId for cell-registry resolution. If the cell's subject
+/// looks like a `ck:space:...` id (space-scoped families: `ck.component.space.*`)
 /// we use it; otherwise we fall back to a sentinel scope. The MemoryCellRegistry
 /// is space-agnostic today so this only affects future per-Space scoping.
-fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<SpaceId, AppError> {
+fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<RealmId, AppError> {
     if let Some(explicit) = explicit {
-        return SpaceId::new(explicit.to_owned()).map_err(|e| {
+        return RealmId::new(explicit.to_owned()).map_err(|e| {
             AppError::new(
                 ErrorCode::InvalidParam,
                 format!("invalid space_id `{explicit}`: {e}"),
@@ -120,15 +120,15 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
             .with_status(StatusCode::BAD_REQUEST)
         });
     }
-    // Best-effort: subject of `cx.component.space.*` cells is the space id.
+    // Best-effort: subject of `ck.component.space.*` cells is the space id.
     if let Ok(parsed) = cokret_sdk::CellId::parse(cell_id.as_str())
         && parsed.subject().starts_with("ck:space:")
     {
-        if let Ok(space) = SpaceId::new(parsed.subject().to_owned()) {
+        if let Ok(space) = RealmId::new(parsed.subject().to_owned()) {
             return Ok(space);
         }
     }
-    SpaceId::new(SENTINEL_SPACE_SCOPE.to_owned()).map_err(|e| {
+    RealmId::new(SENTINEL_SPACE_SCOPE.to_owned()).map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
             format!("sentinel space_id failed to parse: {e}"),
@@ -143,11 +143,11 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.cells.get",
+    operation_id = "ck.extension.soland.admin.cells.get",
     tags("admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.cells.get"))]
 async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -232,21 +232,21 @@ async fn admin_get_cell(
 /// — list cells matching the filter.
 ///
 /// Filters:
-/// - `space_id` (required) — the SpaceId scope. Cells are scoped per Space in the underlying
+/// - `space_id` (required) — the RealmId scope. Cells are scoped per Space in the underlying
 ///   CellStore; we walk `cell_store.list_cells(space_id)` for the canonical set then read each
 ///   cell's effective state from `ProjectionState::cells`.
 /// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
-///   (e.g. `cx.component.consent.`).
+///   (e.g. `ck.component.consent.`).
 /// - `limit` / `offset` — pagination. Default and max page sizes come from
 ///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`, default `100`) and
 ///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
 ///   to `0`.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.cells.list",
+    operation_id = "ck.extension.soland.admin.cells.list",
     tags("admin", "cells"),
     summary = "List cells matching a space + family prefix filter"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.cells.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.cells.list"))]
 async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -262,7 +262,7 @@ async fn admin_list_cells(
         )
         .with_status(StatusCode::BAD_REQUEST));
     };
-    let space = SpaceId::new(space_str.clone()).map_err(|e| {
+    let space = RealmId::new(space_str.clone()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("invalid space_id `{space_str}`: {e}"),
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn resolve_space_extracts_space_subject_when_no_explicit() {
         let cell = CellRef::new(
-            "ck:cell:cx.component.space.create.v1:ck:space:0196419b-0000-7000-8000-00000000014a"
+            "ck:cell:ck.component.space.create.v1:ck:space:0196419b-0000-7000-8000-00000000014a"
                 .to_owned(),
         )
         .unwrap();

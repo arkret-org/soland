@@ -1,20 +1,22 @@
--- Space-container projection state - server-side state-machine for cx.space.*
+-- Space-container projection state - server-side state-machine for ck.space.*
 -- lifecycle events. Spec: cokret-spec/spec/v1/zh/models/space-and-place.md
 -- §4.4 + common-fields.md §5.1. soland's reducer maintains this in-memory
 -- (ProjectionState::space_containers) and persists here for restart durability.
 --
 -- State semantics:
---   active     - default after cx.space.create.
---   archived   - set by cx.space.archive; reversible via cx.space.restore.
---   tombstoned - set by cx.space.tombstone; terminal, MUST NOT be restored.
+--   active     - default after ck.space.create.
+--   archived   - set by ck.space.archive; reversible via ck.space.restore.
+--   tombstoned - set by ck.space.tombstone; terminal, MUST NOT be restored.
 
 CREATE TABLE projection_space_containers (
     container_space_id TEXT PRIMARY KEY,
     realm_id           TEXT NOT NULL,
+    -- Column order mirrors the spec space field order (kind, rank before
+    -- title; spec/v1/artifacts/schemas/space.schema.json).
     kind              TEXT NOT NULL,
+    rank              TEXT,
     title             TEXT NOT NULL,
     parent_ref        TEXT,
-    rank              TEXT,
     state             TEXT NOT NULL DEFAULT 'active'
         CHECK (state IN ('active', 'archived', 'tombstoned')),
     state_changed_at  TIMESTAMPTZ,

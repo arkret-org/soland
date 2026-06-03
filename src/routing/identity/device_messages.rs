@@ -4,10 +4,10 @@
 //! - `POST /_cokret/self/device_messages` — send to-device messages, idempotent on `(actor,
 //!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
 //!   supplied via the `Idempotency-Key` request header.
-//! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound session/device.
-//!   Uses the `ck:cursor:` `to_device_position` from `parse_and_validate_sync_cursor` so a
-//!   duplicate sync cannot prematurely ack a delivery (this is what the README calls out as the
-//!   cursor-acked eviction guarantee).
+//! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound
+//!   session/device. Uses the `ck:cursor:` `to_device_position` from
+//!   `parse_and_validate_sync_cursor` so a duplicate sync cannot prematurely ack a delivery (this
+//!   is what the README calls out as the cursor-acked eviction guarantee).
 
 use std::collections::BTreeMap;
 
@@ -27,10 +27,10 @@ use crate::wire::{
     DeviceMessagesReceiveResBody, DeviceMessagesSendReqBody, DeviceMessagesSendResBody, sync_token,
 };
 
-pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "cx.account_data.update";
-pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "cx.account.blocklist.update";
-pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "cx.read_cursor.update";
-pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "cx.notification.read_cursor.update";
+pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
+pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
+pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
+pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "ck.notification.read_cursor.update";
 
 pub(super) fn router() -> Router {
     Router::new()

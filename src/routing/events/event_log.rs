@@ -1,10 +1,10 @@
 //! Signed Event Envelope ingestion + read API (`/_cokret/self/events/*`).
 //!
 //! Surfaces:
-//! - `GET  /_cokret/self/events/describe`  — declare the active event registry, schema/reducer profiles,
-//!   and limits.
-//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope, an `events[]` batch, or
-//!   a federation `service_binding_ref` + `events[]` batch.
+//! - `GET  /_cokret/self/events/describe`  — declare the active event registry, schema/reducer
+//!   profiles, and limits.
+//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope, an `events[]`
+//!   batch, or a federation `service_binding_ref` + `events[]` batch.
 //! - `GET  /_cokret/self/events/{event_id}` — fetch one envelope.
 //! - `POST /_cokret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /_cokret/self/events`            — paginated list (filtered by actor / realm).
@@ -118,9 +118,9 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "schema_ids": artifacts::schema_ids().into_iter().collect::<Vec<_>>(),
             "operation_count": artifacts::operation_ids().len(),
             "id_kind_count": artifacts::id_kind_forms().len(),
-            "id_profile": "cx.id.typed-prefix.v1"
+            "id_profile": "ck.id.typed-prefix.v1"
         }),
-        schema_profile: "cx.schema.core.v1".to_owned(),
+        schema_profile: "ck.schema.core.v1".to_owned(),
         reducer_profile: "ck.reducer.v1".to_owned(),
         limits: json!({
             "max_event_bytes": MAX_EVENT_BYTES,
@@ -479,11 +479,11 @@ pub(super) async fn events_query_durable_scope_impl(
 /// (currently used only as a fallback dispatched from `routing::events::sync::events_query`
 /// when the selector has no `spaces[]`).
 #[endpoint(
-    operation_id = "cx.events.query_durable",
+    operation_id = "ck.events.query_durable",
     tags("events"),
     summary = "Durable-store reader (bypasses projection; actor-scoped audit queries)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.events.query_durable"))]
+#[tracing::instrument(skip_all, fields(op = "ck.events.query_durable"))]
 async fn events_query_durable_scope(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -873,18 +873,21 @@ async fn submit_federation_events(
         }
     }
 
-    let trust_headers = match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req) {
-        Ok(headers) => headers,
-        Err(violation) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                violation.error_code(),
-                &violation.message(),
-            );
-            return;
-        }
-    };
+    let trust_headers =
+        match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
+            req,
+        ) {
+            Ok(headers) => headers,
+            Err(violation) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    violation.error_code(),
+                    &violation.message(),
+                );
+                return;
+            }
+        };
     let expected_destination = match TypedTrustDomainId::new(state.config.trust_domain.clone()) {
         Ok(value) => value,
         Err(error) => {
@@ -945,9 +948,7 @@ async fn submit_federation_events(
             return;
         }
     };
-    if let Err((code, message)) =
-        EventsSubmitRequest::validate_federation_binding(&submit)
-    {
+    if let Err((code, message)) = EventsSubmitRequest::validate_federation_binding(&submit) {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
@@ -1261,7 +1262,7 @@ async fn submit_event_value(
     // envelope so read-path visibility gating hides circle-scoped messages
     // from realm members outside the Circle. The Flow scope is durable
     // (projection_flows.scope_circle_id), so this survives restart.
-    if parsed.kind == kinds::CX_MESSAGE_CREATE
+    if parsed.kind == kinds::CK_MESSAGE_CREATE
         && let Some(flow_id) = envelope
             .get("payload")
             .and_then(|payload| payload.get("flow_id"))
@@ -1357,13 +1358,13 @@ fn preflight_mls_projection_reject(
 ) -> Option<String> {
     let kind = kinds::canonical_kind_string(operation);
     match kind.as_str() {
-        kinds::CX_MLS_KEYPACKAGE
-        | kinds::CX_MLS_WELCOME
-        | kinds::CX_MLS_GENESIS
-        | kinds::CX_MLS_COMMIT => {
+        kinds::CK_MLS_KEYPACKAGE
+        | kinds::CK_MLS_WELCOME
+        | kinds::CK_MLS_GENESIS
+        | kinds::CK_MLS_COMMIT => {
             let mut snapshot = proj.clone();
             let effect = match kind.as_str() {
-                kinds::CX_MLS_KEYPACKAGE => {
+                kinds::CK_MLS_KEYPACKAGE => {
                     match operation.payload.get("action").and_then(Value::as_str) {
                         Some("publish") => {
                             crate::reducer::mls::apply_keypackage_publish(&mut snapshot, operation)
@@ -1379,13 +1380,13 @@ fn preflight_mls_projection_reject(
                         },
                     }
                 }
-                kinds::CX_MLS_WELCOME => {
+                kinds::CK_MLS_WELCOME => {
                     crate::reducer::mls::apply_welcome_enqueue(&mut snapshot, operation)
                 }
-                kinds::CX_MLS_GENESIS => {
+                kinds::CK_MLS_GENESIS => {
                     crate::reducer::mls::apply_group_genesis(&mut snapshot, operation)
                 }
-                kinds::CX_MLS_COMMIT => {
+                kinds::CK_MLS_COMMIT => {
                     crate::reducer::mls::apply_commit_epoch(&mut snapshot, operation)
                 }
                 _ => crate::reducer::ProjectionEffect::Ignored,
@@ -1451,49 +1452,49 @@ async fn validate_event_envelope(
         event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
     })?;
     // R1.2 (Realm/Space reversal) — hard_reject the pre-rename security
-    // `cx.space.<event>` and container `cx.place.*` wire kinds with a
+    // `ck.space.<event>` and container `ck.place.*` wire kinds with a
     // distinct reason_code so clients can detect they need to upgrade.
-    // The reversal moved the security namespace from `cx.space.*` to
-    // `cx.realm.*` and the container namespace from `cx.place.*` to
-    // `cx.space.*`; both lists below name the pre-rename kinds that are
+    // The reversal moved the security namespace from `ck.space.*` to
+    // `ck.realm.*` and the container namespace from `ck.place.*` to
+    // `ck.space.*`; both lists below name the pre-rename kinds that are
     // now extinct on the wire.
     if matches!(
         kind.as_str(),
-        "cx.space.upgrade"
-            | "cx.space.organization"
-            | "cx.space.policy"
-            | "cx.space.join_rule"
-            | "cx.space.history_visibility"
-            | "cx.space.discovery"
-            | "cx.space.policy_server"
-            | "cx.space.policy_components"
-            | "cx.space.history_sharing_policy"
-            | "cx.space.delivery_binding_policy"
-            | "cx.space.asset_privacy_policy"
-            | "cx.space.read_receipt_policy"
-            | "cx.space.moderation_policy"
-            | "cx.space.plaintext_visible_services"
-            | "cx.space.media_service"
-            | "cx.space.schema"
-            | "cx.space.audit_policy_downgrade"
-            | "cx.space.destroy"
-            | "cx.space.freeze"
-            | "cx.space.notification.audit"
-            | "cx.space.child"
+        "ck.space.upgrade"
+            | "ck.space.organization"
+            | "ck.space.policy"
+            | "ck.space.join_rule"
+            | "ck.space.history_visibility"
+            | "ck.space.discovery"
+            | "ck.space.policy_server"
+            | "ck.space.policy_components"
+            | "ck.space.history_sharing_policy"
+            | "ck.space.delivery_binding_policy"
+            | "ck.space.asset_privacy_policy"
+            | "ck.space.read_receipt_policy"
+            | "ck.space.moderation_policy"
+            | "ck.space.plaintext_visible_services"
+            | "ck.space.media_service"
+            | "ck.space.schema"
+            | "ck.space.audit_policy_downgrade"
+            | "ck.space.destroy"
+            | "ck.space.freeze"
+            | "ck.space.notification.audit"
+            | "ck.space.child"
     ) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "realm_kind_renamed_in_v1",
-            "this security-namespace `cx.space.*` kind was renamed to \
-             `cx.realm.*` in v1 (Realm/Space reversal)",
+            "this security-namespace `ck.space.*` kind was renamed to \
+             `ck.realm.*` in v1 (Realm/Space reversal)",
         ));
     }
-    if kind.as_str().starts_with("cx.place.") {
+    if kind.as_str().starts_with("ck.place.") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "place_kind_renamed_to_space",
-            "the container namespace `cx.place.*` was renamed to \
-             `cx.space.*` in v1 (Realm/Space reversal)",
+            "the container namespace `ck.place.*` was renamed to \
+             `ck.space.*` in v1 (Realm/Space reversal)",
         ));
     }
     // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
@@ -1507,7 +1508,7 @@ async fn validate_event_envelope(
             reason,
         ));
     }
-    if !artifacts::active_durable_event_kinds().contains(&kind) && kind != kinds::CX_CONFLICT_REPAIR
+    if !artifacts::active_durable_event_kinds().contains(&kind) && kind != kinds::CK_CONFLICT_REPAIR
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -1664,7 +1665,7 @@ async fn validate_event_envelope(
         ));
     }
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
-    if kind == kinds::CX_MEMBER_IDENTITY_UPDATE {
+    if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -1676,11 +1677,9 @@ async fn validate_event_envelope(
     // the registered `cross_domain_replay_rejected` (409) code.
     if kind == "ck.cross_signing.reset" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-        if let Err((code, reason)) = cross_signing_reset_replay_check(
-            &payload,
-            &event_id,
-            &state.config.trust_domain,
-        ) {
+        if let Err((code, reason)) =
+            cross_signing_reset_replay_check(&payload, &event_id, &state.config.trust_domain)
+        {
             return Err(event_validation_error(
                 error_http_status(code),
                 code.as_str(),
@@ -1732,7 +1731,7 @@ async fn validate_event_envelope(
     }
     // Round R2/R3 (T04) — Anchor frontier entries MUST be sha256:<hex>.
     // We tighten the validator on the events ingest side for the
-    // `cx.realm.anchor.submit` payload shape used by federation push;
+    // `ck.realm.anchor.submit` payload shape used by federation push;
     // the deeper canonical-bytes path uses SDK `anchor_canonical_bytes`
     // which already excludes id + anchorer_sig (anchorer.rs:217).
     if let Some(frontier) = object
@@ -1827,9 +1826,9 @@ fn projected_mls_governance_binding_covers_policy_root(
     let mut observed_realm_mls_cell = false;
     for (cell, cell_state) in &projection.cells {
         let cell_id = cell.as_str();
-        let is_mls_cell = cell_id.contains("cx.component.mls.epoch.v1")
+        let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
             || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("cx.component.mls.covered_frontier.v1");
+            || cell_id.contains("ck.component.mls.covered_frontier.v1");
         if !is_mls_cell {
             continue;
         }
@@ -1885,9 +1884,9 @@ fn validate_event_critical_features(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
     let supported = [
-        "cx.event_envelope.v1",
+        "ck.event_envelope.v1",
         "ck.profile.core_event_store.v1",
-        "cx.proof.event_digest.v1",
+        "ck.proof.event_digest.v1",
     ];
     for key in ["crit", "critical", "critical_features"] {
         let Some(value) = object.get(key) else {
@@ -1968,8 +1967,8 @@ fn validate_event_critical_features(
 }
 
 const SENDER_COMMITMENT_FEATURE: &str = "ck.profile.franking.sender_commitment.v1";
-const CX_AUDIT_ACCESSED: &str = "ck.audit.accessed";
-const CX_MODERATION_FRANKING_PROOF: &str = "ck.moderation.franking_proof";
+const CK_AUDIT_ACCESSED: &str = "ck.audit.accessed";
+const CK_MODERATION_FRANKING_PROOF: &str = "ck.moderation.franking_proof";
 const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
 
 async fn append_encrypted_message_franking(
@@ -1990,7 +1989,7 @@ async fn append_encrypted_message_franking(
         return;
     };
     let mut proof = json!({
-        "kind": CX_MODERATION_FRANKING_PROOF,
+        "kind": CK_MODERATION_FRANKING_PROOF,
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
@@ -2008,7 +2007,7 @@ async fn append_encrypted_message_franking(
     append_audit_log(
         state,
         Some(&parsed.actor_id),
-        CX_MODERATION_FRANKING_PROOF,
+        CK_MODERATION_FRANKING_PROOF,
         proof,
         "accepted",
     )
@@ -2042,7 +2041,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == kinds::CX_REALM_CREATE
+            record.kind == kinds::CK_REALM_CREATE
                 && canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
         })
         .rev()
@@ -2057,7 +2056,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
 
 fn franking_proof_digest(proof: &Value) -> String {
     let material = json!({
-        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or(CX_MODERATION_FRANKING_PROOF),
+        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or(CK_MODERATION_FRANKING_PROOF),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
@@ -2132,7 +2131,7 @@ fn validate_audit_accessed_payload(
     kind: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if kind != CX_AUDIT_ACCESSED {
+    if kind != CK_AUDIT_ACCESSED {
         return Ok(());
     }
     let payload = object
@@ -2305,7 +2304,7 @@ async fn validate_flow_watch_audit_pair(
     actor_id: &str,
     canonical_digest: &str,
 ) -> Result<(), EventValidationError> {
-    if kind != kinds::CX_FLOW_WATCH_SET {
+    if kind != kinds::CK_FLOW_WATCH_SET {
         return Ok(());
     }
     let payload = object
@@ -2361,7 +2360,7 @@ async fn validate_flow_watch_audit_pair(
         .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
-    if audit_record.kind != CX_AUDIT_ACCESSED {
+    if audit_record.kind != CK_AUDIT_ACCESSED {
         return Err(manage_others_audit_error(
             "audit_pair ref must point to ck.audit.accessed",
         ));
@@ -2538,14 +2537,14 @@ fn validate_event_schema_and_payload(
     // field surfaces the precise R3.2 reason code rather than a generic
     // `schema_violation` from the SDK catalog.
     validate_r3_2_wire_shape(kind, payload)?;
-    if kind == kinds::CX_CONFLICT_REPAIR {
+    if kind == kinds::CK_CONFLICT_REPAIR {
         return validate_conflict_repair_event_payload(payload);
     }
     if matches!(
         kind,
-        kinds::CX_SPACE_CONTAINER_ARCHIVE
-            | kinds::CX_SPACE_CONTAINER_RESTORE
-            | kinds::CX_SPACE_CONTAINER_TOMBSTONE
+        kinds::CK_SPACE_CONTAINER_ARCHIVE
+            | kinds::CK_SPACE_CONTAINER_RESTORE
+            | kinds::CK_SPACE_CONTAINER_TOMBSTONE
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
@@ -2575,11 +2574,11 @@ fn validate_event_schema_and_payload(
 /// `schema_violation`-class [`EventValidationError`] carrying the precise
 /// R3.2 reason code.
 fn validate_r3_2_wire_shape(kind: &str, payload: &Value) -> Result<(), EventValidationError> {
-    if kind == kinds::CX_MEMBER_IDENTITY_UPDATE {
+    if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
             .map_err(wire_rejection_to_validation_error)?;
     }
-    if matches!(kind, kinds::CX_MESSAGE_CREATE | kinds::CX_MESSAGE_REVISE)
+    if matches!(kind, kinds::CK_MESSAGE_CREATE | kinds::CK_MESSAGE_REVISE)
         && let Some(content) = payload.get("content")
     {
         crate::wire_validators::mention::validate_content_mention_references(content)
@@ -2785,7 +2784,7 @@ fn validate_realm_create_policy_constraints(
     kind: &str,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
-    if kind != kinds::CX_REALM_CREATE {
+    if kind != kinds::CK_REALM_CREATE {
         return Ok(());
     }
     let Some(object) = payload.get("object").and_then(Value::as_object) else {
@@ -2882,7 +2881,7 @@ fn event_requirements_schema_id(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "ck.schema.event.v1".to_owned());
-    if !schema_id.starts_with("cx.schema.") || !artifacts::schema_ids().contains(&schema_id) {
+    if !schema_id.starts_with("ck.schema.") || !artifacts::schema_ids().contains(&schema_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_schema",
@@ -3156,7 +3155,7 @@ async fn member_join_accepts_pending_invite(
     actor: &str,
     space_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(kinds::CX_MEMBER_STATE) {
+    if object.get("kind").and_then(Value::as_str) != Some(kinds::CK_MEMBER_STATE) {
         return false;
     }
     let Some(payload) = object.get("payload") else {
@@ -3576,7 +3575,7 @@ fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
-    if parsed.kind == kinds::CX_RELATION_CREATE {
+    if parsed.kind == kinds::CK_RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }
     if let Some(target_ref) = payload_object
@@ -3616,7 +3615,7 @@ fn projection_operation_from_event(
             .entry("actor_seq".to_owned())
             .or_insert_with(|| Value::from(parsed.actor_seq));
     }
-    if parsed.kind == kinds::CX_MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == kinds::CK_MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object
                 .entry("authorization_ref".to_owned())
@@ -3770,7 +3769,7 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Flow at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(kinds::CX_MESSAGE_CREATE) {
+    if object.get("kind").and_then(Value::as_str) == Some(kinds::CK_MESSAGE_CREATE) {
         return None;
     }
     // Non-message events (e.g. ck.flow.create / ck.flow.update) legitimately
@@ -3945,7 +3944,7 @@ pub async fn effective_read_receipt_policy_for_space(
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_anchor; we
     // read directly from there. (R1.2 renamed the cell family from
-    // `cx.component.space.read_receipt_policy.v1` along with the event
+    // `ck.component.space.read_receipt_policy.v1` along with the event
     // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = cokret_sdk::CellRef::new(format!(
@@ -4105,7 +4104,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
     if cokret_sdk::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,
-            "cx.event_batch_receipt is a receipt object only; \
+            "ck.event_batch_receipt is a receipt object only; \
              never accepted as Event.kind",
         ));
     }
@@ -4135,7 +4134,8 @@ pub fn terminal_realm_check(
 /// Spec T08.
 ///
 /// Verification order MUST be:
-/// 1. `payload.trust_domain` equals server's configured trust_domain (else `cross_domain_replay_rejected`)
+/// 1. `payload.trust_domain` equals server's configured trust_domain (else
+///    `cross_domain_replay_rejected`)
 /// 2. `payload.reset_event_id` equals the enclosing Event's id (else `reset_event_id_mismatch`)
 /// 3. signature check (existing path; not implemented here)
 pub fn cross_signing_reset_replay_check(
@@ -4285,8 +4285,8 @@ mod admission_tests {
     fn ephemeral_kind_rejected_at_submit_entry() {
         for kind in [
             "ck.call.signal",
-            "cx.presence",
-            "cx.typing",
+            "ck.presence",
+            "ck.typing",
             "ck.receipt.read",
             "ck.key.verification.start",
             "ck.key.verification.accept",
@@ -4303,7 +4303,7 @@ mod admission_tests {
     #[test]
     fn receipt_object_kind_rejected_at_submit_entry() {
         assert!(matches!(
-            events_submit_pre_admit_check("cx.event_batch_receipt"),
+            events_submit_pre_admit_check("ck.event_batch_receipt"),
             Some((ErrorCode::SchemaViolation, _))
         ));
     }
@@ -4618,7 +4618,7 @@ mod proof_strictness_tests {
         let envelope = json!({
             "requirements": {
                 "critical_extensions": [{
-                    "id": "cx.extension.unknown",
+                    "id": "ck.extension.unknown",
                     "fail_closed": true
                 }]
             }
@@ -4637,7 +4637,7 @@ mod proof_strictness_tests {
         let envelope = json!({
             "requirements": {
                 "critical_extensions": [{
-                    "id": "cx.extension.unknown",
+                    "id": "ck.extension.unknown",
                     "fail_closed": false
                 }]
             }
@@ -4693,7 +4693,7 @@ mod proof_strictness_tests {
             let mut projection = state.projection.lock().unwrap();
             projection.cells.insert(
                 cokret_sdk::CellRef::new(
-                    "ck:cell:cx.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
+                    "ck:cell:ck.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
                 )
                 .unwrap(),
                 cokret_sdk::lattice::CellState::Value(json!({

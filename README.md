@@ -26,7 +26,7 @@ in-memory mode keeps the same API for fast local iteration.
 Following the Phase 1–4 terminology inversion (Round R1.x — wire-breaking):
 
 - **Realm:** security boundary — membership, capability, E2EE, federation.
-  Reducer cells live under `cx.realm.*`; admin routes use `/realms/:id/...`.
+  Reducer cells live under `ck.realm.*`; admin routes use `/realms/:id/...`.
   Old name on the wire: `Space`.
 - **Space:** navigation container — board, list, section, calendar bucket
   inside a Realm. Old name on the wire: `Place`.
@@ -84,8 +84,8 @@ normative source. The key operational hooks:
   Enters the canonical transcript of every `ck.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
 - **Ephemeral kinds rejected on `POST /_cokret/self/events`** — producers
-  must route the 12 ephemeral kinds (`ck.call.signal`, `cx.presence`,
-  `cx.typing`, `ck.receipt.read`, `ck.key.verification.*`) through
+  must route the 12 ephemeral kinds (`ck.call.signal`, `ck.presence`,
+  `ck.typing`, `ck.receipt.read`, `ck.key.verification.*`) through
   the ephemeral envelope / device-message channels; no compatibility
   shim.
 - **Realm terminal-state, presign blob fail-closed, federation

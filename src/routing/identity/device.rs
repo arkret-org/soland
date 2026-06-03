@@ -3,8 +3,8 @@
 //! Surfaces:
 //! - `POST /_cokret/self/devices/pairing-challenge` — current device asks the server to mint a
 //!   short-lived pairing challenge for a new sibling device
-//! - `POST /_cokret/self/devices/authorize-pairing` — current device authorises the sibling and registers
-//!   it in the device inventory
+//! - `POST /_cokret/self/devices/authorize-pairing` — current device authorises the sibling and
+//!   registers it in the device inventory
 //!
 //! Both routes are scaffolds: the proof at `body.proof` is accepted as
 //! `{"alg":"dev-none"}` by default and the authorization event is built
@@ -30,12 +30,12 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.devices.list",
+    operation_id = "ck.devices.list",
     tags("devices"),
     summary = "List active devices for the authenticated principal",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.devices.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.devices.list"))]
 async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -65,12 +65,12 @@ async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
 }
 
 #[endpoint(
-    operation_id = "cx.devices.revoke",
+    operation_id = "ck.devices.revoke",
     tags("devices"),
     summary = "Revoke a sibling device. Self-revoke (revoking the calling session's own device) is rejected with cannot_self_revoke",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.devices.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.devices.revoke"))]
 async fn device_revoke(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -124,12 +124,12 @@ async fn device_revoke(
 const DEVICE_DISPLAY_NAME_MAX_CHARS: usize = 128;
 
 #[endpoint(
-    operation_id = "cx.devices.rename",
+    operation_id = "ck.devices.rename",
     tags("devices"),
     summary = "Rename a device the caller controls (update its user-facing display_name)",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.devices.rename"))]
+#[tracing::instrument(skip_all, fields(op = "ck.devices.rename"))]
 async fn device_rename(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -206,11 +206,11 @@ async fn device_rename(
 }
 
 #[endpoint(
-    operation_id = "cx.devices.pairing_challenge",
+    operation_id = "ck.devices.pairing_challenge",
     tags("devices"),
     summary = "Mint a short-lived device pairing challenge"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.devices.pairing_challenge"))]
+#[tracing::instrument(skip_all, fields(op = "ck.devices.pairing_challenge"))]
 async fn device_pairing_challenge(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -267,11 +267,11 @@ async fn device_pairing_challenge(
 }
 
 #[endpoint(
-    operation_id = "cx.devices.authorize_pairing",
+    operation_id = "ck.devices.authorize_pairing",
     tags("devices"),
     summary = "Authorise and register a paired sibling device"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.devices.authorize_pairing"))]
+#[tracing::instrument(skip_all, fields(op = "ck.devices.authorize_pairing"))]
 async fn device_authorize_pairing(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -321,7 +321,7 @@ async fn device_authorize_pairing(
     let device_json = device_inventory_to_json(&device);
     let authorization_event = json!({
         "event_id": ids::generate_event_id(),
-        "event_kind": "cx.device.pairing.authorized",
+        "event_kind": "ck.device.pairing.authorized",
         "actor": session.actor.clone(),
         "device_id": device_id,
         "authorized_by_device_id": session.device_id.clone(),

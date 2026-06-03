@@ -6,7 +6,7 @@
 //!
 //! All fns are `pub` because sync/projection writers consume them.
 //! This is a derivation layer the server fakes for clients that already
-//! speak the flow protocol; a future real `cx.flow.*` reducer state
+//! speak the flow protocol; a future real `ck.flow.*` reducer state
 //! will replace it once the wire schema lands.
 
 use serde_json::json;

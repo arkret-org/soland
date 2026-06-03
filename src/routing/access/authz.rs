@@ -49,7 +49,8 @@ async fn authz_check(
     req: &mut Request,
 ) -> JsonResult<AuthzCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // TODO(authz-scoping): spec service-http-binding.md:140 要求按 caller 身份(本人/服务签名)进一步限定,此处先关闭匿名访问。
+    // TODO(authz-scoping): spec service-http-binding.md:140 要求按 caller
+    // 身份(本人/服务签名)进一步限定,此处先关闭匿名访问。
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
@@ -258,11 +259,11 @@ async fn effective_grants(
 // ── Grant CRUD ──
 
 #[endpoint(
-    operation_id = "cx.authz.create_grant",
+    operation_id = "ck.authz.create_grant",
     tags("authz"),
     summary = "Create an owner-issued or delegated authorization grant"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.create_grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.create_grant"))]
 async fn create_grant(
     aa: AuthArgs,
     body: JsonBody<CreateGrantRequest>,
@@ -433,11 +434,11 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
 }
 
 #[endpoint(
-    operation_id = "cx.authz.revoke_grant",
+    operation_id = "ck.authz.revoke_grant",
     tags("authz"),
     summary = "Revoke an existing authorization grant by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.revoke_grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.revoke_grant"))]
 async fn revoke_grant(
     aa: AuthArgs,
     grant_id: PathParam<String>,

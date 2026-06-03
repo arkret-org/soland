@@ -337,7 +337,7 @@ diesel::table! {
     }
 }
 
-// Server-side Space-container projection state for cx.space.* lifecycle events.
+// Server-side Space-container projection state for ck.space.* lifecycle events.
 diesel::table! {
     projection_space_containers (container_space_id) {
         container_space_id -> Text,
@@ -355,7 +355,7 @@ diesel::table! {
     }
 }
 
-// Flow / Morph projection state for cx.flow.* / cx.morph.* lifecycle
+// Flow / Morph projection state for ck.flow.* / ck.morph.* lifecycle
 // events. Spec: cokret-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
 // from cokret-sdk: active / archived / deleted / redacted (no

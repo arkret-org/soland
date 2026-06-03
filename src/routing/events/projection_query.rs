@@ -6,8 +6,8 @@
 //! `ck.space.archive` accepted by the server doesn't appear "unarchived"
 //! again when the kanban view re-mounts.
 //!
-//! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing Space
-//!   containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
+//! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing
+//!   Space containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
 //! - `GET /_cokret/self/projection/flows?realm_id=...` — same for Flows (state ∈ {active, archived,
 //!   redacted}).
@@ -33,7 +33,7 @@
 use cokret_sdk::{
     Did, FlowId, MorphId, ProjectionFlowRow, ProjectionFlowsResBody, ProjectionMorphRow,
     ProjectionMorphsResBody, ProjectionObjectState, ProjectionSpaceRow, ProjectionSpaceState,
-    ProjectionSpacesResBody, RealmId, SpaceId,
+    ProjectionSpacesResBody, RealmId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -136,7 +136,7 @@ fn flow_position_relation<'a>(
         })
 }
 
-type FlowPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
+type FlowPositionFields = (Option<RealmId>, Option<RealmId>, Option<String>);
 
 fn flow_position_fields(
     projection: &ProjectionState,
@@ -146,11 +146,11 @@ fn flow_position_fields(
         return Ok((None, None, None));
     };
     let board_space_id = relation_string_field(relation, "board_space_id")
-        .map(|value| parse_projection_id::<SpaceId>(value, "board_space_id"))
+        .map(|value| parse_projection_id::<RealmId>(value, "board_space_id"))
         .transpose()?;
     let list_space_id = relation_string_field(relation, "list_space_id")
         .or(relation.from_ref.as_deref())
-        .map(|value| parse_projection_id::<SpaceId>(value, "list_space_id"))
+        .map(|value| parse_projection_id::<RealmId>(value, "list_space_id"))
         .transpose()?;
     let rank = relation_string_field(relation, "rank").map(ToOwned::to_owned);
     Ok((board_space_id, list_space_id, rank))
@@ -350,7 +350,7 @@ async fn list_space_container_projections(
         .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
         .map(|p| {
             Ok(ProjectionSpaceRow {
-                space_id: parse_projection_id::<SpaceId>(&p.container_space_id, "space_id")?,
+                space_id: parse_projection_id::<RealmId>(&p.container_space_id, "space_id")?,
                 realm_id: parse_projection_id::<RealmId>(&p.realm_id, "realm_id")?,
                 kind: p.kind.clone(),
                 title: p.title.clone(),
@@ -358,9 +358,9 @@ async fn list_space_container_projections(
                     .parent_ref
                     .as_deref()
                     .map(|s| {
-                        SpaceId::new(s.to_owned()).map_err(|err| {
+                        RealmId::new(s.to_owned()).map_err(|err| {
                             AppError::internal(format!(
-                                "stored parent_space_id is not a typed SpaceId: {err}"
+                                "stored parent_space_id is not a typed RealmId: {err}"
                             ))
                         })
                     })
@@ -510,11 +510,11 @@ async fn list_morph_projections(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.projection.document",
+    operation_id = "ck.extension.soland.projection.document",
     tags("projection"),
     summary = "Read a document Morph projection with body, versions, relations, comments, and cursor presence"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.projection.document"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.projection.document"))]
 async fn read_document_projection(
     aa: AuthArgs,
     depot: &mut Depot,

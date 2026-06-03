@@ -855,13 +855,13 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // round 6: the `entity` / `view` abstraction they exercised never landed in
 // `cokret-spec/v1`. Typed objects in the protocol are `ck:flow:` / `ck:space:`
 // / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
-// event kind; presentation concerns belong on `cx.view.*` events going
+// event kind; presentation concerns belong on `ck.view.*` events going
 // through the reducer, not on a free-form `/_cokret/self/entities` /
 // `/_cokret/self/views` scaffold.
 
-/// Build a signed container `cx.space.*` event envelope for the Space
+/// Build a signed container `ck.space.*` event envelope for the Space
 /// (container) state-machine integration test. Post-R1.2 the container
-/// namespace moved from `cx.place.*` to `cx.space.*`. Mirrors
+/// namespace moved from `ck.place.*` to `ck.space.*`. Mirrors
 /// [`signed_event_envelope`] but with a custom `kind` + `payload`
 /// (container lifecycle events do not carry a message body).
 pub(crate) fn signed_place_event(
@@ -926,7 +926,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 // `check_space_container_lifecycle_transition` →
 // `StatusCode::PRECONDITION_FAILED`).
 
-/// Build a signed `cx.flow.*` event envelope for the Flow state-machine
+/// Build a signed `ck.flow.*` event envelope for the Flow state-machine
 /// integration test. Mirror of `signed_place_event` with a Flow-specific
 /// schema_id.
 pub(crate) fn signed_flow_event(
@@ -991,7 +991,7 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "ck.flow.archive" | "ck.flow.restore" | "cx.flow.tombstone"
+        "ck.flow.archive" | "ck.flow.restore" | "ck.flow.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(flow_id) = object.get("flow_id").and_then(Value::as_str) {
@@ -1016,7 +1016,7 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     }
 }
 
-/// Build a signed `cx.morph.*` event envelope.
+/// Build a signed `ck.morph.*` event envelope.
 pub(crate) fn signed_morph_event(
     event_id: &str,
     actor_seq: u64,
@@ -1077,7 +1077,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "ck.morph.archive" | "ck.morph.restore" | "cx.morph.tombstone"
+        "ck.morph.archive" | "ck.morph.restore" | "ck.morph.tombstone"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(morph_id) = object.get("morph_id").and_then(Value::as_str) {
@@ -1186,11 +1186,11 @@ pub(crate) fn signed_relation_event(
 // guards map to HTTP 412 + canonical reason_code per spec §5.1. Combined
 // Flow+Morph in one test to keep the suite small.
 
-/// Build a signed `cx.redaction` event envelope, used by round 14b to
+/// Build a signed `ck.redaction` event envelope, used by round 14b to
 /// test object-level redaction (Flow / Morph). Mirror of
 /// `signed_event_envelope` for the redaction kind. The spec schema
-/// registry doesn't carry a dedicated `cx.schema.redaction.v1` —
-/// `cx.redaction` is `category=message` per event-kind-registry, so
+/// registry doesn't carry a dedicated `ck.schema.redaction.v1` —
+/// `ck.redaction` is `category=message` per event-kind-registry, so
 /// reuses `ck.schema.message.v1`.
 pub(crate) fn signed_redaction_event(
     event_id: &str,
@@ -1210,7 +1210,7 @@ pub(crate) fn signed_redaction_event(
     }
     let mut event = serde_json::json!({
         "event_id": event_id,
-        "kind": "cx.redaction",
+        "kind": "ck.redaction",
         "schema_id": "ck.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
@@ -1236,7 +1236,7 @@ pub(crate) fn signed_redaction_event(
 
 // The following comment blocks are descriptive notes for tests that have
 // migrated to dedicated integration files. They are preserved here only
-// as breadcrumbs (round 14b cx.redaction terminal-flip; round 14d/14f/15a
+// as breadcrumbs (round 14b ck.redaction terminal-flip; round 14d/14f/15a
 // projection_query endpoints; round 15b applet/agent registration; round
 // 15d include_terminal filter; round 15f multi-chunk snapshot; round 15h
 // projection write-through). See the corresponding `tests/*.rs` files for

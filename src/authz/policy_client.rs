@@ -506,7 +506,7 @@ fn policy_decision_transcript_bytes(
 ) -> Result<Vec<u8>, PolicyClientError> {
     let expires_at = response.expires_at.as_ref().map(format_canonical_rfc3339);
     let transcript = PolicyDecisionTranscript {
-        kind: "cx.policy.check.transcript.v1",
+        kind: "ck.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
         decision: &response.decision,
         bound_to: &response.bound_to,

@@ -166,16 +166,17 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
     config.cors_allow_origin = Some("*".to_owned());
     let service = app_from_state(AppState::new(config, Db { pool: None }));
 
-    let from_yougen = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
-        .add_header("Origin", "http://127.0.0.1:8080", true)
-        .add_header("Access-Control-Request-Method", "POST", true)
-        .add_header(
-            "Access-Control-Request-Headers",
-            "authorization, content-type",
-            true,
-        )
-        .send(&service)
-        .await;
+    let from_yougen =
+        TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
+            .add_header("Origin", "http://127.0.0.1:8080", true)
+            .add_header("Access-Control-Request-Method", "POST", true)
+            .add_header(
+                "Access-Control-Request-Headers",
+                "authorization, content-type",
+                true,
+            )
+            .send(&service)
+            .await;
     assert_eq!(
         from_yougen
             .headers()
@@ -194,11 +195,12 @@ async fn wildcard_cors_mirrors_origin_without_credentials() {
 
     // A second, unrelated origin gets the same treatment — the handler is
     // genuinely origin-agnostic, not tied to a single hard-coded URL.
-    let from_other = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
-        .add_header("Origin", "https://app.elsewhere.example", true)
-        .add_header("Access-Control-Request-Method", "POST", true)
-        .send(&service)
-        .await;
+    let from_other =
+        TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
+            .add_header("Origin", "https://app.elsewhere.example", true)
+            .add_header("Access-Control-Request-Method", "POST", true)
+            .send(&service)
+            .await;
     assert_eq!(
         from_other
             .headers()

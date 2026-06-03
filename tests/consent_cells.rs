@@ -111,18 +111,20 @@ async fn grant_cell(
     scope: &str,
     valid_until: Option<String>,
 ) -> Value {
-    TestClient::post(format!("http://server/_cokret/self/consent/cells/{holder}/grant"))
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "peer_did": peer,
-            "consent_scope": scope,
-            "valid_until": valid_until,
-        }))
-        .send(app)
-        .await
-        .take_json()
-        .await
-        .unwrap()
+    TestClient::post(format!(
+        "http://server/_cokret/self/consent/cells/{holder}/grant"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "peer_did": peer,
+        "consent_scope": scope,
+        "valid_until": valid_until,
+    }))
+    .send(app)
+    .await
+    .take_json()
+    .await
+    .unwrap()
 }
 
 async fn revoke_cell(

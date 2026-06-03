@@ -36,7 +36,7 @@ pub mod did_resolver_chain;
 ///
 /// added control-frame variants alongside the original `Event`
 /// (mid-stream control frames per spec):
-///   - `EpochRotation` — emitted when `cx.component.mls.epoch.v1` cell changes (E2EE epoch shift;
+///   - `EpochRotation` — emitted when `ck.component.mls.epoch.v1` cell changes (E2EE epoch shift;
 ///     clients MUST re-fetch keys)
 ///   - `Frontier` — anchor frontier advanced (Snapshot of cursor / state_root after
 ///     `apply_anchor`); clients use this as a resync waypoint
@@ -60,7 +60,7 @@ pub enum EventNotificationKind {
         /// Projection-event JSON (same shape as `projection_event_json`).
         event_payload: Value,
     },
-    /// MLS epoch shift detected on `cx.component.mls.epoch.v1` cell.
+    /// MLS epoch shift detected on `ck.component.mls.epoch.v1` cell.
     EpochRotation {
         /// Old epoch value (the previous CellState::Value if known).
         previous_epoch: Option<Value>,
@@ -920,7 +920,7 @@ pub struct AppState {
     pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     /// Current organization moderation policy per organization.
     pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
-    /// Space -> organizations declared by `cx.realm.create.owning_organizations`
+    /// Space -> organizations declared by `ck.realm.create.owning_organizations`
     /// or the local organization link endpoint.
     pub space_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Organization -> member Realm ids. This is the read-side fanout index:
@@ -1034,7 +1034,7 @@ pub struct AccountRecord {
     pub handle: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_cokret/self/account/profile` (operationId `cx.account.update_profile`);
+    /// `POST /_cokret/self/account/profile` (operationId `ck.account.update_profile`);
     /// rendered by `demo_actors` in directory search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
@@ -1214,13 +1214,13 @@ pub struct ConsentCellRecord {
 /// Actor-private account data row (`ck.account_data.set` storage).
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
-/// (e.g. `ck.read_receipt.preferences`, `cx.contacts.actor.did:web:alice.example`,
-/// `cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000`). Soland
+/// (e.g. `ck.read_receipt.preferences`, `ck.contacts.actor.did:web:alice.example`,
+/// `ck.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model) and §3.7
-/// (Space remarks, `cx.contacts.space.<realm_id>`).
+/// (Space remarks, `ck.contacts.space.<realm_id>`).
 #[derive(Clone, Debug)]
 pub struct AccountDataRecord {
     pub actor: String,
@@ -1250,12 +1250,12 @@ pub struct RealmMetaRecord {
     /// `restricted`. `restricted` is fail-closed unless
     /// `history_sharing_policy` has an explicit matching rule.
     pub history_visibility: String,
-    /// Effective `cx.realm.history_sharing_policy.value` plus its canonical
+    /// Effective `ck.realm.history_sharing_policy.value` plus its canonical
     /// digest. The policy gates E2EE history key shares and restricted history
     /// reads; history visibility alone never grants old epoch keys.
     pub history_sharing_policy: Option<Value>,
     pub history_sharing_policy_digest: Option<String>,
-    /// Effective `cx.realm.preview_policy.value` plus its canonical digest.
+    /// Effective `ck.realm.preview_policy.value` plus its canonical digest.
     /// Directory/object preview must fail closed when this is missing.
     pub preview_policy: Option<Value>,
     pub preview_policy_digest: Option<String>,

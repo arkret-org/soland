@@ -1,11 +1,12 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_cokret/self/moderation/report` (`cx.moderation.report`) — file a report. Persists both the
-//!   report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
+//! - `POST /_cokret/self/moderation/report` (`ck.moderation.report`) — file a report. Persists both
+//!   the report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
 //!   architecture.
-//! - `POST /_cokret/self/moderation/appeal` (`cx.moderation.appeal.submit`) — file an appeal against a
-//!   moderation decision. Validates the four-state FSM via `crate::routing::admin::moderation::AppealState` and
-//!   enforces separation-of-duties when the decision is later reviewed by an admin.
+//! - `POST /_cokret/self/moderation/appeal` (`ck.moderation.appeal.submit`) — file an appeal
+//!   against a moderation decision. Validates the four-state FSM via
+//!   `crate::routing::admin::moderation::AppealState` and enforces separation-of-duties when the
+//!   decision is later reviewed by an admin.
 
 use std::time::Duration;
 
@@ -32,11 +33,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.moderation.report",
+    operation_id = "ck.moderation.report",
     tags("moderation"),
     summary = "File a moderation report for content in a federated space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.moderation.report"))]
+#[tracing::instrument(skip_all, fields(op = "ck.moderation.report"))]
 async fn moderation_report(
     aa: AuthArgs,
     body: JsonBody<ModerationReportReqBody>,
@@ -140,11 +141,11 @@ async fn moderation_report(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.moderation.reports",
+    operation_id = "ck.extension.soland.moderation.reports",
     tags("moderation"),
     summary = "List moderation reports visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.moderation.reports"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.moderation.reports"))]
 async fn moderation_reports(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -339,7 +340,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "cx.audit.agent_invite",
+                "ck.audit.agent_invite",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -354,7 +355,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "cx.audit.agent_invite",
+                "ck.audit.agent_invite",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -368,7 +369,7 @@ async fn notify_audit_agent_for_report(
     }
 
     let event_body = json!({
-        "kind": "cx.audit.report",
+        "kind": "ck.audit.report",
         "event": report_payload,
     });
     match client.post(events_url).json(&event_body).send().await {
@@ -387,7 +388,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "cx.audit.report",
+                "ck.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -402,7 +403,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "cx.audit.report",
+                "ck.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -426,9 +427,9 @@ async fn append_audit_agent_invite_log(
     append_audit_log(
         state,
         None,
-        "cx.audit.agent_invite",
+        "ck.audit.agent_invite",
         json!({
-            "kind": "cx.audit.agent_invite",
+            "kind": "ck.audit.agent_invite",
             "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
@@ -452,9 +453,9 @@ async fn append_agent_accessed_if_present(
     append_audit_log(
         state,
         Some(audit_agent_principal_id),
-        "cx.audit.accessed",
+        "ck.audit.accessed",
         json!({
-            "kind": "cx.audit.accessed",
+            "kind": "ck.audit.accessed",
             "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
@@ -479,7 +480,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
         .ok()?
         .into_iter()
         .filter(|record| {
-            record.kind == crate::kinds::CX_REALM_CREATE
+            record.kind == crate::kinds::CK_REALM_CREATE
                 && record.realm_id.as_deref() == Some(realm_id)
         })
         .rev()
@@ -494,7 +495,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationAppealSubmitReqBody {
-    /// The `cx.moderation.decision` event being appealed.
+    /// The `ck.moderation.decision` event being appealed.
     pub decision_ref: String,
     /// The original moderation target (message / flow / blob / etc.).
     pub target_ref: String,
@@ -518,11 +519,11 @@ pub struct ModerationAppealSubmitResBody {
 }
 
 #[endpoint(
-    operation_id = "cx.moderation.appeal.submit",
+    operation_id = "ck.moderation.appeal.submit",
     tags("moderation"),
     summary = "Submit a moderation appeal against a prior decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.moderation.appeal.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ck.moderation.appeal.submit"))]
 async fn moderation_appeal_submit(
     aa: AuthArgs,
     body: JsonBody<ModerationAppealSubmitReqBody>,

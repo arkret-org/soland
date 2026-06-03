@@ -48,7 +48,7 @@ principal. Soland performs the following actions atomically per
 request (best-effort under in-memory state; durable persistence lands
 with the projection rewrite worker):
 
-1. Append a `cx.audit.erasure_initiated` audit row.
+1. Append a `ck.audit.erasure_initiated` audit row.
 2. Pseudonymize the account record — replace `display_name` with
    `"[user erased]"`, null `bio` and `avatar_url`, and rotate `handle`
    to `@erased-<short-tag>`. The previous handle enters the release
@@ -63,8 +63,8 @@ with the projection rewrite worker):
 6. Flip the actor's lifecycle state to `erased` and mark the in-memory
    `erased_actors` set so future authenticated requests resolve to
    401 `account_erased`.
-7. Append an `cx.account.state_change` audit row.
-8. Append a single `cx.audit.actor_audit_redacted` row that catalogues
+7. Append an `ck.account.state_change` audit row.
+8. Append a single `ck.audit.actor_audit_redacted` row that catalogues
    every prior audit entry by `audit_id` + `created_at` only, marking
    each body as `redacted: true`. The append-only audit store still
    carries the historical rows so chain-of-custody is preserved.
@@ -72,10 +72,10 @@ with the projection rewrite worker):
    audit trail.
 9. Mint a `ck.schema.erasure_receipt.v1` proof, sign it with the
    anchorer signing key, and append `ck.audit.erasure_receipt`.
-10. Mint a per-realm `cx.schema.erasure_receipt.realm.v1` proof for
+10. Mint a per-realm `ck.schema.erasure_receipt.realm.v1` proof for
     every realm the actor was active in (`affected_erasure_realms_for_actor`)
     and emit each as a realm-scoped operation (best-effort fanout —
-    failures are audited under `cx.audit.erasure_receipt.fanout_failed`).
+    failures are audited under `ck.audit.erasure_receipt.fanout_failed`).
 11. Return the response envelope:
 
     ```json
@@ -99,11 +99,11 @@ view of the actor's audit trail; subsequent reads will 401.
 
 ## Audit redaction marker contract
 
-The `cx.audit.actor_audit_redacted` row written during erasure carries:
+The `ck.audit.actor_audit_redacted` row written during erasure carries:
 
 ```json
 {
-  "action": "cx.audit.actor_audit_redacted",
+  "action": "ck.audit.actor_audit_redacted",
   "outcome": "accepted",
   "payload": {
     "actor": "did:web:alice.example",
@@ -117,7 +117,7 @@ The `cx.audit.actor_audit_redacted` row written during erasure carries:
 ```
 
 Renderers MUST treat any audit entry whose `audit_id` appears in a
-later `cx.audit.actor_audit_redacted` row as redacted — replace the
+later `ck.audit.actor_audit_redacted` row as redacted — replace the
 body with `[redacted]` while preserving `audit_id`, `created_at`, and
 `action` for forensic reconstruction.
 

@@ -7,8 +7,8 @@
 //! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full `rotate-signing-key`
 //!    flow end-to-end against a running soland instance:
 //!      - mints a fresh ed25519 seed,
-//!      - calls `POST /admin/spaces/{space_id}/anchorer/rotate-signing-key` on the live
-//!        server (via `--target` URL),
+//!      - calls `POST /admin/spaces/{space_id}/anchorer/rotate-signing-key` on the live server (via
+//!        `--target` URL),
 //!      - verifies the keystore-persisted seed (when `SERVERX_USE_KEYSTORE=true`),
 //!      - signs a probe Move with the new key,
 //!      - asserts the in-process verifier accepts that probe signature,
@@ -17,8 +17,8 @@
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
 //! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted anchorer
-//!    seed (`cokret:signer:soland-anchorer:<service_did>`) and writes a single-key JSON snapshot
-//!    to `--output`.
+//!    seed (`cokret:signer:soland-anchorer:<service_did>`) and writes a single-key JSON snapshot to
+//!    `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
 //!    and stores the seed back into the platform KeyStore under the same id.

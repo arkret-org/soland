@@ -222,7 +222,7 @@ R3 surfaces recovery as a first-class wire flow. Lifecycle:
 ```text
 [client]                  [soland]                              [witnesses]
    | create policy           |                                       |
-   |------------------------>|  cx.recovery.policy.create             |
+   |------------------------>|  ck.recovery.policy.create             |
    |                         |---------------------+                 |
    |                         |  policy_id, version |                 |
    |<------------------------|                     |                 |
@@ -234,7 +234,7 @@ R3 surfaces recovery as a first-class wire flow. Lifecycle:
    |                         |<--------------------------------------|
    |                         |                                       |
    |  complete session       |                                       |
-   |------------------------>|  cx.recovery.session.complete          |
+   |------------------------>|  ck.recovery.session.complete          |
    |                         |   - emits RecoveryReceipt              |
    |<------------------------|                                       |
 ```
@@ -297,7 +297,7 @@ Focus-binding troubleshooting matrix:
 | Error | What to check |
 |---|---|
 | `focus_mismatch` | `ck.realm.media_service.foci[]` shape; the focus_id the client picked must be in the realm's current focus set. |
-| `unknown_focus_type` | A backend the realm advertises but the client doesn't profile — confirm `cx.profile.media_service_binding.<backend>.v1` is in the client's declared profile set. |
+| `unknown_focus_type` | A backend the realm advertises but the client doesn't profile — confirm `ck.profile.media_service_binding.<backend>.v1` is in the client's declared profile set. |
 | `token_issuer_unauthorised` | The `issuer_kid` decoded to an issuer not bound to this realm — usually a stale soland instance returning tokens for a realm it no longer hosts. |
 | `participant_binding_invalid` | Canonical bytes / signature mismatch. Capture the raw `participant_binding` and re-verify locally; suspect a serializer bug on the issuer. |
 | `participant_identity_unrecognised` | Identity string failed to parse — usually a client passing through a backend-native identity instead of the canonical `ck:participant:<realm>:<actor>:<device>:<call>`. |
@@ -331,7 +331,7 @@ Fallout:
 - Federation peers that haven't yet upgraded their accountability shape
   may have their federated events rejected. Coordinate the flip with
   federation partners.
-- The toggle is realm-scoped, not globally global. Audit `cx.realm.*`
+- The toggle is realm-scoped, not globally global. Audit `ck.realm.*`
   events to confirm rollout.
 
 Rollback: flip the profile back off; in-flight in-flight rejects will

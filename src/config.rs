@@ -80,7 +80,7 @@ pub struct AppConfig {
     ///
     /// Production default (built by [`AppConfig::default_replay_overrides`]):
     /// - `ck.component.anchorer.v1` → 60s (very fresh — Space-wide pause risk)
-    /// - `cx.component.mls.epoch.v1` → 60s (E2EE fork risk)
+    /// - `ck.component.mls.epoch.v1` → 60s (E2EE fork risk)
     /// - `ck.component.consent.grant.v1` → 120s (capability-equivalent)
     /// - `ck.component.capability.grant.v1` → 120s
     /// - `ck.component.capability.delegate.v1` → 120s
@@ -388,7 +388,7 @@ impl AppConfig {
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
         let mut m = std::collections::BTreeMap::new();
         m.insert("ck.component.anchorer.v1", 60);
-        m.insert("cx.component.mls.epoch.v1", 60);
+        m.insert("ck.component.mls.epoch.v1", 60);
         m.insert("ck.component.consent.grant.v1", 120);
         m.insert("ck.component.capability.grant.v1", 120);
         m.insert("ck.component.capability.delegate.v1", 120);

@@ -51,13 +51,21 @@ pub async fn validate_cross_signing_publish(
     let ssk_input = content
         .self_signing_binding_input()
         .map_err(|_| "cross_signing_bind_input_failed")?;
-    if !ed25519_verify(&psk, &ssk_input, &content.self_signing_key.binding.signature) {
+    if !ed25519_verify(
+        &psk,
+        &ssk_input,
+        &content.self_signing_key.binding.signature,
+    ) {
         return Err("cross_signing_self_binding_invalid");
     }
     let usk_input = content
         .user_signing_binding_input()
         .map_err(|_| "cross_signing_bind_input_failed")?;
-    if !ed25519_verify(&psk, &usk_input, &content.user_signing_key.binding.signature) {
+    if !ed25519_verify(
+        &psk,
+        &usk_input,
+        &content.user_signing_key.binding.signature,
+    ) {
         return Err("cross_signing_user_binding_invalid");
     }
 
@@ -113,8 +121,8 @@ pub async fn validate_cross_signing_reset(
         .validate_structure()
         .map_err(|_| "cross_signing_reset_invalid_structure")?;
 
-    let principal = Did::new(content.principal_id.as_str().to_owned())
-        .map_err(|_| "cross_signing_bad_did")?;
+    let principal =
+        Did::new(content.principal_id.as_str().to_owned()).map_err(|_| "cross_signing_bad_did")?;
 
     // CAS precondition against the currently accepted generation.
     let current = {
@@ -153,14 +161,14 @@ pub async fn validate_cross_signing_reset(
 /// the current publish + bumps the generation high-water; marks devices
 /// `needs_reverification`). Validation already ran pre-acceptance.
 pub fn project_cross_signing_reset(state: &AppState, payload: &Value) {
-    let content: cokret_sdk::CrossSigningResetContent = match serde_json::from_value(payload.clone())
-    {
-        Ok(content) => content,
-        Err(error) => {
-            tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
-            return;
-        }
-    };
+    let content: cokret_sdk::CrossSigningResetContent =
+        match serde_json::from_value(payload.clone()) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
+                return;
+            }
+        };
     let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
     if let Err(error) = mgr.record_cross_signing_reset(&content) {
         tracing::warn!(%error, "cross_signing.reset projector: record rejected");
@@ -200,8 +208,9 @@ fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
         )
         .with_status(salvo::http::StatusCode::UNAUTHORIZED)
         .with_wire_code(crate::error::reasons::PROOF_INVALID),
-        other if other.starts_with("cross_signing_binding_missing")
-            || other.starts_with("device_authorize_") =>
+        other
+            if other.starts_with("cross_signing_binding_missing")
+                || other.starts_with("device_authorize_") =>
         {
             AppError::invalid_param(other)
         }
@@ -218,8 +227,10 @@ pub(crate) fn check_device_cross_signing_binding(
     device_public_key: &str,
     binding: &Map<String, Value>,
 ) -> Result<(), &'static str> {
-    let principal = Did::new(principal_id.to_owned()).map_err(|_| "device_authorize_bad_principal")?;
-    let device = DeviceId::new(device_id.to_owned()).map_err(|_| "device_authorize_bad_device_id")?;
+    let principal =
+        Did::new(principal_id.to_owned()).map_err(|_| "device_authorize_bad_principal")?;
+    let device =
+        DeviceId::new(device_id.to_owned()).map_err(|_| "device_authorize_bad_device_id")?;
     let binding_generation = binding
         .get("ssk_generation")
         .and_then(Value::as_u64)
@@ -242,9 +253,13 @@ pub(crate) fn check_device_cross_signing_binding(
         &publish.self_signing_key.key.key_format,
     )
     .map_err(|_| "cross_signing_ssk_undecodable")?;
-    let device_input =
-        DeviceTrustBinding::canonical_input(&principal, &device, device_public_key, binding_generation)
-            .map_err(|_| "cross_signing_binding_input_failed")?;
+    let device_input = DeviceTrustBinding::canonical_input(
+        &principal,
+        &device,
+        device_public_key,
+        binding_generation,
+    )
+    .map_err(|_| "cross_signing_binding_input_failed")?;
     if !ed25519_verify(&ssk, &device_input, signature_b64) {
         return Err("cross_signing_binding_invalid");
     }

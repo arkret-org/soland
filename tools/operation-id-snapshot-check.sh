@@ -2,13 +2,13 @@
 # operation-id-snapshot-check.sh — CI gate
 #
 # Compares the operation_id values that soland's source code registers
-# (any `operation_id = "cx.*"` string literal under `src/`) against the
+# (any `operation_id = "ck.*"` string literal under `src/`) against the
 # canonical spec registry at
 # `cokret-spec/spec/v1/artifacts/registry/operation-registry.json`.
 #
 # Exit codes:
 #   0 — every soland-registered operation_id is in the canonical
-#       registry, or is namespaced as `cx.extension.soland.*`, or is
+#       registry, or is namespaced as `ck.extension.soland.*`, or is
 #       listed in `scripts/operation_id_baseline.json` as a
 #       grandfathered allow-listed id.
 #   1 — at least one soland-registered operation_id is none of the
@@ -79,18 +79,18 @@ mapfile -t GRANDFATHERED < <(jq -r '
   .grandfathered_operation_ids // [] | .[]
 ' "${BASELINE}")
 
-# Scan soland's src/ for `operation_id = "cx.*"` literals.
+# Scan soland's src/ for `operation_id = "ck.*"` literals.
 # - exclude comments (the SDK's own Rust comments document spec ids)
-# - tolerate both `=` and `: "cx.foo"` shapes
+# - tolerate both `=` and `: "ck.foo"` shapes
 mapfile -t SOLAND_OPS < <(
-  grep -RhoE 'operation_id[[:space:]]*=[[:space:]]*"cx\.[A-Za-z0-9_.]+"' "${SRC_ROOT}" \
-    | sed -E 's/.*"(cx\.[A-Za-z0-9_.]+)".*/\1/' \
+  grep -RhoE 'operation_id[[:space:]]*=[[:space:]]*"ck\.[A-Za-z0-9_.]+"' "${SRC_ROOT}" \
+    | sed -E 's/.*"(ck\.[A-Za-z0-9_.]+)".*/\1/' \
     | sort -u
 )
 
 failures=()
 for op in "${SOLAND_OPS[@]}"; do
-  if [[ "${op}" == cx.extension.soland.* ]]; then
+  if [[ "${op}" == ck.extension.soland.* ]]; then
     continue
   fi
   is_canonical=0
@@ -119,14 +119,14 @@ done
 if [[ ${#failures[@]} -ne 0 ]]; then
   echo "operation-id snapshot drift — the following soland-registered operation_ids" >&2
   echo "are not in the canonical registry, not in scripts/operation_id_baseline.json," >&2
-  echo "and not namespaced as cx.extension.soland.*:" >&2
+  echo "and not namespaced as ck.extension.soland.*:" >&2
   for op in "${failures[@]}"; do
     echo "  - ${op}" >&2
   done
   echo "" >&2
   echo "Resolution:" >&2
   echo "  1. If the operation_id should be canonical, add it to the spec registry." >&2
-  echo "  2. If it is a soland-private extension, rename it to cx.extension.soland.*." >&2
+  echo "  2. If it is a soland-private extension, rename it to ck.extension.soland.*." >&2
   echo "  3. If it is a known grandfathered id, add it to scripts/operation_id_baseline.json." >&2
   exit 1
 fi

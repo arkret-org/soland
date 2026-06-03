@@ -19,7 +19,7 @@ async fn account_data_space_remark_round_trip() {
         dev_token_for_device(state.clone(), "did:web:bob.example", "device-bob-1", "Bob").await;
 
     let space_id = "ck:space:0196419b-0000-7000-8000-000000000000";
-    let key = format!("cx.contacts.space.{space_id}");
+    let key = format!("ck.contacts.space.{space_id}");
     let remark = serde_json::json!({
         "version": 1,
         "subject": {"kind": "space", "id": space_id},
@@ -70,14 +70,15 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(put_again.status_code.unwrap().as_u16(), 200);
 
     // /sync hydrates the actor's account_data entries.
-    let sync_resp_body =
-        TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_string()
-            .await
-            .unwrap();
+    let sync_resp_body = TestClient::get(
+        "http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online",
+    )
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_string()
+    .await
+    .unwrap();
     let sync_resp: Value = serde_json::from_str(sync_resp_body.lines().next().unwrap()).unwrap();
     let entries = sync_resp["account_data"]["events"].as_array().unwrap();
     let entry = entries
@@ -88,14 +89,15 @@ async fn account_data_space_remark_round_trip() {
     assert_eq!(entry["content"]["pinned"], false);
 
     // Actor isolation: Bob's /sync does NOT see Alice's remark.
-    let bob_sync_body =
-        TestClient::get("http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online")
-            .add_header("authorization", format!("Bearer {bob}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_string()
-            .await
-            .unwrap();
+    let bob_sync_body = TestClient::get(
+        "http://server/_cokret/self/account/subscribe?catchup=true&set_presence=online",
+    )
+    .add_header("authorization", format!("Bearer {bob}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_string()
+    .await
+    .unwrap();
     let bob_sync: Value = serde_json::from_str(bob_sync_body.lines().next().unwrap()).unwrap();
     let bob_entries = bob_sync["account_data"]["events"]
         .as_array()
@@ -121,7 +123,7 @@ async fn account_data_space_remark_round_trip() {
 
 #[tokio::test]
 async fn account_data_requires_auth() {
-    let resp = TestClient::put("http://server/_cokret/self/account_data/cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000")
+    let resp = TestClient::put("http://server/_cokret/self/account_data/ck.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000")
         .json(&serde_json::json!({"content": {"local_name": "x"}}))
         .send(&app())
         .await;

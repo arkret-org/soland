@@ -49,7 +49,7 @@ locked value reject with `cross_domain_replay_rejected`. This means:
    list every peer; hub deployments list only the upstream. Restart
    each side (or hot-reload via `routing::admin::federation` once it
    lands).
-3. **Smoke-test a low-impact event.** Send a `cx.directory.refresh`
+3. **Smoke-test a low-impact event.** Send a `ck.directory.refresh`
    (or any other read-side event) and confirm it lands on the peer.
    Watch the peer's `soland_federation_outbox_depth` gauge return to
    zero and the per-peer trace span close cleanly.

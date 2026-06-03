@@ -46,9 +46,9 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let allow_methods = state.config.did_resolver_allow_methods.clone();
     let did_webvh = did_webvh_descriptor(state);
-    let mut profiles = vec!["cx.identity.local-dev.v1".to_owned()];
+    let mut profiles = vec!["ck.identity.local-dev.v1".to_owned()];
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
-        profiles.push("cx.identity.webvh.provider.v1".to_owned());
+        profiles.push("ck.identity.webvh.provider.v1".to_owned());
     }
     res.render(Json(IdentityDescribeResBody {
         service_did: state.config.service_did.clone(),
@@ -121,12 +121,12 @@ pub struct EmbeddedWebvhRegisterResponse {
 }
 
 #[endpoint(
-    operation_id = "cx.identity.webvh.register",
+    operation_id = "ck.identity.webvh.register",
     tags("identity"),
     summary = "Register through the embedded did:webvh provider",
     status_codes(201, 400, 401, 404, 409, 500, 503)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.identity.webvh.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.identity.webvh.register"))]
 pub(super) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
@@ -477,13 +477,13 @@ pub(super) async fn identity_document(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.identity.get_path_did_document",
+    operation_id = "ck.extension.soland.identity.get_path_did_document",
     tags("identity"),
     summary = "Fetch a DID document by DID path segment"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.identity.get_path_did_document")
+    fields(op = "ck.extension.soland.identity.get_path_did_document")
 )]
 pub(super) async fn identity_did_document(
     req: &mut Request,
@@ -822,7 +822,7 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
     let default_missing = default_provider_id.is_none();
     json!({
         "method": "did:webvh",
-        "profile": "cx.identity.webvh.provider.v1",
+        "profile": "ck.identity.webvh.provider.v1",
         "enabled": enabled,
         "default_provider_id": default_provider_id,
         "providers": providers,
@@ -854,7 +854,7 @@ fn resolver_trust_roots(state: &AppState, did_webvh: &Value) -> Value {
             roots.push(json!({
                 "id": provider.get("id").cloned().unwrap_or_else(|| json!("unknown")),
                 "kind": provider.get("kind").cloned().unwrap_or_else(|| json!("unknown")),
-                "profile": provider.get("profile").cloned().unwrap_or_else(|| json!("cx.identity.webvh.provider.v1")),
+                "profile": provider.get("profile").cloned().unwrap_or_else(|| json!("ck.identity.webvh.provider.v1")),
                 "base_url": provider.get("base_url").cloned(),
                 "active": provider.get("active").cloned().unwrap_or(Value::Bool(false)),
                 "expected_trust_domain": state.config.trust_domain.clone(),
@@ -1034,8 +1034,8 @@ fn derive_webvh_scid(skeleton: &Value) -> Result<String, String> {
             "inception log entry must contain {WEBVH_SCID_PLACEHOLDER} placeholders"
         ));
     }
-    let canonical = cokret_sdk::canonical::canonical_json_bytes(skeleton)
-        .map_err(|error| error.to_string())?;
+    let canonical =
+        cokret_sdk::canonical::canonical_json_bytes(skeleton).map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
 
@@ -1056,9 +1056,8 @@ fn substitute_webvh_scid(value: Value, scid: &str) -> Value {
 }
 
 fn webvh_entry_hash_multibase(value: &Value) -> Result<String, String> {
-    let canonical =
-        cokret_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
-            .map_err(|error| error.to_string())?;
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&strip_webvh_entry_for_hash(value))
+        .map_err(|error| error.to_string())?;
     Ok(sha256_multihash_multibase(&canonical))
 }
 

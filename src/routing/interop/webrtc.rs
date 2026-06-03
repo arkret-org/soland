@@ -61,11 +61,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.media.ice_config",
+    operation_id = "ck.media.ice_config",
     tags("media"),
     summary = "Issue signed ICE config"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.media.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ck.media.ice_config"))]
 async fn cokret_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -78,11 +78,11 @@ async fn cokret_ice_config(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.calls.ice_config",
+    operation_id = "ck.extension.soland.calls.ice_config",
     tags("media", "calls"),
     summary = "Issue signed ICE config through the API namespace"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.ice_config"))]
 async fn api_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -95,11 +95,11 @@ async fn api_ice_config(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.calls.ice_config.refresh",
+    operation_id = "ck.extension.soland.calls.ice_config.refresh",
     tags("media", "calls"),
     summary = "Refresh signed ICE / TURN credentials for an active call"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.ice_config.refresh"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.ice_config.refresh"))]
 async fn refresh_ice_config(
     aa: AuthArgs,
     call_id: PathParam<String>,
@@ -292,11 +292,11 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.webrtc.create_session",
+    operation_id = "ck.extension.soland.webrtc.create_session",
     tags("webrtc"),
     summary = "Create a WebRTC signaling session bound to a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.create_session"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
     aa: AuthArgs,
     body: JsonBody<CreateWebrtcSessionRequest>,
@@ -370,11 +370,11 @@ async fn create_webrtc_session(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.webrtc.send_signal",
+    operation_id = "ck.extension.soland.webrtc.send_signal",
     tags("webrtc"),
     summary = "Append a WebRTC signaling message (offer/answer/candidate/...) to a session"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.send_signal"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.send_signal"))]
 async fn put_webrtc_signal(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -473,11 +473,11 @@ async fn put_webrtc_signal(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.webrtc.get_signals",
+    operation_id = "ck.extension.soland.webrtc.get_signals",
     tags("webrtc"),
     summary = "Page through WebRTC signaling events for a session"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.get_signals"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.get_signals"))]
 async fn get_webrtc_signals(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -544,11 +544,11 @@ async fn get_webrtc_signals(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.webrtc.close_session",
+    operation_id = "ck.extension.soland.webrtc.close_session",
     tags("webrtc"),
     summary = "Close (delete) a WebRTC signaling session"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.webrtc.close_session"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.close_session"))]
 async fn delete_webrtc_session(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -583,11 +583,11 @@ async fn delete_webrtc_session(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.calls.recording.start",
+    operation_id = "ck.extension.soland.calls.recording.start",
     tags("media", "calls"),
     summary = "Start recording for a call when recording_policy allows it"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.calls.recording.start"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.recording.start"))]
 async fn start_recording(
     aa: AuthArgs,
     call_id: PathParam<String>,
@@ -662,7 +662,7 @@ async fn start_recording(
 
 // ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
-// caller that already has a committed `cx.call.state.session_focus`.
+// caller that already has a committed `ck.call.state.session_focus`.
 //
 // Wire-level checks implemented here:
 //   - `focus_id` must equal the call's committed session_focus → `focus_mismatch` (MEDIA-2,
@@ -673,8 +673,8 @@ async fn start_recording(
 //   - Token TTL ≤ `MEDIA_TOKEN_TTL_MAX_SECS` (600s); default `MEDIA_TOKEN_TTL_SHOULD_SECS` (300s)
 //     (MEDIA-1).
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
-//     `cx.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
-const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "cx.component.realm.media_service.v1";
+//     `ck.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
+const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ck.component.realm.media_service.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
@@ -856,17 +856,17 @@ async fn handle_rtc_token(
     // ERR-1 — additional CXP-0010 reason codes surface from this token
     // exchange path. The constants are referenced so they stay
     // grep-discoverable from the handler that emits them; deep
-    // emission paths land with the cx.realm.media_service epoch
+    // emission paths land with the ck.realm.media_service epoch
     // projection (TODO(R4)).
     //
     //   - UNKNOWN_FOCUS_TYPE: emitted by the foci[] type validator when the requested focus.type
     //     isn't in the {cokret-native, livekit, mediasoup, jitsi} enum.
-    //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's `cx.realm.media_service` cell
+    //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's `ck.realm.media_service` cell
     //     doesn't expose a focus that intersects the caller's `foci_preferred[]`.
     //   - E2EE_KEY_SOURCE_UNAUTHORISED: emitted when the caller's `e2ee_key_source` doesn't appear
-    //     in the realm's `cx.realm.media_service.e2ee_key_sources_allowed[]`.
+    //     in the realm's `ck.realm.media_service.e2ee_key_sources_allowed[]`.
     //   - RECORDING_ARTIFACT_PIPELINE_BYPASSED: emitted by the recording-artifact uploader when the
-    //     binding chain to `cx.realm.recording_artifact_pipeline` is broken.
+    //     binding chain to `ck.realm.recording_artifact_pipeline` is broken.
     let _unknown_focus_type_reason: &str = crate::error::reasons::UNKNOWN_FOCUS_TYPE;
     let _focus_unavailable_reason: &str = crate::error::reasons::FOCUS_UNAVAILABLE_FOR_CLIENT;
     let _e2ee_unauth_reason: &str = crate::error::reasons::E2EE_KEY_SOURCE_UNAUTHORISED;
@@ -876,7 +876,7 @@ async fn handle_rtc_token(
     let media_epoch = media_service_epoch_for_realm(state, &body.realm_id)?;
 
     // MEDIA-2 — focus selection (oldest-membership-wins). A committed
-    // `cx.call.state.session_focus` projection wins when present; otherwise we
+    // `ck.call.state.session_focus` projection wins when present; otherwise we
     // derive from call members ordered by realm membership age and the latest
     // per-member `foci_preferred[]` signal in the call.
     let session_focus = session_focus_for_call(state, &webrtc, &media_epoch)?;
@@ -1092,7 +1092,7 @@ fn media_service_epoch_for_realm(
     }
     .ok_or_else(|| {
         token_issuer_unauthorised(format!(
-            "realm `{realm_id}` has no projected cx.realm.media_service epoch"
+            "realm `{realm_id}` has no projected ck.realm.media_service epoch"
         ))
     })?;
     parse_media_service_epoch(realm_id, &value)
@@ -1371,12 +1371,12 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "cx.call.media.token_exchange",
+    operation_id = "ck.call.media.token_exchange",
     tags("media", "calls"),
     summary = "Exchange a session-focus for a backend media token + participant_binding (CXP-0010)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.call.media.token_exchange"))]
+#[tracing::instrument(skip_all, fields(op = "ck.call.media.token_exchange"))]
 async fn cokret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<MediaTokenExchangeReqBody>,
@@ -1426,26 +1426,26 @@ fn is_supported_webrtc_signal_type(value: &str) -> bool {
             | "device_change"
             | "renegotiate"
             | "candidate"
-            | "cx.webrtc.offer"
-            | "cx.webrtc.answer"
-            | "cx.webrtc.candidate"
-            | "cx.webrtc.ice"
-            | "cx.webrtc.renegotiate"
-            | "cx.webrtc.hangup"
-            | "cx.call.signal.invite"
-            | "cx.call.signal.offer"
-            | "cx.call.signal.answer"
-            | "cx.call.signal.ice"
-            | "cx.call.signal.hangup"
-            | "cx.call.signal.reject"
-            | "cx.call.signal.mute_state"
-            | "cx.call.signal.media_state"
-            | "cx.call.signal.speaking"
-            | "cx.call.signal.focus_join"
-            | "cx.call.signal.focus_leave"
-            | "cx.call.signal.error"
-            | "cx.call.signal.device_change"
-            | "cx.call.signal.renegotiate"
+            | "ck.webrtc.offer"
+            | "ck.webrtc.answer"
+            | "ck.webrtc.candidate"
+            | "ck.webrtc.ice"
+            | "ck.webrtc.renegotiate"
+            | "ck.webrtc.hangup"
+            | "ck.call.signal.invite"
+            | "ck.call.signal.offer"
+            | "ck.call.signal.answer"
+            | "ck.call.signal.ice"
+            | "ck.call.signal.hangup"
+            | "ck.call.signal.reject"
+            | "ck.call.signal.mute_state"
+            | "ck.call.signal.media_state"
+            | "ck.call.signal.speaking"
+            | "ck.call.signal.focus_join"
+            | "ck.call.signal.focus_leave"
+            | "ck.call.signal.error"
+            | "ck.call.signal.device_change"
+            | "ck.call.signal.renegotiate"
     )
 }
 

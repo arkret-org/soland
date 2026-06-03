@@ -428,10 +428,11 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 4. Bob drains his Welcome queue via the HTTP route ──────
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
-    let drain_resp = TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+    let drain_resp =
+        TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
+            .add_header("authorization", format!("Bearer {bob_token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(drain_resp.status_code, Some(StatusCode::OK));
     let mut drain_resp = drain_resp;
     let drain_json: Value = drain_resp.take_json().await.unwrap();
@@ -447,10 +448,11 @@ async fn mls_lifecycle_end_to_end() {
 
     // Second drain must return zero rows — `delivered_at` flips
     // ensures we don't redeliver.
-    let drain2_resp = TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+    let drain2_resp =
+        TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
+            .add_header("authorization", format!("Bearer {bob_token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
     let mut drain2_resp = drain2_resp;
     let drain2_json: Value = drain2_resp.take_json().await.unwrap();
     assert!(

@@ -60,12 +60,13 @@ async fn identity_surface_works() {
             .unwrap();
     assert_eq!(document["did_document"]["id"], "did:web:alice.example");
 
-    let log: Value = TestClient::get("http://server/_cokret/root/identity/log?did=did:web:alice.example")
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let log: Value =
+        TestClient::get("http://server/_cokret/root/identity/log?did=did:web:alice.example")
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(log["has_more"], false);
 }
 
@@ -120,7 +121,7 @@ async fn identity_describe_exposes_external_webvh_provider() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile.as_str() == Some("cx.identity.webvh.provider.v1"))
+            .any(|profile| profile.as_str() == Some("ck.identity.webvh.provider.v1"))
     );
 }
 
@@ -156,7 +157,7 @@ async fn identity_describe_keeps_external_webvh_provider_when_probe_fails() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile.as_str() == Some("cx.identity.webvh.provider.v1"))
+            .any(|profile| profile.as_str() == Some("ck.identity.webvh.provider.v1"))
     );
     assert_eq!(
         describe["did_webvh"]["providers"][0]["health"]["active"],

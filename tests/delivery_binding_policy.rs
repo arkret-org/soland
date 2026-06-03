@@ -1,4 +1,4 @@
-//! Reducer-level tests for the `cx.space.delivery_binding_policy`
+//! Reducer-level tests for the `ck.space.delivery_binding_policy`
 //! cell projection + `ck.member.state{join,routable}` validation
 //! (Round C46, spec join-policy.md §5.1).
 //!
@@ -26,7 +26,7 @@ fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            soland::kinds::CX_REALM_DELIVERY_BINDING_POLICY,
+            soland::kinds::CK_REALM_DELIVERY_BINDING_POLICY,
             SPACE_A,
             payload,
         ),
@@ -40,7 +40,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 
 fn join_op(member: &str, binding: Value) -> Operation {
     op(
-        soland::kinds::CX_MEMBER_STATE,
+        soland::kinds::CK_MEMBER_STATE,
         SPACE_A,
         json!({
             "actor_id": member,
@@ -190,7 +190,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
-    // No `cx.space.delivery_binding_policy` was projected for this Space.
+    // No `ck.space.delivery_binding_policy` was projected for this Space.
     assert!(state.delivery_binding_policy_cell_value(SPACE_A).is_none());
 
     // Reasonable-looking binding (would pass a permissive policy) MUST

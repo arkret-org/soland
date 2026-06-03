@@ -112,15 +112,15 @@ See `examples/prometheus-alerts.yml` for ready-made alert rules.
 ## 3. MLS lifecycle
 
 MLS (RFC 9420) lives inside the same event log: every
-`cx.component.mls.*` event is a regular durable event with the standard
+`ck.component.mls.*` event is a regular durable event with the standard
 replay-window and signature verification. The lifecycle states the
 operator should be aware of:
 
-1. **Group create** (`ck.realm.create` + `cx.component.mls.epoch.v1`
+1. **Group create** (`ck.realm.create` + `ck.component.mls.epoch.v1`
    cell write). The reducer mints the initial epoch and seeds
    `MlsGroupProjection` (`src/reducer/mls.rs`).
 2. **Epoch rotation**. Any commit that touches the
-   `cx.component.mls.epoch.v1` cell triggers an
+   `ck.component.mls.epoch.v1` cell triggers an
    `EventNotificationKind::EpochRotation` broadcast on the
    `AppState::event_broadcast` channel. NDJSON subscribers receive a
    typed `EventsSubscribeFrame::epoch_rotation` so clients can re-fetch
@@ -131,10 +131,10 @@ operator should be aware of:
    (`circle_member_must_be_realm_member` invariant).
 4. **Group archive / tombstone**. `ck.circle.archive` / `ck.circle.tombstone`
    move the projection row into a terminal state; the
-   `cx.component.mls.epoch.v1` cell remains addressable for forensic
+   `ck.component.mls.epoch.v1` cell remains addressable for forensic
    purposes but no new commits are accepted.
 
-The replay window for `cx.component.mls.epoch.v1` is intentionally
+The replay window for `ck.component.mls.epoch.v1` is intentionally
 tighter than the global default (60 s vs. 300 s) — see
 `AppConfig::default_replay_overrides` — because a stale epoch rotation
 can fork the group.

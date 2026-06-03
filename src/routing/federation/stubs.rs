@@ -25,11 +25,11 @@ pub fn well_known_cokret_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.well_known.cokret",
+    operation_id = "ck.extension.soland.well_known.cokret",
     tags("federation"),
     summary = "Server description for federation discovery"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.well_known.cokret"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.well_known.cokret"))]
 async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
@@ -43,7 +43,7 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
         crate::config::FederationPolicy::Hub => "hub",
     };
     json_ok(json!({
-        "schema": "cx.schema.server_description.v1",
+        "schema": "ck.schema.server_description.v1",
         "service_did": state.config.service_did.clone(),
         "trust_domain": state.config.trust_domain.clone(),
         "public_base_url": state.config.public_base_url.clone(),
@@ -67,11 +67,11 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.send_event",
+    operation_id = "ck.extension.soland.federation.send_event",
     tags("federation"),
     summary = "Outbound federation send-event (stub; returns 501)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.send_event"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.send_event"))]
 pub(super) async fn federation_send_event(body: JsonBody<Value>) -> JsonResult<Value> {
     // Spec: B.3 — outbound federation send-event endpoint. The active
     // path lands with the federation outbox v2 rewrite; today this

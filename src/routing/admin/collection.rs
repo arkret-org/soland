@@ -28,11 +28,11 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
 
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.collection",
+    operation_id = "ck.extension.soland.admin.collection",
     tags("admin"),
     summary = "Dev-only paginated admin snapshot of a named collection"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.collection"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.collection"))]
 pub(super) async fn admin_collection(
     aa: AuthArgs,
     resource: PathParam<String>,

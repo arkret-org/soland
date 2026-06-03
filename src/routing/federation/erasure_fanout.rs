@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use cokret_sdk::{Did, Operation, OperationId, RealmId, SpaceId};
+use cokret_sdk::{Did, Operation, OperationId, RealmId};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -99,7 +99,7 @@ pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
     let operation = Operation::create(
         operation_id,
         realm_id,
-        crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
+        crate::kinds::CK_AUDIT_ERASURE_RECEIPT,
         receipt.payload,
     );
     fanout_erasure_receipt_operation(state, &operation).await;
@@ -251,7 +251,7 @@ fn erasure_push_payload(
 ) -> Option<String> {
     let origin = Did::new(state.config.service_did.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
-    let space_id = SpaceId::new(operation.realm_id.to_string()).ok()?;
+    let space_id = RealmId::new(operation.realm_id.to_string()).ok()?;
     let body = cokret_sdk::FederationPushOperationsReqBody {
         origin,
         destination,
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(body["destination"], "did:web:peer1.example");
         assert_eq!(
             body["operations"][0]["object_type"],
-            crate::kinds::CX_AUDIT_ERASURE_RECEIPT
+            crate::kinds::CK_AUDIT_ERASURE_RECEIPT
         );
     }
 

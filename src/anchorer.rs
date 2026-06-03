@@ -28,9 +28,9 @@
 //!   `SOLAND_ANCHORER_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
 //!   `routing/move_anchor.rs`) still accepts both real and shape-only JWSes for local fixtures.
-//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /_soland/admin/anchors/sign`.
-//!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
-//!   shutdown handling under tokio).
+//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST
+//!   /_soland/admin/anchors/sign`. A periodic ticker / push-loop is left to future production work
+//!   (needs lease coordination + shutdown handling under tokio).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -44,7 +44,7 @@ use cokret_sdk::state_res::{
     effective_anchor_view, verify_move,
 };
 use cokret_sdk::{
-    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, SpaceId,
+    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, RealmId,
 };
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
@@ -103,7 +103,7 @@ impl AnchorerWorker {
     pub fn sign_pending_for_space(
         &self,
         state: &AppState,
-        realm_id: &SpaceId,
+        realm_id: &RealmId,
         max_moves: usize,
     ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
         // Step 1: authorization. v1 single-DID mode — accept if anchorer
@@ -266,7 +266,7 @@ impl AnchorerWorker {
         //
         // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
-            "ck:cell:cx.component.mls.epoch.v1:{}",
+            "ck:cell:ck.component.mls.epoch.v1:{}",
             realm_id.as_str()
         ))
         .ok();
@@ -346,7 +346,7 @@ impl AnchorerWorker {
     fn is_authorized_for(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        space_id: &RealmId,
     ) -> Result<bool, AnchorerError> {
         let anchorer_cell = match CellRef::new(format!(
             "ck:cell:ck.component.anchorer.v1:{}",
@@ -451,7 +451,7 @@ impl AnchorerWorker {
     fn frontier_is_stale(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        space_id: &RealmId,
         staleness_ms: u64,
     ) -> Result<bool, AnchorerError> {
         let leaves = state.anchor_store.list_leaves(space_id)?;
@@ -479,7 +479,7 @@ impl AnchorerWorker {
     fn read_effective_state(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        space_id: &RealmId,
     ) -> Result<BTreeMap<CellRef, CellState>, AnchorerError> {
         let mut out = BTreeMap::new();
         let cells = state.cell_store.list_cells(space_id)?;
@@ -501,7 +501,7 @@ impl AnchorerWorker {
     fn predict_post_state_root(
         &self,
         state: &AppState,
-        space_id: &SpaceId,
+        space_id: &RealmId,
         _pre_state: &BTreeMap<CellRef, CellState>,
         accepted: &[Move],
     ) -> Result<Hash, AnchorerError> {
@@ -589,7 +589,7 @@ impl AnchorerWorker {
     fn build_genesis_anchor(
         &self,
         state: &AppState,
-        realm_id: &SpaceId,
+        realm_id: &RealmId,
     ) -> Result<Anchor, AnchorerError> {
         let zero_anchor_id = AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32)))
             .expect("zero AnchorId is well-formed");
@@ -689,7 +689,7 @@ fn read_did_list(value: &serde_json::Value, candidates: &[&str]) -> Vec<String> 
 /// summary — used by the admin endpoint.
 pub fn run_one_signing_pass(
     state: &AppState,
-    space_id: &SpaceId,
+    space_id: &RealmId,
     max_moves: usize,
 ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
     let worker = AnchorerWorker::for_service(state.config.service_did.clone());

@@ -2,8 +2,8 @@
 //!
 //! - `POST /_cokret/self/realms/{realm_id}/links` — create / status-flip a `ck.realm.link`.
 //! - `DELETE /_cokret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
-//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — read the merged effective policy (walks the
-//!   inheritance chain).
+//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
+//!   (walks the inheritance chain).
 //! - Cycle-detection negative: a 3-realm `governed_by` triangle MUST be rejected with
 //!   `realm_link_cycle` at the third POST.
 
@@ -104,7 +104,7 @@ fn project_inheritance_policy(
     let op = Operation::create(
         OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        soland::kinds::CX_REALM_INHERITANCE_POLICY,
+        soland::kinds::CK_REALM_INHERITANCE_POLICY,
         json!({
             "source_realm_id": source_realm_id,
             "allowed_policies": allowed_policies,
@@ -125,18 +125,19 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     let token = dev_token(&svc).await;
 
     // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes the projected status.
-    let body: Value = TestClient::post(format!("http://server/_cokret/self/realms/{REALM_B}/links"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "target_realm_id": REALM_A,
-            "link_kind": "governed_by",
-            "status": "active",
-        }))
-        .send(&svc)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let body: Value =
+        TestClient::post(format!("http://server/_cokret/self/realms/{REALM_B}/links"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&json!({
+                "target_realm_id": REALM_A,
+                "link_kind": "governed_by",
+                "status": "active",
+            }))
+            .send(&svc)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(body["realm_id"], REALM_B);
     assert_eq!(body["target_realm_id"], REALM_A);
     assert_eq!(body["status"], "active");

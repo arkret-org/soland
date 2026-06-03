@@ -42,7 +42,7 @@ fn op(payload: Value) -> Operation {
     Operation::create(
         cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         cokret_sdk::RealmId::new(PLACEHOLDER_REALM).unwrap(),
-        soland::kinds::CX_DEVICE_PUSH_ROUTE,
+        soland::kinds::CK_DEVICE_PUSH_ROUTE,
         payload,
     )
 }

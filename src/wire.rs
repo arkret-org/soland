@@ -2004,7 +2004,7 @@ pub fn describe(
         supported_operations,
         supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/_cokret"})],
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
-        supported_schema_profiles: vec!["cx.schema.core.v1".to_owned()],
+        supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
         auth_metadata,
         limits: serde_json::json!({
             "storage": storage,
@@ -2038,7 +2038,7 @@ pub fn describe(
                 "conformance": "limited_reference",
                 "unsupported_profiles": [
                     {
-                        "profile": "cx.profile.soland_limited_server.v1",
+                        "profile": "ck.profile.soland_limited_server.v1",
                         "status": "unsupported",
                         "reason": "limited profile is a limitation descriptor, not a conformance claim"
                     }

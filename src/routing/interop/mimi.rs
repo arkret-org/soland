@@ -4,14 +4,14 @@
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Cokret reducer chain:
 //!
-//!   * `POST /mimi/flows/{flow_id}/messages` -> emits a `MessageRecord` + a `cx.message.create`
+//!   * `POST /mimi/flows/{flow_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
 //!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
-//!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a `cx.mimi.room_binding` projection event
+//!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a `ck.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
-//!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic `cx.mimi.notify` projection
+//!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic `ck.mimi.notify` projection
 //!     event so live subscribers observe MIMI fanout.
 //!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
-//!     `cx.moderation.report` projection event so the audit timeline reflects the report.
+//!     `ck.moderation.report` projection event so the audit timeline reflects the report.
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so
@@ -57,7 +57,7 @@ async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.provider_directory",
+    operation_id = "ck.mimi.provider_directory",
     tags("mimi"),
     summary = "Read the MIMI provider directory"
 )]
@@ -68,11 +68,11 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.key_material",
+    operation_id = "ck.mimi.key_material",
     tags("mimi"),
     summary = "Claim MIMI/MLS key material for a target identifier"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.key_material"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.key_material"))]
 async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -88,7 +88,7 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         "ok": true,
         "key_packages": [],
         "failures": {},
-        "receipt": mimi_receipt(state, "cx.mimi.key_material", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.key_material", &body, json!({
             "target": target,
             "keypackage_claim_lifecycle": "single_use_required",
             "production_gap": "full_mls_keypackage_claim_not_implemented"
@@ -97,11 +97,11 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.room_update",
+    operation_id = "ck.mimi.room_update",
     tags("mimi"),
     summary = "Apply a MIMI room update (optionally persists `room_binding`)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.room_update"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.room_update"))]
 async fn mimi_room_update(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -117,7 +117,7 @@ async fn mimi_room_update(
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     // If the update carries a `room_binding` block, persist it as a
-    // `cx.mimi.room_binding` projection event so the Cokret
+    // `ck.mimi.room_binding` projection event so the Cokret
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
@@ -141,7 +141,7 @@ async fn mimi_room_update(
         "ok": true,
         "room_id": room_id,
         "binding_event_id": binding_event_id,
-        "receipt": mimi_receipt(state, "cx.mimi.room_update", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.room_update", &body, json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "truth_source": "cokret_signed_event_reducer",
             "status": "projected",
@@ -151,11 +151,11 @@ async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.room_notify",
+    operation_id = "ck.mimi.room_notify",
     tags("mimi"),
-    summary = "Fan out a MIMI room notify (broadcasts a `cx.mimi.notify` ephemeral)"
+    summary = "Fan out a MIMI room notify (broadcasts a `ck.mimi.notify` ephemeral)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.room_notify"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.room_notify"))]
 async fn mimi_room_notify(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -170,7 +170,7 @@ async fn mimi_room_notify(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    // Fan out a synthetic `cx.mimi.notify` projection event so live
+    // Fan out a synthetic `ck.mimi.notify` projection event so live
     // subscribers observe the MIMI provider-to-provider
     // notification. The notify event is an ephemeral signal in the
     // spec's wire_scope taxonomy - we broadcast but don't persist
@@ -183,7 +183,7 @@ async fn mimi_room_notify(
     let notify_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "cx.mimi.notify".to_owned(),
+        event_kind: "ck.mimi.notify".to_owned(),
         operation_type: "mimi_facade_notify".to_owned(),
         operation_id: None,
         sender: None,
@@ -209,7 +209,7 @@ async fn mimi_room_notify(
         "ok": true,
         "accepted": [room_id],
         "broadcast_event_id": event_id,
-        "receipt": mimi_receipt(state, "cx.mimi.notify", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.notify", &body, json!({
             "delivery": "queued",
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "broadcast_emitted": true,
@@ -218,11 +218,11 @@ async fn mimi_room_notify(
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.submit_message",
+    operation_id = "ck.mimi.submit_message",
     tags("mimi"),
-    summary = "Submit a MIMI room message (mapped into cx.message.create projection)"
+    summary = "Submit a MIMI room message (mapped into ck.message.create projection)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.submit_message"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.submit_message"))]
 async fn mimi_room_message(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
@@ -264,7 +264,7 @@ async fn mimi_room_message(
         .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
 
     // Map the MIMI message into the canonical Cokret timeline.
-    // Append a MessageRecord + a `cx.message.create` projection event so
+    // Append a MessageRecord + a `ck.message.create` projection event so
     // the message shows up in `GET /_cokret/self/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
@@ -317,7 +317,7 @@ async fn mimi_room_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
+        event_kind: kinds::CK_MESSAGE_CREATE.to_owned(),
         operation_type: "mimi_facade_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(sender.clone()),
@@ -347,14 +347,14 @@ async fn mimi_room_message(
 
     let receipt = mimi_receipt(
         state,
-        "cx.mimi.submit_message",
+        "ck.mimi.submit_message",
         &body,
         json!({
-            "kind": "cx.mimi.mapping_receipt",
-            "profile": "cx.profile.mimi_interop.v1",
+            "kind": "ck.mimi.mapping_receipt",
+            "profile": "ck.profile.mimi_interop.v1",
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "source_format": source_format,
-            "target_format": "cx.message.create",
+            "target_format": "ck.message.create",
             "original_envelope_hash": original_hash,
             "mapped_operation_id": operation_id,
             "cokret_event_id": event_id,
@@ -395,11 +395,11 @@ async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.group_info",
+    operation_id = "ck.mimi.group_info",
     tags("mimi"),
     summary = "Read a MIMI room's group info / projection"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.group_info"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.group_info"))]
 async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
@@ -416,7 +416,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
         "mimi_room_uri": projection["mimi_room_uri"].clone(),
         "group_info": projection,
         "participants": mimi_room_participants(state, &realm_id),
-        "receipt": mimi_receipt(state, "cx.mimi.group_info", &json!({"room_id": room_id}), json!({
+        "receipt": mimi_receipt(state, "ck.mimi.group_info", &json!({"room_id": room_id}), json!({
             "truth_source": "cokret_signed_event_reducer",
             "projection_only": true
         }))
@@ -424,11 +424,11 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.request_consent",
+    operation_id = "ck.mimi.request_consent",
     tags("mimi"),
     summary = "Open a MIMI consent request"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.request_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.request_consent"))]
 async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -440,7 +440,7 @@ async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonR
         "ok": true,
         "consent_id": consent_id,
         "state": "requested",
-        "receipt": mimi_receipt(state, "cx.mimi.request_consent", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.request_consent", &body, json!({
             "consent_grants_space_capability": false,
             "privacy_state": "holder_private"
         }))
@@ -448,11 +448,11 @@ async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonR
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.update_consent",
+    operation_id = "ck.mimi.update_consent",
     tags("mimi"),
     summary = "Update a MIMI consent state"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.update_consent"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.update_consent"))]
 async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -472,7 +472,7 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
         "ok": true,
         "consent_id": consent_id,
         "state": state_value,
-        "receipt": mimi_receipt(state, "cx.mimi.update_consent", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.update_consent", &body, json!({
             "consent_grants_space_capability": false,
             "membership_still_required": true
         }))
@@ -480,11 +480,11 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.identifier_query",
+    operation_id = "ck.mimi.identifier_query",
     tags("mimi"),
     summary = "Resolve a MIMI / DID identifier to a reachable Cokret actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.identifier_query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.identifier_query"))]
 async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -515,7 +515,7 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
             "privacy_mode": "private_contact_discovery",
             "expires_at": now() + Duration::minutes(5)
         }],
-        "receipt": mimi_receipt(state, "cx.mimi.identifier_query", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.identifier_query", &body, json!({
             "contact_graph_exposed": false,
             "connection_identifier_separated": true
         }))
@@ -523,11 +523,11 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.report_abuse",
+    operation_id = "ck.mimi.report_abuse",
     tags("mimi"),
-    summary = "File a MIMI abuse report (mirrors as cx.moderation.report projection event)"
+    summary = "File a MIMI abuse report (mirrors as ck.moderation.report projection event)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.report_abuse"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.report_abuse"))]
 async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -552,7 +552,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
-    // Also emit a `cx.moderation.report` projection event so the
+    // Also emit a `ck.moderation.report` projection event so the
     // audit timeline observes the report in the same shape native
     // Cokret reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.
@@ -581,7 +581,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     let report_record = ProjectionEventRecord {
         event_id: report_event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "cx.moderation.report".to_owned(),
+        event_kind: "ck.moderation.report".to_owned(),
         operation_type: "mimi_facade_report".to_owned(),
         operation_id: None,
         sender: body
@@ -623,7 +623,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         "report_id": report_id,
         "report_event_id": report_event_id,
         "status": "queued",
-        "receipt": mimi_receipt(state, "cx.mimi.report_abuse", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.report_abuse", &body, json!({
             "e2ee_evidence_plaintext_required": false,
             "routed_to": [format!("{}#moderation", state.config.service_did)],
             "moderation_event_emitted": true,
@@ -632,11 +632,11 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
 }
 
 #[endpoint(
-    operation_id = "cx.mimi.proxy_download",
+    operation_id = "ck.mimi.proxy_download",
     tags("mimi"),
     summary = "Issue a proxy-download token for a MIMI blob (asset privacy policy honored)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.mimi.proxy_download"))]
+#[tracing::instrument(skip_all, fields(op = "ck.mimi.proxy_download"))]
 async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -663,7 +663,7 @@ async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
         } else {
             None
         },
-        "receipt": mimi_receipt(state, "cx.mimi.proxy_download", &body, json!({
+        "receipt": mimi_receipt(state, "ck.mimi.proxy_download", &body, json!({
             "asset_privacy_policy": asset_policy,
             "direct_object_store_url_returned": false,
             "client_must_verify_content_hash": true
@@ -673,10 +673,10 @@ async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
 
 fn mimi_provider_directory_value(state: &AppState) -> Value {
     json!({
-        "schema": "cx.schema.mimi_interop.v1",
+        "schema": "ck.schema.mimi_interop.v1",
         "service_did": state.config.service_did.clone(),
         "service_type": "mimi_provider_facade",
-        "supported_profiles": ["cx.profile.mimi_interop.v1"],
+        "supported_profiles": ["ck.profile.mimi_interop.v1"],
         "mimi": {
             "protocol_draft": "draft-ietf-mimi-protocol-06",
             "content_draft": "draft-ietf-mimi-content-08",
@@ -715,7 +715,7 @@ fn mimi_provider_directory_value(state: &AppState) -> Value {
             "type": "dev_service_digest",
             "kid": format!("{}#mimi-provider", state.config.service_did),
             "alg": "sha256-dev",
-            "sig": sha256_hex(format!("{}:cx.profile.mimi_interop.v1", state.config.service_did).as_bytes())
+            "sig": sha256_hex(format!("{}:ck.profile.mimi_interop.v1", state.config.service_did).as_bytes())
         }
     })
 }
@@ -742,7 +742,7 @@ fn mimi_room_uri(state: &AppState, room_id: &str) -> String {
 
 fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value) -> Value {
     json!({
-        "profile": "cx.profile.mimi_interop.v1",
+        "profile": "ck.profile.mimi_interop.v1",
         "operation_id": operation_id,
         "service_did": state.config.service_did,
         "provider_id": mimi_provider_id(state),
@@ -785,7 +785,7 @@ fn map_mimi_message_content(
     }
 
     let mut policy = json!({
-        "profile": "cx.profile.mimi_interop.v1",
+        "profile": "ck.profile.mimi_interop.v1",
         "e2ee_boundary": "none",
         "plaintext_detected": plaintext_detected,
         "plaintext_guard": "not_e2ee",
@@ -796,7 +796,7 @@ fn map_mimi_message_content(
         ensure_content_object(&mut content);
         let object = content.as_object_mut().expect("content object");
         object.insert(
-            "cx.morph.e2ee_downgrade".to_owned(),
+            "ck.morph.e2ee_downgrade".to_owned(),
             Value::String("mimi_bridge".to_owned()),
         );
         object.insert(
@@ -804,7 +804,7 @@ fn map_mimi_message_content(
             Value::String("mimi_bridge".to_owned()),
         );
         policy = json!({
-            "profile": "cx.profile.mimi_interop.v1",
+            "profile": "ck.profile.mimi_interop.v1",
             "e2ee_boundary": "explicit_downgrade",
             "plaintext_detected": plaintext_detected,
             "plaintext_guard": "marked_explicit_downgrade",
@@ -817,11 +817,11 @@ fn map_mimi_message_content(
             let object = content.as_object_mut().expect("content object");
             object.insert("transcript_binding".to_owned(), binding.clone());
             object.insert(
-                "cx.morph.e2ee_boundary".to_owned(),
+                "ck.morph.e2ee_boundary".to_owned(),
                 Value::String("transcript_bound".to_owned()),
             );
             policy = json!({
-                "profile": "cx.profile.mimi_interop.v1",
+                "profile": "ck.profile.mimi_interop.v1",
                 "e2ee_boundary": "transcript_bound",
                 "plaintext_detected": plaintext_detected,
                 "plaintext_guard": "transcript_binding",
@@ -829,7 +829,7 @@ fn map_mimi_message_content(
             });
         } else {
             policy = json!({
-                "profile": "cx.profile.mimi_interop.v1",
+                "profile": "ck.profile.mimi_interop.v1",
                 "e2ee_boundary": "opaque_ciphertext",
                 "plaintext_detected": false,
                 "plaintext_guard": "opaque_ciphertext_only",
@@ -849,9 +849,9 @@ fn map_mimi_message_content(
             "raw_payload_hash": format!("sha256:{}", sha256_hex(content.to_string().as_bytes())),
         });
         let content = json!({
-            "kind": "cx.content.unsupported",
+            "kind": "ck.content.unsupported",
             "body": "unsupported content from MIMI",
-            "cx.morph.unknown_content_kind": kind,
+            "ck.morph.unknown_content_kind": kind,
             "quarantine": quarantine.clone(),
         });
         let mut policy = policy;
@@ -887,7 +887,7 @@ fn mimi_content_payload(body: &Value, source_format: &str) -> Value {
             .and_then(Value::as_str)
             .unwrap_or_default();
         json!({
-            "kind": "cx.content.text",
+            "kind": "ck.content.text",
             "body": text,
             "raw_mimi_source_format": source_format,
         })
@@ -898,7 +898,7 @@ fn ensure_content_object(content: &mut Value) {
     if !content.is_object() {
         let raw = content.clone();
         *content = json!({
-            "kind": "cx.content.opaque",
+            "kind": "ck.content.opaque",
             "raw_mimi_content": raw,
         });
     }
@@ -918,12 +918,12 @@ fn valid_mimi_content_kind(kind: &str) -> bool {
             | "text/plain"
             | "text/markdown"
             | "m.markdown"
-            | "cx.message.text"
-            | "cx.message.revise"
-            | "cx.message.redact"
-            | "cx.content.text"
-            | "cx.content.composite"
-            | "cx.content.markdown"
+            | "ck.message.text"
+            | "ck.message.revise"
+            | "ck.message.redact"
+            | "ck.content.text"
+            | "ck.content.composite"
+            | "ck.content.markdown"
     )
 }
 
@@ -964,9 +964,9 @@ fn mimi_transcript_binding<'a>(body: &'a Value, content: &'a Value) -> Option<&'
 
 fn mimi_explicit_downgrade(body: &Value, content: &Value) -> bool {
     downgrade_marker(body.get("e2ee_downgrade"))
-        || downgrade_marker(body.get("cx.morph.e2ee_downgrade"))
+        || downgrade_marker(body.get("ck.morph.e2ee_downgrade"))
         || downgrade_marker(content.get("e2ee_downgrade"))
-        || downgrade_marker(content.get("cx.morph.e2ee_downgrade"))
+        || downgrade_marker(content.get("ck.morph.e2ee_downgrade"))
 }
 
 fn downgrade_marker(value: Option<&Value>) -> bool {
@@ -999,7 +999,7 @@ fn mimi_plaintext_detected(value: &Value) -> bool {
 
 /// Look up which Cokret `realm_id` (if any) the MIMI `room_id` is
 /// bound to. Scans the persistence projection event log for the
-/// most recent `cx.mimi.room_binding` event whose
+/// most recent `ck.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
 /// matches `room_id`. Returns `None` when no binding has been
 /// recorded; callers translate that into a 404/400 rather than
@@ -1013,7 +1013,7 @@ async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> 
         .ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
-        if entry.event_kind != "cx.mimi.room_binding" {
+        if entry.event_kind != "ck.mimi.room_binding" {
             continue;
         }
         let payload_room = entry
@@ -1045,7 +1045,7 @@ async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> 
     None
 }
 
-/// Emit a `cx.mimi.room_binding` projection event capturing the
+/// Emit a `ck.mimi.room_binding` projection event capturing the
 /// binding state. Returns the generated event_id so the caller can
 /// echo it back to the MIMI client. The binding payload is captured
 /// verbatim under `payload.binding` and `mimi_room_id` is hoisted to
@@ -1076,12 +1076,12 @@ async fn emit_mimi_room_binding_event(
     let record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
-        event_kind: "cx.mimi.room_binding".to_owned(),
+        event_kind: "ck.mimi.room_binding".to_owned(),
         operation_type: "mimi_facade_room_binding".to_owned(),
         operation_id: None,
         sender: None,
         payload: json!({
-            "profile": "cx.profile.mimi_interop.v1",
+            "profile": "ck.profile.mimi_interop.v1",
             "mimi_room_uri": mimi_room_uri_value,
             "mimi_room_id": room_id,
             "binding_scope": {
@@ -1114,8 +1114,8 @@ async fn emit_mimi_room_binding_event(
 
 fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {
     json!({
-        "kind": "cx.mimi.room_binding",
-        "profile": "cx.profile.mimi_interop.v1",
+        "kind": "ck.mimi.room_binding",
+        "profile": "ck.profile.mimi_interop.v1",
         "mimi_room_uri": mimi_room_uri(state, room_id),
         "binding_scope": {
             "realm_id": realm_id,

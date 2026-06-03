@@ -261,11 +261,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.manifest.verify",
+    operation_id = "ck.extension.soland.applets.manifest.verify",
     tags("extensions"),
     summary = "Verify a signed applet manifest"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.manifest.verify"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.manifest.verify"))]
 async fn verify_endpoint(body: JsonBody<Value>) -> JsonResult<Value> {
     let body = body.into_inner();
     let manifest_value = body

@@ -167,7 +167,7 @@ fn policy_decision_transcript_bytes(
         .as_ref()
         .map(|ts| ts.format("%Y-%m-%dT%H:%M:%SZ").to_string());
     let transcript = PolicyDecisionTranscript {
-        kind: "cx.policy.check.transcript.v1",
+        kind: "ck.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
         decision: &response.decision,
         bound_to: &response.bound_to,

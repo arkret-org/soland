@@ -49,11 +49,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.system.health",
+    operation_id = "ck.system.health",
     tags("system"),
     summary = "Liveness probe + database / events health snapshot"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.system.health"))]
+#[tracing::instrument(skip_all, fields(op = "ck.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
@@ -82,11 +82,11 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthRespo
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.system.readyz",
+    operation_id = "ck.extension.soland.system.readyz",
     tags("system"),
     summary = "Readiness probe for deploy orchestrators"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.system.readyz"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
@@ -202,7 +202,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     let mut value = serde_json::to_value(description).expect("server description serializes");
     value["unsupported_profiles"] = json!([
         {
-            "profile": "cx.profile.soland_limited_server.v1",
+            "profile": "ck.profile.soland_limited_server.v1",
             "status": "unsupported",
             "reason": "limited profile is a limitation descriptor, not a conformance claim"
         }
@@ -401,11 +401,11 @@ pub(crate) fn apply_claim_level_partition(
 }
 
 #[endpoint(
-    operation_id = "cx.auth.bridge.describe",
+    operation_id = "ck.auth.bridge.describe",
     tags("auth"),
     summary = "Auth bridge contract description (OAuth bearer introspection + push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.auth.bridge.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
     json_ok(AuthBridgeDescribeResponse {
         contract: "cokret.rest.principal_bridge.v1".to_owned(),
@@ -458,11 +458,11 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
 }
 
 #[endpoint(
-    operation_id = "cx.authz.describe",
+    operation_id = "ck.authz.describe",
     tags("authz"),
     summary = "Authz scaffold description (constraint + condition examples)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.authz.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.authz.describe"))]
 pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "cokret.rest.authz_describe.v1",
@@ -539,11 +539,11 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.describe",
+    operation_id = "ck.extension.soland.policies.describe",
     tags("policy"),
     summary = "Policy collection scaffold description"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.describe"))]
 pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "cokret.rest.policies_describe.v1",
@@ -589,11 +589,11 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.device_messages.describe",
+    operation_id = "ck.device_messages.describe",
     tags("device_messages"),
     summary = "Device messages contract description"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.device_messages.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.device_messages.describe"))]
 pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "cokret.rest.device_messages_describe.v1",
@@ -630,11 +630,11 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
 }
 
 #[endpoint(
-    operation_id = "cx.keys.backups.describe",
+    operation_id = "ck.keys.backups.describe",
     tags("keys"),
     summary = "Encrypted key-backup surface description"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.keys.backups.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.describe"))]
 pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "cokret.rest.key_backups_describe.v1",
@@ -651,11 +651,11 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.integration.describe",
+    operation_id = "ck.integration.describe",
     tags("system"),
     summary = "Integration manifest (dependencies + service surface inventory)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.integration.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.integration.describe"))]
 async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
     json_ok(IntegrationDescribeResponse {
         contract: "cokret.rest.integration_manifest.v1".to_owned(),
@@ -675,7 +675,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
-                required_contract: "cx.push.bridge.describe".to_owned(),
+                required_contract: "ck.push.bridge.describe".to_owned(),
                 discovery_path: "/_cokret/edge/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },
@@ -781,7 +781,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "extensions_tsp".to_owned(),
                 method: "POST/GET".to_owned(),
                 path: "/_cokret/self/extensions/tsp/*".to_owned(),
-                contract: "cx.extension.soland.extensions.tsp.*".to_owned(),
+                contract: "ck.extension.soland.extensions.tsp.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local TSP transport/route/audit scaffold only; no real TSP envelope verify/decrypt or persistent signed audit chain.".to_owned(),
             },
@@ -789,7 +789,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "extensions_bot_actor".to_owned(),
                 method: "POST/GET/DELETE".to_owned(),
                 path: "/_cokret/self/extensions/bots*".to_owned(),
-                contract: "cx.extension.soland.extensions.bots.*".to_owned(),
+                contract: "ck.extension.soland.extensions.bots.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local bot/ghost registry only; durable provisioning and accountability grant emission are not wired.".to_owned(),
             },

@@ -11,7 +11,7 @@
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- \ --space-id <id> --dry-run`.
 
 use cokret_sdk::state_res::{AnchorStore, MoveStore};
-use cokret_sdk::{Move, MoveId, SpaceId};
+use cokret_sdk::{Move, MoveId, RealmId};
 
 use crate::state::AppState;
 
@@ -36,7 +36,7 @@ pub struct GcCandidate {
 ///   - The Move is NOT in any current leaf's frontier (transitively, we compute the union of
 ///     leaf-Anchor frontiers).
 ///   - The Move is NOT in the pending pool (`list_pending_for_anchorer`).
-pub fn scan_gc_candidates(state: &AppState, space_id: &SpaceId) -> Vec<GcCandidate> {
+pub fn scan_gc_candidates(state: &AppState, space_id: &RealmId) -> Vec<GcCandidate> {
     let move_store = state.move_store.as_ref();
     let anchor_store = state.anchor_store.as_ref();
 
@@ -97,12 +97,12 @@ pub fn scan_gc_candidates(state: &AppState, space_id: &SpaceId) -> Vec<GcCandida
 /// Scan every Space we know about. Used by the admin endpoint when no
 /// `space_id` is provided.
 pub fn scan_all_spaces(state: &AppState) -> Vec<GcCandidate> {
-    let space_ids: Vec<SpaceId> = {
+    let space_ids: Vec<RealmId> = {
         let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
             .into_iter()
-            .filter_map(|entry| SpaceId::new(entry.realm_id.to_string()).ok())
+            .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
             .collect()
     };
     space_ids

@@ -138,10 +138,11 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
 async fn realms_delivery_binding_policy_endpoint_rejects_invalid_id() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let response =
-        TestClient::get("http://server/_soland/admin/realms/not-a-typed-id/delivery-binding-policy")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&svc)
-            .await;
+    let response = TestClient::get(
+        "http://server/_soland/admin/realms/not-a-typed-id/delivery-binding-policy",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&svc)
+    .await;
     assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
 }

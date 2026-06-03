@@ -162,7 +162,7 @@ mod tests {
         Operation::create(
             OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(space_id).unwrap(),
-            crate::kinds::CX_REALM_POLICY_SERVER,
+            crate::kinds::CK_REALM_POLICY_SERVER,
             payload,
         )
     }

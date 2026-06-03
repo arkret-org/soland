@@ -12,7 +12,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{DeviceId, Did, SpaceId};
+use cokret_sdk::{DeviceId, Did, RealmId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 
@@ -61,7 +61,7 @@ pub fn render_error_with_detail(
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
 /// typed-id query args like `?space_id=ck:space:...` where browsers
-/// (and `encodeURIComponent`) emit `cx%3Aspace%3A...` — without
+/// (and `encodeURIComponent`) emit `ck%3Aspace%3A...` — without
 /// decoding the downstream typed-id validator rejects the literal.
 pub fn query_param(req: &Request, key: &str) -> Option<String> {
     req.uri().query().and_then(|query| {
@@ -219,8 +219,8 @@ pub fn validate_device_id(value: &str) -> Result<DeviceId, ()> {
     DeviceId::new(value.to_owned()).map_err(|_| ())
 }
 
-pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
-    SpaceId::new(value.to_owned()).map_err(|_| ())
+pub fn validate_space_id(value: &str) -> Result<RealmId, ()> {
+    RealmId::new(value.to_owned()).map_err(|_| ())
 }
 
 /// `@`-prefixed, lowercase, alphanumeric + `-_.` only.

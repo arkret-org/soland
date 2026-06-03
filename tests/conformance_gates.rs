@@ -1,5 +1,5 @@
 //! Conformance gate: every operation_id used by soland is either in the
-//! canonical registry OR namespaced as cx.extension.soland.*
+//! canonical registry OR namespaced as ck.extension.soland.*
 //!
 //! Stream J of `_claude_todos.md`. The goal is to prevent regressions
 //! where a new HTTP endpoint silently invents an `operation_id` that
@@ -38,7 +38,7 @@ fn soland_src_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// Stream J / J2 grandfathered allowlist of `cx.*` operation_ids that
+/// Stream J / J2 grandfathered allowlist of `ck.*` operation_ids that
 /// soland emits today but that are NOT yet in the canonical registry.
 /// See `scripts/operation_id_baseline.json` for rationale and exit
 /// criteria. Returns `BTreeSet<String>` so membership is O(log n).
@@ -177,7 +177,7 @@ fn operation_ids_are_registered_or_namespaced() {
     let canonical = load_canonical_operation_ids();
     let grandfathered = load_grandfathered_operation_ids();
     let pattern =
-        Regex::new(r#"operation_id\s*=\s*"(cx\.[A-Za-z0-9_.]+)""#).expect("regex compiles");
+        Regex::new(r#"operation_id\s*=\s*"(ck\.[A-Za-z0-9_.]+)""#).expect("regex compiles");
 
     let mut offenders: Vec<String> = Vec::new();
     let mut seen_grandfathered: BTreeSet<String> = BTreeSet::new();
@@ -193,7 +193,7 @@ fn operation_ids_are_registered_or_namespaced() {
             let scanned = code_portion(line);
             for cap in pattern.captures_iter(scanned) {
                 let op = &cap[1];
-                if op.starts_with("cx.extension.soland.") {
+                if op.starts_with("ck.extension.soland.") {
                     continue;
                 }
                 if canonical.contains(op) {
@@ -206,7 +206,7 @@ fn operation_ids_are_registered_or_namespaced() {
                 offenders.push(format!(
                     "{}:{}: unregistered operation_id `{op}` (not in canonical \
                      registry, not in scripts/operation_id_baseline.json, \
-                     and not namespaced as cx.extension.soland.*)",
+                     and not namespaced as ck.extension.soland.*)",
                     path.display(),
                     idx + 1
                 ));
@@ -218,7 +218,7 @@ fn operation_ids_are_registered_or_namespaced() {
         offenders.is_empty(),
         "soland source declares operation_id values that are neither \
          in the canonical registry, in the grandfathered allowlist, nor \
-         namespaced as cx.extension.soland.*:\n  {}",
+         namespaced as ck.extension.soland.*:\n  {}",
         offenders.join("\n  ")
     );
 
@@ -248,11 +248,11 @@ fn operation_ids_are_registered_or_namespaced() {
 // pure file-system / fixture scans — no soland code is linked — so
 // they stay green during dev workflows.
 
-/// CXP-0007 — every active `cx.circle.*` event kind in the spec
+/// CXP-0007 — every active `ck.circle.*` event kind in the spec
 /// registry MUST be wired into soland's reducer dispatch table
 /// (`src/reducer.rs`). The reducer's dispatch helper for each kind
 /// follows the convention `apply_<verb>_dispatch`; this gate checks
-/// the source file for each expected `m.insert(CX_CIRCLE_…, …)`
+/// the source file for each expected `m.insert(CK_CIRCLE_…, …)`
 /// registration so a new spec-registered kind cannot be silently
 /// ignored.
 #[test]
@@ -271,7 +271,7 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
         .filter(|entry| entry.get("status").and_then(Value::as_str) == Some("active"))
         .filter(|entry| entry.get("wire_scope").and_then(Value::as_str) == Some("durable_event"))
         .filter_map(|entry| entry.get("event_kind").and_then(Value::as_str))
-        .filter(|kind| kind.starts_with("cx.circle."))
+        .filter(|kind| kind.starts_with("ck.circle."))
         .map(ToOwned::to_owned)
         .collect();
     circle_kinds.sort();
@@ -292,7 +292,7 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
     assert_eq!(
         circle_kinds.iter().map(String::as_str).collect::<Vec<_>>(),
         expected,
-        "spec registry's active cx.circle.* kinds drifted from the expected set"
+        "spec registry's active ck.circle.* kinds drifted from the expected set"
     );
 
     let reducer_src =
@@ -301,12 +301,12 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
     // Constants the dispatch must reference. Anchor-commit is excluded
     // (reducer-derived, no dispatch entry).
     let required_consts = [
-        "CX_CIRCLE_CREATE",
-        "CX_CIRCLE_UPDATE",
-        "CX_CIRCLE_ARCHIVE",
-        "CX_CIRCLE_RESTORE",
-        "CX_CIRCLE_TOMBSTONE",
-        "CX_CIRCLE_MEMBER_STATE",
+        "CK_CIRCLE_CREATE",
+        "CK_CIRCLE_UPDATE",
+        "CK_CIRCLE_ARCHIVE",
+        "CK_CIRCLE_RESTORE",
+        "CK_CIRCLE_TOMBSTONE",
+        "CK_CIRCLE_MEMBER_STATE",
     ];
     for name in required_consts {
         let needle = format!("m.insert({name},");

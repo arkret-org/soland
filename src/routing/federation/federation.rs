@@ -6,8 +6,8 @@
 //! - `GET /_cokret/peer/federation/pull-operations`
 //! - `GET /_cokret/peer/federation/space-members`
 //! - `POST /_cokret/peer/federation/verify-actor`
-//! - `GET /_cokret/peer/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for a
-//!   Space) + `POST /_cokret/peer/federation/anchors` (peer-push: accept Anchor envelopes for
+//! - `GET /_cokret/peer/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for
+//!   a Space) + `POST /_cokret/peer/federation/anchors` (peer-push: accept Anchor envelopes for
 //!   replication). The wire path is identical for both [`crate::config::FederationPolicy::Mesh`]
 //!   and [`crate::config::FederationPolicy::Hub`]; only the outbound routing decision (broadcast vs
 //!   hub-only) differs.
@@ -24,7 +24,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use cokret_sdk::state_res::AnchorStore;
-use cokret_sdk::{Anchor, Did, Operation, RealmId, SpaceId};
+use cokret_sdk::{Anchor, Did, Operation, RealmId};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -52,11 +52,11 @@ struct FederationPeerTarget {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.transaction",
+    operation_id = "ck.extension.soland.federation.transaction",
     tags("federation"),
     summary = "Idempotent inbound server-to-server federation transaction"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.transaction"))]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
     body: JsonBody<cokret_sdk::FederationTransactionReqBody>,
@@ -74,14 +74,13 @@ pub(super) async fn federation_transaction(
     // of the hard admission boundary. Missing / malformed headers are
     // schema_violation; destination or request-digest mismatch is
     // cross_domain_replay_rejected.
-    let trust_headers =
-        FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
-            AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
-                violation.message(),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?;
+    let trust_headers = FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+        AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            violation.message(),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
     let expected_destination = cokret_sdk::TypedTrustDomainId::new(
         state.config.trust_domain.clone(),
     )
@@ -112,7 +111,10 @@ pub(super) async fn federation_transaction(
     });
     let _service_binding = FederationIdempotencyServiceBinding {
         source_service_did: body.origin.to_string(),
-        verification_method: idem_key.as_ref().expect("federation idempotency key").strict(),
+        verification_method: idem_key
+            .as_ref()
+            .expect("federation idempotency key")
+            .strict(),
         service_binding_ref: idem_key
             .as_ref()
             .expect("federation idempotency key")
@@ -241,13 +243,13 @@ pub(super) async fn federation_transaction(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.push_operations",
+    operation_id = "ck.extension.soland.federation.push_operations",
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.federation.push_operations")
+    fields(op = "ck.extension.soland.federation.push_operations")
 )]
 pub(super) async fn federation_push_operations(
     body: JsonBody<cokret_sdk::FederationPushOperationsReqBody>,
@@ -284,11 +286,11 @@ pub(super) async fn federation_push_operations(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.block_hint",
+    operation_id = "ck.extension.soland.federation.block_hint",
     tags("federation"),
     summary = "Record a best-effort personal blocklist hint from a peer"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.block_hint"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.block_hint"))]
 pub(super) async fn federation_block_hint(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -326,11 +328,11 @@ pub(super) async fn federation_block_hint(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.block_hints",
+    operation_id = "ck.extension.soland.federation.block_hints",
     tags("federation"),
     summary = "List locally known personal blocklist hints"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.block_hints"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.block_hints"))]
 pub(super) async fn federation_block_hints(
     actor: QueryParam<String, false>,
     blocked: QueryParam<String, false>,
@@ -650,11 +652,11 @@ fn blocklist_hint_target_value(value: &Value) -> Option<&str> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.actor_events",
+    operation_id = "ck.extension.soland.federation.actor_events",
     tags("federation"),
     summary = "Debug/read model: list projection events for a federated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.actor_events"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.actor_events"))]
 pub(super) async fn federation_actor_events(
     actor_id: PathParam<String>,
     depot: &mut Depot,
@@ -1053,13 +1055,13 @@ fn operation_actor_did(operation: &Operation) -> Option<&str> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.pull_operations",
+    operation_id = "ck.extension.soland.federation.pull_operations",
     tags("federation"),
     summary = "Pull a page of operations for a federated space, with optional snapshot bootstrap"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.federation.pull_operations")
+    fields(op = "ck.extension.soland.federation.pull_operations")
 )]
 pub(super) async fn federation_pull_operations(
     space_id: QueryParam<String, true>,
@@ -1144,13 +1146,13 @@ pub(super) async fn federation_pull_operations(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.backfill_operations",
+    operation_id = "ck.extension.soland.federation.backfill_operations",
     tags("federation"),
     summary = "Pull missing operations from a configured federation peer and ingest them locally"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.federation.backfill_operations")
+    fields(op = "ck.extension.soland.federation.backfill_operations")
 )]
 pub(super) async fn federation_backfill_operations(
     body: JsonBody<Value>,
@@ -1234,13 +1236,13 @@ pub(super) async fn federation_backfill_operations(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.operation_frontier",
+    operation_id = "ck.extension.soland.federation.operation_frontier",
     tags("federation"),
     summary = "Return the operation frontier used by federation pull/backfill convergence checks"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.federation.operation_frontier")
+    fields(op = "ck.extension.soland.federation.operation_frontier")
 )]
 pub(super) async fn federation_operation_frontier(
     space_id: QueryParam<String, true>,
@@ -1255,11 +1257,11 @@ pub(super) async fn federation_operation_frontier(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.space_members",
+    operation_id = "ck.extension.soland.federation.space_members",
     tags("federation"),
     summary = "List space memberships for a federated space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.space_members"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.space_members"))]
 pub(super) async fn federation_space_members(
     space_id: QueryParam<String, true>,
     depot: &mut Depot,
@@ -1291,11 +1293,11 @@ pub(super) async fn federation_space_members(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.verify_actor",
+    operation_id = "ck.extension.soland.federation.verify_actor",
     tags("federation"),
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.verify_actor"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.verify_actor"))]
 pub(super) async fn federation_verify_actor(
     body: JsonBody<cokret_sdk::FederationVerifyActorReqBody>,
     depot: &mut Depot,
@@ -1348,14 +1350,13 @@ fn validate_federation_request_binding(
     req: &Request,
     request_hash: &str,
 ) -> Result<(), AppError> {
-    let headers =
-        FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
-            AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
-                violation.message(),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?;
+    let headers = FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
+        AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            violation.message(),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
     let expected_destination = cokret_sdk::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
     validate_federation_headers(&headers, &expected_destination, request_hash)
@@ -1443,11 +1444,7 @@ fn verify_inbound_federation_http_signature(
     })?;
     let expected_content_digest = content_digest_header(&body_bytes);
     let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
-    validate_federation_request_binding(
-        &state.config.trust_domain,
-        req,
-        &expected_request_digest,
-    )?;
+    validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
 
     let content_digest = required_header(req, "content-digest")?;
     if content_digest != expected_content_digest {
@@ -1879,7 +1876,7 @@ fn federation_verify_actor_signature_transcript(
 ) -> Value {
     let scope_id = body.space_id.as_ref().map(|value| value.as_str());
     json!({
-        "type": "cx.federation.verify_actor.signature.v1",
+        "type": "ck.federation.verify_actor.signature.v1",
         "actor_id": body.actor_id.as_str(),
         "purpose": body.purpose,
         "challenge": body.challenge,
@@ -2072,8 +2069,11 @@ async fn pull_operations_page(
     after_cursor: Option<&str>,
     limit: usize,
 ) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
-    let mut url = reqwest::Url::parse(&format!("{}/_cokret/peer/federation/pull-operations", peer.url))
-        .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/_cokret/peer/federation/pull-operations",
+        peer.url
+    ))
+    .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("space_id", space_id);
@@ -2199,7 +2199,7 @@ async fn enqueue_operation_push(
         );
         return;
     };
-    let Ok(space_id) = SpaceId::new(operation.realm_id.to_string()) else {
+    let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
@@ -2311,11 +2311,11 @@ pub struct FederationAnchorsPushResponse {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.anchors.pull",
+    operation_id = "ck.extension.soland.federation.anchors.pull",
     tags("federation"),
     summary = "Pull locally-held Anchors for a Space (federation peer-pull)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.anchors.pull"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.pull"))]
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
     space_id: QueryParam<String, true>,
@@ -2325,7 +2325,7 @@ pub(super) async fn federation_anchors_pull(
     if validate_space_id(&space_id).is_err() {
         return Err(AppError::invalid_param("invalid space_id"));
     }
-    let space = SpaceId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    let space = RealmId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     let leaves = state.anchor_store.list_leaves(&space).unwrap_or_default();
     let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
@@ -2341,11 +2341,11 @@ pub(super) async fn federation_anchors_pull(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.federation.anchors.push",
+    operation_id = "ck.extension.soland.federation.anchors.push",
     tags("federation"),
     summary = "Accept Anchor envelopes from a federation peer (peer-push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.federation.anchors.push"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.push"))]
 pub(super) async fn federation_anchors_push(
     depot: &mut Depot,
     body: JsonBody<FederationAnchorsPushRequest>,
@@ -2505,7 +2505,7 @@ async fn enqueue_outbound_for(
         _ => "/_cokret/peer/federation/push-operations",
     };
     let payload = json!({
-        "schema": format!("cx.federation.outbound.{resource_kind}.v1"),
+        "schema": format!("ck.federation.outbound.{resource_kind}.v1"),
         "origin": state.config.service_did,
         "destination": peer.did.as_str(),
         "resource_kind": resource_kind,
@@ -2582,7 +2582,7 @@ async fn record_outbound_fanout_attempt(
         _ => "/_cokret/peer/federation/push-operations",
     };
     let intent = json!({
-        "schema": "cx.federation.outbound_fanout.intent.v1",
+        "schema": "ck.federation.outbound_fanout.intent.v1",
         "origin": state.config.service_did,
         "destination": peer,
         "resource_kind": resource_kind,
@@ -2593,7 +2593,7 @@ async fn record_outbound_fanout_attempt(
     });
     let signing = signed_fanout_intent_evidence(state, peer, target_path, &intent, attempted_at);
     let transcript = json!({
-        "schema": "cx.federation.outbound_fanout.transcript.v1",
+        "schema": "ck.federation.outbound_fanout.transcript.v1",
         "direction": "outbound",
         "resource_kind": resource_kind,
         "resource_id": resource_id,
@@ -2694,7 +2694,7 @@ fn signed_fanout_intent_evidence(
     let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
     let payload_digest = format!("sha256:{}", sha256_hex(&canonical_bytes));
-    let protected_header = br#"{"alg":"EdDSA","typ":"cx.federation.outbound_fanout.intent.v1"}"#;
+    let protected_header = br#"{"alg":"EdDSA","typ":"ck.federation.outbound_fanout.intent.v1"}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
     let signing_input = format!("{protected_b64u}.{payload_b64u}");
@@ -3252,7 +3252,7 @@ mod tests {
         assert_eq!(transcript.status, "outbound_fanout_retry_scheduled");
         assert_eq!(
             transcript.response["schema"],
-            "cx.federation.outbound_fanout.transcript.v1"
+            "ck.federation.outbound_fanout.transcript.v1"
         );
         assert_eq!(transcript.response["signing"]["status"], "intent_signed");
         assert_eq!(
@@ -3331,7 +3331,7 @@ mod tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000052")
                 .unwrap(),
             realm_id.clone(),
-            kinds::CX_MEMBER_STATE,
+            kinds::CK_MEMBER_STATE,
             json!({
                 "actor_id": "did:web:bob.example",
                 "member": "did:web:bob.example",
@@ -3342,7 +3342,7 @@ mod tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000055")
                 .unwrap(),
             realm_id.clone(),
-            kinds::CX_INVITE_CREATE,
+            kinds::CK_INVITE_CREATE,
             json!({
                 "invite_id": "ck:invite:01904100-0000-7000-8000-000000000056",
                 "invitee": "did:web:carol.example",
@@ -3354,7 +3354,7 @@ mod tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000053")
                 .unwrap(),
             realm_id,
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-000000000054",
                 "sender": "did:web:alice.example",
@@ -3461,14 +3461,14 @@ mod tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000062")
                 .unwrap(),
             realm_id.clone(),
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({"content": {"kind": "ck.content.text", "body": "one"}}),
         );
         let second = Operation::create(
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063")
                 .unwrap(),
             realm_id,
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({"content": {"kind": "ck.content.text", "body": "two"}}),
         );
         state
@@ -3608,9 +3608,7 @@ impl FederationTrustHeaders {
     /// Spec B1.7 — extract + validate the three headers from a salvo
     /// `Request`. Returns the typed triple on success or a
     /// [`HeaderViolation`] on the first missing / malformed header.
-    pub(crate) fn from_salvo_request(
-        req: &salvo::http::Request,
-    ) -> Result<Self, HeaderViolation> {
+    pub(crate) fn from_salvo_request(req: &salvo::http::Request) -> Result<Self, HeaderViolation> {
         let header_value = |name: &str| -> Result<&str, HeaderViolation> {
             let value = req
                 .headers()

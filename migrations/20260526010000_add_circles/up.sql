@@ -1,6 +1,6 @@
 -- CXP-0007 (spec b7d35be / floor 2b0d70d) — durable mirror tables for the
 -- Circle projection (`ProjectionState::circles`). Mirrors the
--- `cx.schema.circle.v1` shape from
+-- `ck.schema.circle.v1` shape from
 -- `cokret-spec/spec/v1/artifacts/schemas/circle.schema.json` plus the
 -- per-actor membership row used to enforce the
 -- `Circle.members ⊆ Realm.members` invariant.

@@ -97,13 +97,14 @@ async fn policy_check_and_validation_work() {
     assert_eq!(denied["decision_trace"]["obligations"][0]["level"], "high");
     assert!(denied["decision_trace"]["missing_proofs"].is_array());
 
-    let deleted: Value = TestClient::delete(format!("http://server/_cokret/self/policies/{policy_id}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let deleted: Value =
+        TestClient::delete(format!("http://server/_cokret/self/policies/{policy_id}"))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(deleted["ok"], true);
 
     let allowed_again: Value = TestClient::post("http://server/_cokret/self/policy/check")

@@ -1,9 +1,9 @@
 //! Blob upload + download handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/blob/upload`         — multipart-or-raw upload, normalises MIME / filename,
-//!   enforces per-actor / per-space / per-upload quotas, rejects plaintext blobs in private Spaces
-//!   unless this service is in `plaintext_visible_services`.
+//! - `POST /_cokret/self/blob/upload`         — multipart-or-raw upload, normalises MIME /
+//!   filename, enforces per-actor / per-space / per-upload quotas, rejects plaintext blobs in
+//!   private Spaces unless this service is in `plaintext_visible_services`.
 //! - `HEAD /_cokret/self/blob/get`            — metadata + size for range planning
 //! - `GET  /_cokret/self/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
@@ -478,11 +478,11 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.blob.presign",
+    operation_id = "ck.blob.presign",
     tags("blob"),
     summary = "Issue a short-lived presigned blob download URL"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.blob.presign"))]
+#[tracing::instrument(skip_all, fields(op = "ck.blob.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<Value>,

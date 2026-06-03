@@ -591,14 +591,15 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
 
-    let audit_events: Value =
-        TestClient::get("http://server/_cokret/self/audit/events?actor=did:web:alice.example&limit=50")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let audit_events: Value = TestClient::get(
+        "http://server/_cokret/self/audit/events?actor=did:web:alice.example&limit=50",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let status_transitions: Vec<&Value> = audit_events["events"]
         .as_array()
         .expect("audit events array")
@@ -694,7 +695,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         assert_eq!(
             flow.state.as_str(),
             "redacted",
-            "Flow MUST be in Redacted terminal state after cx.redaction with object_ref"
+            "Flow MUST be in Redacted terminal state after ck.redaction with object_ref"
         );
     }
 

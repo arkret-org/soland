@@ -506,7 +506,9 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
         .and_then(Value::as_u64)
         .ok_or_else(|| schema_error("recovery_policy_ref.policy_version is required (>=1)"))?;
     if version < 1 {
-        return Err(schema_error("recovery_policy_ref.policy_version must be >= 1"));
+        return Err(schema_error(
+            "recovery_policy_ref.policy_version must be >= 1",
+        ));
     }
 
     // signed_fields MUST cover recovery_policy_ref whenever it is present.
@@ -514,7 +516,11 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
         .get("auth_data")
         .and_then(|a| a.get("signed_fields"))
         .and_then(Value::as_array)
-        .is_some_and(|fields| fields.iter().any(|f| f.as_str() == Some("recovery_policy_ref")));
+        .is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|f| f.as_str() == Some("recovery_policy_ref"))
+        });
     if !covered {
         return Err(schema_error(
             "auth_data.signed_fields MUST cover recovery_policy_ref when it is present",
@@ -686,7 +692,7 @@ fn key_backup_delete_proof_canonical_bytes(
     backup_id: &str,
 ) -> Result<Vec<u8>, AppError> {
     let transcript = KeyBackupDeleteProofTranscript {
-        kind: "cx.key_backup.delete_proof.v1",
+        kind: "ck.key_backup.delete_proof.v1",
         actor_id,
         backup_id,
         action: "DELETE /_cokret/self/keys/backups/{backup_id}",
@@ -1084,7 +1090,11 @@ mod tests {
     #[test]
     fn did_recovery_rejects_passphrase_kdf() {
         // Spec §5.0.1 first-backup gate: passphrase_kdf-only did_recovery forbidden.
-        let body = key_backup_body("did_recovery", "recovery_key_share", passphrase_encryption());
+        let body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            passphrase_encryption(),
+        );
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("passphrase_kdf did_recovery must be rejected");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
@@ -1287,12 +1297,12 @@ mod tests {
             .expect("canonical delete proof transcript");
         let value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
 
-        assert_eq!(value["kind"], "cx.key_backup.delete_proof.v1");
+        assert_eq!(value["kind"], "ck.key_backup.delete_proof.v1");
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
             cokret_sdk::canonical::sha256_digest(&canonical),
-            "sha256:45b12aa842a30b12869c571c4fd4d70089c02ffa47b1cf68f55c99bbf35ffb06"
+            "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
         );
     }
 }

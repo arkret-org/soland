@@ -4,12 +4,12 @@
 //! - `GET /_cokret/self/realms/{realm_id}/policy-server` — fetch the currently-projected
 //!   `ck.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /_cokret/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move. Routes
-//!   through the standard `accept_local_operations` pipeline so the reducer's validators (URL
-//!   scheme, on_timeout enum) run.
-//! - `DELETE /_cokret/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins can
-//!   remove the per-realm policy server config (callers fall back to the `governed_by` chain or the
-//!   local-only capability check after this lands).
+//! - `PUT /_cokret/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move.
+//!   Routes through the standard `accept_local_operations` pipeline so the reducer's validators
+//!   (URL scheme, on_timeout enum) run.
+//! - `DELETE /_cokret/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins
+//!   can remove the per-realm policy server config (callers fall back to the `governed_by` chain or
+//!   the local-only capability check after this lands).
 //!
 //! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
@@ -22,7 +22,7 @@ use serde_json::json;
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::ids;
-use crate::kinds::CX_REALM_POLICY_SERVER;
+use crate::kinds::CK_REALM_POLICY_SERVER;
 use crate::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 use crate::state::AppState;
 
@@ -63,11 +63,11 @@ pub struct PutRealmPolicyServerRequest {
 }
 
 #[endpoint(
-    operation_id = "cx.realms.policy_server.get",
+    operation_id = "ck.realms.policy_server.get",
     tags("realms"),
     summary = "Read the projected ck.realm.policy_server config (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -103,11 +103,11 @@ async fn get_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "cx.realms.policy_server.put",
+    operation_id = "ck.realms.policy_server.put",
     tags("realms"),
     summary = "Submit a ck.realm.policy_server Move (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.put"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -138,7 +138,7 @@ async fn put_realm_policy_server(
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_REALM_POLICY_SERVER, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_REALM_POLICY_SERVER, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -167,11 +167,11 @@ async fn put_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "cx.realms.policy_server.delete",
+    operation_id = "ck.realms.policy_server.delete",
     tags("realms"),
     summary = "Tombstone the ck.realm.policy_server cell (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.policy_server.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,

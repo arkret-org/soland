@@ -23,7 +23,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use chrono::Utc;
 use cokret_sdk::{
-    Anchor, AnchorId, Did, Hash, Hlc, MoveId, PartialSignature, SpaceId, ThresholdAggregator,
+    Anchor, AnchorId, Did, Hash, Hlc, MoveId, PartialSignature, RealmId, ThresholdAggregator,
 };
 
 use crate::state::{AppState, MultisigPendingRecord};
@@ -293,7 +293,7 @@ fn aggregate_and_publish(
         .map(ToOwned::to_owned)
         .ok_or_else(|| "canonical body missing hlc".to_owned())?;
 
-    let space_id = SpaceId::new(space_id).map_err(|e| format!("invalid space_id: {e}"))?;
+    let space_id = RealmId::new(space_id).map_err(|e| format!("invalid space_id: {e}"))?;
     let predecessor_refs: Vec<AnchorId> = predecessor_refs
         .into_iter()
         .map(|s| AnchorId::new(s).map_err(|e| format!("invalid AnchorId: {e}")))

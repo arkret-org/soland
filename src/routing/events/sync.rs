@@ -3,15 +3,15 @@
 //!
 //! Surfaces for the current sync/event wire layout:
 //! - `GET  /_cokret/self/account/describe`
-//! - `GET  /_cokret/self/account/subscribe`       — `ck.account.subscribe` (account-aggregate NDJSON:
-//!   timeline, presence, typing, to_device).
+//! - `GET  /_cokret/self/account/subscribe`       — `ck.account.subscribe` (account-aggregate
+//!   NDJSON: timeline, presence, typing, to_device).
 //! - `POST /_cokret/self/ephemeral`               — `ck.ephemeral.send` (broadcast ephemeral)
-//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-space / multi-actor
-//!   stream; frame `kind` field replaces `type`.
-//! - `GET  /_cokret/self/events`                  — `ck.events.query` (replaces `cx.events.list` +
-//!   `cx.sync.backfill` via `direction=forward|backward`).
-//! - `GET  /_cokret/self/sync/backfill/gap`       — `cx.sync.backfill_gap` (deployment-local; not in
-//!   spec)
+//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-space /
+//!   multi-actor stream; frame `kind` field replaces `type`.
+//! - `GET  /_cokret/self/events`                  — `ck.events.query` (replaces `ck.events.list` +
+//!   `ck.sync.backfill` via `direction=forward|backward`).
+//! - `GET  /_cokret/self/sync/backfill/gap`       — `ck.sync.backfill_gap` (deployment-local; not
+//!   in spec)
 //! - `GET  /_cokret/self/snapshot/head`
 //! - `GET  /_cokret/self/sync/snapshot-chunk`
 //!
@@ -62,7 +62,7 @@ use crate::wire::{
 };
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "cx.account.blocklist.v1"];
+const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
 const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 
@@ -543,7 +543,7 @@ async fn build_sync_snapshot(
         // polls — the realm stays in the client's local projection.
         //
         // Caveats: membership changes that don't bump `realm_meta.updated_at`
-        // (e.g. raw `cx.realm.member.update` events) will not propagate
+        // (e.g. raw `ck.realm.member.update` events) will not propagate
         // through an incremental sync until either (a) a new timeline
         // event arrives, or (b) the client issues a full sync (no
         // `after`). This is a known limitation — see follow-up TODO to
@@ -629,7 +629,7 @@ async fn build_sync_snapshot(
 
     // Actor-private account data: hydrate every `(actor, data_type)` row
     // owned by the authenticated session so the client can join e.g.
-    // `cx.contacts.space.<realm_id>` Space remarks against the public
+    // `ck.contacts.space.<realm_id>` Space remarks against the public
     // Space `title` during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Space remarks).
     let account_data = if let Some(session) = session {
@@ -2093,10 +2093,10 @@ async fn submit_ephemeral(
     }
 
     match envelope.kind.as_str() {
-        "cx.typing" => {
+        "ck.typing" => {
             persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
         }
-        "cx.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
+        "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
         "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
         "ck.call.signal" => {}
         _ => {
@@ -2120,7 +2120,7 @@ fn validate_ephemeral_envelope(
 ) -> Result<(), crate::error::AppError> {
     if !matches!(
         envelope.kind.as_str(),
-        "ck.call.signal" | "cx.presence" | "cx.typing" | "ck.receipt.read"
+        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
     ) {
         return Err(crate::error::AppError::invalid_param(
             "unsupported ephemeral kind",
@@ -2793,7 +2793,7 @@ async fn events_query_impl(
     let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
     // Single-space fast path preserves the original `BackfillResBody` shape
-    // for soland's existing test surface (cx.sync.backfill behavior).
+    // for soland's existing test surface (ck.sync.backfill behavior).
     if accessible_spaces.len() == 1 {
         let realm_id = &accessible_spaces[0];
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
@@ -2978,11 +2978,11 @@ async fn durable_events_query_from_parts(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.sync.backfill_gap",
+    operation_id = "ck.extension.soland.sync.backfill_gap",
     tags("sync"),
     summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.sync.backfill_gap"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.sync.backfill_gap"))]
 async fn sync_gap_backfill(
     realm_id: salvo::oapi::extract::QueryParam<String, true>,
     limit: salvo::oapi::extract::QueryParam<usize, false>,
@@ -3117,11 +3117,11 @@ async fn snapshot_head(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.sync.snapshot_chunk",
+    operation_id = "ck.extension.soland.sync.snapshot_chunk",
     tags("sync"),
     summary = "Read one chunk of a snapshot-v1 bundle (with audit_path proving merkle membership)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.sync.snapshot_chunk"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.sync.snapshot_chunk"))]
 async fn snapshot_chunk(
     snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
     chunk_id: salvo::oapi::extract::QueryParam<u32, false>,
@@ -3338,7 +3338,7 @@ mod tests {
                 replaces: Vec::new(),
                 raw_event: json!({
                     "operation_id": "ck:operation:roster-identity-1",
-                    "event_kind": crate::kinds::CX_MEMBER_IDENTITY_UPDATE,
+                    "event_kind": crate::kinds::CK_MEMBER_IDENTITY_UPDATE,
                     "realm_id": ROSTER_REALM,
                     "created_at": now(),
                     "payload": {

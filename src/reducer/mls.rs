@@ -10,8 +10,8 @@
 //! 2. **Welcome to-device persistence** — `apply_welcome_enqueue`. Each accepted Welcome is
 //!    appended to a per-`(recipient_actor_id, recipient_device_id)` queue inside
 //!    `ProjectionState::mls_welcomes`. The recipient device drains its queue via the `GET
-//!    /_cokret/self/keys/welcomes/pending` route, which marks delivered rows with `delivered_at = now()`
-//!    so subsequent polls don't redeliver.
+//!    /_cokret/self/keys/welcomes/pending` route, which marks delivered rows with `delivered_at =
+//!    now()` so subsequent polls don't redeliver.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
 //!    initializes its covered-frontier accumulator.

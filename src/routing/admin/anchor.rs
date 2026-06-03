@@ -39,7 +39,7 @@ use cokret_sdk::lattice::CellState;
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
 use cokret_sdk::state_res::{AnchorStore, CellStore, MoveStore};
 use cokret_sdk::{
-    AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, SpaceId,
+    AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, RealmId,
     ThresholdAggregator, UnsignedMove,
 };
 use salvo::http::StatusCode;
@@ -415,7 +415,7 @@ fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value,
 /// the Space has at least one Anchor leaf, that's the issuer's view; if
 /// it's a true genesis Space, we use the spec-canonical zero AnchorId
 /// (matching SDK fixtures and `state-res::apply_anchor` genesis path).
-fn pick_admin_anchor_ref(state: &AppState, realm_id: &SpaceId) -> AnchorId {
+fn pick_admin_anchor_ref(state: &AppState, realm_id: &RealmId) -> AnchorId {
     let leaves = state.anchor_store.list_leaves(realm_id).unwrap_or_default();
     if let Some(first) = leaves.into_iter().next() {
         return first;
@@ -604,7 +604,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
 /// Walk the projection cell map for one Space, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
 fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
-    let Ok(space) = SpaceId::new(realm_id.to_owned()) else {
+    let Ok(space) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
     let proj = match state.projection.lock() {
@@ -641,11 +641,11 @@ fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<Bot
 /// `GET /_soland/admin/spaces/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchorer.get",
+    operation_id = "ck.extension.soland.admin.spaces.anchorer.get",
     tags("admin", "anchorer"),
     summary = "Get current anchorer cell value"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.spaces.anchorer.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.spaces.anchorer.get"))]
 pub(super) async fn admin_get_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -685,13 +685,13 @@ pub(super) async fn admin_get_anchorer(
 /// the signing identity is still the service signer so Moves chain off the
 /// AnchorerWorker key.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchorer.reconfigure",
+    operation_id = "ck.extension.soland.admin.spaces.anchorer.reconfigure",
     tags("admin", "anchorer"),
     summary = "Submit anchorer reconfiguration Move"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.spaces.anchorer.reconfigure")
+    fields(op = "ck.extension.soland.admin.spaces.anchorer.reconfigure")
 )]
 pub(super) async fn admin_reconfigure_anchorer(
     aa: AuthArgs,
@@ -711,7 +711,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     )
     .await?;
     let realm_id = realm_id.into_inner();
-    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+    let space = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
@@ -834,11 +834,11 @@ pub(super) async fn admin_reconfigure_anchorer(
 /// `GET /_soland/admin/spaces/{realm_id}/bottom` — list bottom cells in
 /// this Space.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.bottom.list",
+    operation_id = "ck.extension.soland.admin.spaces.bottom.list",
     tags("admin", "bottom"),
     summary = "List Bottom cells in a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.spaces.bottom.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.spaces.bottom.list"))]
 pub(super) async fn admin_list_space_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -848,7 +848,7 @@ pub(super) async fn admin_list_space_bottom(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let _ = SpaceId::new(realm_id.clone()).map_err(|e| {
+    let _ = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     json_ok(collect_bottom_entries_for_space(state, &realm_id))
@@ -856,11 +856,11 @@ pub(super) async fn admin_list_space_bottom(
 
 /// `GET /_soland/admin/bottom` — global cross-space bottom entries.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.bottom.list_global",
+    operation_id = "ck.extension.soland.admin.bottom.list_global",
     tags("admin", "bottom"),
     summary = "List Bottom cells across every Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.admin.bottom.list_global"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.bottom.list_global"))]
 pub(super) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -895,13 +895,13 @@ pub(super) async fn admin_list_bottom_global(
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer flow.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.bottom.repair",
+    operation_id = "ck.extension.soland.admin.spaces.bottom.repair",
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.spaces.bottom.repair")
+    fields(op = "ck.extension.soland.admin.spaces.bottom.repair")
 )]
 pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
@@ -923,7 +923,7 @@ pub(super) async fn admin_repair_bottom(
     .await?;
     let realm_id = realm_id.into_inner();
     let cell_id_str = cell_id.into_inner();
-    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+    let space = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
@@ -1106,13 +1106,13 @@ pub(super) async fn admin_repair_bottom(
 /// `GET /_soland/admin/spaces/{realm_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.get",
+    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.get",
     tags("admin", "anchor-dag"),
     summary = "Get Anchor DAG snapshot for a Space"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.get")
+    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.get")
 )]
 pub(super) async fn admin_get_anchor_dag(
     aa: AuthArgs,
@@ -1123,7 +1123,7 @@ pub(super) async fn admin_get_anchor_dag(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+    let space = RealmId::new(realm_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1196,13 +1196,13 @@ pub(super) async fn admin_get_anchor_dag(
 /// structurally-correct response so sodmin's UI flow is unblocked.
 /// `max_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.compact",
+    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.compact",
     tags("admin", "anchor-dag"),
     summary = "Trigger signed compaction Anchor"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.compact")
+    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.compact")
 )]
 pub(super) async fn admin_compact_anchor_dag(
     aa: AuthArgs,
@@ -1222,7 +1222,7 @@ pub(super) async fn admin_compact_anchor_dag(
     )
     .await?;
     let realm_id = realm_id.into_inner();
-    let space = SpaceId::new(realm_id.clone()).map_err(|e| {
+    let space = RealmId::new(realm_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1330,13 +1330,13 @@ pub(super) async fn admin_compact_anchor_dag(
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchor_dag.prune",
+    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.prune",
     tags("admin", "anchor-dag"),
     summary = "Evaluate + prune a historical Anchor"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.admin.spaces.anchor_dag.prune")
+    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.prune")
 )]
 pub(super) async fn admin_prune_anchor_dag(
     aa: AuthArgs,
@@ -1356,7 +1356,7 @@ pub(super) async fn admin_prune_anchor_dag(
     )
     .await?;
     let realm_id_str = realm_id.into_inner();
-    let realm = SpaceId::new(realm_id_str.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1576,7 +1576,7 @@ pub struct MultisigPendingResponse {
 /// Anchor; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
 #[salvo::oapi::endpoint(
-    operation_id = "cx.extension.soland.admin.multisig.partial",
+    operation_id = "ck.extension.soland.admin.multisig.partial",
     tags("admin", "multisig")
 )]
 pub(super) async fn admin_submit_multisig_partial(
@@ -1591,7 +1591,7 @@ pub(super) async fn admin_submit_multisig_partial(
     let session = aa.authenticated_session(state, req).await?;
     let _session = super::require_admin_principal(state, session)?;
     let realm_id_str = realm_id.into_inner();
-    let _realm_id = SpaceId::new(realm_id_str.clone()).map_err(|e| {
+    let _realm_id = RealmId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1696,7 +1696,7 @@ pub(super) async fn admin_submit_multisig_partial(
 
 /// `GET /_soland/admin/spaces/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
-    operation_id = "cx.extension.soland.admin.multisig.pending",
+    operation_id = "ck.extension.soland.admin.multisig.pending",
     tags("admin", "multisig")
 )]
 pub(super) async fn admin_list_multisig_pending(
@@ -1708,7 +1708,7 @@ pub(super) async fn admin_list_multisig_pending(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
-    let _realm_id = SpaceId::new(realm_id_str.clone()).map_err(|e| {
+    let _realm_id = RealmId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1784,7 +1784,7 @@ pub struct RotateSigningKeyResponse {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.anchorer.rotate_signing_key",
+    operation_id = "ck.extension.soland.admin.spaces.anchorer.rotate_signing_key",
     tags("admin", "anchorer"),
     summary = "Rotate the AnchorerWorker signing key"
 )]
@@ -1808,7 +1808,7 @@ pub(super) async fn admin_rotate_signing_key(
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a
     // bogus path; the rotation itself is process-wide.
     let realm_id_str = realm_id.into_inner();
-    let _ = SpaceId::new(realm_id_str.clone()).map_err(|e| {
+    let _ = RealmId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1823,10 +1823,7 @@ pub(super) async fn admin_rotate_signing_key(
     let mut keystore_warning: Option<String> = None;
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
-        let key_id = format!(
-            "cokret:signer:soland-anchorer:{}",
-            state.config.service_did
-        );
+        let key_id = format!("cokret:signer:soland-anchorer:{}", state.config.service_did);
         let store = cokret_sdk::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {
@@ -1949,7 +1946,7 @@ pub struct GcCandidatesResponse {
 /// `GET /_soland/admin/spaces/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
-    operation_id = "cx.extension.soland.admin.spaces.gc_candidates",
+    operation_id = "ck.extension.soland.admin.spaces.gc_candidates",
     tags("admin", "gc"),
     summary = "List GC-eligible Moves for a Space"
 )]
@@ -1962,7 +1959,7 @@ pub(super) async fn admin_list_gc_candidates(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
-    let realm = SpaceId::new(realm_id_str.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -2048,7 +2045,7 @@ mod tests {
         });
         let entry = bottom_entry_from(
             "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
-            "ck:cell:cx.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+            "ck:cell:ck.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
             &bottom,
         );
         assert_eq!(entry.kind, "conflict");

@@ -17,7 +17,7 @@
 //! write to this Space?".
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, RealmId, SpaceId};
+use cokret_sdk::{Did, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -42,11 +42,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.spaces.get",
+    operation_id = "ck.extension.soland.spaces.get",
     tags("spaces"),
     summary = "Get a Space's lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.get"))]
 async fn get_space(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -62,13 +62,13 @@ async fn get_space(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.spaces.effective_policy.get",
+    operation_id = "ck.extension.soland.spaces.effective_policy.get",
     tags("spaces", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.spaces.effective_policy.get")
+    fields(op = "ck.extension.soland.spaces.effective_policy.get")
 )]
 async fn get_space_effective_policy(
     aa: AuthArgs,
@@ -89,13 +89,13 @@ async fn get_space_effective_policy(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.spaces.moderation_policy.upsert",
+    operation_id = "ck.extension.soland.spaces.moderation_policy.upsert",
     tags("spaces", "policy"),
     summary = "Set a Space moderation-policy override"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.spaces.moderation_policy.upsert")
+    fields(op = "ck.extension.soland.spaces.moderation_policy.upsert")
 )]
 async fn upsert_space_moderation_policy(
     aa: AuthArgs,
@@ -136,11 +136,11 @@ async fn upsert_space_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.spaces.cells.get",
+    operation_id = "ck.extension.soland.spaces.cells.get",
     tags("spaces", "cells"),
     summary = "Get a projected Space-container child-order cell"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.cells.get"))]
 async fn get_space_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -193,11 +193,11 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.spaces.export",
+    operation_id = "ck.extension.soland.spaces.export",
     tags("spaces"),
     summary = "Full event log + projection dump for a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.spaces.export"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.export"))]
 async fn export_space(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -247,7 +247,7 @@ async fn export_space(
         })
         .collect::<Vec<_>>();
     json_ok(json!({
-        "schema": "cx.export.space.v1",
+        "schema": "ck.export.space.v1",
         "realm_id": space_id,
         "generated_at": now(),
         "operations": operations,
@@ -257,7 +257,7 @@ async fn export_space(
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
     if space_id.starts_with("ck:space:") {
-        SpaceId::new(space_id.to_owned())
+        RealmId::new(space_id.to_owned())
             .map_err(|_| AppError::invalid_param("invalid space_id"))?;
         return Ok(());
     }
@@ -913,7 +913,7 @@ pub async fn typing_ephemeral_for_space(
         .into_iter()
         .map(|(scope_id, actors)| {
             json!({
-                "type": "cx.typing",
+                "type": "ck.typing",
                 "space_id": space_id,
                 "scope_id": scope_id,
                 "actors": actors,

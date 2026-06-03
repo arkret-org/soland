@@ -8,20 +8,19 @@
 //!
 //! See `cokret-spec/spec/v1/zh/conformance/encoding.md` §4.
 
-use uuid::Uuid;
-
 /// Typed wire identifiers are owned by the SDK `cokret` (identifiers) crate.
 /// soland re-exports them so the whole server shares one validated newtype per
 /// id-kind instead of maintaining parallel local copies.
 ///
-/// - [`RealmId`] is the SDK `ck:realm:<UUIDv7>` security-boundary id.
-/// - [`SpaceContainerId`] is an alias for the SDK [`SpaceId`]
-///   (`ck:space:` / `ck:realm:` strict-typed id) per the Realm/Space inversion.
-pub use cokret_sdk::{RealmId, SpaceId};
+/// - [`RealmId`] is the SDK merged security-boundary id; its validator accepts both
+///   `ck:realm:` and `ck:space:` strict-typed ids (Realm/Space inversion).
+/// - [`SpaceContainerId`] is an alias for the SDK [`RealmId`].
+pub use cokret_sdk::RealmId;
+use uuid::Uuid;
 
-/// Space-container typed id. Alias for the SDK [`SpaceId`] newtype; the local
+/// Space-container typed id. Alias for the SDK [`RealmId`] newtype; the local
 /// `SpaceContainerId` struct was removed in favour of the shared SDK type.
-pub type SpaceContainerId = SpaceId;
+pub type SpaceContainerId = RealmId;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
@@ -111,7 +110,7 @@ pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
 pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
     let mut iter = typed.splitn(3, ':');
     let scheme = iter.next()?;
-    if scheme != "cx" {
+    if scheme != "ck" {
         return None;
     }
     let _kind = iter.next()?;
@@ -183,7 +182,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_format_is_cx_kind_uuid() {
+    fn id_format_is_ck_kind_uuid() {
         let id = generate_space_id();
         assert!(id.starts_with("ck:space:"));
         let uuid_part = &id["ck:space:".len()..];
@@ -275,8 +274,12 @@ mod tests {
 
     #[test]
     fn realm_id_rejects_wrong_kind_and_bad_uuid() {
+        // RealmId is the merged boundary-key type: it accepts both `ck:realm:`
+        // and `ck:space:` strict-typed ids (Realm/Space inversion).
         let space = generate_space_id();
-        assert!(RealmId::new(space).is_err());
+        assert!(RealmId::new(space).is_ok());
+        // Non-boundary kinds and malformed UUIDs are still rejected.
+        assert!(RealmId::new("ck:place:00000000-0000-7000-8000-000000000000").is_err());
         assert!(RealmId::new("ck:realm:not-a-uuid").is_err());
         assert!(RealmId::new("ck:realm:00000000-0000-0000-0000-000000000000").is_err());
         assert!(RealmId::new("").is_err());
@@ -307,7 +310,7 @@ mod tests {
 
     #[test]
     fn space_container_id_rejects_bad_kind() {
-        // `SpaceContainerId` aliases the SDK `SpaceId`, whose validator accepts
+        // `SpaceContainerId` aliases the SDK `RealmId`, whose validator accepts
         // both `ck:space:` and `ck:realm:` strict-typed ids (Realm/Space
         // inversion). Non-typed / wrong-prefix forms are still rejected.
         assert!(SpaceContainerId::new("ck:place:00000000-0000-7000-8000-000000000000").is_err());

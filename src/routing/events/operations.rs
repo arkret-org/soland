@@ -12,11 +12,11 @@
 //!   payloads MUST pass.
 //! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
 //!   shape.
-//! - `validate_encrypted_payload_envelope` — `cx.profile.encrypted_envelope.v1` envelope shape (MLS
+//! - `validate_encrypted_payload_envelope` — `ck.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - `validate_device_message_payload` — to-device payload shape.
-//! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated
-//!   via the SDK `cokret_sdk::canonical::validate_timestamp_canonical`.
+//! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK
+//!   `cokret_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
 //!
 //! Spec items still pending here are tracked in `_todos.md` (notably
@@ -32,7 +32,7 @@ use super::{is_json_integer, is_valid_sha256_digest, validate_did};
 use crate::kinds;
 use crate::state::AppState;
 
-const CX_CROSS_SIGNING_RESET: &str = "ck.cross_signing.reset";
+const CK_CROSS_SIGNING_RESET: &str = "ck.cross_signing.reset";
 const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
@@ -595,18 +595,16 @@ pub fn validate_operation_semantics(
 /// `reaction_target_unsupported` (a `schema_violation` sub-reason).
 /// Profiles MAY register additional target kinds; v1 core does not.
 fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<(), &'static str> {
-    if !matches!(kind, kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE) {
+    if !matches!(kind, kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE) {
         return Ok(());
     }
-    let target = REACTION_TARGET_FIELDS
-        .iter()
-        .find_map(|field| {
-            operation
-                .payload
-                .get(*field)
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        });
+    let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
+        operation
+            .payload
+            .get(*field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+    });
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
@@ -702,17 +700,15 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // `ck:applet:<uuidv7>` typed id.
         "ck.applet.protocol_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
-                validate_applet_id(applet_id)
-                    .map(|_| ())
-                    .map_err(
-                        |_| "applet_id must be a DID or ck:applet:<uuidv7> (typed-id wire break)",
-                    )?;
+                validate_applet_id(applet_id).map(|_| ()).map_err(
+                    |_| "applet_id must be a DID or ck:applet:<uuidv7> (typed-id wire break)",
+                )?;
             }
             Ok(())
         }
-        // cx.audit.policy_access — when `access_kind=e2ee_late_recovery`
+        // ck.audit.policy_access — when `access_kind=e2ee_late_recovery`
         // the payload MUST carry `late_recovery_original_event_id`.
-        "cx.audit.policy_access" => {
+        "ck.audit.policy_access" => {
             if let Some(access_kind) = operation
                 .payload
                 .get("access_kind")
@@ -724,7 +720,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     .is_none()
             {
                 return Err(
-                    "cx.audit.policy_access access_kind=e2ee_late_recovery requires \
+                    "ck.audit.policy_access access_kind=e2ee_late_recovery requires \
                      late_recovery_original_event_id (round-4 wire break)",
                 );
             }
@@ -871,7 +867,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             Ok(())
         }
         // REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
-        // `cx.audit.epoch_destruction_failsafe` event cannot serve as a
+        // `ck.audit.epoch_destruction_failsafe` event cannot serve as a
         // delayed remediation for an Audit Agent remove batch that lacks
         // the same-batch `ck.audit.epoch_key_destruction` attestation.
         // The wire-level check here rejects any failsafe whose payload
@@ -884,7 +880,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         // TODO(R4): walk the per-epoch remove batch index from the audit
         // projection and reject when a remove batch lacks an
         // in-batch attestation AND was committed before this failsafe.
-        "cx.audit.epoch_destruction_failsafe" => {
+        "ck.audit.epoch_destruction_failsafe" => {
             let attestation_paired = operation
                 .payload
                 .get("paired_with_epoch_key_destruction")
@@ -892,7 +888,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .unwrap_or(false);
             if !attestation_paired {
                 return Err("audit_agent_destruction_not_paired_with_remove: \
-                     cx.audit.epoch_destruction_failsafe MUST NOT be accepted as delayed \
+                     ck.audit.epoch_destruction_failsafe MUST NOT be accepted as delayed \
                      remediation for an Audit Agent remove batch lacking same-batch \
                      ck.audit.epoch_key_destruction");
             }
@@ -947,27 +943,27 @@ fn validate_operation_schema_from_sdk_artifact(
 
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
     let schema = match kind {
-        kinds::CX_MESSAGE_CREATE => OperationPayloadSchema {
+        kinds::CK_MESSAGE_CREATE => OperationPayloadSchema {
             requirements: MESSAGE_CREATE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
-        kinds::CX_MESSAGE_REVISE => OperationPayloadSchema {
+        kinds::CK_MESSAGE_REVISE => OperationPayloadSchema {
             requirements: MESSAGE_REVISE_REQUIREMENTS,
             validate: Some(validate_message_operation_payload),
         },
-        kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION => OperationPayloadSchema {
+        kinds::CK_MESSAGE_REDACT | kinds::CK_REDACTION => OperationPayloadSchema {
             requirements: REDACTION_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE => OperationPayloadSchema {
+        kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE => OperationPayloadSchema {
             requirements: REACTION_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_RELATION_CREATE => OperationPayloadSchema {
+        kinds::CK_RELATION_CREATE => OperationPayloadSchema {
             requirements: RELATION_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_RELATION_UPDATE | kinds::CX_RELATION_DELETE => OperationPayloadSchema {
+        kinds::CK_RELATION_UPDATE | kinds::CK_RELATION_DELETE => OperationPayloadSchema {
             requirements: RELATION_ID_REQUIREMENTS,
             validate: None,
         },
@@ -978,28 +974,28 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // the SDK artifact validator (whose `realm_id` pattern is
         // stricter than the in-tree fixtures need for testing —
         // existing reducer-level tests use `ck:space:` prefixes).
-        kinds::CX_REALM_LINK => OperationPayloadSchema {
+        kinds::CK_REALM_LINK => OperationPayloadSchema {
             requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_MLS_COMMIT => OperationPayloadSchema {
+        kinds::CK_MLS_COMMIT => OperationPayloadSchema {
             requirements: MLS_COMMIT_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_MLS_GENESIS => OperationPayloadSchema {
+        kinds::CK_MLS_GENESIS => OperationPayloadSchema {
             requirements: MLS_GENESIS_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_MLS_WELCOME => OperationPayloadSchema {
+        kinds::CK_MLS_WELCOME => OperationPayloadSchema {
             requirements: MLS_WELCOME_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_MLS_KEYPACKAGE => OperationPayloadSchema {
+        kinds::CK_MLS_KEYPACKAGE => OperationPayloadSchema {
             requirements: MLS_KEYPACKAGE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_VIEW_CREATE | kinds::CX_VIEW_UPDATE | kinds::CX_VIEW_RECONCILE => {
-            // `cx.view.*` events route through the `cx.component.view.*.v1`
+        kinds::CK_VIEW_CREATE | kinds::CK_VIEW_UPDATE | kinds::CK_VIEW_RECONCILE => {
+            // `ck.view.*` events route through the `ck.component.view.*.v1`
             // cell families in the lattice registry (see
             // `reducer::lattice_kinds::ViewCreate / ViewUpdate / ViewReconcile`).
             // The validator just enforces a `view_id` payload key — the
@@ -1009,7 +1005,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
                 validate: None,
             }
         }
-        kinds::CX_READ_MARKER => OperationPayloadSchema {
+        kinds::CK_READ_MARKER => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
             validate: Some(validate_read_marker_payload),
         },
@@ -1021,11 +1017,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: CONSENT_REVOKE_REQUIREMENTS,
             validate: Some(validate_observed_dots_payload),
         },
-        kinds::CX_INVITE_CREATE => OperationPayloadSchema {
+        kinds::CK_INVITE_CREATE => OperationPayloadSchema {
             requirements: INVITE_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
+        kinds::CK_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
             requirements: ERASURE_RECEIPT_REQUIREMENTS,
             validate: None,
         },
@@ -1037,7 +1033,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: MEMBERSHIP_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_REALM_CREATE => OperationPayloadSchema {
+        kinds::CK_REALM_CREATE => OperationPayloadSchema {
             // `ck.realm.create` is technically lifecycle but carries the
             // full Realm `object` rather than an `action`. Match it
             // explicitly so the broader `is_realm_lifecycle_kind` branch
@@ -1045,7 +1041,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_REALM_UPDATE => OperationPayloadSchema {
+        kinds::CK_REALM_UPDATE => OperationPayloadSchema {
             requirements: REALM_UPDATE_REQUIREMENTS,
             validate: None,
         },
@@ -1057,33 +1053,33 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `validate_content_encryption_floor` (previously dead for circles
         // because no Operation was built, so the lock was only caught at
         // projection and the client saw a misleading 200).
-        kinds::CX_CIRCLE_CREATE | kinds::CX_CIRCLE_UPDATE => OperationPayloadSchema {
+        kinds::CK_CIRCLE_CREATE | kinds::CK_CIRCLE_UPDATE => OperationPayloadSchema {
             requirements: &[],
             validate: None,
         },
-        kinds::CX_REALM_DESTROY | kinds::CX_REALM_TOMBSTONE => OperationPayloadSchema {
+        kinds::CK_REALM_DESTROY | kinds::CK_REALM_TOMBSTONE => OperationPayloadSchema {
             requirements: REALM_TERMINAL_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_REALM_MODERATION_POLICY => OperationPayloadSchema {
+        kinds::CK_REALM_MODERATION_POLICY => OperationPayloadSchema {
             requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
+        kinds::CK_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: Some(validate_history_visibility_payload),
         },
-        kinds::CX_REALM_HISTORY_SHARING_POLICY | kinds::CX_REALM_PREVIEW_POLICY => {
+        kinds::CK_REALM_HISTORY_SHARING_POLICY | kinds::CK_REALM_PREVIEW_POLICY => {
             OperationPayloadSchema {
                 requirements: REALM_POLICY_VALUE_REQUIREMENTS,
                 validate: None,
             }
         }
-        kinds::CX_REALM_KEY_SHARE => OperationPayloadSchema {
+        kinds::CK_REALM_KEY_SHARE => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_CONFLICT_REPAIR => OperationPayloadSchema {
+        kinds::CK_CONFLICT_REPAIR => OperationPayloadSchema {
             requirements: CONFLICT_REPAIR_REQUIREMENTS,
             validate: Some(validate_conflict_repair_payload),
         },
@@ -1095,15 +1091,15 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_SPACE_CONTAINER_CREATE => OperationPayloadSchema {
+        kinds::CK_SPACE_CONTAINER_CREATE => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_SPACE_CONTAINER_UPDATE => OperationPayloadSchema {
+        kinds::CK_SPACE_CONTAINER_UPDATE => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_SPACE_CONTAINER_PARENT => OperationPayloadSchema {
+        kinds::CK_SPACE_CONTAINER_PARENT => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
             validate: None,
         },
@@ -1111,27 +1107,27 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: FLOW_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_CREATE => OperationPayloadSchema {
+        kinds::CK_FLOW_CREATE => OperationPayloadSchema {
             requirements: FLOW_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_UPDATE => OperationPayloadSchema {
+        kinds::CK_FLOW_UPDATE => OperationPayloadSchema {
             requirements: FLOW_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_MOVE => OperationPayloadSchema {
+        kinds::CK_FLOW_MOVE => OperationPayloadSchema {
             requirements: FLOW_MOVE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_REORDER => OperationPayloadSchema {
+        kinds::CK_FLOW_REORDER => OperationPayloadSchema {
             requirements: FLOW_REORDER_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_WATCH_SET => OperationPayloadSchema {
+        kinds::CK_FLOW_WATCH_SET => OperationPayloadSchema {
             requirements: FLOW_WATCH_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_FLOW_TRACKS_UPDATE => OperationPayloadSchema {
+        kinds::CK_FLOW_TRACKS_UPDATE => OperationPayloadSchema {
             requirements: FLOW_TRACKS_UPDATE_REQUIREMENTS,
             validate: None,
         },
@@ -1139,96 +1135,96 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: MORPH_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_MORPH_CREATE => OperationPayloadSchema {
+        kinds::CK_MORPH_CREATE => OperationPayloadSchema {
             requirements: MORPH_CREATE_REQUIREMENTS,
             validate: Some(validate_morph_create_payload),
         },
-        kinds::CX_MORPH_UPDATE => OperationPayloadSchema {
+        kinds::CK_MORPH_UPDATE => OperationPayloadSchema {
             requirements: MORPH_UPDATE_REQUIREMENTS,
             validate: Some(validate_morph_update_payload),
         },
-        kinds::CX_MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
+        kinds::CK_MORPH_SCHEMA_MIGRATE => OperationPayloadSchema {
             requirements: MORPH_SCHEMA_MIGRATE_REQUIREMENTS,
             validate: Some(validate_morph_schema_migrate_payload),
         },
-        // `cx.field.position.move` / `cx.field.position.reorder` were removed
+        // `ck.field.position.move` / `ck.field.position.reorder` were removed
         // in revision 0a5ab85 (see cokret-spec
         // `artifacts/registry/removed-event-kinds.json`). The generic
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
-        kinds::CX_CONTAINER_MOVE_ITEM | kinds::CX_CONTAINER_REBALANCE => OperationPayloadSchema {
+        kinds::CK_CONTAINER_MOVE_ITEM | kinds::CK_CONTAINER_REBALANCE => OperationPayloadSchema {
             requirements: RELATION_ID_REQUIREMENTS,
             validate: None,
         },
         // Applet protocol family.
-        kinds::CX_APPLET_REGISTRATION => OperationPayloadSchema {
+        kinds::CK_APPLET_REGISTRATION => OperationPayloadSchema {
             requirements: APPLET_REGISTRATION_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_APPLET_DISCOVERY => OperationPayloadSchema {
+        kinds::CK_APPLET_DISCOVERY => OperationPayloadSchema {
             requirements: APPLET_DISCOVERY_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_APPLET_PROTOCOL_SESSION_START => OperationPayloadSchema {
+        kinds::CK_APPLET_PROTOCOL_SESSION_START => OperationPayloadSchema {
             requirements: APPLET_SESSION_START_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_APPLET_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+        kinds::CK_APPLET_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
             requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_APPLET_BRIDGE_ERROR => OperationPayloadSchema {
+        kinds::CK_APPLET_BRIDGE_ERROR => OperationPayloadSchema {
             requirements: APPLET_BRIDGE_ERROR_REQUIREMENTS,
             validate: None,
         },
         // Agent protocol family.
-        kinds::CX_AGENT_ENDPOINT => OperationPayloadSchema {
+        kinds::CK_AGENT_ENDPOINT => OperationPayloadSchema {
             requirements: AGENT_ENDPOINT_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_PROTOCOL_SESSION_START => OperationPayloadSchema {
+        kinds::CK_AGENT_PROTOCOL_SESSION_START => OperationPayloadSchema {
             requirements: AGENT_SESSION_START_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+        kinds::CK_AGENT_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
             requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_PROTOCOL_SESSION_RESULT => OperationPayloadSchema {
+        kinds::CK_AGENT_PROTOCOL_SESSION_RESULT => OperationPayloadSchema {
             requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
             validate: None,
         },
         // R3 spec-sync — agent lifecycle FSM kinds.
-        kinds::CX_AGENT_PAUSE => OperationPayloadSchema {
+        kinds::CK_AGENT_PAUSE => OperationPayloadSchema {
             requirements: AGENT_PAUSE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_RESUME => OperationPayloadSchema {
+        kinds::CK_AGENT_RESUME => OperationPayloadSchema {
             requirements: AGENT_RESUME_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_DEACTIVATE => OperationPayloadSchema {
+        kinds::CK_AGENT_DEACTIVATE => OperationPayloadSchema {
             requirements: AGENT_DEACTIVATE_REQUIREMENTS,
             validate: None,
         },
         // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-        kinds::CX_AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
+        kinds::CK_AGENT_DRAFT_PROPOSE => OperationPayloadSchema {
             requirements: AGENT_DRAFT_PROPOSE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_ACTION_REQUEST => OperationPayloadSchema {
+        kinds::CK_AGENT_ACTION_REQUEST => OperationPayloadSchema {
             requirements: AGENT_ACTION_REQUEST_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_ACTION_APPROVE => OperationPayloadSchema {
+        kinds::CK_AGENT_ACTION_APPROVE => OperationPayloadSchema {
             requirements: AGENT_ACTION_APPROVE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CX_AGENT_ACTION_REJECT => OperationPayloadSchema {
+        kinds::CK_AGENT_ACTION_REJECT => OperationPayloadSchema {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
             validate: None,
         },
-        CX_CROSS_SIGNING_RESET => OperationPayloadSchema {
+        CK_CROSS_SIGNING_RESET => OperationPayloadSchema {
             requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
             validate: Some(validate_cross_signing_reset_payload),
         },
@@ -1718,7 +1714,7 @@ fn validate_cross_signing_reset_payload(operation: &Operation) -> Result<(), &'s
 fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result<(), &'static str> {
     let mut seen = std::collections::BTreeSet::new();
     for operation in operations {
-        if kinds::canonical_kind_for_operation(operation) != Some(CX_CROSS_SIGNING_RESET) {
+        if kinds::canonical_kind_for_operation(operation) != Some(CK_CROSS_SIGNING_RESET) {
             continue;
         }
         let Some(principal_id) = operation
@@ -1752,7 +1748,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("message_redact_window")
         || message == cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
-        (salvo::http::StatusCode::PRECONDITION_FAILED, "failed_precondition")
+        (
+            salvo::http::StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+        )
     } else {
         (salvo::http::StatusCode::FORBIDDEN, "capability_denied")
     }
@@ -1771,7 +1770,7 @@ pub async fn validate_operation_policy(
                 "private plaintext message operations require this service in plaintext_visible_services",
             );
         }
-        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_MORPH_SCHEMA_MIGRATE) {
+        if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_MORPH_SCHEMA_MIGRATE) {
             validate_morph_schema_migrate_capability(operation)?;
         }
         validate_principal_control_realm_binding(operation)?;
@@ -1811,7 +1810,7 @@ pub async fn validate_operation_policy(
 
 /// flow-and-message.md §9.8.2 — a reaction MUST target an object inside its
 /// own effective scope. soland's effective scope is the Realm, so a
-/// `cx.reaction.*` whose `target_ref` resolves to a Message in a different
+/// `ck.reaction.*` whose `target_ref` resolves to a Message in a different
 /// Realm is rejected with `reaction_scope_mismatch` (a `failed_precondition`
 /// sub-reason). The target-kind gate (`reaction_target_unsupported`) already
 /// ran in `validate_operation_semantics`; an unknown / not-yet-observed
@@ -1823,7 +1822,7 @@ fn validate_reaction_scope_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    if !matches!(kind, kinds::CX_REACTION_ADD | kinds::CX_REACTION_REMOVE) {
+    if !matches!(kind, kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE) {
         return Ok(());
     }
     let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
@@ -1901,14 +1900,13 @@ fn realm_ids_match(a: &str, b: &str) -> bool {
 /// target Message `created_at` plus the actor's effective grant set), so
 /// soland evaluates the window at admission time. The rules:
 ///
-/// - The window only bites when a grant authorizing the relevant `.own`
-///   action carries a `temporal` window field. With no such grant the
-///   action is unbounded (default member / owner behaviour is unchanged).
-/// - Holding the broader `ck.message.revise` / `ck.message.redact`
-///   capability (or `*`), or being the Realm owner, lifts the window
-///   entirely (admin override).
-/// - `message_redact_window` is authoritative for redact; otherwise redact
-///   shares the edit window unless `allow_redact_after_window` is set.
+/// - The window only bites when a grant authorizing the relevant `.own` action carries a `temporal`
+///   window field. With no such grant the action is unbounded (default member / owner behaviour is
+///   unchanged).
+/// - Holding the broader `ck.message.revise` / `ck.message.redact` capability (or `*`), or being
+///   the Realm owner, lifts the window entirely (admin override).
+/// - `message_redact_window` is authoritative for redact; otherwise redact shares the edit window
+///   unless `allow_redact_after_window` is set.
 async fn validate_message_edit_redact_window_policy(
     state: &AppState,
     operation: &Operation,
@@ -1916,8 +1914,8 @@ async fn validate_message_edit_redact_window_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    let is_redact = matches!(kind, kinds::CX_MESSAGE_REDACT | kinds::CX_REDACTION);
-    let is_revise = matches!(kind, kinds::CX_MESSAGE_REVISE);
+    let is_redact = matches!(kind, kinds::CK_MESSAGE_REDACT | kinds::CK_REDACTION);
+    let is_revise = matches!(kind, kinds::CK_MESSAGE_REVISE);
     if !is_redact && !is_revise {
         return Ok(());
     }
@@ -2078,13 +2076,13 @@ pub async fn validate_content_encryption_floor(
 ) -> Result<(), &'static str> {
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
-            Some(kinds::CX_REALM_UPDATE) if operation_touches_encryption_profile(operation) => {
+            Some(kinds::CK_REALM_UPDATE) if operation_touches_encryption_profile(operation) => {
                 return Err(REALM_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(kinds::CX_CIRCLE_UPDATE) if operation_touches_encryption_profile(operation) => {
+            Some(kinds::CK_CIRCLE_UPDATE) if operation_touches_encryption_profile(operation) => {
                 return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(kinds::CX_CIRCLE_CREATE) => {
+            Some(kinds::CK_CIRCLE_CREATE) => {
                 if let Some(profile) = operation_circle_encryption_profile(operation)
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
@@ -2107,7 +2105,7 @@ async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_MEMBER_STATE) {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_MEMBER_STATE) {
         return Ok(());
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
@@ -2141,7 +2139,7 @@ async fn validate_history_visibility_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_HISTORY_VISIBILITY) {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_HISTORY_VISIBILITY) {
         return Ok(());
     }
     if operation.payload.get("value").and_then(Value::as_str) != Some("restricted") {
@@ -2175,7 +2173,7 @@ async fn validate_realm_key_share_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_KEY_SHARE) {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_KEY_SHARE) {
         return Ok(());
     }
     let Some(meta) = state
@@ -2222,7 +2220,7 @@ fn validate_realm_moderation_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CX_REALM_MODERATION_POLICY) {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_MODERATION_POLICY) {
         return Ok(());
     }
     let realm_id = operation.realm_id.as_str();
@@ -2283,7 +2281,7 @@ async fn validate_audience_mention_operation_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_for_operation(operation),
-        Some(kinds::CX_MESSAGE_CREATE | kinds::CX_MESSAGE_REVISE)
+        Some(kinds::CK_MESSAGE_CREATE | kinds::CK_MESSAGE_REVISE)
     ) {
         return Ok(());
     }
@@ -2659,7 +2657,7 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
 
 fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CX_FLOW_CREATE) => [
+        Some(kinds::CK_FLOW_CREATE) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
@@ -2671,7 +2669,7 @@ fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bo
         .any(|path| {
             value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
         }),
-        Some(kinds::CX_FLOW_UPDATE) => patch_touches_plaintext_content_path(
+        Some(kinds::CK_FLOW_UPDATE) => patch_touches_plaintext_content_path(
             &operation.payload,
             &["synthesis", "content", "attachments"],
         ),
@@ -2951,6 +2949,92 @@ fn validate_audience_mention_object(
     })
 }
 
+/// Validate the keys of a `ck.patch.v1` map as patch *paths* per
+/// `event-and-patch.md` §4.2.1. Unlike canonical JSON field names, a patch path
+/// is a dot-separated sequence of snake_case identifier / quoted-identifier /
+/// selector segments (e.g. `metadata.title`, `metadata.fields.review_status`).
+/// Op values are validated separately by the canonical-JSON recursion.
+fn validate_patch_map_paths(
+    patch: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), &'static str> {
+    for path in patch.keys() {
+        validate_patch_path(path)?;
+    }
+    Ok(())
+}
+
+/// Validate a single patch path against the §4.2.1 ABNF. Returns the canonical
+/// `patch_path_invalid` family reason on any violation.
+fn validate_patch_path(path: &str) -> Result<(), &'static str> {
+    const PATCH_PATH_INVALID: &str = "patch path is invalid (patch_path_invalid)";
+    // §4.2.1 / §4.2.2: max 1024 bytes, max 16 segments.
+    if path.is_empty() {
+        return Err(PATCH_PATH_INVALID);
+    }
+    if path.len() > 1024 {
+        return Err(PATCH_PATH_INVALID);
+    }
+    let mut segments = 0usize;
+    for segment in path.split('.') {
+        segments += 1;
+        if segments > 16 {
+            return Err(PATCH_PATH_INVALID);
+        }
+        if !patch_path_segment_is_valid(segment) {
+            return Err(PATCH_PATH_INVALID);
+        }
+    }
+    Ok(())
+}
+
+/// A single patch path segment: a snake_case identifier, an identifier with a
+/// trailing stable-key selector (`field[key="..."]`), or a backtick-quoted
+/// literal for non-snake_case keys (`\`Weird Key\``).
+fn patch_path_segment_is_valid(segment: &str) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+    // Backtick-quoted identifier: `...` (literal backtick escaped as ``).
+    if let Some(inner) = segment
+        .strip_prefix('`')
+        .and_then(|rest| rest.strip_suffix('`'))
+    {
+        return !inner.is_empty() && inner.chars().all(|c| ('\u{20}'..='\u{7f}').contains(&c));
+    }
+    // Selector segment: identifier "[" key-name "=" selector-value "]".
+    if let Some(open) = segment.find('[') {
+        let Some(rest) = segment.strip_suffix(']') else {
+            return false;
+        };
+        let (head, selector) = (&segment[..open], &rest[open + 1..]);
+        let Some((key_name, value)) = selector.split_once('=') else {
+            return false;
+        };
+        return patch_path_identifier_is_valid(head)
+            && patch_path_identifier_is_valid(key_name)
+            // selector-value is a (JCS canonical) JSON string: quoted, non-empty.
+            && value.len() >= 2
+            && value.starts_with('"')
+            && value.ends_with('"');
+    }
+    patch_path_identifier_is_valid(segment)
+}
+
+/// `^[a-z][a-z0-9_]{0,63}$` — the §4.2.1 identifier production.
+fn patch_path_identifier_is_valid(identifier: &str) -> bool {
+    let mut chars = identifier.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    if identifier.len() > 64 {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 pub fn validate_canonical_json_value(value: &serde_json::Value) -> Result<(), &'static str> {
     validate_canonical_json_value_inner(value, true)
 }
@@ -3010,16 +3094,31 @@ pub fn validate_canonical_json_value_inner(
                 }
                 prev_key = Some(key);
             }
-            for value in object.values() {
+            for (key, value) in object {
+                // A `patch` map is a ck.schema.patch.v1 (`ck.patch.v1`) field
+                // delta: its keys are patch *paths* (dotted snake_case segments
+                // per event-and-patch.md §4.2.1), not canonical JSON field names,
+                // so they are validated as paths and their op values are recursed
+                // into directly, bypassing the structural snake_case/no-dot
+                // field-name rule that the generic object branch would impose.
+                if key == "patch"
+                    && let serde_json::Value::Object(patch) = value
+                {
+                    validate_patch_map_paths(patch)?;
+                    for patch_value in patch.values() {
+                        validate_canonical_json_value_inner(patch_value, false)?;
+                    }
+                    continue;
+                }
                 validate_canonical_json_value_inner(value, false)?;
             }
             // RFC3339 UTC Z timestamp validation for fields named *_at or *_at_ms.
             for (key, value) in object {
                 if key.ends_with("_at") {
                     if let Some(s) = value.as_str() {
-                        cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(|_| {
-                            "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)"
-                        })?;
+                        cokret_sdk::canonical::validate_timestamp_canonical(s).map_err(
+                            |_| "timestamp must be canonical RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ)",
+                        )?;
                     }
                 }
             }
@@ -3052,7 +3151,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
     if block.get("blocks").is_some() {
         return Err("content.blocks is not permitted; use content.parts");
     }
-    let block_kind = block_kind.strip_prefix("cx.content.").unwrap_or(block_kind);
+    let block_kind = block_kind.strip_prefix("ck.content.").unwrap_or(block_kind);
     match block_kind {
         "composite" => {
             let Some(parts) = block.get("parts").and_then(|value| value.as_array()) else {
@@ -3164,7 +3263,7 @@ mod flow_tracks_update_tests {
             cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
             cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
-            kinds::CX_FLOW_TRACKS_UPDATE,
+            kinds::CK_FLOW_TRACKS_UPDATE,
             payload,
         )
     }
@@ -3181,9 +3280,9 @@ mod flow_tracks_update_tests {
         }));
         assert_eq!(
             kinds::canonical_kind_for_operation(&operation),
-            Some(kinds::CX_FLOW_TRACKS_UPDATE)
+            Some(kinds::CK_FLOW_TRACKS_UPDATE)
         );
-        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_FLOW_TRACKS_UPDATE).unwrap();
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
 
@@ -3195,13 +3294,13 @@ mod flow_tracks_update_tests {
                 "review": {"profile": "review"}
             }
         }));
-        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_FLOW_TRACKS_UPDATE).unwrap();
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
 
     #[test]
     fn canonical_flow_tracks_update_requires_flow_id_and_patch_or_tracks() {
-        let schema = operation_schema_for_kind(kinds::CX_FLOW_TRACKS_UPDATE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_FLOW_TRACKS_UPDATE).unwrap();
 
         let missing_flow_id = op(json!({
             "tracks": {
@@ -3226,7 +3325,7 @@ mod flow_tracks_update_tests {
     fn encrypted_realm_flow_content_detector_matches_content_only_boundary() {
         let flow_id = "ck:flow:01904100-0000-7000-8000-000000000001";
         let content_update = flow_position_op(
-            kinds::CX_FLOW_UPDATE,
+            kinds::CK_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
@@ -3239,7 +3338,7 @@ mod flow_tracks_update_tests {
         ));
 
         let summary_update = flow_position_op(
-            kinds::CX_FLOW_UPDATE,
+            kinds::CK_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
@@ -3252,7 +3351,7 @@ mod flow_tracks_update_tests {
         ));
 
         let sdk_encrypted_content_update = flow_position_op(
-            kinds::CX_FLOW_UPDATE,
+            kinds::CK_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
@@ -3260,7 +3359,7 @@ mod flow_tracks_update_tests {
                         "$op": "set",
                         "value": {
                             "scheme": "mls-rfc9420",
-                            "group_id": "cx_space_01904100_0000_7000_8000_000000000001",
+                            "group_id": "CK_space_01904100_0000_7000_8000_000000000001",
                             "epoch": 1,
                             "content_type": "application/vnd.cokret.flow.patch-value+json",
                             "ciphertext": "T1BBUVVFX0NJUEhFUlRFWFQ",
@@ -3275,7 +3374,7 @@ mod flow_tracks_update_tests {
         ));
 
         let ciphertext_label_content_update = flow_position_op(
-            kinds::CX_FLOW_UPDATE,
+            kinds::CK_FLOW_UPDATE,
             json!({
                 "flow_id": flow_id,
                 "patch": {
@@ -3293,7 +3392,7 @@ mod flow_tracks_update_tests {
         ));
 
         let title_create = flow_position_op(
-            kinds::CX_FLOW_CREATE,
+            kinds::CK_FLOW_CREATE,
             json!({
                 "object": {
                     "id": flow_id,
@@ -3309,7 +3408,7 @@ mod flow_tracks_update_tests {
     #[test]
     fn create_locked_encryption_profile_detector_matches_update_shapes() {
         let direct_patch = flow_position_op(
-            kinds::CX_REALM_UPDATE,
+            kinds::CK_REALM_UPDATE,
             json!({
                 "patch": {
                     "encryption_profile": "none"
@@ -3319,7 +3418,7 @@ mod flow_tracks_update_tests {
         assert!(operation_touches_encryption_profile(&direct_patch));
 
         let pointer_patch = flow_position_op(
-            kinds::CX_CIRCLE_UPDATE,
+            kinds::CK_CIRCLE_UPDATE,
             json!({
                 "circle_id": "ck:circle:01904100-0000-7000-8000-000000000001",
                 "patch": {
@@ -3333,7 +3432,7 @@ mod flow_tracks_update_tests {
         assert!(operation_touches_encryption_profile(&pointer_patch));
 
         let metadata_patch = flow_position_op(
-            kinds::CX_REALM_UPDATE,
+            kinds::CK_REALM_UPDATE,
             json!({
                 "patch": {
                     "title": "Still mutable"
@@ -3355,9 +3454,9 @@ mod flow_tracks_update_tests {
 
     #[test]
     fn canonical_flow_move_requires_board_target_and_rank() {
-        let schema = operation_schema_for_kind(kinds::CX_FLOW_MOVE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_FLOW_MOVE).unwrap();
         let operation = flow_position_op(
-            kinds::CX_FLOW_MOVE,
+            kinds::CK_FLOW_MOVE,
             json!({
                 "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
                 "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
@@ -3368,7 +3467,7 @@ mod flow_tracks_update_tests {
         assert!(validate_operation_schema(&operation, schema).is_ok());
 
         let missing_target = flow_position_op(
-            kinds::CX_FLOW_MOVE,
+            kinds::CK_FLOW_MOVE,
             json!({
                 "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
                 "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
@@ -3383,9 +3482,9 @@ mod flow_tracks_update_tests {
 
     #[test]
     fn canonical_flow_reorder_requires_board_space_and_rank() {
-        let schema = operation_schema_for_kind(kinds::CX_FLOW_REORDER).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_FLOW_REORDER).unwrap();
         let operation = flow_position_op(
-            kinds::CX_FLOW_REORDER,
+            kinds::CK_FLOW_REORDER,
             json!({
                 "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
                 "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
@@ -3408,9 +3507,9 @@ mod flow_tracks_update_tests {
 
     #[test]
     fn canonical_space_update_accepts_target_ref_and_patch() {
-        let schema = operation_schema_for_kind(kinds::CX_SPACE_CONTAINER_UPDATE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_SPACE_CONTAINER_UPDATE).unwrap();
         let operation = space_container_op(
-            kinds::CX_SPACE_CONTAINER_UPDATE,
+            kinds::CK_SPACE_CONTAINER_UPDATE,
             json!({
                 "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
@@ -3419,7 +3518,7 @@ mod flow_tracks_update_tests {
         assert!(validate_operation_schema(&operation, schema).is_ok());
 
         let legacy_space_id = space_container_op(
-            kinds::CX_SPACE_CONTAINER_UPDATE,
+            kinds::CK_SPACE_CONTAINER_UPDATE,
             json!({
                 "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
@@ -3428,7 +3527,7 @@ mod flow_tracks_update_tests {
         assert!(validate_operation_schema(&legacy_space_id, schema).is_ok());
 
         let missing_space_id = space_container_op(
-            kinds::CX_SPACE_CONTAINER_UPDATE,
+            kinds::CK_SPACE_CONTAINER_UPDATE,
             json!({"patch": {"title": "Launch v2"}}),
         );
         assert_eq!(
@@ -3439,9 +3538,9 @@ mod flow_tracks_update_tests {
 
     #[test]
     fn canonical_space_parent_requires_space_id_and_expected_parent() {
-        let schema = operation_schema_for_kind(kinds::CX_SPACE_CONTAINER_PARENT).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_SPACE_CONTAINER_PARENT).unwrap();
         let operation = space_container_op(
-            kinds::CX_SPACE_CONTAINER_PARENT,
+            kinds::CK_SPACE_CONTAINER_PARENT,
             json!({
                 "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004",
@@ -3451,7 +3550,7 @@ mod flow_tracks_update_tests {
         assert!(validate_operation_schema(&operation, schema).is_ok());
 
         let missing_expected = space_container_op(
-            kinds::CX_SPACE_CONTAINER_PARENT,
+            kinds::CK_SPACE_CONTAINER_PARENT,
             json!({
                 "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004"
@@ -3484,13 +3583,13 @@ mod message_projection_schema_tests {
     #[test]
     fn message_revise_accepts_spec_canonical_target_ref() {
         let operation = op(
-            kinds::CX_MESSAGE_REVISE,
+            kinds::CK_MESSAGE_REVISE,
             json!({
                 "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "content": {"kind": "ck.content.text", "body": "edited"}
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CX_MESSAGE_REVISE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_MESSAGE_REVISE).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
@@ -3498,14 +3597,14 @@ mod message_projection_schema_tests {
     #[test]
     fn reaction_accepts_spec_target_ref_without_event_alias() {
         let operation = op(
-            kinds::CX_REACTION_ADD,
+            kinds::CK_REACTION_ADD,
             json!({
                 "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
         );
-        let schema = operation_schema_for_kind(kinds::CX_REACTION_ADD).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_REACTION_ADD).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         assert!(operation.payload.get("event_id").is_none());
@@ -3538,7 +3637,7 @@ mod spec_sync_validator_tests {
         });
         let digest = canonical_json_digest(&commitment).unwrap().to_string();
         let valid = op(
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({
                 "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
                 "track_name": "discussion",
@@ -3551,7 +3650,7 @@ mod spec_sync_validator_tests {
         assert!(validate_message_operation_payload(&valid).is_ok());
 
         let missing = op(
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({
                 "body": "hello",
                 "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
@@ -3564,7 +3663,7 @@ mod spec_sync_validator_tests {
         );
 
         let invalid = op(
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({
                 "body": "hello",
                 "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
@@ -3580,9 +3679,9 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_create_accepts_metadata_and_rejects_content_conflict() {
-        let schema = operation_schema_for_kind(kinds::CX_MORPH_CREATE).unwrap();
+        let schema = operation_schema_for_kind(kinds::CK_MORPH_CREATE).unwrap();
         let valid = op(
-            kinds::CX_MORPH_CREATE,
+            kinds::CK_MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ck:morph:01904100-0000-7000-8000-000000000001",
@@ -3596,7 +3695,7 @@ mod spec_sync_validator_tests {
         assert!(validate_operation_schema(&valid, schema).is_ok());
 
         let content_conflict = op(
-            kinds::CX_MORPH_CREATE,
+            kinds::CK_MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ck:morph:01904100-0000-7000-8000-000000000001",
@@ -3615,12 +3714,12 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_schema_refs_use_migrate_gate() {
-        let update_schema = operation_schema_for_kind(kinds::CX_MORPH_UPDATE).unwrap();
+        let update_schema = operation_schema_for_kind(kinds::CK_MORPH_UPDATE).unwrap();
         let update = op(
-            kinds::CX_MORPH_UPDATE,
+            kinds::CK_MORPH_UPDATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
-                "patch": {"schema_refs": ["cx.schema.new"]}
+                "patch": {"schema_refs": ["ck.schema.new"]}
             }),
         );
         assert_eq!(
@@ -3629,26 +3728,26 @@ mod spec_sync_validator_tests {
         );
 
         let migrate = op(
-            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            kinds::CK_MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["cx.schema.old"],
-                "to_schema_refs": ["cx.schema.old", "cx.schema.new"],
+                "from_schema_refs": ["ck.schema.old"],
+                "to_schema_refs": ["ck.schema.old", "ck.schema.new"],
                 "compatibility_class": "additive",
                 "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema.migrate"
             }),
         );
-        let migrate_schema = operation_schema_for_kind(kinds::CX_MORPH_SCHEMA_MIGRATE).unwrap();
+        let migrate_schema = operation_schema_for_kind(kinds::CK_MORPH_SCHEMA_MIGRATE).unwrap();
         assert!(validate_operation_schema(&migrate, migrate_schema).is_ok());
         assert!(validate_morph_schema_migrate_capability(&migrate).is_ok());
 
         let missing_gate = op(
-            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            kinds::CK_MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["cx.schema.old"],
-                "to_schema_refs": ["cx.schema.new"],
+                "from_schema_refs": ["ck.schema.old"],
+                "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "additive"
             }),
         );
@@ -3658,11 +3757,11 @@ mod spec_sync_validator_tests {
         );
 
         let unsupported = op(
-            kinds::CX_MORPH_SCHEMA_MIGRATE,
+            kinds::CK_MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
-                "from_schema_refs": ["cx.schema.old"],
-                "to_schema_refs": ["cx.schema.new"],
+                "from_schema_refs": ["ck.schema.old"],
+                "to_schema_refs": ["ck.schema.new"],
                 "compatibility_class": "breaking",
                 "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "ck.morph.schema.migrate"
@@ -3939,23 +4038,23 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_message_target_is_accepted() {
         let op = reaction_op(
-            kinds::CX_REACTION_ADD,
+            kinds::CK_REACTION_ADD,
             json!({
                 "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
         );
-        assert!(validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op).is_ok());
+        assert!(validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op).is_ok());
     }
 
     #[test]
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
-            kinds::CX_REACTION_ADD,
+            kinds::CK_REACTION_ADD,
             json!({ "target_ref": "ck:event:01904100-0000-7000-8000-000000000001" }),
         );
-        assert!(validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op).is_ok());
+        assert!(validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op).is_ok());
     }
 
     #[test]
@@ -3965,9 +4064,9 @@ mod reaction_and_window_policy_tests {
             "ck:morph:01904100-0000-7000-8000-000000000001",
             "ck:circle:01904100-0000-7000-8000-000000000001",
         ] {
-            let op = reaction_op(kinds::CX_REACTION_ADD, json!({ "target_ref": target }));
+            let op = reaction_op(kinds::CK_REACTION_ADD, json!({ "target_ref": target }));
             assert_eq!(
-                validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op),
+                validate_reaction_target_kind(kinds::CK_REACTION_ADD, &op),
                 Err(cokret_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
@@ -3977,10 +4076,10 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
-            kinds::CX_MESSAGE_CREATE,
+            kinds::CK_MESSAGE_CREATE,
             json!({ "target_ref": "ck:flow:01904100-0000-7000-8000-000000000001" }),
         );
-        assert!(validate_reaction_target_kind(kinds::CX_MESSAGE_CREATE, &op).is_ok());
+        assert!(validate_reaction_target_kind(kinds::CK_MESSAGE_CREATE, &op).is_ok());
     }
 
     #[test]
@@ -3994,7 +4093,10 @@ mod reaction_and_window_policy_tests {
     }
 
     fn dur(value: u64, unit: &str) -> cokret_sdk::authz::ConstraintDuration {
-        cokret_sdk::authz::ConstraintDuration { value, unit: unit.to_owned() }
+        cokret_sdk::authz::ConstraintDuration {
+            value,
+            unit: unit.to_owned(),
+        }
     }
 
     #[test]
@@ -4043,10 +4145,28 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn revise_uses_edit_window_only() {
         let edit = dur(15, "m");
-        assert!(message_window_permits(false, chrono::Duration::minutes(10), Some(&edit), None, false));
-        assert!(!message_window_permits(false, chrono::Duration::minutes(16), Some(&edit), None, false));
+        assert!(message_window_permits(
+            false,
+            chrono::Duration::minutes(10),
+            Some(&edit),
+            None,
+            false
+        ));
+        assert!(!message_window_permits(
+            false,
+            chrono::Duration::minutes(16),
+            Some(&edit),
+            None,
+            false
+        ));
         // No edit window declared → unbounded edits.
-        assert!(message_window_permits(false, chrono::Duration::days(365), None, None, false));
+        assert!(message_window_permits(
+            false,
+            chrono::Duration::days(365),
+            None,
+            None,
+            false
+        ));
     }
 
     #[test]
@@ -4144,7 +4264,7 @@ mod wire_payload_tests {
     }
 
     #[test]
-    fn applet_id_accepts_did_or_cx_form() {
+    fn applet_id_accepts_did_or_ck_form() {
         assert!(validate_applet_id("did:web:applet.example").is_ok());
         assert!(validate_applet_id("ck:applet:01904100-0000-7000-8000-000000000001").is_ok());
         assert!(validate_applet_id("not-a-valid-id").is_err());

@@ -120,9 +120,9 @@ CREATE INDEX recovery_session_actor_idx ON recovery_session(actor_id);
 CREATE INDEX recovery_session_series_idx ON recovery_session(series_id);
 CREATE INDEX recovery_session_state_idx ON recovery_session(state);
 
--- `cx.agent.draft.v1` controller-private actor-private queue. The reducer
+-- `ck.agent.draft.v1` controller-private actor-private queue. The reducer
 -- keeps drafts hidden from the agent runtime until the controller
--- explicitly approves them (cx.agent.action_approve event).
+-- explicitly approves them (ck.agent.action_approve event).
 CREATE TABLE pending_agent_drafts (
     draft_id               TEXT PRIMARY KEY
         CHECK (draft_id LIKE 'ck:agent_draft:%'),

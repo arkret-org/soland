@@ -900,7 +900,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .expect("flow projection MUST still exist after redaction");
     assert_eq!(
         flow_row.state, "redacted",
-        "cx.redaction with object_ref MUST flip flow projection in persistence too"
+        "ck.redaction with object_ref MUST flip flow projection in persistence too"
     );
 
     // Morph: create + archive → persistence has state=archived.

@@ -3,7 +3,8 @@
 //! Surfaces:
 //! - `GET  /_cokret/find/directory/describe`            — capability + profile probe
 //! - `POST /_cokret/find/directory/search-realms`       — fuzzy text + visibility filter
-//! - `POST /_cokret/find/directory/resolve-realm`       — by id / alias / invite_token / signed_link
+//! - `POST /_cokret/find/directory/resolve-realm`       — by id / alias / invite_token /
+//!   signed_link
 //! - `POST /_cokret/find/directory/resolve-target`      — Realm / Flow / Message address preview
 //! - `POST /_cokret/find/directory/search-organizations`
 //! - `POST /_cokret/find/directory/resolve-organization`
@@ -214,7 +215,7 @@ async fn resolve_realm(
                 realm_preview: space.clone(),
                 stripped_state: vec![json!({
                     // R1.2 (Realm/Space reversal): security-namespace
-                    // event renamed from `cx.space.discovery` to
+                    // event renamed from `ck.space.discovery` to
                     // `ck.realm.discovery`.
                     "type": "ck.realm.discovery",
                     "subject": "",
@@ -930,7 +931,7 @@ async fn search_users(
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
     // avatar) goes through `ck.directory.search_actors` or
-    // `cx.directory.resolve-handle`.
+    // `ck.directory.resolve-handle`.
     let mut results: Vec<Value> = Vec::new();
     for actor in demo_actors(state).await {
         if results.len() >= limit {

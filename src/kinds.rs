@@ -1,61 +1,4 @@
 use cokret_sdk::Operation;
-use serde_json::Value;
-
-use crate::artifacts;
-
-pub use cokret_sdk::events::kinds::MESSAGE_CREATE as CX_MESSAGE_CREATE;
-pub use cokret_sdk::events::kinds::MESSAGE_REVISE as CX_MESSAGE_REVISE;
-pub use cokret_sdk::events::kinds::MESSAGE_REDACT as CX_MESSAGE_REDACT;
-pub use cokret_sdk::events::kinds::REACTION_ADD as CX_REACTION_ADD;
-pub use cokret_sdk::events::kinds::REACTION_REMOVE as CX_REACTION_REMOVE;
-pub use cokret_sdk::events::kinds::RELATION_CREATE as CX_RELATION_CREATE;
-pub use cokret_sdk::events::kinds::RELATION_UPDATE as CX_RELATION_UPDATE;
-pub use cokret_sdk::events::kinds::RELATION_TOMBSTONE as CX_RELATION_DELETE;
-pub use cokret_sdk::events::kinds::VIEW_CREATE as CX_VIEW_CREATE;
-pub use cokret_sdk::events::kinds::VIEW_UPDATE as CX_VIEW_UPDATE;
-pub use cokret_sdk::events::kinds::VIEW_RECONCILE as CX_VIEW_RECONCILE;
-// Space-container lifecycle (`cx.space.*`). Spec
-// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
-// container, distinct from the `cx.realm.*` security boundary below.
-pub use cokret_sdk::events::kinds::SPACE_CREATE as CX_SPACE_CONTAINER_CREATE;
-pub use cokret_sdk::events::kinds::SPACE_UPDATE as CX_SPACE_CONTAINER_UPDATE;
-pub use cokret_sdk::events::kinds::SPACE_PARENT as CX_SPACE_CONTAINER_PARENT;
-pub use cokret_sdk::events::kinds::SPACE_ARCHIVE as CX_SPACE_CONTAINER_ARCHIVE;
-pub use cokret_sdk::events::kinds::SPACE_RESTORE as CX_SPACE_CONTAINER_RESTORE;
-pub use cokret_sdk::events::kinds::SPACE_TOMBSTONE as CX_SPACE_CONTAINER_TOMBSTONE;
-// Flow lifecycle (round 13 — Flow projection state machine). spec
-// `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
-// Flow has no dedicated `cx.flow.tombstone` event (terminal state reached
-// via `cx.redaction`); only archive/restore are state-machine transitions
-// here.
-pub use cokret_sdk::events::kinds::FLOW_CREATE as CX_FLOW_CREATE;
-pub use cokret_sdk::events::kinds::FLOW_UPDATE as CX_FLOW_UPDATE;
-pub use cokret_sdk::events::kinds::FLOW_ARCHIVE as CX_FLOW_ARCHIVE;
-pub use cokret_sdk::events::kinds::FLOW_RESTORE as CX_FLOW_RESTORE;
-// Round 14 — Flow position events. Not state-machine transitions; they
-// write to the `ck.component.flow.position.v1` cell family keyed by
-// (board_space_id, flow_id). The Event-Envelope path only validates
-// payload shape and bumps the Flow's updated_at/by; the cell write
-// happens on the Move/Anchor pipeline (out of scope for the reducer's
-// structured cache).
-pub use cokret_sdk::events::kinds::FLOW_MOVE as CX_FLOW_MOVE;
-pub use cokret_sdk::events::kinds::FLOW_REORDER as CX_FLOW_REORDER;
-// Round 16 — Flow watch subscription event. Writes the
-// `ck.component.flow.watch.v1` cas-register cell keyed by
-// (flow_id, watcher_actor_id). Spec:
-// cokret-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
-// flow position events the Event-Envelope path only validates payload
-// shape; cell write happens on the Move/Anchor pipeline. The Flow
-// projection's updated_at is NOT bumped — watch is a per-(flow, actor)
-// subscription that does not represent a Flow state mutation.
-pub use cokret_sdk::events::kinds::FLOW_WATCH_SET as CX_FLOW_WATCH_SET;
-// Unified Flow tracks update event. `payload.patch` uses `ck.patch.v1`
-// against the `Flow.tracks` map; atomic across multiple tracks. soland's
-// wire validator enforces payload shape (flow_id + patch | tracks) and
-// the spec common-fields.md §5.1 update-on-non-active state guard.
-// FlowProjection doesn't carry `tracks` server-side; the touch just
-// bumps `updated_at` (mirror of ck.flow.move/reorder pattern).
-pub use cokret_sdk::events::kinds::FLOW_TRACKS_UPDATE as CX_FLOW_TRACKS_UPDATE;
 // CXP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
 // active durable kinds registered in
 // `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
@@ -66,12 +9,58 @@ pub use cokret_sdk::events::kinds::FLOW_TRACKS_UPDATE as CX_FLOW_TRACKS_UPDATE;
 // the Circle's profile cadence) and MUST NOT be submitted directly via
 // `ck.events.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
-pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CX_CIRCLE_CREATE;
-pub use cokret_sdk::events::kinds::CIRCLE_UPDATE as CX_CIRCLE_UPDATE;
-pub use cokret_sdk::events::kinds::CIRCLE_ARCHIVE as CX_CIRCLE_ARCHIVE;
-pub use cokret_sdk::events::kinds::CIRCLE_RESTORE as CX_CIRCLE_RESTORE;
-pub use cokret_sdk::events::kinds::CIRCLE_TOMBSTONE as CX_CIRCLE_TOMBSTONE;
-pub use cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE as CX_CIRCLE_MEMBER_STATE;
+pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CK_CIRCLE_CREATE;
+// Flow lifecycle (round 13 — Flow projection state machine). spec
+// `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
+// Flow has no dedicated `ck.flow.tombstone` event (terminal state reached
+// via `ck.redaction`); only archive/restore are state-machine transitions
+// here.
+pub use cokret_sdk::events::kinds::FLOW_CREATE as CK_FLOW_CREATE;
+// Round 14 — Flow position events. Not state-machine transitions; they
+// write to the `ck.component.flow.position.v1` cell family keyed by
+// (board_space_id, flow_id). The Event-Envelope path only validates
+// payload shape and bumps the Flow's updated_at/by; the cell write
+// happens on the Move/Anchor pipeline (out of scope for the reducer's
+// structured cache).
+pub use cokret_sdk::events::kinds::FLOW_MOVE as CK_FLOW_MOVE;
+// Unified Flow tracks update event. `payload.patch` uses `ck.patch.v1`
+// against the `Flow.tracks` map; atomic across multiple tracks. soland's
+// wire validator enforces payload shape (flow_id + patch | tracks) and
+// the spec common-fields.md §5.1 update-on-non-active state guard.
+// FlowProjection doesn't carry `tracks` server-side; the touch just
+// bumps `updated_at` (mirror of ck.flow.move/reorder pattern).
+pub use cokret_sdk::events::kinds::FLOW_TRACKS_UPDATE as CK_FLOW_TRACKS_UPDATE;
+// Round 16 — Flow watch subscription event. Writes the
+// `ck.component.flow.watch.v1` cas-register cell keyed by
+// (flow_id, watcher_actor_id). Spec:
+// cokret-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
+// flow position events the Event-Envelope path only validates payload
+// shape; cell write happens on the Move/Anchor pipeline. The Flow
+// projection's updated_at is NOT bumped — watch is a per-(flow, actor)
+// subscription that does not represent a Flow state mutation.
+pub use cokret_sdk::events::kinds::FLOW_WATCH_SET as CK_FLOW_WATCH_SET;
+// Space-container lifecycle (`ck.space.*`). Spec
+// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
+// container, distinct from the `ck.realm.*` security boundary below.
+pub use cokret_sdk::events::kinds::SPACE_CREATE as CK_SPACE_CONTAINER_CREATE;
+pub use cokret_sdk::events::kinds::{
+    CIRCLE_ARCHIVE as CK_CIRCLE_ARCHIVE, CIRCLE_MEMBER_STATE as CK_CIRCLE_MEMBER_STATE,
+    CIRCLE_RESTORE as CK_CIRCLE_RESTORE, CIRCLE_TOMBSTONE as CK_CIRCLE_TOMBSTONE,
+    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, FLOW_ARCHIVE as CK_FLOW_ARCHIVE,
+    FLOW_REORDER as CK_FLOW_REORDER, FLOW_RESTORE as CK_FLOW_RESTORE,
+    FLOW_UPDATE as CK_FLOW_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
+    MESSAGE_REDACT as CK_MESSAGE_REDACT, MESSAGE_REVISE as CK_MESSAGE_REVISE,
+    REACTION_ADD as CK_REACTION_ADD, REACTION_REMOVE as CK_REACTION_REMOVE,
+    RELATION_CREATE as CK_RELATION_CREATE, RELATION_TOMBSTONE as CK_RELATION_DELETE,
+    RELATION_UPDATE as CK_RELATION_UPDATE, SPACE_ARCHIVE as CK_SPACE_CONTAINER_ARCHIVE,
+    SPACE_PARENT as CK_SPACE_CONTAINER_PARENT, SPACE_RESTORE as CK_SPACE_CONTAINER_RESTORE,
+    SPACE_TOMBSTONE as CK_SPACE_CONTAINER_TOMBSTONE, SPACE_UPDATE as CK_SPACE_CONTAINER_UPDATE,
+    VIEW_CREATE as CK_VIEW_CREATE, VIEW_RECONCILE as CK_VIEW_RECONCILE,
+    VIEW_UPDATE as CK_VIEW_UPDATE,
+};
+use serde_json::Value;
+
+use crate::artifacts;
 
 // CXP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
 // Realm-default scope) to a "narrow discussion" Flow bound to a
@@ -81,21 +70,13 @@ pub use cokret_sdk::events::kinds::CIRCLE_MEMBER_STATE as CX_CIRCLE_MEMBER_STATE
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
-pub use cokret_sdk::events::kinds::MORPH_CREATE as CX_MORPH_CREATE;
-pub use cokret_sdk::events::kinds::MORPH_UPDATE as CX_MORPH_UPDATE;
-pub use cokret_sdk::events::kinds::MORPH_ARCHIVE as CX_MORPH_ARCHIVE;
-pub use cokret_sdk::events::kinds::MORPH_RESTORE as CX_MORPH_RESTORE;
-// `cx.field.position.move` and `cx.field.position.reorder` were removed in
+// `ck.field.position.move` and `ck.field.position.reorder` were removed in
 // revision 0a5ab85 (see cokret-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
 // was subsumed by track-relative ordering and the per-cell ordered-log
 // lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
 // generic unknown-event-kind path in `event_log::submit_event` already
 // rejects them because they no longer appear in `active_durable_event_kinds`.
-pub use cokret_sdk::events::kinds::CONTAINER_MOVE_ITEM as CX_CONTAINER_MOVE_ITEM;
-pub use cokret_sdk::events::kinds::CONTAINER_REBALANCE as CX_CONTAINER_REBALANCE;
-pub use cokret_sdk::events::kinds::INVITE_CREATE as CX_INVITE_CREATE;
-pub use cokret_sdk::events::kinds::MEMBER_STATE as CX_MEMBER_STATE;
 // R3.1 spec-sync (2026-05-27, cokret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
 // `ck.component.member.identity.v1`; lattice `ordered_log`; bottom
@@ -103,75 +84,90 @@ pub use cokret_sdk::events::kinds::MEMBER_STATE as CX_MEMBER_STATE;
 // `(payload.realm_id, payload.actor_id, payload.segment)`. Reducer
 // dispatch lives in `reducer::apply_member_identity_update`; persistence
 // is in `state::MemberIdentityRegistry`.
-pub use cokret_sdk::events::kinds::MEMBER_IDENTITY_UPDATE as CX_MEMBER_IDENTITY_UPDATE;
-pub use cokret_sdk::events::kinds::READ_CURSOR_ADVANCE as CX_READ_MARKER;
-// Realm security-boundary lifecycle (`cx.realm.*`). Spec
+// Realm security-boundary lifecycle (`ck.realm.*`). Spec
 // `cokret-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
 //
 // `ck.realm.tombstone` is the irreversible terminal-state event that
 // freezes the Realm and triggers the erasure-receipt fanout chain via
 // `ck.audit.erasure_receipt`. Distinct from `ck.realm.destroy`, which
 // is the GDPR-grade hard-delete request that retains a `retained_stub_digest`.
-pub use cokret_sdk::events::kinds::REALM_CREATE as CX_REALM_CREATE;
-pub use cokret_sdk::events::kinds::REALM_UPDATE as CX_REALM_UPDATE;
-pub use cokret_sdk::events::kinds::REALM_DESTROY as CX_REALM_DESTROY;
-pub use cokret_sdk::events::kinds::REALM_TOMBSTONE as CX_REALM_TOMBSTONE;
-pub use cokret_sdk::events::kinds::REALM_MODERATION_POLICY as CX_REALM_MODERATION_POLICY;
-pub use cokret_sdk::events::kinds::REALM_HISTORY_VISIBILITY as CX_REALM_HISTORY_VISIBILITY;
-pub use cokret_sdk::events::kinds::REALM_HISTORY_SHARING_POLICY as CX_REALM_HISTORY_SHARING_POLICY;
-pub use cokret_sdk::events::kinds::REALM_PREVIEW_POLICY as CX_REALM_PREVIEW_POLICY;
-pub use cokret_sdk::events::kinds::REALM_KEY_SHARE as CX_REALM_KEY_SHARE;
-pub const CX_CONFLICT_REPAIR: &str = "cx.conflict.repair";
-pub use cokret_sdk::events::kinds::AUDIT_ERASURE_RECEIPT as CX_AUDIT_ERASURE_RECEIPT;
-pub use cokret_sdk::events::kinds::REDACTION as CX_REDACTION;
+pub use cokret_sdk::events::kinds::{
+    CONTAINER_MOVE_ITEM as CK_CONTAINER_MOVE_ITEM, CONTAINER_REBALANCE as CK_CONTAINER_REBALANCE,
+    INVITE_CREATE as CK_INVITE_CREATE, MEMBER_IDENTITY_UPDATE as CK_MEMBER_IDENTITY_UPDATE,
+    MEMBER_STATE as CK_MEMBER_STATE, MORPH_ARCHIVE as CK_MORPH_ARCHIVE,
+    MORPH_CREATE as CK_MORPH_CREATE, MORPH_RESTORE as CK_MORPH_RESTORE,
+    MORPH_UPDATE as CK_MORPH_UPDATE, READ_CURSOR_ADVANCE as CK_READ_MARKER,
+    REALM_CREATE as CK_REALM_CREATE, REALM_DESTROY as CK_REALM_DESTROY,
+    REALM_HISTORY_SHARING_POLICY as CK_REALM_HISTORY_SHARING_POLICY,
+    REALM_HISTORY_VISIBILITY as CK_REALM_HISTORY_VISIBILITY, REALM_KEY_SHARE as CK_REALM_KEY_SHARE,
+    REALM_MODERATION_POLICY as CK_REALM_MODERATION_POLICY,
+    REALM_PREVIEW_POLICY as CK_REALM_PREVIEW_POLICY, REALM_TOMBSTONE as CK_REALM_TOMBSTONE,
+    REALM_UPDATE as CK_REALM_UPDATE,
+};
+pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
+// Round 14e+ (2026-05-16) — Agent protocol family. Spec
+// `extensions/agent-integration.md`. Mirror of applet but with a
+// terminal `*.result` event that carries the signed audit binding.
 // Round 14e+ (2026-05-16) — Applet protocol family. Spec
 // `extensions/applet-integration.md`. soland's role at this layer is to
 // validate wire shape + persist + dispatch; applet bridge state machine
 // lives client-side (yougen) and at the applet service itself.
-pub use cokret_sdk::events::kinds::APPLET_REGISTRATION as CX_APPLET_REGISTRATION;
-pub use cokret_sdk::events::kinds::APPLET_DISCOVERY as CX_APPLET_DISCOVERY;
-pub use cokret_sdk::events::kinds::APPLET_PROTOCOL_SESSION_START as CX_APPLET_PROTOCOL_SESSION_START;
-pub use cokret_sdk::events::kinds::APPLET_PROTOCOL_SESSION_STATUS as CX_APPLET_PROTOCOL_SESSION_STATUS;
-pub use cokret_sdk::events::kinds::APPLET_BRIDGE_ERROR as CX_APPLET_BRIDGE_ERROR;
-// Round 14e+ (2026-05-16) — Agent protocol family. Spec
-// `extensions/agent-integration.md`. Mirror of applet but with a
-// terminal `*.result` event that carries the signed audit binding.
-pub use cokret_sdk::events::kinds::AGENT_ENDPOINT as CX_AGENT_ENDPOINT;
-pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.start";
-pub use cokret_sdk::events::kinds::AGENT_PROTOCOL_SESSION_STATUS as CX_AGENT_PROTOCOL_SESSION_STATUS;
-pub use cokret_sdk::events::kinds::AGENT_PROTOCOL_SESSION_RESULT as CX_AGENT_PROTOCOL_SESSION_RESULT;
-
+pub use cokret_sdk::events::kinds::{
+    AGENT_ENDPOINT as CK_AGENT_ENDPOINT, APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR,
+    APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
+    APPLET_PROTOCOL_SESSION_START as CK_APPLET_PROTOCOL_SESSION_START,
+    APPLET_PROTOCOL_SESSION_STATUS as CK_APPLET_PROTOCOL_SESSION_STATUS,
+    APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
+    AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, REDACTION as CK_REDACTION,
+};
+pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.start";
+// R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
+// NOT advance the anchor frontier / actor_seq). Wire-accepted only.
 // R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
 // event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
 // (REDU-1).
-pub use cokret_sdk::events::kinds::AGENT_PAUSE as CX_AGENT_PAUSE;
-pub use cokret_sdk::events::kinds::AGENT_RESUME as CX_AGENT_RESUME;
-pub use cokret_sdk::events::kinds::AGENT_DEACTIVATE as CX_AGENT_DEACTIVATE;
-
-// R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
-// NOT advance the anchor frontier / actor_seq). Wire-accepted only.
-pub use cokret_sdk::events::kinds::AGENT_DRAFT_PROPOSE as CX_AGENT_DRAFT_PROPOSE;
-pub use cokret_sdk::events::kinds::AGENT_ACTION_REQUEST as CX_AGENT_ACTION_REQUEST;
-pub use cokret_sdk::events::kinds::AGENT_ACTION_APPROVE as CX_AGENT_ACTION_APPROVE;
-pub use cokret_sdk::events::kinds::AGENT_ACTION_REJECT as CX_AGENT_ACTION_REJECT;
-
-// Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
-// `.v1` suffix from these audit event kinds. Wire schema versioning now
-// flows through `requirements.features` (e.g. `ck.feature.audit_destruction_v1`).
-// `attested_hardware` Audit Agent removal MUST emit
-// `ck.audit.epoch_key_destruction` in the same anchor batch as the paired
-// `ck.mls.commit`. If the deadline passes without the attestation, soland
-// forces a `ck.realm.audit_policy_downgrade` event that drops
-// `audit_assurance` from attested_hardware to disclosed_policy and triggers
-// a UI banner. Reducer-level validation lives in `src/reducer.rs` under
-// `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
-// (still TODO stubs pending full attestation-chain verification).
-pub use cokret_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CX_REALM_AUDIT_POLICY_DOWNGRADE;
-
+// `ck.capability.derived` (capability / reducer_input): records a
+// capability derived from a parent Realm's policy + a child Realm's
+// inheritance declaration. Reducer projects into
+// `ck.component.capability.derived.v1`; full derive logic now runs
+// through the same chain as the rest of the Realm-graph family. Any
+// remaining cross-Realm derivation gaps are tracked as
+// TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
+// derivation under audited-high-risk policies.
+// `ck.device.push_route` is device-scoped.
+pub use cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE;
+// G3.S1 — MLS / E2EE lifecycle event kinds.
+//
+// Canonical kinds per
+// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
+//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at
+//     the HTTP operation_id layer (`ck.keys.keypackages.upload` /
+//     `ck.keys.keypackages.claim`); the event log stores only the canonical kind. The reducer
+//     dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
+//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue
+//     semantics are conveyed via payload shape; no separate `.enqueue` suffix.
+//   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
+//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the
+//     kind suffix.
+//   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
+//   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered-frontier
+//     accumulator).
+//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path
+//     (wire-only; no reducer projection yet).
+//
+// TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
+// retry path for messages that arrived before the key material; today the
+// recipient silently drops them.
+// MLS commits now require a governance binding with an attested
+// membership/covered frontier; the soland reducer accumulates that
+// frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
+// accepted only in minimal routing form: opaque Welcome bytes plus the
+// recipient delivery tuple.
+pub use cokret_sdk::events::kinds::MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE;
 // REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
-// `cx.audit.epoch_destruction_failsafe` event cannot serve as a delayed
+// `ck.audit.epoch_destruction_failsafe` event cannot serve as a delayed
 // remediation for a missing same-batch attestation. The spec wording
 // (see _before_todos.md §0.4) is: the failsafe MUST NOT be accepted in
 // place of the in-batch `ck.audit.epoch_key_destruction` paired with
@@ -197,8 +193,19 @@ pub use cokret_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CX_REALM_AUDI
 // `ck.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
-pub use cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE as CX_MORPH_SCHEMA_MIGRATE;
-
+pub use cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE;
+// Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
+// `.v1` suffix from these audit event kinds. Wire schema versioning now
+// flows through `requirements.features` (e.g. `ck.feature.audit_destruction_v1`).
+// `attested_hardware` Audit Agent removal MUST emit
+// `ck.audit.epoch_key_destruction` in the same anchor batch as the paired
+// `ck.mls.commit`. If the deadline passes without the attestation, soland
+// forces a `ck.realm.audit_policy_downgrade` event that drops
+// `audit_assurance` from attested_hardware to disclosed_policy and triggers
+// a UI banner. Reducer-level validation lives in `src/reducer.rs` under
+// `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
+// (still TODO stubs pending full attestation-chain verification).
+pub use cokret_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDIT_POLICY_DOWNGRADE;
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
 // governance + per-device push route binding.
 //
@@ -218,10 +225,13 @@ pub use cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE as CX_MORPH_SCHEMA_MIGRA
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-pub use cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY as CX_REALM_DELIVERY_BINDING_POLICY;
-// `ck.device.push_route` is device-scoped.
-pub use cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE as CX_DEVICE_PUSH_ROUTE;
-
+pub use cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY;
+// `ck.realm.inheritance_policy` (realm / reducer_input): declares which
+// realm-scoped policies a child Realm inherits from its parent boundary.
+// Reducer maintains a `ck.component.realm.inheritance_policy.v1`
+// cas-register cell; capability derivation runs against the projected
+// chain alongside `ck.capability.derived`.
+pub use cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY;
 // Realm graph + capability derivation event kinds. Reducer dispatch
 // (`apply_realm_link` / `apply_realm_inheritance_policy` /
 // `apply_capability_derived`) is fully wired in `src/reducer.rs`;
@@ -236,60 +246,21 @@ pub use cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE as CX_DEVICE_PUSH_ROUTE;
 // `/_cokret/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
-pub use cokret_sdk::events::kinds::REALM_LINK as CX_REALM_LINK;
-// `ck.realm.inheritance_policy` (realm / reducer_input): declares which
-// realm-scoped policies a child Realm inherits from its parent boundary.
-// Reducer maintains a `ck.component.realm.inheritance_policy.v1`
-// cas-register cell; capability derivation runs against the projected
-// chain alongside `ck.capability.derived`.
-pub use cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY as CX_REALM_INHERITANCE_POLICY;
-// `ck.capability.derived` (capability / reducer_input): records a
-// capability derived from a parent Realm's policy + a child Realm's
-// inheritance declaration. Reducer projects into
-// `ck.component.capability.derived.v1`; full derive logic now runs
-// through the same chain as the rest of the Realm-graph family. Any
-// remaining cross-Realm derivation gaps are tracked as
-// TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
-// derivation under audited-high-risk policies.
-pub use cokret_sdk::events::kinds::CAPABILITY_DERIVED as CX_CAPABILITY_DERIVED;
-
+pub use cokret_sdk::events::kinds::REALM_LINK as CK_REALM_LINK;
 // G3.S2 — `ck.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
 // `ck.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
-pub use cokret_sdk::events::kinds::REALM_POLICY_SERVER as CX_REALM_POLICY_SERVER;
-
-// G3.S1 — MLS / E2EE lifecycle event kinds.
-//
-// Canonical kinds per
-// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ck.keys.keypackages.upload` / `ck.keys.keypackages.claim`); the
-//     event log stores only the canonical kind. The reducer dispatches publish-vs-claim on the
-//     `payload.action == "publish" | "claim"` field.
-//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
-//     are conveyed via payload shape; no separate `.enqueue` suffix.
-//   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
-//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
-//     suffix.
-//   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
-//   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered-frontier
-//     accumulator).
-//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
-//     no reducer projection yet).
-//
-// TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
-// retry path for messages that arrived before the key material; today the
-// recipient silently drops them.
-// MLS commits now require a governance binding with an attested
-// membership/covered frontier; the soland reducer accumulates that
-// frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
-// accepted only in minimal routing form: opaque Welcome bytes plus the
-// recipient delivery tuple.
-pub use cokret_sdk::events::kinds::MLS_KEYPACKAGE as CX_MLS_KEYPACKAGE;
-pub use cokret_sdk::events::kinds::MLS_WELCOME as CX_MLS_WELCOME;
-pub use cokret_sdk::events::kinds::MLS_COMMIT as CX_MLS_COMMIT;
-pub use cokret_sdk::events::kinds::MLS_GENESIS as CX_MLS_GENESIS;
+pub use cokret_sdk::events::kinds::REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER;
+pub use cokret_sdk::events::kinds::{
+    AGENT_ACTION_APPROVE as CK_AGENT_ACTION_APPROVE, AGENT_ACTION_REJECT as CK_AGENT_ACTION_REJECT,
+    AGENT_ACTION_REQUEST as CK_AGENT_ACTION_REQUEST, AGENT_DEACTIVATE as CK_AGENT_DEACTIVATE,
+    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE, AGENT_PAUSE as CK_AGENT_PAUSE,
+    AGENT_PROTOCOL_SESSION_RESULT as CK_AGENT_PROTOCOL_SESSION_RESULT,
+    AGENT_PROTOCOL_SESSION_STATUS as CK_AGENT_PROTOCOL_SESSION_STATUS,
+    AGENT_RESUME as CK_AGENT_RESUME, CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED,
+    MLS_COMMIT as CK_MLS_COMMIT, MLS_GENESIS as CK_MLS_GENESIS, MLS_WELCOME as CK_MLS_WELCOME,
+};
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
@@ -393,115 +364,115 @@ pub fn canonical_kind_for_payload<'a>(object_type: &'a str, _payload: &Value) ->
 
 fn canonical_registered_kind(object_type: &str) -> Option<&str> {
     if !artifacts::active_local_operation_event_kinds().contains(object_type)
-        && object_type != CX_CONFLICT_REPAIR
+        && object_type != CK_CONFLICT_REPAIR
     {
         return None;
     }
     match object_type {
-        CX_MESSAGE_CREATE => Some(CX_MESSAGE_CREATE),
-        CX_MESSAGE_REVISE => Some(CX_MESSAGE_REVISE),
-        CX_MESSAGE_REDACT => Some(CX_MESSAGE_REDACT),
-        CX_REDACTION => Some(CX_REDACTION),
-        CX_REACTION_ADD => Some(CX_REACTION_ADD),
-        CX_REACTION_REMOVE => Some(CX_REACTION_REMOVE),
-        CX_RELATION_CREATE => Some(CX_RELATION_CREATE),
-        CX_RELATION_UPDATE => Some(CX_RELATION_UPDATE),
-        CX_RELATION_DELETE => Some(CX_RELATION_DELETE),
-        CX_VIEW_CREATE => Some(CX_VIEW_CREATE),
-        CX_VIEW_UPDATE => Some(CX_VIEW_UPDATE),
-        CX_VIEW_RECONCILE => Some(CX_VIEW_RECONCILE),
-        CX_SPACE_CONTAINER_CREATE => Some(CX_SPACE_CONTAINER_CREATE),
-        CX_SPACE_CONTAINER_UPDATE => Some(CX_SPACE_CONTAINER_UPDATE),
-        CX_SPACE_CONTAINER_PARENT => Some(CX_SPACE_CONTAINER_PARENT),
-        CX_SPACE_CONTAINER_ARCHIVE => Some(CX_SPACE_CONTAINER_ARCHIVE),
-        CX_SPACE_CONTAINER_RESTORE => Some(CX_SPACE_CONTAINER_RESTORE),
-        CX_SPACE_CONTAINER_TOMBSTONE => Some(CX_SPACE_CONTAINER_TOMBSTONE),
-        CX_FLOW_CREATE => Some(CX_FLOW_CREATE),
-        CX_FLOW_UPDATE => Some(CX_FLOW_UPDATE),
-        CX_FLOW_ARCHIVE => Some(CX_FLOW_ARCHIVE),
-        CX_FLOW_RESTORE => Some(CX_FLOW_RESTORE),
-        CX_FLOW_MOVE => Some(CX_FLOW_MOVE),
-        CX_FLOW_REORDER => Some(CX_FLOW_REORDER),
-        CX_FLOW_WATCH_SET => Some(CX_FLOW_WATCH_SET),
-        CX_FLOW_TRACKS_UPDATE => Some(CX_FLOW_TRACKS_UPDATE),
-        CX_MORPH_CREATE => Some(CX_MORPH_CREATE),
-        CX_MORPH_UPDATE => Some(CX_MORPH_UPDATE),
-        CX_MORPH_ARCHIVE => Some(CX_MORPH_ARCHIVE),
-        CX_MORPH_RESTORE => Some(CX_MORPH_RESTORE),
-        CX_CONTAINER_MOVE_ITEM => Some(CX_CONTAINER_MOVE_ITEM),
-        CX_CONTAINER_REBALANCE => Some(CX_CONTAINER_REBALANCE),
-        CX_INVITE_CREATE => Some(CX_INVITE_CREATE),
-        CX_READ_MARKER => Some(CX_READ_MARKER),
-        CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE => {
+        CK_MESSAGE_CREATE => Some(CK_MESSAGE_CREATE),
+        CK_MESSAGE_REVISE => Some(CK_MESSAGE_REVISE),
+        CK_MESSAGE_REDACT => Some(CK_MESSAGE_REDACT),
+        CK_REDACTION => Some(CK_REDACTION),
+        CK_REACTION_ADD => Some(CK_REACTION_ADD),
+        CK_REACTION_REMOVE => Some(CK_REACTION_REMOVE),
+        CK_RELATION_CREATE => Some(CK_RELATION_CREATE),
+        CK_RELATION_UPDATE => Some(CK_RELATION_UPDATE),
+        CK_RELATION_DELETE => Some(CK_RELATION_DELETE),
+        CK_VIEW_CREATE => Some(CK_VIEW_CREATE),
+        CK_VIEW_UPDATE => Some(CK_VIEW_UPDATE),
+        CK_VIEW_RECONCILE => Some(CK_VIEW_RECONCILE),
+        CK_SPACE_CONTAINER_CREATE => Some(CK_SPACE_CONTAINER_CREATE),
+        CK_SPACE_CONTAINER_UPDATE => Some(CK_SPACE_CONTAINER_UPDATE),
+        CK_SPACE_CONTAINER_PARENT => Some(CK_SPACE_CONTAINER_PARENT),
+        CK_SPACE_CONTAINER_ARCHIVE => Some(CK_SPACE_CONTAINER_ARCHIVE),
+        CK_SPACE_CONTAINER_RESTORE => Some(CK_SPACE_CONTAINER_RESTORE),
+        CK_SPACE_CONTAINER_TOMBSTONE => Some(CK_SPACE_CONTAINER_TOMBSTONE),
+        CK_FLOW_CREATE => Some(CK_FLOW_CREATE),
+        CK_FLOW_UPDATE => Some(CK_FLOW_UPDATE),
+        CK_FLOW_ARCHIVE => Some(CK_FLOW_ARCHIVE),
+        CK_FLOW_RESTORE => Some(CK_FLOW_RESTORE),
+        CK_FLOW_MOVE => Some(CK_FLOW_MOVE),
+        CK_FLOW_REORDER => Some(CK_FLOW_REORDER),
+        CK_FLOW_WATCH_SET => Some(CK_FLOW_WATCH_SET),
+        CK_FLOW_TRACKS_UPDATE => Some(CK_FLOW_TRACKS_UPDATE),
+        CK_MORPH_CREATE => Some(CK_MORPH_CREATE),
+        CK_MORPH_UPDATE => Some(CK_MORPH_UPDATE),
+        CK_MORPH_ARCHIVE => Some(CK_MORPH_ARCHIVE),
+        CK_MORPH_RESTORE => Some(CK_MORPH_RESTORE),
+        CK_CONTAINER_MOVE_ITEM => Some(CK_CONTAINER_MOVE_ITEM),
+        CK_CONTAINER_REBALANCE => Some(CK_CONTAINER_REBALANCE),
+        CK_INVITE_CREATE => Some(CK_INVITE_CREATE),
+        CK_READ_MARKER => Some(CK_READ_MARKER),
+        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_DESTROY | CK_REALM_TOMBSTONE => {
             Some(match object_type {
-                CX_REALM_CREATE => CX_REALM_CREATE,
-                CX_REALM_DESTROY => CX_REALM_DESTROY,
-                CX_REALM_TOMBSTONE => CX_REALM_TOMBSTONE,
-                _ => CX_REALM_UPDATE,
+                CK_REALM_CREATE => CK_REALM_CREATE,
+                CK_REALM_DESTROY => CK_REALM_DESTROY,
+                CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
+                _ => CK_REALM_UPDATE,
             })
         }
-        CX_REALM_MODERATION_POLICY => Some(CX_REALM_MODERATION_POLICY),
-        CX_REALM_HISTORY_VISIBILITY => Some(CX_REALM_HISTORY_VISIBILITY),
-        CX_REALM_HISTORY_SHARING_POLICY => Some(CX_REALM_HISTORY_SHARING_POLICY),
-        CX_REALM_PREVIEW_POLICY => Some(CX_REALM_PREVIEW_POLICY),
-        CX_REALM_KEY_SHARE => Some(CX_REALM_KEY_SHARE),
-        CX_CONFLICT_REPAIR => Some(CX_CONFLICT_REPAIR),
-        CX_AUDIT_ERASURE_RECEIPT => Some(CX_AUDIT_ERASURE_RECEIPT),
-        CX_MEMBER_STATE => Some(CX_MEMBER_STATE),
+        CK_REALM_MODERATION_POLICY => Some(CK_REALM_MODERATION_POLICY),
+        CK_REALM_HISTORY_VISIBILITY => Some(CK_REALM_HISTORY_VISIBILITY),
+        CK_REALM_HISTORY_SHARING_POLICY => Some(CK_REALM_HISTORY_SHARING_POLICY),
+        CK_REALM_PREVIEW_POLICY => Some(CK_REALM_PREVIEW_POLICY),
+        CK_REALM_KEY_SHARE => Some(CK_REALM_KEY_SHARE),
+        CK_CONFLICT_REPAIR => Some(CK_CONFLICT_REPAIR),
+        CK_AUDIT_ERASURE_RECEIPT => Some(CK_AUDIT_ERASURE_RECEIPT),
+        CK_MEMBER_STATE => Some(CK_MEMBER_STATE),
         // R3.1 — MemberIdentity append-only replacement event.
-        CX_MEMBER_IDENTITY_UPDATE => Some(CX_MEMBER_IDENTITY_UPDATE),
+        CK_MEMBER_IDENTITY_UPDATE => Some(CK_MEMBER_IDENTITY_UPDATE),
         // Applet protocol family (round 14e+).
-        CX_APPLET_REGISTRATION => Some(CX_APPLET_REGISTRATION),
-        CX_APPLET_DISCOVERY => Some(CX_APPLET_DISCOVERY),
-        CX_APPLET_PROTOCOL_SESSION_START => Some(CX_APPLET_PROTOCOL_SESSION_START),
-        CX_APPLET_PROTOCOL_SESSION_STATUS => Some(CX_APPLET_PROTOCOL_SESSION_STATUS),
-        CX_APPLET_BRIDGE_ERROR => Some(CX_APPLET_BRIDGE_ERROR),
+        CK_APPLET_REGISTRATION => Some(CK_APPLET_REGISTRATION),
+        CK_APPLET_DISCOVERY => Some(CK_APPLET_DISCOVERY),
+        CK_APPLET_PROTOCOL_SESSION_START => Some(CK_APPLET_PROTOCOL_SESSION_START),
+        CK_APPLET_PROTOCOL_SESSION_STATUS => Some(CK_APPLET_PROTOCOL_SESSION_STATUS),
+        CK_APPLET_BRIDGE_ERROR => Some(CK_APPLET_BRIDGE_ERROR),
         // Agent protocol family (round 14e+).
-        CX_AGENT_ENDPOINT => Some(CX_AGENT_ENDPOINT),
-        CX_AGENT_PROTOCOL_SESSION_START => Some(CX_AGENT_PROTOCOL_SESSION_START),
-        CX_AGENT_PROTOCOL_SESSION_STATUS => Some(CX_AGENT_PROTOCOL_SESSION_STATUS),
-        CX_AGENT_PROTOCOL_SESSION_RESULT => Some(CX_AGENT_PROTOCOL_SESSION_RESULT),
+        CK_AGENT_ENDPOINT => Some(CK_AGENT_ENDPOINT),
+        CK_AGENT_PROTOCOL_SESSION_START => Some(CK_AGENT_PROTOCOL_SESSION_START),
+        CK_AGENT_PROTOCOL_SESSION_STATUS => Some(CK_AGENT_PROTOCOL_SESSION_STATUS),
+        CK_AGENT_PROTOCOL_SESSION_RESULT => Some(CK_AGENT_PROTOCOL_SESSION_RESULT),
         // R3 spec-sync — agent lifecycle (FSM, reducer_input=true).
-        CX_AGENT_PAUSE => Some(CX_AGENT_PAUSE),
-        CX_AGENT_RESUME => Some(CX_AGENT_RESUME),
-        CX_AGENT_DEACTIVATE => Some(CX_AGENT_DEACTIVATE),
+        CK_AGENT_PAUSE => Some(CK_AGENT_PAUSE),
+        CK_AGENT_RESUME => Some(CK_AGENT_RESUME),
+        CK_AGENT_DEACTIVATE => Some(CK_AGENT_DEACTIVATE),
         // R3 spec-sync — actor_private_event kinds (reducer_input=false).
-        CX_AGENT_DRAFT_PROPOSE => Some(CX_AGENT_DRAFT_PROPOSE),
-        CX_AGENT_ACTION_REQUEST => Some(CX_AGENT_ACTION_REQUEST),
-        CX_AGENT_ACTION_APPROVE => Some(CX_AGENT_ACTION_APPROVE),
-        CX_AGENT_ACTION_REJECT => Some(CX_AGENT_ACTION_REJECT),
+        CK_AGENT_DRAFT_PROPOSE => Some(CK_AGENT_DRAFT_PROPOSE),
+        CK_AGENT_ACTION_REQUEST => Some(CK_AGENT_ACTION_REQUEST),
+        CK_AGENT_ACTION_APPROVE => Some(CK_AGENT_ACTION_APPROVE),
+        CK_AGENT_ACTION_REJECT => Some(CK_AGENT_ACTION_REJECT),
         // Tier-0 S6 audit kinds (C44 wire-valid, C45 renamed off `.v1`).
         // Projection is currently `Ignored` pending full attestation-chain
         // verification.
-        CX_REALM_AUDIT_POLICY_DOWNGRADE => Some(CX_REALM_AUDIT_POLICY_DOWNGRADE),
+        CK_REALM_AUDIT_POLICY_DOWNGRADE => Some(CK_REALM_AUDIT_POLICY_DOWNGRADE),
         // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
         // (morph.schema_migrate enforces capability + compatibility_class gate).
-        CX_MORPH_SCHEMA_MIGRATE => Some(CX_MORPH_SCHEMA_MIGRATE),
+        CK_MORPH_SCHEMA_MIGRATE => Some(CK_MORPH_SCHEMA_MIGRATE),
         // Round C46 — delivery binding governance + push route binding.
         // Wire-valid; reducer projection is TODO pending full policy /
         // push registration plumbing.
-        CX_REALM_DELIVERY_BINDING_POLICY => Some(CX_REALM_DELIVERY_BINDING_POLICY),
-        CX_DEVICE_PUSH_ROUTE => Some(CX_DEVICE_PUSH_ROUTE),
+        CK_REALM_DELIVERY_BINDING_POLICY => Some(CK_REALM_DELIVERY_BINDING_POLICY),
+        CK_DEVICE_PUSH_ROUTE => Some(CK_DEVICE_PUSH_ROUTE),
         // Realm graph — schema-level accept; reducer projection is
         // TODO(realm-rework) for link_kind / inheritance / capability
         // derive semantics.
-        CX_REALM_LINK => Some(CX_REALM_LINK),
-        CX_REALM_INHERITANCE_POLICY => Some(CX_REALM_INHERITANCE_POLICY),
-        CX_CAPABILITY_DERIVED => Some(CX_CAPABILITY_DERIVED),
+        CK_REALM_LINK => Some(CK_REALM_LINK),
+        CK_REALM_INHERITANCE_POLICY => Some(CK_REALM_INHERITANCE_POLICY),
+        CK_CAPABILITY_DERIVED => Some(CK_CAPABILITY_DERIVED),
         // G3.S2 — policy server declaration.
-        CX_REALM_POLICY_SERVER => Some(CX_REALM_POLICY_SERVER),
+        CK_REALM_POLICY_SERVER => Some(CK_REALM_POLICY_SERVER),
         _ => Some(object_type),
     }
 }
 
-/// True for any `cx.audit.*` event kind. Used by the Realm terminal-state
+/// True for any `ck.audit.*` event kind. Used by the Realm terminal-state
 /// admission guard (`routing::events::event_log::terminal_realm_check`) to
 /// admit audit-class
 /// writes even after a Realm has reached `ck.realm.tombstone` /
 /// `ck.realm.destroy` terminal state. Spec
 /// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
 pub fn is_audit_kind(kind: &str) -> bool {
-    kind.starts_with("cx.audit.")
+    kind.starts_with("ck.audit.")
 }
 
 /// Applet + agent family classifiers used by projection/audit
@@ -510,34 +481,34 @@ pub fn is_audit_kind(kind: &str) -> bool {
 pub fn is_applet_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_APPLET_REGISTRATION
-            | CX_APPLET_DISCOVERY
-            | CX_APPLET_PROTOCOL_SESSION_START
-            | CX_APPLET_PROTOCOL_SESSION_STATUS
-            | CX_APPLET_BRIDGE_ERROR
+        CK_APPLET_REGISTRATION
+            | CK_APPLET_DISCOVERY
+            | CK_APPLET_PROTOCOL_SESSION_START
+            | CK_APPLET_PROTOCOL_SESSION_STATUS
+            | CK_APPLET_BRIDGE_ERROR
     )
 }
 
 pub fn is_agent_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_AGENT_ENDPOINT
-            | CX_AGENT_PROTOCOL_SESSION_START
-            | CX_AGENT_PROTOCOL_SESSION_STATUS
-            | CX_AGENT_PROTOCOL_SESSION_RESULT
-            | CX_AGENT_PAUSE
-            | CX_AGENT_RESUME
-            | CX_AGENT_DEACTIVATE
-            | CX_AGENT_DRAFT_PROPOSE
-            | CX_AGENT_ACTION_REQUEST
-            | CX_AGENT_ACTION_APPROVE
-            | CX_AGENT_ACTION_REJECT
+        CK_AGENT_ENDPOINT
+            | CK_AGENT_PROTOCOL_SESSION_START
+            | CK_AGENT_PROTOCOL_SESSION_STATUS
+            | CK_AGENT_PROTOCOL_SESSION_RESULT
+            | CK_AGENT_PAUSE
+            | CK_AGENT_RESUME
+            | CK_AGENT_DEACTIVATE
+            | CK_AGENT_DRAFT_PROPOSE
+            | CK_AGENT_ACTION_REQUEST
+            | CK_AGENT_ACTION_APPROVE
+            | CK_AGENT_ACTION_REJECT
     )
 }
 
 /// R3 spec-sync (2026-05-27) — FSM-lattice agent lifecycle kinds.
 pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_AGENT_PAUSE | CX_AGENT_RESUME | CX_AGENT_DEACTIVATE)
+    matches!(kind, CK_AGENT_PAUSE | CK_AGENT_RESUME | CK_AGENT_DEACTIVATE)
 }
 
 /// R3 spec-sync — `actor_private_event` kinds (reducer_input=false).
@@ -546,26 +517,26 @@ pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
 pub fn is_actor_private_event_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_AGENT_DRAFT_PROPOSE
-            | CX_AGENT_ACTION_REQUEST
-            | CX_AGENT_ACTION_APPROVE
-            | CX_AGENT_ACTION_REJECT
+        CK_AGENT_DRAFT_PROPOSE
+            | CK_AGENT_ACTION_REQUEST
+            | CK_AGENT_ACTION_APPROVE
+            | CK_AGENT_ACTION_REJECT
     )
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CX_MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(CK_MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
     matches!(
         canonical_kind_for_operation(operation),
-        Some(CX_MESSAGE_REDACT | CX_REDACTION)
+        Some(CK_MESSAGE_REDACT | CK_REDACTION)
     )
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CX_MEMBER_STATE)
+    canonical_kind_for_operation(operation) == Some(CK_MEMBER_STATE)
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
@@ -573,7 +544,7 @@ pub fn operation_is_invite(operation: &Operation) -> bool {
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(CX_INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(CK_INVITE_CREATE)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
@@ -581,41 +552,44 @@ pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
 }
 
 pub fn is_redaction_kind(kind: &str) -> bool {
-    matches!(kind, CX_MESSAGE_REDACT | CX_REDACTION | "redaction")
+    matches!(kind, CK_MESSAGE_REDACT | CK_REDACTION | "redaction")
 }
 
 pub fn is_membership_kind(kind: &str) -> bool {
-    matches!(kind, CX_MEMBER_STATE | CX_MEMBER_IDENTITY_UPDATE)
+    matches!(kind, CK_MEMBER_STATE | CK_MEMBER_IDENTITY_UPDATE)
 }
 
 pub fn is_invite_kind(kind: &str) -> bool {
-    matches!(kind, CX_INVITE_CREATE | "ck.invite.accept" | "ck.invite.cancel")
+    matches!(
+        kind,
+        CK_INVITE_CREATE | "ck.invite.accept" | "ck.invite.cancel"
+    )
 }
 
 pub fn is_realm_lifecycle_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_REALM_CREATE | CX_REALM_UPDATE | CX_REALM_DESTROY | CX_REALM_TOMBSTONE
+        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_DESTROY | CK_REALM_TOMBSTONE
     )
 }
 
 pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CX_SPACE_CONTAINER_ARCHIVE | CX_SPACE_CONTAINER_RESTORE | CX_SPACE_CONTAINER_TOMBSTONE
+        CK_SPACE_CONTAINER_ARCHIVE | CK_SPACE_CONTAINER_RESTORE | CK_SPACE_CONTAINER_TOMBSTONE
     )
 }
 
-/// Flow has no dedicated `cx.flow.tombstone` event in the spec event-kind
-/// registry — terminal state is reached via `cx.redaction`. Only archive /
+/// Flow has no dedicated `ck.flow.tombstone` event in the spec event-kind
+/// registry — terminal state is reached via `ck.redaction`. Only archive /
 /// restore are lifecycle state-machine transitions here.
 pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_FLOW_ARCHIVE | CX_FLOW_RESTORE)
+    matches!(kind, CK_FLOW_ARCHIVE | CK_FLOW_RESTORE)
 }
 
 /// Morph has no dedicated tombstone event for the same reason as Flow.
 pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CX_MORPH_ARCHIVE | CX_MORPH_RESTORE)
+    matches!(kind, CK_MORPH_ARCHIVE | CK_MORPH_RESTORE)
 }
 
 /// Flow tracks update events. Distinct from lifecycle events
@@ -624,7 +598,7 @@ pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
 /// MUST be Active" (spec §5.1 update rule), enforced via
 /// `check_flow_tracks_transition`.
 pub fn is_flow_tracks_kind(kind: &str) -> bool {
-    matches!(kind, CX_FLOW_TRACKS_UPDATE)
+    matches!(kind, CK_FLOW_TRACKS_UPDATE)
 }
 
 // G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +
@@ -636,11 +610,11 @@ pub fn is_flow_tracks_kind(kind: &str) -> bool {
 // Spec anchors:
 //   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
 //   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
-pub const CX_EXTENSIONS_BOT_REGISTER: &str = "cx.extensions.bot_actor.register";
-pub const CX_EXTENSIONS_BOT_REVOKE: &str = "cx.extensions.bot_actor.revoke";
-pub const CX_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "cx.extensions.tsp.transport_declare";
-pub const CX_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "cx.extensions.tsp.route_establish";
-pub const CX_EXTENSIONS_TSP_AUDIT_APPEND: &str = "cx.extensions.tsp.audit_append";
+pub const CK_EXTENSIONS_BOT_REGISTER: &str = "ck.extensions.bot_actor.register";
+pub const CK_EXTENSIONS_BOT_REVOKE: &str = "ck.extensions.bot_actor.revoke";
+pub const CK_EXTENSIONS_TSP_TRANSPORT_DECLARE: &str = "ck.extensions.tsp.transport_declare";
+pub const CK_EXTENSIONS_TSP_ROUTE_ESTABLISH: &str = "ck.extensions.tsp.route_establish";
+pub const CK_EXTENSIONS_TSP_AUDIT_APPEND: &str = "ck.extensions.tsp.audit_append";
 
 // ────────────────────────────────────────────────────────────────────────
 // Audit-compliance profiles + Realm terminal-state classifier (spec T07/T09/T23).

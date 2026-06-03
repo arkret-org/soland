@@ -255,17 +255,18 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
             "created_at": "2026-05-21T00:00:00Z"
         }]
     });
-    let mut put = TestClient::put("http://server/_cokret/self/account_data/cx.account.blocklist.v1")
-        .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-        .json(&json!({"content": blocklist.clone()}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut put =
+        TestClient::put("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
+            .add_header("authorization", format!("Bearer {alice_desktop}"), true)
+            .json(&json!({"content": blocklist.clone()}))
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(put.status_code.unwrap().as_u16(), 201);
     let put_body: Value = put.take_json().await.unwrap();
     assert_eq!(put_body["content"], blocklist);
 
     let phone_account_data: Value =
-        TestClient::get("http://server/_cokret/self/account_data/cx.account.blocklist.v1")
+        TestClient::get("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
             .add_header("authorization", format!("Bearer {alice_phone}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -284,11 +285,11 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     let phone_events = phone_messages["events"].as_array().unwrap();
     let blocklist_event = phone_events
         .iter()
-        .find(|event| event["content"]["type"] == "cx.account.blocklist.update")
+        .find(|event| event["content"]["type"] == "ck.account.blocklist.update")
         .expect("blocklist update fanout reaches Alice's sibling device");
     assert_eq!(
         blocklist_event["content"]["content"]["data_type"],
-        "cx.account.blocklist.v1"
+        "ck.account.blocklist.v1"
     );
     assert_eq!(
         blocklist_event["content"]["content"]["content"]["entries"][0]["target"]["did"],
@@ -312,13 +313,14 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         "blocked notification",
     )
     .await;
-    let notifications: Value =
-        TestClient::get("http://server/_cokret/self/index/notifications?actor=did:web:alice.example")
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let notifications: Value = TestClient::get(
+        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert!(
         notifications["notifications"]
             .as_array()
@@ -327,11 +329,12 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
             .all(|notification| notification["event_ref"] != blocked_message["event_id"])
     );
 
-    let unblock = TestClient::put("http://server/_cokret/self/account_data/cx.account.blocklist.v1")
-        .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-        .json(&json!({"content": {"version": 1, "entries": []}}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let unblock =
+        TestClient::put("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
+            .add_header("authorization", format!("Bearer {alice_desktop}"), true)
+            .json(&json!({"content": {"version": 1, "entries": []}}))
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(unblock.status_code.unwrap().as_u16(), 200);
 
     let visible_message = send_plaintext_message(
@@ -342,13 +345,14 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         "visible notification",
     )
     .await;
-    let notifications_after: Value =
-        TestClient::get("http://server/_cokret/self/index/notifications?actor=did:web:alice.example")
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let notifications_after: Value = TestClient::get(
+        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+    )
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert!(
         notifications_after["notifications"]
             .as_array()
@@ -478,7 +482,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| event["content"]["type"] == "cx.read_cursor.update")
+        .filter(|event| event["content"]["type"] == "ck.read_cursor.update")
         .collect::<Vec<_>>();
     assert_eq!(read_cursor_fanouts.len(), 2);
     assert!(read_cursor_fanouts.iter().any(|event| {

@@ -25,11 +25,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.reactions.add",
+    operation_id = "ck.reactions.add",
     tags("reactions"),
     summary = "Add a reaction to an event"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.reactions.add"))]
+#[tracing::instrument(skip_all, fields(op = "ck.reactions.add"))]
 async fn add_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -48,7 +48,7 @@ async fn add_reaction(
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(body.realm_id.clone()).unwrap(),
-        kinds::CX_REACTION_ADD,
+        kinds::CK_REACTION_ADD,
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])
@@ -63,11 +63,11 @@ async fn add_reaction(
 }
 
 #[endpoint(
-    operation_id = "cx.reactions.remove",
+    operation_id = "ck.reactions.remove",
     tags("reactions"),
     summary = "Remove a previously-added reaction"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.reactions.remove"))]
+#[tracing::instrument(skip_all, fields(op = "ck.reactions.remove"))]
 async fn remove_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -86,7 +86,7 @@ async fn remove_reaction(
     let operation = Operation::create(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(body.realm_id.clone()).unwrap(),
-        kinds::CX_REACTION_REMOVE,
+        kinds::CK_REACTION_REMOVE,
         payload,
     );
     accept_local_operations(state, &session.actor, &[operation])

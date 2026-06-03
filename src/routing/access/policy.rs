@@ -51,11 +51,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.list",
+    operation_id = "ck.extension.soland.policies.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -92,11 +92,11 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.get",
+    operation_id = "ck.extension.soland.policies.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.get"))]
 async fn get_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -119,11 +119,11 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.upsert",
+    operation_id = "ck.extension.soland.policies.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.upsert"))]
 async fn upsert_policy_document(
     aa: AuthArgs,
     body: JsonBody<UpsertPolicyDocumentRequest>,
@@ -209,11 +209,11 @@ pub struct PatchPolicyDocumentRequest {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.patch",
+    operation_id = "ck.extension.soland.policies.patch",
     tags("policy"),
     summary = "Apply a ck.schema.patch.v1 patch to a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.patch"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.patch"))]
 async fn patch_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -293,11 +293,11 @@ async fn patch_policy_document(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.policies.delete",
+    operation_id = "ck.extension.soland.policies.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.delete"))]
 async fn delete_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -371,7 +371,8 @@ async fn policy_check(
                 Vec::new(),
             )
         } else {
-            // TODO(policy-default): 默认 allow 是产品级默认,已要求端点认证;是否改 require_review 待产品决策。
+            // TODO(policy-default): 默认 allow 是产品级默认,已要求端点认证;是否改 require_review
+            // 待产品决策。
             ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
         };
 
@@ -445,7 +446,7 @@ async fn policy_check(
     let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&to_sign)
         .unwrap_or_else(|_| serde_json::to_vec(&to_sign).unwrap_or_default());
     let protected_header =
-        br#"{"alg":"EdDSA","typ":"cx.policy.check.binding.v1","b64":false,"crit":["b64"]}"#;
+        br#"{"alg":"EdDSA","typ":"ck.policy.check.binding.v1","b64":false,"crit":["b64"]}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
     let signing_input = format!("{protected_b64u}.{payload_b64u}");
@@ -477,7 +478,7 @@ async fn policy_check(
         signature: json!({
             "kid": format!("{}#policy-binding-key", state.config.service_did),
             "alg": "EdDSA",
-            "typ": "cx.policy.check.binding.v1",
+            "typ": "ck.policy.check.binding.v1",
             "scheme": "ed25519-detached-jws",
             "payload_digest": format!("sha256:{}", sha256_hex(&canonical_bytes)),
             "jws": jws_detached,

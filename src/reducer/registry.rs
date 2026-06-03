@@ -25,7 +25,7 @@ mod lattice_kind_scaffold_tests {
         struct ConsentCell;
         impl LatticeKind for ConsentCell {
             fn cell_family(&self) -> &'static str {
-                "cx.component.consent.v1"
+                "ck.component.consent.v1"
             }
             fn lattice(&self) -> cokret_sdk::lattice::LatticeKind {
                 cokret_sdk::lattice::LatticeKind::OrSet
@@ -35,7 +35,7 @@ mod lattice_kind_scaffold_tests {
             }
             fn component(&self) -> ComponentDescriptor {
                 ComponentDescriptor {
-                    component_type: "cx.component.consent.v1",
+                    component_type: "ck.component.consent.v1",
                     component_version: 1,
                     criticality: Criticality::Required,
                 }
@@ -45,11 +45,11 @@ mod lattice_kind_scaffold_tests {
         assert!(registry.is_empty());
         registry.register(ConsentCell);
         assert_eq!(registry.len(), 1);
-        let found = registry.lookup("cx.component.consent.v1").unwrap();
+        let found = registry.lookup("ck.component.consent.v1").unwrap();
         assert_eq!(found.lattice(), cokret_sdk::lattice::LatticeKind::OrSet);
         assert_eq!(found.bottom_policy(), BottomPolicy::Reject);
         assert_eq!(found.bottom_policy().as_str(), "reject");
-        assert!(registry.lookup("cx.component.unknown.v1").is_none());
+        assert!(registry.lookup("ck.component.unknown.v1").is_none());
     }
 
     #[test]
@@ -63,11 +63,11 @@ mod lattice_kind_scaffold_tests {
         assert!(msg.contains("flow_id"));
 
         let err = LatticeKindError::UnknownCellFamily {
-            observed: "cx.component.unrecognised.v1".to_owned(),
-            declared: "cx.component.consent.v1",
+            observed: "ck.component.unrecognised.v1".to_owned(),
+            declared: "ck.component.consent.v1",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("cx.component.unrecognised.v1"));
-        assert!(msg.contains("cx.component.consent.v1"));
+        assert!(msg.contains("ck.component.unrecognised.v1"));
+        assert!(msg.contains("ck.component.consent.v1"));
     }
 }

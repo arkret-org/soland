@@ -87,7 +87,7 @@ pub(crate) fn build_typed_frontier_response(
     peer_role: FrontierPeerRole,
     service_did: &Did,
     // NOTE: 该 map 承载的是 Realm 级 frontier(键为 `ck:realm:`)。SDK 的 key 类型
-    // 暂为 `SpaceId` 属历史遗留(Realm/Space 反转),本次仅修正本地变量命名。
+    // 是合并后的边界键 `RealmId`(同时接受 `ck:realm:` / `ck:space:`)。
     realm_frontier: BTreeMap<RealmId, Vec<EventId>>,
     actor_upper_bounds: BTreeMap<Did, u64>,
     federation_binding: Option<FederationFrontierBinding>,
@@ -148,14 +148,14 @@ pub(crate) fn frontier_root(
     let mut leaves = Vec::new();
     for event_id in heads {
         leaves.push(canonical_hash(&json!({
-            "domain": "cx.events.frontier.leaf.v1",
+            "domain": "ck.events.frontier.leaf.v1",
             "kind": "head",
             "event_id": event_id,
         }))?);
     }
     for (actor, seq) in actor_upper_bounds {
         leaves.push(canonical_hash(&json!({
-            "domain": "cx.events.frontier.leaf.v1",
+            "domain": "ck.events.frontier.leaf.v1",
             "kind": "actor_seq_upper_bound",
             "actor_id": actor.as_str(),
             "actor_seq": seq,
@@ -164,7 +164,7 @@ pub(crate) fn frontier_root(
 
     if leaves.is_empty() {
         return canonical_hash(&json!({
-            "domain": "cx.events.frontier.root.v1",
+            "domain": "ck.events.frontier.root.v1",
             "empty": true,
         }));
     }
@@ -174,7 +174,7 @@ pub(crate) fn frontier_root(
         for pair in leaves.chunks(2) {
             let right = pair.get(1).unwrap_or(&pair[0]);
             next.push(canonical_hash(&json!({
-                "domain": "cx.events.frontier.node.v1",
+                "domain": "ck.events.frontier.node.v1",
                 "left": pair[0].as_str(),
                 "right": right.as_str(),
             }))?);
@@ -193,7 +193,7 @@ pub(crate) fn frontier_service_binding_ref(
 ) -> Result<FederationServiceBindingRef, String> {
     let heads = frontier_heads(realm_frontier);
     let space_policy_hash = canonical_hash(&json!({
-        "domain": "cx.events.frontier.space_policy_hash.v1",
+        "domain": "ck.events.frontier.space_policy_hash.v1",
         "realm_id": realm_id.as_str(),
         "heads": heads.iter().map(EventId::as_str).collect::<Vec<_>>(),
         "actor_seq_upper_bounds": actor_upper_bounds
@@ -205,7 +205,7 @@ pub(crate) fn frontier_service_binding_ref(
             .collect::<Vec<_>>(),
     }))?;
     let reducer_profile_digest = canonical_hash(&json!({
-        "domain": "cx.events.frontier.reducer_profile.v1",
+        "domain": "ck.events.frontier.reducer_profile.v1",
         "profile": "ck.reducer.v1",
     }))?;
 
@@ -230,7 +230,7 @@ pub(crate) fn frontier_signature_payload(
     frontier_root: &Hash,
 ) -> Value {
     json!({
-        "domain": "cx.events.frontier.signature.v1",
+        "domain": "ck.events.frontier.signature.v1",
         "frontier_root": frontier_root.as_str(),
         "realm_id": realm_id.map(RealmId::as_str),
         "issuer": issuer.as_str(),
@@ -257,7 +257,7 @@ pub(crate) fn sign_frontier_root(
 
     Ok(json!({
         "alg": "EdDSA",
-        "typ": "cx.events.frontier.signature.v1",
+        "typ": "ck.events.frontier.signature.v1",
         "scheme": "ed25519-detached-jws",
         "verification_method": format!("{}#frontier-key", service_did.as_str()),
         "payload_digest": payload_digest,

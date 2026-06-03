@@ -1,10 +1,10 @@
 -- Flow watch subscription projection. Spec:
 -- cokret-spec/spec/v1/zh/models/flow-and-message.md §8.
 --
--- Truth source is the cas-register cell `cx.component.flow.watch.v1`
+-- Truth source is the cas-register cell `ck.component.flow.watch.v1`
 -- keyed by (flow_id, actor_did). The cell write happens on the Move/
 -- Anchor pipeline; this projection is a flat read-side view that the
--- server populates on accepted `cx.flow.watch.set` events so clients
+-- server populates on accepted `ck.flow.watch.set` events so clients
 -- can query "watchers of flow X" / "flows I watch" without scanning the
 -- cell store.
 --

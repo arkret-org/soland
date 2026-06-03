@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cokret_sdk::state_res::AnchorStore;
-use cokret_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, SpaceId};
+use cokret_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, RealmId};
 
 use crate::state::AppState;
 
@@ -102,12 +102,12 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 /// tokio runtime.
 pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> CompactorPassReport {
     let mut report = CompactorPassReport::default();
-    let spaces: Vec<SpaceId> = {
+    let spaces: Vec<RealmId> = {
         let registry = state.realms.lock().expect("spaces lock");
         registry
             .search(Default::default())
             .into_iter()
-            .filter_map(|space| SpaceId::new(space.realm_id.to_string()).ok())
+            .filter_map(|space| RealmId::new(space.realm_id.to_string()).ok())
             .collect()
     };
     report.spaces_scanned = spaces.len();
@@ -181,7 +181,7 @@ pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> Compactor
 /// traversal that doesn't favor any particular fork.
 fn collect_candidate_anchors(
     anchor_store: &dyn AnchorStore,
-    space_id: &SpaceId,
+    space_id: &RealmId,
     per_space_limit: usize,
 ) -> Result<Vec<AnchorId>, String> {
     let leaves = anchor_store
@@ -233,7 +233,7 @@ struct CandidateDiagnostics {
 
 fn evaluate_candidate(
     anchor_store: &dyn AnchorStore,
-    space_id: &SpaceId,
+    space_id: &RealmId,
     candidate: &Anchor,
     now_ms: i64,
 ) -> CandidateDiagnostics {

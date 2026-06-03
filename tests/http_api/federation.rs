@@ -12,7 +12,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
+        kinds::CK_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-19d11d370b0e",
             "sender": "did:web:remote.example",
@@ -138,7 +138,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let invalid_operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-1cac81a395b6").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
+        kinds::CK_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-97aea7e40a20",
             "sender": "did:web:remote.example",
@@ -174,7 +174,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let redaction = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-fd0b34f35181").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
-        kinds::CX_MESSAGE_REDACT,
+        kinds::CK_MESSAGE_REDACT,
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-9494a7271728",
             "target_event_id": "ck:event:01904100-0000-7000-8000-19d11d370b0e"
@@ -225,7 +225,7 @@ async fn federation_push_rejects_bad_rfc9421_and_missing_relay_inner_signature()
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-7e173b950001").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-7e173b950002").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
+        kinds::CK_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-7e173b950003",
             "sender": "did:web:remote.example",
@@ -361,7 +361,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-788d17d38a52").unwrap(),
-        kinds::CX_MESSAGE_CREATE,
+        kinds::CK_MESSAGE_CREATE,
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-f10d061a12a7",
             "sender": "did:web:remote.example",
@@ -525,7 +525,7 @@ fn verify_actor_unsigned_digest(body: &Value) -> String {
 
 fn verify_actor_signature_transcript(body: &Value, unsigned_digest: &str) -> Value {
     serde_json::json!({
-        "type": "cx.federation.verify_actor.signature.v1",
+        "type": "ck.federation.verify_actor.signature.v1",
         "actor_id": body["actor_id"].as_str().unwrap(),
         "purpose": body["purpose"].as_str().unwrap(),
         "challenge": body.get("challenge").cloned().unwrap_or(Value::Null),
@@ -536,7 +536,8 @@ fn verify_actor_signature_transcript(body: &Value, unsigned_digest: &str) -> Val
 }
 
 async fn post_verify_actor(state: AppState, body: Value) -> Value {
-    let mut request = TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
+    let mut request =
+        TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
     for (name, value) in verify_actor_headers(&body) {
         request = request.add_header(name, value, true);
     }
@@ -549,7 +550,8 @@ async fn post_verify_actor(state: AppState, body: Value) -> Value {
 }
 
 async fn post_verify_actor_error(state: AppState, body: Value) -> (u16, String) {
-    let mut request = TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
+    let mut request =
+        TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
     for (name, value) in verify_actor_headers(&body) {
         request = request.add_header(name, value, true);
     }

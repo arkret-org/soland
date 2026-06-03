@@ -13,9 +13,9 @@
 //!   `backfill_gap_events`, `truncate_gap_events`, and `sync_timeline_message_json` to render
 //!   timeline-shaped responses.
 //!
-//! Today this layer only fans out `cx.message.*` / `ck.member.state` /
-//! `cx.realm.*` (security boundary, was `cx.space.*` pre-R1.2) lifecycle
-//! events plus the container `cx.space.*` (was `cx.place.*`) family;
+//! Today this layer only fans out `ck.message.*` / `ck.member.state` /
+//! `ck.realm.*` (security boundary, was `ck.space.*` pre-R1.2) lifecycle
+//! events plus the container `ck.space.*` (was `ck.place.*`) family;
 //! everything else is dropped on the floor (`project_accepted_operations`
 //! only routes message+membership+lifecycle).
 //! Persistence: `projection_events` is in-memory plus a Pg mirror via
@@ -204,8 +204,8 @@ fn operation_realm_history_visibility(operation: &Operation) -> Option<&str> {
 
 fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CX_REALM_HISTORY_SHARING_POLICY) => operation.payload.get("value").cloned(),
-        Some(kinds::CX_REALM_CREATE) => operation
+        Some(kinds::CK_REALM_HISTORY_SHARING_POLICY) => operation.payload.get("value").cloned(),
+        Some(kinds::CK_REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("history_sharing_policy"))
@@ -216,8 +216,8 @@ fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value
 
 fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CX_REALM_PREVIEW_POLICY) => operation.payload.get("value").cloned(),
-        Some(kinds::CX_REALM_CREATE) => operation
+        Some(kinds::CK_REALM_PREVIEW_POLICY) => operation.payload.get("value").cloned(),
+        Some(kinds::CK_REALM_CREATE) => operation
             .payload
             .get("object")
             .and_then(|object| object.get("preview_policy"))
@@ -636,7 +636,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     projection: &crate::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if event.event_kind == kinds::CX_AUDIT_ERASURE_RECEIPT {
+    if event.event_kind == kinds::CK_AUDIT_ERASURE_RECEIPT {
         return;
     }
     let Some(actor) = projection_event_actor(event) else {
@@ -1255,34 +1255,34 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     // Space-container lifecycle: 6 event kinds → space_containers map.
     let is_space_container_kind = matches!(
         kind,
-        kinds::CX_SPACE_CONTAINER_CREATE
-            | kinds::CX_SPACE_CONTAINER_UPDATE
-            | kinds::CX_SPACE_CONTAINER_PARENT
-            | kinds::CX_SPACE_CONTAINER_ARCHIVE
-            | kinds::CX_SPACE_CONTAINER_RESTORE
-            | kinds::CX_SPACE_CONTAINER_TOMBSTONE
+        kinds::CK_SPACE_CONTAINER_CREATE
+            | kinds::CK_SPACE_CONTAINER_UPDATE
+            | kinds::CK_SPACE_CONTAINER_PARENT
+            | kinds::CK_SPACE_CONTAINER_ARCHIVE
+            | kinds::CK_SPACE_CONTAINER_RESTORE
+            | kinds::CK_SPACE_CONTAINER_TOMBSTONE
     );
     // Flow lifecycle (state-affecting + position-touching).
     let is_flow_kind = matches!(
         kind,
-        kinds::CX_FLOW_CREATE
-            | kinds::CX_FLOW_UPDATE
-            | kinds::CX_FLOW_ARCHIVE
-            | kinds::CX_FLOW_RESTORE
-            | kinds::CX_FLOW_MOVE
-            | kinds::CX_FLOW_REORDER
-            | kinds::CX_FLOW_TRACKS_UPDATE
+        kinds::CK_FLOW_CREATE
+            | kinds::CK_FLOW_UPDATE
+            | kinds::CK_FLOW_ARCHIVE
+            | kinds::CK_FLOW_RESTORE
+            | kinds::CK_FLOW_MOVE
+            | kinds::CK_FLOW_REORDER
+            | kinds::CK_FLOW_TRACKS_UPDATE
     );
     let is_morph_kind = matches!(
         kind,
-        kinds::CX_MORPH_CREATE
-            | kinds::CX_MORPH_UPDATE
-            | kinds::CX_MORPH_ARCHIVE
-            | kinds::CX_MORPH_RESTORE
+        kinds::CK_MORPH_CREATE
+            | kinds::CK_MORPH_UPDATE
+            | kinds::CK_MORPH_ARCHIVE
+            | kinds::CK_MORPH_RESTORE
     );
-    // cx.redaction with an `object_ref` may have flipped a Flow or
+    // ck.redaction with an `object_ref` may have flipped a Flow or
     // Morph to Redacted. Pick up either by attempting both.
-    let is_redaction = kind == kinds::CX_REDACTION;
+    let is_redaction = kind == kinds::CK_REDACTION;
     if !(is_space_container_kind || is_flow_kind || is_morph_kind || is_redaction) {
         return;
     }
@@ -1487,13 +1487,13 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
-        if kinds::canonical_kind_string(operation) == kinds::CX_MEMBER_IDENTITY_UPDATE {
+        if kinds::canonical_kind_string(operation) == kinds::CK_MEMBER_IDENTITY_UPDATE {
             project_member_identity_update(state, operation);
         }
         // Cache ck.realm.read_receipt_policy state into ProjectionState so
         // ephemeral ck.receipt.read fanout (and other readers) can hit a
         // BTreeMap lookup instead of scanning the durable Event store.
-        // (R1.2 renamed `cx.space.read_receipt_policy` to `cx.realm.*`.)
+        // (R1.2 renamed `ck.space.read_receipt_policy` to `ck.realm.*`.)
         if kinds::canonical_kind_string(operation) == "ck.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
@@ -1527,7 +1527,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         // by `receipt_id`, enqueues one outbox row per federation peer,
         // and seeds the per-peer `peer_status` map.
         // Spec realm-and-space.md §2.5.2.
-        if kinds::canonical_kind_string(operation) == kinds::CX_AUDIT_ERASURE_RECEIPT
+        if kinds::canonical_kind_string(operation) == kinds::CK_AUDIT_ERASURE_RECEIPT
             && operation
                 .payload
                 .get("receipt_id")
@@ -1736,7 +1736,7 @@ pub async fn persist_projected_operation(
 }
 
 /// Project a `ck.realm.read_receipt_policy` (post-R1.2; was
-/// `cx.space.read_receipt_policy`) durable-event into
+/// `ck.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
 /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
@@ -1905,7 +1905,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                 changed = true;
             }
             if record.encryption_profile.is_none()
-                && kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_CREATE)
+                && kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_CREATE)
                 && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
             {
                 record.encryption_profile = Some(encryption_profile.to_owned());
@@ -1941,7 +1941,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .payload
         .get("membership")
         .and_then(|value| value.as_str());
-    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CX_REALM_DESTROY) {
+    if kinds::canonical_kind_for_operation(operation) == Some(kinds::CK_REALM_DESTROY) {
         let store = state.persistence.realm_meta();
         if let Ok(Some(mut record)) = store.get(operation.realm_id.as_str()).await {
             record.deleted = true;
@@ -2171,7 +2171,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     // its `actor_id` field) round-trip verbatim through `payload`.
     let raw_event = json!({
         "operation_id": operation.operation_id.to_string(),
-        "event_kind": kinds::CX_MEMBER_IDENTITY_UPDATE,
+        "event_kind": kinds::CK_MEMBER_IDENTITY_UPDATE,
         "realm_id": operation.realm_id.as_str(),
         "created_at": operation.created_at,
         "payload": operation.payload.clone(),
@@ -2429,7 +2429,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     let content = message_content_from_payload(&operation.payload, flow_scope);
     if matches!(
         content.get("kind").and_then(Value::as_str),
-        Some("ck.content.poll.response" | "cx.content.poll.close")
+        Some("ck.content.poll.response" | "ck.content.poll.close")
     ) {
         return;
     }
@@ -2539,7 +2539,7 @@ mod tests {
     #[test]
     fn realm_projection_metadata_reads_canonical_object_fields() {
         let operation = op(
-            kinds::CX_REALM_CREATE,
+            kinds::CK_REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -2568,7 +2568,7 @@ mod tests {
     #[test]
     fn retention_policy_ttl_reads_canonical_object_fields() {
         let operation = op(
-            kinds::CX_REALM_CREATE,
+            kinds::CK_REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -2584,7 +2584,7 @@ mod tests {
     #[test]
     fn member_state_without_title_does_not_project_realm_title() {
         let operation = op(
-            kinds::CX_MEMBER_STATE,
+            kinds::CK_MEMBER_STATE,
             json!({
                 "actor_id": "did:web:alice.example",
                 "membership": "join"
@@ -2599,7 +2599,7 @@ mod tests {
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
         let invite_id = "ck:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(
-            kinds::CX_MEMBER_STATE,
+            kinds::CK_MEMBER_STATE,
             json!({
                 "actor_id": "did:web:bob.example",
                 "membership": "join",
@@ -2618,7 +2618,7 @@ mod tests {
     #[test]
     fn realm_update_reads_patch_title_without_realm_id_fallback() {
         let operation = op(
-            kinds::CX_REALM_UPDATE,
+            kinds::CK_REALM_UPDATE,
             json!({
                 "action": "update",
                 "patch": {

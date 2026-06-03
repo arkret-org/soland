@@ -136,13 +136,14 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let realm_id = space_id.clone();
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
-    let hidden_space: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
-        .json(&serde_json::json!({"query": "Workflow Space"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let hidden_space: Value =
+        TestClient::post("http://server/_cokret/find/directory/search-realms")
+            .json(&serde_json::json!({"query": "Workflow Space"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(hidden_space["results"].as_array().unwrap().is_empty());
 
     let invite_space = seed_test_realm(
@@ -169,18 +170,20 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .as_str()
         .unwrap()
         .to_owned();
-    let invalid_invite_resolve = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"invite_token": "ck:invite-token:invalid"}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let invalid_invite_resolve =
+        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+            .json(&serde_json::json!({"invite_token": "ck:invite-token:invalid"}))
+            .send(&app_from_state(state.clone()))
+            .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
-    let invite_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"invite_token": invite_token}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let invite_resolve: Value =
+        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+            .json(&serde_json::json!({"invite_token": invite_token}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(invite_resolve["realm_preview"]["realm_id"], invite_space_id);
 
     let listed_space = seed_test_realm(
@@ -194,13 +197,14 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
-    let listed_search: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
-        .json(&serde_json::json!({"query": "Listed Directory Space"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let listed_search: Value =
+        TestClient::post("http://server/_cokret/find/directory/search-realms")
+            .json(&serde_json::json!({"query": "Listed Directory Space"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(
         listed_search["results"][0]["realm_id"],
         listed_space_id.as_str()
@@ -225,21 +229,23 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
-    let unlisted_search: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
-        .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let unlisted_search: Value =
+        TestClient::post("http://server/_cokret/find/directory/search-realms")
+            .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert!(unlisted_search["results"].as_array().unwrap().is_empty());
-    let unlisted_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"realm_id": unlisted_space_id.clone()}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let unlisted_resolve: Value =
+        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+            .json(&serde_json::json!({"realm_id": unlisted_space_id.clone()}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(
         unlisted_resolve["realm_preview"]["realm_id"],
         unlisted_space_id
@@ -251,14 +257,15 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
 
-    let owner_resolve: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"realm_id": space_id}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let owner_resolve: Value =
+        TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({"realm_id": space_id}))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(owner_resolve["realm_preview"]["realm_id"], space_id);
 
     let locked_space = seed_test_realm(
@@ -302,7 +309,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "did:web:alice.example",
         locked_space_id,
         locked_space_id,
-        encrypted_envelope("cx.message.v1", "opaque-ciphertext"),
+        encrypted_envelope("ck.message.v1", "opaque-ciphertext"),
         true,
     )
     .await;
@@ -596,14 +603,16 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let expired_body: Value = expired.take_json().await.unwrap();
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
-    let exported: Value = TestClient::get(format!("http://server/_cokret/self/spaces/{space_id}/export"))
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(exported["schema"], "cx.export.space.v1");
+    let exported: Value = TestClient::get(format!(
+        "http://server/_cokret/self/spaces/{space_id}/export"
+    ))
+    .add_header("authorization", format!("Bearer {alice}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(exported["schema"], "ck.export.space.v1");
     assert!(
         exported["operations"]
             .as_array()

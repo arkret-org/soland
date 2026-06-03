@@ -19,7 +19,7 @@
 //! Trust + freshness:
 //! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
 //!   (default 900s). Stale entries are downgraded to `trust_level=stale` and surface
-//!   `fetch_state=cache_hit_stale`, so downstream `cx.push.notify` never delivers off a stale
+//!   `fetch_state=cache_hit_stale`, so downstream `ck.push.notify` never delivers off a stale
 //!   snapshot without an explicit operator action (force_refresh on /fetch, or import).
 //! - **Signed-service-DID trust**: snapshot imports / live fetches only promote
 //!   `trust_level=trusted` when the upstream contract's `service_did` matches
@@ -27,7 +27,7 @@
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
 //! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
 //!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
-//!   whatever the gateway advertised (instead of the fixed `cx.push.notify` defaults). Stays
+//!   whatever the gateway advertised (instead of the fixed `ck.push.notify` defaults). Stays
 //!   read-only here — the actual binding lives in the delivery loop.
 
 use std::time::Duration;
@@ -92,15 +92,15 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             bridge_describe_path: "/_cokret/edge/push/bridge/describe".to_owned(),
             notify_path: "/_cokret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
-                "cx.push.bridge.describe".to_owned(),
-                "cx.profile.push_gateway.v1".to_owned(),
+                "ck.push.bridge.describe".to_owned(),
+                "ck.profile.push_gateway.v1".to_owned(),
             ],
             fetch_mode: "live_http_fetch_with_durable_cache_fallback".to_owned(),
             cache_mode: "durable_snapshot_cache_with_drift_check".to_owned(),
             snapshot_store_mode: "durable_export_import_with_freshness_and_trust_level".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
-            operation_id: "cx.push.notify".to_owned(),
+            operation_id: "ck.push.notify".to_owned(),
             origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
             destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
             request_id_header: "X-Cokret-Request-Id".to_owned(),
@@ -136,10 +136,10 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "fetched_at": now(),
                     "remote_contract": {
-                        "contract": "cx.push.bridge.describe",
+                        "contract": "ck.push.bridge.describe",
                         "delivery": {
                             "notify_path": "/_cokret/edge/push/notify",
-                            "operation_id": "cx.push.notify"
+                            "operation_id": "ck.push.notify"
                         }
                     }
                 }]
@@ -153,7 +153,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "remote_contract": {
-                        "contract": "cx.push.bridge.describe"
+                        "contract": "ck.push.bridge.describe"
                     }
                 }],
                 "snapshot_store_kind": "durable_push_bridge_cache"
@@ -164,13 +164,13 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.push.outbound_bridge_resolve",
+    operation_id = "ck.extension.soland.push.outbound_bridge_resolve",
     tags("push"),
     summary = "Resolve a push gateway URL to a cached contract snapshot"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.push.outbound_bridge_resolve")
+    fields(op = "ck.extension.soland.push.outbound_bridge_resolve")
 )]
 async fn outbound_push_bridge_resolve(
     body: JsonBody<OutboundPushBridgeResolveRequest>,
@@ -188,7 +188,8 @@ async fn outbound_push_bridge_resolve(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+    let bridge_describe_url =
+        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let cached = state
         .persistence
         .push_bridge_cache()
@@ -233,13 +234,13 @@ async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.push.outbound_bridge_fetch",
+    operation_id = "ck.extension.soland.push.outbound_bridge_fetch",
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.push.outbound_bridge_fetch")
+    fields(op = "ck.extension.soland.push.outbound_bridge_fetch")
 )]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequest>,
@@ -256,7 +257,8 @@ async fn outbound_push_bridge_fetch(
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
-    let bridge_describe_url = join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+    let bridge_describe_url =
+        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
     let bridge_describe_target = crate::security::validate_http_url_for_egress(
         &bridge_describe_url,
         "push bridge describe",
@@ -419,13 +421,13 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.push.outbound_bridge_cache_import",
+    operation_id = "ck.extension.soland.push.outbound_bridge_cache_import",
     tags("push"),
     summary = "Import push bridge cache snapshots (replace_existing toggle)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.push.outbound_bridge_cache_import")
+    fields(op = "ck.extension.soland.push.outbound_bridge_cache_import")
 )]
 async fn outbound_push_bridge_cache_import(
     body: JsonBody<OutboundPushBridgeCacheImportRequest>,
@@ -486,13 +488,13 @@ async fn outbound_push_bridge_cache_import(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.push.outbound_bridge_cache_invalidate",
+    operation_id = "ck.extension.soland.push.outbound_bridge_cache_invalidate",
     tags("push"),
     summary = "Invalidate one or all push bridge cache entries"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "cx.extension.soland.push.outbound_bridge_cache_invalidate")
+    fields(op = "ck.extension.soland.push.outbound_bridge_cache_invalidate")
 )]
 async fn outbound_push_bridge_cache_invalidate(
     body: JsonBody<OutboundPushBridgeCacheInvalidateRequest>,
@@ -566,9 +568,9 @@ pub(super) fn join_edge_push_url(base: &str, path: &str) -> String {
 
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
-        contract: "cx.push.bridge.describe".to_owned(),
+        contract: "ck.push.bridge.describe".to_owned(),
         expected_notify_path: "/_cokret/edge/push/notify".to_owned(),
-        expected_operation_id: "cx.push.notify".to_owned(),
+        expected_operation_id: "ck.push.notify".to_owned(),
         expected_origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
         expected_destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
         expected_request_id_header: "X-Cokret-Request-Id".to_owned(),

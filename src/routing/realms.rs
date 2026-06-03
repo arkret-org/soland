@@ -1,8 +1,8 @@
 //! Realm governance HTTP surface (R3.1 + G3.S5).
 //!
 //! Surfaces:
-//! - `GET /_cokret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...` —
-//!   list the typed cross-Realm links projected from `ck.realm.link` events. Powered by
+//! - `GET /_cokret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
+//!   ` — list the typed cross-Realm links projected from `ck.realm.link` events. Powered by
 //!   [`crate::reducer::ProjectionState::realm_links_query`].
 //! - `POST /_cokret/self/realms/{realm_id}/links` — write a `ck.realm.link` Move from `realm_id →
 //!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
@@ -11,8 +11,8 @@
 //! - `DELETE /_cokret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
 //!   `ck.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
 //!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
-//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — return the merged effective policy after
-//!   walking `governed_by` / `inherits_policy_from` ancestors per the realm's
+//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
+//!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
 //!   `ck.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.
 
@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::ids;
-use crate::kinds::CX_REALM_LINK;
+use crate::kinds::CK_REALM_LINK;
 use crate::reducer::RealmLinkState;
 use crate::reducer::realm_links::{check_realm_link_admissible, effective_policy_for_realm};
 use crate::result::{JsonResult, json_ok};
@@ -114,11 +114,11 @@ impl From<&RealmLinkState> for RealmLinkResponseEntry {
 }
 
 #[endpoint(
-    operation_id = "cx.realms.links.list",
+    operation_id = "ck.realms.links.list",
     tags("realms"),
     summary = "List typed cross-Realm links projected from ck.realm.link"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.links.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.links.list"))]
 async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -169,15 +169,15 @@ async fn list_realm_links(
 }
 
 /// G3.S5 — POST a new `ck.realm.link` Move. Builds an `Operation` for
-/// `CX_REALM_LINK` and routes through the standard
+/// `CK_REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
 #[endpoint(
-    operation_id = "cx.realms.links.create",
+    operation_id = "ck.realms.links.create",
     tags("realms"),
     summary = "Submit a ck.realm.link Move (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.links.create"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.links.create"))]
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -226,7 +226,7 @@ async fn post_realm_link(
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -258,11 +258,11 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// to `governed_by` (the most common case — admin tooling cleaning up
 /// a governance link).
 #[endpoint(
-    operation_id = "cx.realms.links.delete",
+    operation_id = "ck.realms.links.delete",
     tags("realms"),
     summary = "Tombstone a ck.realm.link (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.links.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.links.delete"))]
 async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -305,7 +305,7 @@ async fn delete_realm_link(
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CX_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_scope, CK_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -334,11 +334,11 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "cx.realms.effective_policy.get",
+    operation_id = "ck.realms.effective_policy.get",
     tags("realms"),
     summary = "Read the merged effective policy after walking inheritance (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.realms.effective_policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.realms.effective_policy.get"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

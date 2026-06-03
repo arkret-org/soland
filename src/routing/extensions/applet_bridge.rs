@@ -70,12 +70,12 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.register",
+    operation_id = "ck.extension.soland.applets.register",
     tags("extensions"),
     summary = "Register a verified applet manifest and issue a bot actor DID",
     status_codes(200, 201, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -108,11 +108,11 @@ async fn register_endpoint(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.get",
+    operation_id = "ck.extension.soland.applets.get",
     tags("extensions"),
     summary = "Read applet bridge registration state"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.get"))]
 async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
     let applet_id = applet_id_param(req)?;
     let record =
@@ -121,11 +121,11 @@ async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.ghosts.provision",
+    operation_id = "ck.extension.soland.applets.ghosts.provision",
     tags("extensions"),
     summary = "Provision or reuse a ghost actor and optionally route a portal message"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.ghosts.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.ghosts.provision"))]
 async fn ghost_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -159,11 +159,11 @@ async fn ghost_endpoint(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.bot.message",
+    operation_id = "ck.extension.soland.applets.bot.message",
     tags("extensions"),
     summary = "Write a portal message as the applet bot actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.bot.message"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.bot.message"))]
 async fn bot_message_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -200,11 +200,11 @@ async fn bot_message_endpoint(
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.applets.revoke",
+    operation_id = "ck.extension.soland.applets.revoke",
     tags("extensions"),
     summary = "Revoke an applet's bot and ghost capabilities"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.applets.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -463,7 +463,7 @@ async fn append_portal_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
-        event_kind: kinds::CX_MESSAGE_CREATE.to_owned(),
+        event_kind: kinds::CK_MESSAGE_CREATE.to_owned(),
         operation_type: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(ghost.ghost_actor_did.clone()),

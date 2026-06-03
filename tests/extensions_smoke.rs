@@ -173,13 +173,14 @@ async fn bot_actor_register_then_list_smoke() {
     );
 
     // Revoke removes it from the listing.
-    let _: Value = TestClient::delete("http://server/_cokret/self/extensions/bots/did:web:bot-smoke")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let _: Value =
+        TestClient::delete("http://server/_cokret/self/extensions/bots/did:web:bot-smoke")
+            .add_header("Authorization", format!("Bearer {token}"), true)
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let list_after: Value = TestClient::get("http://server/_cokret/self/extensions/bots")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -406,14 +407,15 @@ async fn tsp_transport_route_audit_smoke() {
     assert_eq!(route["destination_actor_did"], json!("did:web:bob.example"));
 
     // 4) fetch the audit chain — establish_route auto-appends one entry
-    let audit: Value =
-        TestClient::get("http://server/_cokret/self/extensions/tsp/routes/rt:alice-bob-smoke/audit")
-            .add_header("Authorization", format!("Bearer {token}"), true)
-            .send(&app)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let audit: Value = TestClient::get(
+        "http://server/_cokret/self/extensions/tsp/routes/rt:alice-bob-smoke/audit",
+    )
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     let entries = audit["entries"].as_array().unwrap();
     assert!(
         !entries.is_empty(),

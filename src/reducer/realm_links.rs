@@ -369,7 +369,7 @@ mod tests {
 
     use super::*;
     use crate::hlc::ServerHlc;
-    use crate::kinds::{CX_REALM_INHERITANCE_POLICY, CX_REALM_LINK};
+    use crate::kinds::{CK_REALM_INHERITANCE_POLICY, CK_REALM_LINK};
 
     const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
     const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
@@ -387,7 +387,7 @@ mod tests {
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            CX_REALM_LINK,
+            CK_REALM_LINK,
             source,
             json!({
                 "target_realm_id": target,
@@ -399,7 +399,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            CX_REALM_INHERITANCE_POLICY,
+            CK_REALM_INHERITANCE_POLICY,
             child,
             json!({
                 "source_realm_id": parent,

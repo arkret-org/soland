@@ -734,8 +734,7 @@ mod tests {
     }
 
     fn witness_proof(entry_without_witness: &Value, signer: &SigningKey) -> Value {
-        let canonical =
-            cokret_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
+        let canonical = cokret_sdk::canonical::canonical_json_bytes(entry_without_witness).unwrap();
         let signature = signer.sign(&canonical);
         let public_key = encode_pubkey_multibase(&signer.verifying_key());
         json!({

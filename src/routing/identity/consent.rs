@@ -141,11 +141,11 @@ async fn project_consent_revoke_operation(
 }
 
 #[endpoint(
-    operation_id = "cx.consent.cells.list",
+    operation_id = "ck.consent.cells.list",
     tags("consent"),
     summary = "List consent cells visible to the authenticated holder"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.consent.cells.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -172,12 +172,12 @@ async fn list_consent_cells(
 }
 
 #[endpoint(
-    operation_id = "cx.consent.cells.get",
+    operation_id = "ck.consent.cells.get",
     tags("consent"),
     summary = "Read one holder-private consent cell",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.consent.cells.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -213,12 +213,12 @@ async fn get_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "cx.consent.cells.grant",
+    operation_id = "ck.consent.cells.grant",
     tags("consent"),
     summary = "Grant scoped consent to a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.consent.cells.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -263,12 +263,12 @@ async fn grant_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "cx.consent.cells.revoke",
+    operation_id = "ck.consent.cells.revoke",
     tags("consent"),
     summary = "Revoke scoped consent from a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.consent.cells.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.consent.cells.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -301,12 +301,12 @@ async fn revoke_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "cx.consent.request",
+    operation_id = "ck.consent.request",
     tags("consent"),
     summary = "Open a scoped consent request",
     status_codes(200, 201, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.consent.request"))]
+#[tracing::instrument(skip_all, fields(op = "ck.consent.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
