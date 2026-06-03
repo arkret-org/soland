@@ -103,6 +103,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures 0.2.17",
+ "password-hash",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,6 +233,15 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -531,6 +552,7 @@ dependencies = [
 name = "contrix"
 version = "1.0.0"
 dependencies = [
+ "argon2",
  "base64",
  "chacha20poly1305",
  "chrono",
@@ -543,22 +565,23 @@ dependencies = [
  "contrix-http-client",
  "contrix-server",
  "contrix-signatures",
- "contrix-testing",
  "ed25519-dalek",
  "getrandom 0.3.4",
+ "hkdf 0.12.4",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
+ "parking_lot",
  "regex",
  "reqwest 0.12.28",
  "salvo",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "thiserror",
  "tls_codec",
  "tokio",
- "ulid",
  "uuid",
  "x25519-dalek",
 ]
@@ -679,22 +702,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
-]
-
-[[package]]
-name = "contrix-testing"
-version = "1.0.0"
-dependencies = [
- "chrono",
- "contrix-contracts",
- "contrix-core",
- "contrix-crypto",
- "contrix-ffi",
- "contrix-html",
- "contrix-signatures",
- "serde",
- "serde_json",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2706,7 +2713,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "openmls"
 version = "0.8.1"
-source = "git+https://github.com/openmls/openmls.git?branch=main#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
+source = "git+https://github.com/openmls/openmls.git?rev=d5a3aa7b595cb445614aa04b38f3d3aa42cf4911#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
 dependencies = [
  "getrandom 0.3.4",
  "log",
@@ -2723,7 +2730,7 @@ dependencies = [
 [[package]]
 name = "openmls_basic_credential"
 version = "0.5.0"
-source = "git+https://github.com/openmls/openmls.git?branch=main#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
+source = "git+https://github.com/openmls/openmls.git?rev=d5a3aa7b595cb445614aa04b38f3d3aa42cf4911#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
 dependencies = [
  "ed25519-dalek",
  "openmls_traits",
@@ -2737,7 +2744,7 @@ dependencies = [
 [[package]]
 name = "openmls_memory_storage"
 version = "0.5.0"
-source = "git+https://github.com/openmls/openmls.git?branch=main#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
+source = "git+https://github.com/openmls/openmls.git?rev=d5a3aa7b595cb445614aa04b38f3d3aa42cf4911#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
 dependencies = [
  "log",
  "openmls_traits",
@@ -2749,7 +2756,7 @@ dependencies = [
 [[package]]
 name = "openmls_rust_crypto"
 version = "0.5.1"
-source = "git+https://github.com/openmls/openmls.git?branch=main#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
+source = "git+https://github.com/openmls/openmls.git?rev=d5a3aa7b595cb445614aa04b38f3d3aa42cf4911#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
@@ -2773,7 +2780,7 @@ dependencies = [
 [[package]]
 name = "openmls_traits"
 version = "0.5.0"
-source = "git+https://github.com/openmls/openmls.git?branch=main#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
+source = "git+https://github.com/openmls/openmls.git?rev=d5a3aa7b595cb445614aa04b38f3d3aa42cf4911#d5a3aa7b595cb445614aa04b38f3d3aa42cf4911"
 dependencies = [
  "serde",
  "tls_codec",
@@ -2899,6 +2906,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]

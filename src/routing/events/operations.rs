@@ -1789,6 +1789,14 @@ pub async fn validate_operation_policy(
             )
             .await?;
         }
+        // 3a — verify the cross_signing_binding on ANY cx.device.authorize at
+        // ingest (recovery /complete, or a future client-submitted control event).
+        if kinds::canonical_kind_string(operation) == "cx.device.authorize" {
+            crate::routing::identity::cross_signing::validate_device_authorize_binding(
+                state,
+                &operation.payload,
+            )?;
+        }
         validate_member_state_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;

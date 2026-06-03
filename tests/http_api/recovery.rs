@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use soland::persistence::{MemoryPersistenceStore, PersistenceStore};
-use soland::state::{DeviceInventoryRecord, SessionRecord};
+use soland::state::{CanonicalEventRecord, DeviceInventoryRecord, SessionRecord};
 
 use super::common::*;
 
@@ -717,32 +717,24 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     )
     .await;
 
+    // Client has submitted authorize + list_update to /events (seeded here);
+    // completion references their ids.
+    let complete_body =
+        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
     let body = post_recovery(
         state.clone(),
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        &complete_body,
         StatusCode::OK,
     )
     .await;
-    // recovery-session.schema.json complete_response (conformant, no production_gap).
+    // recovery-session.schema.json complete_response (references the durable ids).
     assert_eq!(body["ok"], true);
     assert_eq!(body["state"], "completed");
     assert_eq!(body["device_id"], device_id);
-    assert!(
-        body["authorization_event_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("cx:event:"),
-        "authorization_event_id present: {body}"
-    );
-    assert!(
-        body["device_list_update_event_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("cx:event:"),
-        "device_list_update_event_id present: {body}"
-    );
+    assert_eq!(body["authorization_event_id"], AUTH_EVENT_ID);
+    assert_eq!(body["device_list_update_event_id"], LIST_EVENT_ID);
     assert!(body.get("production_gap").is_none(), "no production_gap: {body}");
 
     // The requesting device is now a verified device for the principal.
@@ -761,7 +753,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        &complete_body,
         StatusCode::CONFLICT,
     )
     .await;
@@ -770,44 +762,27 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
-    // The client-signed cross_signing_binding MUST bind the session's snapshotted
-    // ssk_generation; a stale/forged generation is rejected.
+    // The authorize event's cross_signing_binding MUST bind the CURRENT accepted
+    // generation; a stale/forged generation is rejected.
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[113u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
+    let ssk = SigningKey::from_bytes(&[214u8; 32]);
+    let usk = SigningKey::from_bytes(&[215u8; 32]);
+    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
     let token =
         dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
-    let session = open_recovery_session(state.clone(), &token, &signing, &principal_id, &vm).await;
-    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
-    let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let signature = sign_recovery_proof(&signing, &session);
-    post_recovery(
-        state.clone(),
-        &token,
-        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
-        &serde_json::json!({
-            "proof": {
-                "kind": "principal_signing",
-                "challenge": challenge,
-                "verification_method": vm,
-                "alg": "EdDSA",
-                "signature": signature,
-            },
-        }),
-        StatusCode::OK,
-    )
-    .await;
+    let (session, session_id) =
+        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
 
-    // Request-level gate: binding ssk_generation (999) != session snapshot (1)
-    // is rejected before any cross-signing lookup, so no seed needed.
-    let ssk = SigningKey::from_bytes(&[214u8; 32]);
     let mut material = device_authorize_material(&session, &ssk);
     material["cross_signing_binding"]["ssk_generation"] = serde_json::json!(999);
+    let complete_body = seed_completion_events(&state, &session, material).await;
     let body = post_recovery(
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": material }),
+        &complete_body,
         StatusCode::CONFLICT,
     )
     .await;
@@ -839,11 +814,13 @@ async fn authorize_device_via_recovery(
         verified_session_for(state, &token, signing, principal_id, vm).await;
     let policy_id = session["policy_id"].as_str().unwrap().to_owned();
     let device_id = session["requesting_device_id"].as_str().unwrap().to_owned();
+    let complete_body =
+        seed_completion_events(state, &session, device_authorize_material(&session, &ssk)).await;
     post_recovery(
         state.clone(),
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        &complete_body,
         StatusCode::OK,
     )
     .await;
@@ -972,6 +949,61 @@ fn seed_cross_signing(
         .expect("seed cross-signing publish");
 }
 
+const AUTH_EVENT_ID: &str = "cx:event:01964137-0000-7000-8000-00000000a111";
+const LIST_EVENT_ID: &str = "cx:event:01964137-0000-7000-8000-00000000a222";
+
+/// Seed a client-submitted control event into the durable event store (mirrors
+/// what `POST /events` persists), so `/complete` can resolve it by id.
+async fn seed_control_event(
+    state: &AppState,
+    event_id: &str,
+    kind: &str,
+    principal_id: &str,
+    payload: Value,
+) {
+    let envelope = serde_json::json!({ "payload": payload });
+    let canonical_bytes = contrix_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    state
+        .persistence
+        .events()
+        .put(CanonicalEventRecord {
+            event_id: event_id.to_owned(),
+            actor_id: principal_id.to_owned(),
+            actor_seq: 1,
+            realm_id: None,
+            kind: kind.to_owned(),
+            schema_id: "cx.schema.event.v1".to_owned(),
+            canonical_digest: format!("sha256:{}", "0".repeat(64)),
+            canonical_bytes,
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+}
+
+/// Seed both control events (authorize from `device_authorize`, list_update for
+/// the session's device) and return `{authorization_event_id, device_list_update_event_id}`
+/// for the complete_request body.
+async fn seed_completion_events(state: &AppState, session: &Value, device_authorize: Value) -> Value {
+    let principal = session["principal_id"].as_str().unwrap();
+    let device = session["requesting_device_id"].as_str().unwrap();
+    seed_control_event(state, AUTH_EVENT_ID, "cx.device.authorize", principal, device_authorize)
+        .await;
+    seed_control_event(
+        state,
+        LIST_EVENT_ID,
+        "cx.device.list_update",
+        principal,
+        serde_json::json!({ "principal_id": principal, "changed": [device] }),
+    )
+    .await;
+    serde_json::json!({
+        "authorization_event_id": AUTH_EVENT_ID,
+        "device_list_update_event_id": LIST_EVENT_ID,
+    })
+}
+
 /// Open a session for `signing`, submit a valid principal_signing proof, return
 /// the verified session JSON + id. (No cross-signing seed.)
 async fn verified_session_for(
@@ -1041,11 +1073,13 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         .record_cross_signing_reset(&content)
         .expect("record reset");
 
+    let complete_body =
+        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
     let body = post_recovery(
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        &complete_body,
         StatusCode::CONFLICT,
     )
     .await;
@@ -1062,11 +1096,13 @@ async fn recovery_session_complete_rejects_missing_cross_signing_state() {
         dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
     let (session, session_id) =
         verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
+    let complete_body =
+        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
     let body = post_recovery(
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        &complete_body,
         StatusCode::CONFLICT,
     )
     .await;
@@ -1087,11 +1123,14 @@ async fn recovery_session_complete_rejects_wrong_ssk_signature() {
         verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
     // Sign with an ATTACKER key, not the accepted SSK.
     let attacker = SigningKey::from_bytes(&[218u8; 32]);
+    let complete_body =
+        seed_completion_events(&state, &session, device_authorize_material(&session, &attacker))
+            .await;
     let body = post_recovery(
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &attacker) }),
+        &complete_body,
         StatusCode::UNAUTHORIZED,
     )
     .await;

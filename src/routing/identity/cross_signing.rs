@@ -178,52 +178,107 @@ pub fn verify_device_cross_signing_binding(
     device_public_key: &str,
     binding: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    let principal = Did::new(principal_id.to_owned())
-        .map_err(|e| AppError::invalid_param(format!("principal_id DID invalid: {e}")))?;
-    let device = DeviceId::new(device_id.to_owned())
-        .map_err(|e| AppError::invalid_param(format!("device_id invalid: {e}")))?;
+    check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
+        .map_err(device_binding_reason_to_app_error)
+}
 
-    let binding_generation = binding
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| AppError::invalid_param("cross_signing_binding.ssk_generation is required"))?;
-    let signature_b64 = binding
-        .get("signature")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("cross_signing_binding.signature is required"))?;
-
-    let mgr = state.cross_signing.lock().expect("cross_signing lock");
-    let publish = mgr.current_cross_signing(&principal).ok_or_else(|| {
-        AppError::conflict(format!(
-            "no accepted cross-signing publish for principal `{principal_id}`"
-        ))
-        .with_wire_code("cross_signing_state_missing")
-    })?;
-
-    // Live generation gate (device-lifecycle.md §15 step 3 / §5.2.1): the
-    // binding MUST bind the CURRENT accepted generation, not a stale snapshot.
-    if binding_generation != publish.generation {
-        return Err(AppError::conflict(format!(
-            "cross_signing_binding.ssk_generation {binding_generation} != accepted generation {}",
-            publish.generation
-        ))
-        .with_wire_code("device_recovery_ssk_generation_mismatch"));
-    }
-
-    let ssk = decode_ed25519_key(&publish.self_signing_key.key.public_key, &publish.self_signing_key.key.key_format)
-        .map_err(|e| AppError::internal(format!("accepted SSK public key invalid: {e}")))?;
-    let device_input =
-        DeviceTrustBinding::canonical_input(&principal, &device, device_public_key, binding_generation)
-            .map_err(|e| AppError::internal(format!("device trust binding input failed: {e}")))?;
-    if !ed25519_verify(&ssk, &device_input, signature_b64) {
-        return Err(AppError::new(
+/// Map a `check_device_cross_signing_binding` wire reason to a typed HTTP error,
+/// preserving the recovery `/complete` status semantics.
+fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
+    match reason {
+        "cross_signing_state_missing" => {
+            AppError::conflict("no accepted cross-signing publish for principal")
+                .with_wire_code("cross_signing_state_missing")
+        }
+        "device_recovery_ssk_generation_mismatch" => {
+            AppError::conflict("cross_signing_binding.ssk_generation != accepted generation")
+                .with_wire_code("device_recovery_ssk_generation_mismatch")
+        }
+        "cross_signing_binding_invalid" => AppError::new(
             ErrorCode::InvalidSignature,
             "cross_signing_binding signature does not verify against accepted SSK",
         )
         .with_status(salvo::http::StatusCode::UNAUTHORIZED)
-        .with_wire_code(crate::error::reasons::PROOF_INVALID));
+        .with_wire_code(crate::error::reasons::PROOF_INVALID),
+        other if other.starts_with("cross_signing_binding_missing")
+            || other.starts_with("device_authorize_") =>
+        {
+            AppError::invalid_param(other)
+        }
+        other => AppError::internal(format!("device cross_signing_binding check: {other}")),
+    }
+}
+
+/// 3a — reason-returning core for `cx.device.authorize` binding verification,
+/// shared by the recovery `/complete` path and the event-ingest validator.
+pub(crate) fn check_device_cross_signing_binding(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+    device_public_key: &str,
+    binding: &Map<String, Value>,
+) -> Result<(), &'static str> {
+    let principal = Did::new(principal_id.to_owned()).map_err(|_| "device_authorize_bad_principal")?;
+    let device = DeviceId::new(device_id.to_owned()).map_err(|_| "device_authorize_bad_device_id")?;
+    let binding_generation = binding
+        .get("ssk_generation")
+        .and_then(Value::as_u64)
+        .ok_or("cross_signing_binding_missing_ssk_generation")?;
+    let signature_b64 = binding
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or("cross_signing_binding_missing_signature")?;
+
+    let mgr = state.cross_signing.lock().expect("cross_signing lock");
+    let publish = mgr
+        .current_cross_signing(&principal)
+        .ok_or("cross_signing_state_missing")?;
+    // Live generation gate (device-lifecycle.md §15 step 3 / §5.2.1).
+    if binding_generation != publish.generation {
+        return Err("device_recovery_ssk_generation_mismatch");
+    }
+    let ssk = decode_ed25519_key(
+        &publish.self_signing_key.key.public_key,
+        &publish.self_signing_key.key.key_format,
+    )
+    .map_err(|_| "cross_signing_ssk_undecodable")?;
+    let device_input =
+        DeviceTrustBinding::canonical_input(&principal, &device, device_public_key, binding_generation)
+            .map_err(|_| "cross_signing_binding_input_failed")?;
+    if !ed25519_verify(&ssk, &device_input, signature_b64) {
+        return Err("cross_signing_binding_invalid");
     }
     Ok(())
+}
+
+/// 3a — validate a `cx.device.authorize` operation payload's cross_signing_binding
+/// at event ingest, so ANY submission path (recovery, or a future client-submitted
+/// control event) is verified, not just recovery `/complete`. Bootstrap-first-device
+/// authorizations carry a `bootstrap_binding` instead and are validated elsewhere;
+/// here we only verify when a `cross_signing_binding` is present.
+pub fn validate_device_authorize_binding(
+    state: &AppState,
+    payload: &Value,
+) -> Result<(), &'static str> {
+    let Some(binding) = payload
+        .get("cross_signing_binding")
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    let principal_id = payload
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .ok_or("device_authorize_missing_principal_id")?;
+    let device_id = payload
+        .get("device_id")
+        .and_then(Value::as_str)
+        .ok_or("device_authorize_missing_device_id")?;
+    let device_public_key = payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .ok_or("device_authorize_missing_device_public_key")?;
+    check_device_cross_signing_binding(state, principal_id, device_id, device_public_key, binding)
 }
 
 /// Resolve the published PSK against the principal DID document (control-set

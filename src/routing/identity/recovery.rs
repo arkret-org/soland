@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
-use contrix_sdk::{Did, Operation, OperationId, RealmId};
+use contrix_sdk::Did;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -781,34 +781,81 @@ async fn recovery_session_complete(
         .with_wire_code("recovery_session_not_verified"));
     }
 
-    // C-P4 — per recovery-session.schema.json complete_request, the recovering
-    // client MUST supply the SSK-signed `cx.device.authorize` material (the
-    // server cannot produce it — it has neither the new device private key nor
-    // the SSK). Validate every session binding the spec mandates before doing
-    // anything irreversible.
-    let device_authorize = complete_request
-        .get("device_authorize")
-        .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("device_authorize is required"))?;
-    validate_device_authorize_material(device_authorize, &record)?;
+    // C-P4 / Phase 3 (durable model) — the recovering client has already
+    // submitted, via POST /events on the principal control stream, both a
+    // `cx.device.authorize` (SSK-signed; its cross_signing_binding was verified
+    // at ingest, §3a) and a `cx.device.list_update`, each a signed Event
+    // Envelope carrying the next actor_seq. Completion REFERENCES those durable
+    // event ids and verifies they are the right events bound to this session —
+    // the server never authors/signs control events on the principal's behalf.
+    let authorization_event_id = require_string(&complete_request, "authorization_event_id")?;
+    let device_list_update_event_id =
+        require_string(&complete_request, "device_list_update_event_id")?;
 
-    // Phase 4 — verify the cross_signing_binding is a real SSK signature at the
-    // currently accepted cross-signing generation (not just shape + snapshot).
-    let binding = device_authorize
-        .get("cross_signing_binding")
-        .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("device_authorize.cross_signing_binding is required"))?;
-    let device_public_key = device_authorize
+    // Resolve + verify the referenced cx.device.authorize.
+    let authorize_payload =
+        resolve_control_event_payload(state, &authorization_event_id, "cx.device.authorize").await?;
+    if authorize_payload.get("principal_id").and_then(Value::as_str)
+        != Some(record.principal_id.as_str())
+    {
+        return Err(AppError::conflict("authorize event principal_id mismatch")
+            .with_wire_code("recovery_authorization_principal_mismatch"));
+    }
+    if authorize_payload.get("device_id").and_then(Value::as_str)
+        != Some(record.requesting_device_id.as_str())
+    {
+        return Err(AppError::conflict("authorize event device_id mismatch")
+            .with_wire_code("recovery_authorization_device_mismatch"));
+    }
+    if authorize_payload.get("recovery_session_id").and_then(Value::as_str)
+        != Some(record.recovery_session_id.as_str())
+    {
+        return Err(AppError::conflict("authorize event recovery_session_id mismatch")
+            .with_wire_code("recovery_authorization_session_mismatch"));
+    }
+    let device_public_key = authorize_payload
         .get("device_public_key")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_owned();
+    let binding = authorize_payload
+        .get("cross_signing_binding")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            AppError::invalid_param("authorize event missing cross_signing_binding")
+        })?;
+    // Defense-in-depth: re-verify the binding against the accepted SSK (ingest
+    // already verified it via §3a, but completion is the irreversible step).
     crate::routing::identity::cross_signing::verify_device_cross_signing_binding(
         state,
         &record.principal_id,
         &record.requesting_device_id,
-        device_public_key,
+        &device_public_key,
         binding,
     )?;
+
+    // Resolve + verify the referenced cx.device.list_update.
+    let list_update_payload =
+        resolve_control_event_payload(state, &device_list_update_event_id, "cx.device.list_update")
+            .await?;
+    if list_update_payload.get("principal_id").and_then(Value::as_str)
+        != Some(record.principal_id.as_str())
+    {
+        return Err(AppError::conflict("list_update event principal_id mismatch")
+            .with_wire_code("recovery_list_update_principal_mismatch"));
+    }
+    let list_update_covers_device = list_update_payload
+        .get("changed")
+        .and_then(Value::as_array)
+        .is_some_and(|changed| {
+            changed
+                .iter()
+                .any(|d| d.as_str() == Some(record.requesting_device_id.as_str()))
+        });
+    if !list_update_covers_device {
+        return Err(AppError::conflict("list_update event does not cover the recovered device")
+            .with_wire_code("recovery_list_update_device_mismatch"));
+    }
 
     let now = chrono::Utc::now();
     let proof_summary = record
@@ -840,13 +887,11 @@ async fn recovery_session_complete(
                 "proof_summary": proof_summary,
                 "authorized_at": now.to_rfc3339_opts(SecondsFormat::Millis, true),
             },
-            // The accepted device key (from the cx.device.authorize material),
+            // The accepted device key (from the referenced cx.device.authorize),
             // used to verify a later recovery_receipt is signed by THIS device
             // (recovery-receipt.schema.json auth_data.verification_method, §15 step 7).
-            "device_public_key": device_authorize
-                .get("device_public_key")
-                .cloned()
-                .unwrap_or(Value::Null),
+            "device_public_key": device_public_key,
+            "authorization_event_id": authorization_event_id,
         }),
         created_at: now,
         updated_at: now,
@@ -858,14 +903,6 @@ async fn recovery_session_complete(
         .put(&device)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-
-    // C-P4 — emit the client-signed cx.device.authorize + a cx.device.list_update
-    // onto the principal's control realm (deterministic per-principal realm,
-    // auto-materialized by the projector on first op). These genuinely run
-    // through accept_local_operations: schema validation + reducer apply
-    // (DeviceAuthorized / DeviceListUpdate cells) + fanout.
-    let (authorization_event_id, device_list_update_event_id) =
-        emit_recovery_device_authorization(state, &record, device_authorize).await?;
 
     let completed = RecoverySessionRecord {
         state: "completed".to_owned(),
@@ -933,126 +970,41 @@ pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     )
 }
 
-/// C-P4 — accept the validated client `cx.device.authorize` material plus a
-/// `cx.device.list_update` onto the principal's control realm. Returns
-/// `(authorization_event_id, device_list_update_event_id)`.
-async fn emit_recovery_device_authorization(
+/// Phase 3 — resolve a client-submitted control event from the durable event
+/// store and return its operation payload (`envelope.payload`). Rejects when the
+/// event is absent or not the expected kind. (Events reach the store via the
+/// normal `POST /events` path, where §3a verifies the cross_signing_binding at
+/// ingest and actor_seq monotonicity is enforced.)
+async fn resolve_control_event_payload(
     state: &AppState,
-    record: &RecoverySessionRecord,
-    device_authorize: &Map<String, Value>,
-    ) -> Result<(String, String), AppError> {
-    let control_realm = RealmId::new(principal_control_realm_for_did(&record.principal_id))
-        .map_err(|e| AppError::internal(format!("control realm id: {e}")))?;
-
-    // The authorize payload is exactly the validated client material (it is a
-    // subset of event-payload.schema.json device_authorize_payload).
-    let authorize_payload = Value::Object(device_authorize.clone());
-    let authorize_op = Operation::create(
-        OperationId::new(crate::ids::generate_operation_id())
-            .map_err(|e| AppError::internal(format!("operation_id: {e}")))?,
-        control_realm.clone(),
-        "cx.device.authorize",
-        authorize_payload,
-    );
-
-    let list_update_payload = json!({
-        "principal_id": record.principal_id,
-        "changed": [record.requesting_device_id],
-        // Canonical operation timestamps are seconds-precision UTC.
-        "updated_at": record.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-    });
-    let list_update_op = Operation::create(
-        OperationId::new(crate::ids::generate_operation_id())
-            .map_err(|e| AppError::internal(format!("operation_id: {e}")))?,
-        control_realm,
-        "cx.device.list_update",
-        list_update_payload,
-    );
-
-    crate::routing::events::projection::accept_local_operations(
-        state,
-        &record.principal_id,
-        &[authorize_op, list_update_op],
-    )
-    .await
-    .map_err(|reason| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
-            format!("control-realm operation rejected: {reason}"),
-        )
-        .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-        .with_wire_code(reason)
-    })?;
-
-    Ok((
-        crate::ids::generate_event_id(),
-        crate::ids::generate_event_id(),
-    ))
-}
-
-/// C-P4 — validate the client-signed `cx.device.authorize` material a recovering
-/// client submits at `/complete` (recovery-session.schema.json `device_authorize_material`).
-///
-/// The server cannot synthesize this (no new-device private key, no SSK), so it
-/// MUST verify every session binding the spec mandates. NOTE: the SSK *signature*
-/// inside `cross_signing_binding` is not verified here because soland has no
-/// accepted `cx.cross_signing.publish` state to resolve the SSK public key from
-/// (that arrives with the principal-control-realm subsystem); shape + the
-/// `ssk_generation` snapshot match ARE enforced.
-fn validate_device_authorize_material(
-    material: &Map<String, Value>,
-    record: &RecoverySessionRecord,
-) -> Result<(), AppError> {
-    let get_str = |k: &str| material.get(k).and_then(Value::as_str);
-
-    if get_str("device_id") != Some(record.requesting_device_id.as_str()) {
-        return Err(AppError::invalid_param(
-            "device_authorize.device_id must equal session.requesting_device_id",
-        )
-        .with_wire_code("recovery_device_mismatch"));
-    }
-    if get_str("principal_id") != Some(record.principal_id.as_str()) {
-        return Err(AppError::invalid_param(
-            "device_authorize.principal_id must equal session.principal_id",
-        )
-        .with_wire_code("recovery_principal_isolation"));
-    }
-    if get_str("recovery_session_id") != Some(record.recovery_session_id.as_str()) {
-        return Err(AppError::invalid_param(
-            "device_authorize.recovery_session_id must equal this session",
-        )
-        .with_wire_code("recovery_session_id_mismatch"));
-    }
-    for req in ["device_public_key", "authorized_by", "not_before", "device_signature"] {
-        if get_str(req).is_none() {
-            return Err(AppError::invalid_param(format!(
-                "device_authorize.{req} is required",
-            )));
-        }
-    }
-    // Recovery is never a bootstrap-first-device case → cross_signing_binding required.
-    let binding = material
-        .get("cross_signing_binding")
-        .and_then(Value::as_object)
+    event_id: &str,
+    expected_kind: &str,
+) -> Result<Value, AppError> {
+    let record = state
+        .persistence
+        .events()
+        .get(event_id)
+        .await
+        .map_err(recovery_store_error)?
         .ok_or_else(|| {
-            AppError::invalid_param("device_authorize.cross_signing_binding is required")
+            AppError::conflict(format!("control event `{event_id}` not found"))
+                .with_wire_code("recovery_control_event_not_found")
         })?;
-    for req in ["verification_method", "alg", "signature"] {
-        if binding.get(req).and_then(Value::as_str).is_none() {
-            return Err(AppError::invalid_param(format!(
-                "device_authorize.cross_signing_binding.{req} is required",
-            )));
-        }
-    }
-    let binding_gen = binding.get("ssk_generation").and_then(Value::as_u64);
-    if binding_gen != Some(record.ssk_generation as u64) {
+    if record.kind != expected_kind {
         return Err(AppError::conflict(format!(
-            "cross_signing_binding.ssk_generation {binding_gen:?} != session ssk_generation {}",
-            record.ssk_generation
+            "control event `{event_id}` is `{}`, expected `{expected_kind}`",
+            record.kind
         ))
-        .with_wire_code("device_recovery_ssk_generation_mismatch"));
+        .with_wire_code("recovery_control_event_kind_mismatch"));
     }
-    Ok(())
+    record
+        .envelope
+        .get("payload")
+        .cloned()
+        .filter(|p| p.is_object())
+        .ok_or_else(|| {
+            AppError::internal(format!("control event `{event_id}` has no payload object"))
+        })
 }
 
 /// Lazily expire a session whose TTL has elapsed: if a `pending`/`verified`
