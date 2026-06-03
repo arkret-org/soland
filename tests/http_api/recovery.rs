@@ -703,17 +703,29 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         state.clone(),
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({}),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session) }),
         StatusCode::OK,
     )
     .await;
+    // recovery-session.schema.json complete_response (conformant, no production_gap).
+    assert_eq!(body["ok"], true);
     assert_eq!(body["state"], "completed");
     assert_eq!(body["device_id"], device_id);
-    assert_eq!(body["authorization_event"]["event_kind"], "cx.device.authorize");
-    assert_eq!(
-        body["production_gap"],
-        "authorization_event_not_yet_in_operation_stream"
+    assert!(
+        body["authorization_event_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:event:"),
+        "authorization_event_id present: {body}"
     );
+    assert!(
+        body["device_list_update_event_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("cx:event:"),
+        "device_list_update_event_id present: {body}"
+    );
+    assert!(body.get("production_gap").is_none(), "no production_gap: {body}");
 
     // The requesting device is now a verified device for the principal.
     let device = state
@@ -725,16 +737,79 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         .expect("recovered device authorized");
     assert_eq!(device.verification_state, "verified");
 
-    // Re-read shows completed; a second complete is rejected (not verified).
+    // Re-read shows completed; a second complete is rejected (not verified)
+    // before the body is even inspected.
     let again = post_recovery(
         state,
         &token,
         &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({}),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session) }),
         StatusCode::CONFLICT,
     )
     .await;
     assert_eq!(again["error"]["code"], "recovery_session_not_verified");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
+    // The client-signed cross_signing_binding MUST bind the session's snapshotted
+    // ssk_generation; a stale/forged generation is rejected.
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[113u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let token =
+        dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+    let session = open_recovery_session(state.clone(), &token, &signing, &principal_id, &vm).await;
+    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
+    let challenge = session["challenge"].as_str().unwrap().to_owned();
+    let signature = sign_recovery_proof(&signing, &session);
+    post_recovery(
+        state.clone(),
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/proofs"),
+        &serde_json::json!({
+            "proof": {
+                "kind": "principal_signing",
+                "challenge": challenge,
+                "verification_method": vm,
+                "alg": "EdDSA",
+                "signature": signature,
+            },
+        }),
+        StatusCode::OK,
+    )
+    .await;
+
+    let mut material = device_authorize_material(&session);
+    material["cross_signing_binding"]["ssk_generation"] = serde_json::json!(999);
+    let body = post_recovery(
+        state,
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({ "device_authorize": material }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "device_recovery_ssk_generation_mismatch");
+}
+
+/// Build a well-formed client `device_authorize` material bound to `session`.
+fn device_authorize_material(session: &Value) -> Value {
+    serde_json::json!({
+        "principal_id": session["principal_id"],
+        "device_id": session["requesting_device_id"],
+        "device_public_key": "z6MkNewDevicePublicKeyPlaceholder",
+        "authorized_by": session["principal_id"],
+        "not_before": session["created_at"],
+        "device_signature": "ZGV2aWNlLXNlbGYtc2lnbmF0dXJlLXBsYWNlaG9sZGVy",
+        "recovery_session_id": session["recovery_session_id"],
+        "cross_signing_binding": {
+            "verification_method": "did:key:zSSK#cx_self_signing_v1",
+            "alg": "EdDSA",
+            "ssk_generation": session["ssk_generation"],
+            "signature": "c3NrLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg",
+        },
+    })
 }
 
 // ── C-P5 did_recovery ↔ active policy value binding ─────────────────────────
