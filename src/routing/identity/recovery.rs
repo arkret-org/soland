@@ -81,12 +81,20 @@ const RECEIPT_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "trust_domain",
     "new_device_id",
     "proof_summary",
+    "backup_classes_unlocked",
+    "welcome_count",
+    "welcome_realm_summary",
+    "previous_ssk_generation",
+    "new_ssk_generation",
     "outcome",
     "outcome_reason_code",
     "started_at",
     "completed_at",
 ];
 
+// device-lifecycle.md §15 step 7 / recovery-receipt.schema.json: signed_fields
+// MUST cover the full normative receipt binding, including backup_classes_unlocked
+// and welcome_count.
 const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "schema",
     "receipt_id",
@@ -97,6 +105,8 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "trust_domain",
     "new_device_id",
     "proof_summary",
+    "backup_classes_unlocked",
+    "welcome_count",
     "outcome",
     "started_at",
     "completed_at",
@@ -1299,6 +1309,25 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("proof_summary.proof_digest is required"))?
         .to_owned();
+    // recovery-receipt.schema.json conditional reqs: threshold_recovery binds
+    // quorum_size + share_ids; device_quorum binds quorum_size.
+    if matches!(proof_kind, "threshold_recovery" | "device_quorum")
+        && proof_summary.get("quorum_size").and_then(Value::as_u64).is_none()
+    {
+        return Err(AppError::invalid_param(format!(
+            "proof_summary.quorum_size is required for kind `{proof_kind}`",
+        )));
+    }
+    if proof_kind == "threshold_recovery"
+        && proof_summary
+            .get("share_ids")
+            .and_then(Value::as_array)
+            .is_none_or(|a| a.is_empty())
+    {
+        return Err(AppError::invalid_param(
+            "proof_summary.share_ids is required (non-empty) for threshold_recovery",
+        ));
+    }
     let outcome = require_string(payload, "outcome")?;
     if !matches!(
         outcome.as_str(),
@@ -1325,6 +1354,41 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
             "completed_at MUST be greater than or equal to started_at",
         ));
     }
+    // device-lifecycle.md §15 step 7 — backup_classes_unlocked records every
+    // backup class the recovering device decrypted; required (MAY be empty).
+    let backup_classes = payload
+        .get("backup_classes_unlocked")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::invalid_param("backup_classes_unlocked is required (array)"))?;
+    for entry in backup_classes {
+        let obj = entry.as_object().ok_or_else(|| {
+            AppError::invalid_param("backup_classes_unlocked entries must be objects")
+        })?;
+        let class = obj
+            .get("backup_class")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::invalid_param("backup_classes_unlocked[].backup_class is required")
+            })?;
+        if !matches!(class, "did_recovery" | "secret_storage" | "mls_history") {
+            return Err(AppError::invalid_param(format!(
+                "backup_classes_unlocked[].backup_class `{class}` not in spec enum",
+            )));
+        }
+        for req in ["backup_id", "series_id", "ciphertext_digest"] {
+            if obj.get(req).and_then(Value::as_str).is_none() {
+                return Err(AppError::invalid_param(format!(
+                    "backup_classes_unlocked[].{req} is required",
+                )));
+            }
+        }
+    }
+    // welcome_count — number of MLS Welcomes replayed for the recovering device.
+    if payload.get("welcome_count").and_then(Value::as_u64).is_none() {
+        return Err(AppError::invalid_param(
+            "welcome_count is required (integer >= 0)",
+        ));
+    }
     let auth_data = payload
         .get("auth_data")
         .and_then(Value::as_object)
@@ -1337,9 +1401,10 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
         .get("signature_algorithm")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.signature_algorithm is required"))?;
-    if !matches!(signature_algorithm, "EdDSA" | "Ed25519") {
+    // recovery-receipt.schema.json auth_data.signature_algorithm enum.
+    if !matches!(signature_algorithm, "EdDSA" | "ES256") {
         return Err(AppError::invalid_param(format!(
-            "auth_data.signature_algorithm `{signature_algorithm}` not in {{EdDSA, Ed25519}}",
+            "auth_data.signature_algorithm `{signature_algorithm}` not in {{EdDSA, ES256}}",
         )));
     }
     auth_data

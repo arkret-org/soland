@@ -30,6 +30,8 @@ const RECEIPT_FIELDS: &[&str] = &[
     "trust_domain",
     "new_device_id",
     "proof_summary",
+    "backup_classes_unlocked",
+    "welcome_count",
     "outcome",
     "started_at",
     "completed_at",
@@ -203,6 +205,39 @@ async fn recovery_receipt_rejects_tampered_proof_digest() {
 
     let body = post_recovery_receipt(state, &token, &receipt, StatusCode::UNAUTHORIZED).await;
     assert_eq!(body["error"]["code"], "proof_invalid");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_receipt_requires_backup_classes_unlocked() {
+    // device-lifecycle.md §15 step 7: backup_classes_unlocked is a required
+    // normative receipt field. Dropping it MUST be rejected.
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let token = dev_token(state.clone()).await;
+    let signing = SigningKey::from_bytes(&[78u8; 32]);
+    let (principal_id, verification_method) = did_key_principal(&signing);
+    let policy =
+        signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None, POLICY_FIELDS);
+    post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+
+    let mut receipt = signed_recovery_receipt(
+        &signing,
+        &principal_id,
+        &verification_method,
+        policy["policy_id"].as_str().unwrap(),
+        1,
+        None,
+        RECEIPT_FIELDS,
+    );
+    receipt.as_object_mut().unwrap().remove("backup_classes_unlocked");
+
+    let body = post_recovery_receipt(state, &token, &receipt, StatusCode::BAD_REQUEST).await;
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("backup_classes_unlocked"),
+        "expected backup_classes_unlocked error: {body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -926,6 +961,8 @@ fn signed_recovery_receipt(
             "kind": "principal_signing",
             "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
+        "backup_classes_unlocked": [],
+        "welcome_count": 0,
         "outcome": "completed",
         "started_at": "2026-05-30T00:00:00Z",
         "completed_at": "2026-05-30T00:00:01Z",
