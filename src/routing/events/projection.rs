@@ -1506,6 +1506,12 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
                 &operation.payload,
             );
         }
+        if kinds::canonical_kind_string(operation) == "cx.cross_signing.reset" {
+            crate::routing::identity::cross_signing::project_cross_signing_reset(
+                state,
+                &operation.payload,
+            );
+        }
         // Also apply to the deterministic reducer.
         let reducer_effect = state
             .projection

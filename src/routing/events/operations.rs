@@ -1782,6 +1782,13 @@ pub async fn validate_operation_policy(
             )
             .await?;
         }
+        if kinds::canonical_kind_string(operation) == "cx.cross_signing.reset" {
+            crate::routing::identity::cross_signing::validate_cross_signing_reset(
+                state,
+                &operation.payload,
+            )
+            .await?;
+        }
         validate_member_state_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;

@@ -97,6 +97,76 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
     }
 }
 
+/// Validate a `cx.cross_signing.reset` BEFORE acceptance (read-only). Only the
+/// `principal_signing` proof variant is implemented (signed by the principal's
+/// current DID control key over `reset_signing_input`); the other high-risk
+/// variants (recovery_unlock / device_quorum / trusted_recovery_service) are
+/// rejected as unimplemented rather than silently accepted. CAS: the reset's
+/// `previous_generation` MUST equal the currently accepted generation.
+pub async fn validate_cross_signing_reset(
+    state: &AppState,
+    payload: &Value,
+) -> Result<(), &'static str> {
+    let content: contrix_sdk::CrossSigningResetContent =
+        serde_json::from_value(payload.clone()).map_err(|_| "cross_signing_reset_malformed")?;
+    content
+        .validate_structure()
+        .map_err(|_| "cross_signing_reset_invalid_structure")?;
+
+    let principal = Did::new(content.principal_id.as_str().to_owned())
+        .map_err(|_| "cross_signing_bad_did")?;
+
+    // CAS precondition against the currently accepted generation.
+    let current = {
+        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        mgr.current_cross_signing(&principal)
+            .map(|p| p.generation)
+            .unwrap_or(0)
+    };
+    if content.previous_generation != current {
+        return Err("cross_signing_reset_cas_conflict");
+    }
+
+    match &content.proof {
+        contrix_sdk::CrossSigningResetProof::PrincipalSigning {
+            verification_method,
+            signature,
+            ..
+        } => {
+            // PSK control-set: the signing key MUST resolve in the principal's
+            // DID document.
+            let psk = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+                .map_err(|_| "cross_signing_reset_key_not_in_control_set")?;
+            let input = content
+                .reset_signing_input()
+                .map_err(|_| "cross_signing_reset_input_failed")?;
+            if !ed25519_verify(&psk, &input, signature) {
+                return Err("cross_signing_reset_signature_invalid");
+            }
+            Ok(())
+        }
+        _ => Err("cross_signing_reset_proof_kind_unimplemented"),
+    }
+}
+
+/// Record an accepted `cx.cross_signing.reset` into the `DeviceManager` (drops
+/// the current publish + bumps the generation high-water; marks devices
+/// `needs_reverification`). Validation already ran pre-acceptance.
+pub fn project_cross_signing_reset(state: &AppState, payload: &Value) {
+    let content: contrix_sdk::CrossSigningResetContent = match serde_json::from_value(payload.clone())
+    {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(%error, "cross_signing.reset projector: malformed payload");
+            return;
+        }
+    };
+    let mut mgr = state.cross_signing.lock().expect("cross_signing lock");
+    if let Err(error) = mgr.record_cross_signing_reset(&content) {
+        tracing::warn!(%error, "cross_signing.reset projector: record rejected");
+    }
+}
+
 /// Verify a `cx.device.authorize` `cross_signing_binding` at recovery
 /// completion. The binding MUST be an SSK signature over the device-trust
 /// canonical input, at the currently accepted generation (device-lifecycle

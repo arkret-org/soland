@@ -1005,6 +1005,54 @@ async fn verified_session_for(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_complete_rejected_after_cross_signing_reset() {
+    // A cx.cross_signing.reset retires the current generation (removes the
+    // accepted publish). A device-authorize binding can then no longer verify —
+    // completion MUST reject (cross_signing_state_missing), proving reset
+    // invalidates stale bindings.
+    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[117u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let ssk = SigningKey::from_bytes(&[219u8; 32]);
+    let usk = SigningKey::from_bytes(&[220u8; 32]);
+    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let token =
+        dev_token_for_device(state.clone(), &principal_id, RECOVERY_TEST_DEVICE, "Recovery").await;
+    let (session, session_id) =
+        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
+
+    // Record a cross-signing reset (gen 1 -> 2): drops the accepted publish.
+    let reset = serde_json::json!({
+        "principal_id": principal_id,
+        "trust_domain": "cx:trust_domain:soland.local",
+        "reset_event_id": "cx:event:01964137-0000-7000-8000-0000000000aa",
+        "previous_generation": 1,
+        "new_generation": 2,
+        "reset_reason_code": "test-reset",
+        "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
+        "issued_at": "2026-05-30T00:00:00Z",
+    });
+    let content: contrix_sdk::CrossSigningResetContent =
+        serde_json::from_value(reset).expect("reset content");
+    state
+        .cross_signing
+        .lock()
+        .unwrap()
+        .record_cross_signing_reset(&content)
+        .expect("record reset");
+
+    let body = post_recovery(
+        state,
+        &token,
+        &format!("/api/v1/identity/recovery-sessions/{session_id}/complete"),
+        &serde_json::json!({ "device_authorize": device_authorize_material(&session, &ssk) }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "cross_signing_state_missing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_missing_cross_signing_state() {
     let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[115u8; 32]);
