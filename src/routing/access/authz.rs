@@ -43,10 +43,15 @@ pub(super) fn router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.authz.check"))]
 async fn authz_check(
+    aa: AuthArgs,
     body: JsonBody<AuthzCheckReqBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<AuthzCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    // TODO(authz-scoping): spec service-http-binding.md:140 要求按 caller 身份(本人/服务签名)进一步限定,此处先关闭匿名访问。
+    let session = aa.authenticated_session(state, req).await?;
+    let _ = &session;
     let body = body.into_inner();
     let (resource_str, realm_id, resource_facets) = if let Some(s) = body.resource.as_str() {
         (s.to_owned(), s.to_owned(), Vec::new())
@@ -188,11 +193,13 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.authz.get_effective_grants"))]
 async fn effective_grants(
+    aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<EffectiveGrantsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let subject = query_param(req, "subject").unwrap_or_else(|| "did:web:alice.example".to_owned());
+    let session = aa.authenticated_session(state, req).await?;
+    let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
     let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
     let grants = if space_id == "*" {
         // Return grants across all spaces

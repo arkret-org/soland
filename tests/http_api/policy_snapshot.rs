@@ -11,6 +11,7 @@ async fn policy_check_and_validation_work() {
     let token = dev_token(state.clone()).await;
 
     let policy: Value = TestClient::post("http://server/_cokret/self/policy/check")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req1",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -73,6 +74,7 @@ async fn policy_check_and_validation_work() {
     assert_eq!(policies["policies"].as_array().unwrap().len(), 1);
 
     let denied: Value = TestClient::post("http://server/_cokret/self/policy/check")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req2",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -105,6 +107,7 @@ async fn policy_check_and_validation_work() {
     assert_eq!(deleted["ok"], true);
 
     let allowed_again: Value = TestClient::post("http://server/_cokret/self/policy/check")
+        .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "request_id": "req3",
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",

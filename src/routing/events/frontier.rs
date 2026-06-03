@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use cokret_sdk::{
     Did, EventId, EventsFrontierAccountClientResponse, EventsFrontierAnonymousHealthResponse,
     EventsFrontierFederationPeerResponse, EventsFrontierResponse, FederationServiceBindingRef,
-    FrontierPeerRole, Hash, RealmId, SpaceId, canonical,
+    FrontierPeerRole, Hash, RealmId, canonical,
 };
 use serde_json::{Value, json};
 
@@ -30,16 +30,16 @@ pub(crate) fn parse_peer_role(value: Option<&str>) -> Result<FrontierPeerRole, &
 }
 
 /// Spec B1.4 — convert a per-realm frontier table to the typed
-/// `BTreeMap<SpaceId, Vec<EventId>>` shape. Entries whose ids fail SDK
+/// `BTreeMap<RealmId, Vec<EventId>>` shape. Entries whose ids fail SDK
 /// typed-id parsing are silently dropped — this is the server's
 /// introspection surface, not the canonical persistence layer, so a single
 /// malformed row should not break the whole response.
 pub(crate) fn typed_realm_frontier(
     realm_to_event_ids: impl IntoIterator<Item = (String, Vec<String>)>,
-) -> BTreeMap<SpaceId, Vec<EventId>> {
+) -> BTreeMap<RealmId, Vec<EventId>> {
     let mut out = BTreeMap::new();
     for (realm, events) in realm_to_event_ids {
-        let Ok(realm_id) = SpaceId::new(realm) else {
+        let Ok(realm_id) = RealmId::new(realm) else {
             continue;
         };
         let typed_events: Vec<EventId> = events
@@ -86,7 +86,9 @@ pub(crate) struct FederationFrontierBinding {
 pub(crate) fn build_typed_frontier_response(
     peer_role: FrontierPeerRole,
     service_did: &Did,
-    space_frontier: BTreeMap<SpaceId, Vec<EventId>>,
+    // NOTE: 该 map 承载的是 Realm 级 frontier(键为 `ck:realm:`)。SDK 的 key 类型
+    // 暂为 `SpaceId` 属历史遗留(Realm/Space 反转),本次仅修正本地变量命名。
+    realm_frontier: BTreeMap<RealmId, Vec<EventId>>,
     actor_upper_bounds: BTreeMap<Did, u64>,
     federation_binding: Option<FederationFrontierBinding>,
 ) -> EventsFrontierResponse {
@@ -94,17 +96,17 @@ pub(crate) fn build_typed_frontier_response(
         FrontierPeerRole::AccountClient => {
             EventsFrontierResponse::AccountClient(EventsFrontierAccountClientResponse {
                 peer_role,
-                frontier: space_frontier,
+                frontier: realm_frontier,
                 actor_seq_upper_bounds: actor_upper_bounds,
             })
         }
         FrontierPeerRole::FederationPeer => {
             let binding = federation_binding.unwrap_or_else(|| {
-                fallback_federation_frontier_binding(&space_frontier, &actor_upper_bounds)
+                fallback_federation_frontier_binding(&realm_frontier, &actor_upper_bounds)
             });
             EventsFrontierResponse::FederationPeer(EventsFrontierFederationPeerResponse {
                 peer_role,
-                frontier: space_frontier,
+                frontier: realm_frontier,
                 frontier_root: binding.frontier_root,
                 service_binding_ref: binding.service_binding_ref,
                 receipts: binding.receipts,
@@ -133,11 +135,11 @@ pub(crate) fn build_typed_frontier_response(
 /// as a binary Merkle tree using canonical node JSON. The empty frontier
 /// still has a stable non-zero domain-separated root.
 pub(crate) fn frontier_root(
-    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
     actor_upper_bounds: &BTreeMap<Did, u64>,
 ) -> Result<Hash, String> {
     let mut heads = BTreeSet::new();
-    for events in space_frontier.values() {
+    for events in realm_frontier.values() {
         for event in events {
             heads.insert(event.as_str().to_owned());
         }
@@ -186,10 +188,10 @@ pub(crate) fn frontier_root(
 /// `peer_role=federation_peer`.
 pub(crate) fn frontier_service_binding_ref(
     realm_id: &RealmId,
-    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
     actor_upper_bounds: &BTreeMap<Did, u64>,
 ) -> Result<FederationServiceBindingRef, String> {
-    let heads = frontier_heads(space_frontier);
+    let heads = frontier_heads(realm_frontier);
     let space_policy_hash = canonical_hash(&json!({
         "domain": "cx.events.frontier.space_policy_hash.v1",
         "realm_id": realm_id.as_str(),
@@ -265,9 +267,9 @@ pub(crate) fn sign_frontier_root(
     }))
 }
 
-fn frontier_heads(space_frontier: &BTreeMap<SpaceId, Vec<EventId>>) -> Vec<EventId> {
+fn frontier_heads(realm_frontier: &BTreeMap<RealmId, Vec<EventId>>) -> Vec<EventId> {
     let mut heads: BTreeMap<&str, &EventId> = BTreeMap::new();
-    for events in space_frontier.values() {
+    for events in realm_frontier.values() {
         for event in events {
             heads.insert(event.as_str(), event);
         }
@@ -281,15 +283,15 @@ fn canonical_hash(value: &Value) -> Result<Hash, String> {
 }
 
 fn fallback_federation_frontier_binding(
-    space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
+    realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
     actor_upper_bounds: &BTreeMap<Did, u64>,
 ) -> FederationFrontierBinding {
     let realm_id = RealmId::new("ck:realm:00000000-0000-7000-8000-000000000000".to_owned())
         .expect("built-in fallback realm id is valid");
-    let frontier_root = frontier_root(space_frontier, actor_upper_bounds)
+    let frontier_root = frontier_root(realm_frontier, actor_upper_bounds)
         .expect("frontier root over typed ids must canonicalize");
     let service_binding_ref =
-        frontier_service_binding_ref(&realm_id, space_frontier, actor_upper_bounds)
+        frontier_service_binding_ref(&realm_id, realm_frontier, actor_upper_bounds)
             .expect("frontier-derived binding must canonicalize");
     FederationFrontierBinding {
         service_binding_ref,
@@ -313,9 +315,6 @@ mod tests {
     }
     fn bob() -> Did {
         Did::new("did:web:bob.example").unwrap()
-    }
-    fn space() -> SpaceId {
-        SpaceId::new("ck:space:01904100-0000-7000-8000-000000000001".to_owned()).unwrap()
     }
     fn event(id: &str) -> EventId {
         EventId::new(id.to_owned()).unwrap()
@@ -363,7 +362,7 @@ mod tests {
     fn federation_frontier_root_is_order_stable() {
         let mut frontier_a = BTreeMap::new();
         frontier_a.insert(
-            space(),
+            realm(),
             vec![
                 event("ck:event:01904100-0000-7000-8000-000000000002"),
                 event("ck:event:01904100-0000-7000-8000-000000000001"),
@@ -371,7 +370,7 @@ mod tests {
         );
         let mut frontier_b = BTreeMap::new();
         frontier_b.insert(
-            space(),
+            realm(),
             vec![
                 event("ck:event:01904100-0000-7000-8000-000000000001"),
                 event("ck:event:01904100-0000-7000-8000-000000000002"),
@@ -392,7 +391,7 @@ mod tests {
     fn federation_frontier_signature_binds_root_tuple() {
         let mut frontier = BTreeMap::new();
         frontier.insert(
-            space(),
+            realm(),
             vec![event("ck:event:01904100-0000-7000-8000-000000000001")],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
@@ -434,7 +433,7 @@ mod tests {
     fn federation_peer_response_carries_root_binding_and_signature() {
         let mut frontier = BTreeMap::new();
         frontier.insert(
-            space(),
+            realm(),
             vec![event("ck:event:01904100-0000-7000-8000-000000000001")],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);

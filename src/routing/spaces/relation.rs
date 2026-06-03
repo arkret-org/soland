@@ -3,7 +3,7 @@
 //! Surfaces:
 //! - `POST   /_cokret/self/relations`                — create
 //! - `GET    /_cokret/self/relations`                — list, filtered by `?realm_id` / `?kind`
-//! - `DELETE /_cokret/self/relations/{relation_id}`  — delete (soft)
+//! - `DELETE /_cokret/self/relations/{relation_id}`  — tombstone
 //!
 //! `ck.relation.update` is intentionally not exposed as its own handler — the
 //! reducer handles in-place patch-merge per round-1 work (Round-1 A1a in
@@ -22,7 +22,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::query_param;
 use crate::state::AppState;
 use crate::wire::{
-    CreateRelationRequest, DeleteRelationResponse, ListRelationsResponse, RelationResponse,
+    CreateRelationRequest, ListRelationsResponse, RelationResponse, TombstoneRelationResponse,
 };
 use crate::{ids, kinds};
 
@@ -33,7 +33,7 @@ pub(super) fn router() -> Router {
                 .post(create_relation)
                 .get(list_relations),
         )
-        .push(Router::with_path("relations/{relation_id}").delete(delete_relation))
+        .push(Router::with_path("relations/{relation_id}").delete(tombstone_relation))
 }
 
 #[endpoint(
@@ -114,15 +114,15 @@ async fn create_relation(
 #[endpoint(
     operation_id = "ck.relation.tombstone",
     tags("relations"),
-    summary = "Soft-delete a relation by relation_id"
+    summary = "Tombstone a relation by relation_id"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.relation.tombstone"))]
-async fn delete_relation(
+async fn tombstone_relation(
     aa: AuthArgs,
     relation_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeleteRelationResponse> {
+) -> JsonResult<TombstoneRelationResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let relation_id = relation_id.into_inner();
@@ -141,7 +141,7 @@ async fn delete_relation(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
-    json_ok(DeleteRelationResponse {
+    json_ok(TombstoneRelationResponse {
         state: "tombstoned".to_owned(),
         relation_id,
     })

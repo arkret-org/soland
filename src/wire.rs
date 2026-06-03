@@ -1660,8 +1660,8 @@ pub struct CreateWebrtcSessionResponse {
     pub mode: String,
     pub recording_policy: String,
     pub call_state: String,
-    pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -2022,7 +2022,7 @@ pub fn describe(
             "scalability_constraints": {
                 "source": "cokret-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": 65536,
-                "max_events_batch_submit": 1,
+                "max_events_batch_submit": 100,
                 "max_federation_transaction_events": 500,
                 "max_page_items": 100,
                 "max_prev_refs": 32,
@@ -2253,7 +2253,7 @@ pub struct ListRelationsResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeleteRelationResponse {
+pub struct TombstoneRelationResponse {
     pub state: String,
     pub relation_id: String,
 }

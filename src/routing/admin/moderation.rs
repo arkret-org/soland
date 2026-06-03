@@ -790,19 +790,6 @@ pub fn appeal_self_review_check(
     Ok(())
 }
 
-/// SHA-256 of canonical-JSON encoded value. Helper used by the
-/// moderation-appeal reducer to derive the appeal cell digest.
-///
-/// Delegates to the SDK [`cokret_sdk::canonical::canonical_sha256`] which
-/// hashes the canonical JSON byte stream and emits the wire `sha256:<hex>`
-/// form. There is no non-canonical fallback: a canonicalization failure is
-/// surfaced as an `Err` instead of silently hashing an empty/non-canonical
-/// byte stream.
-#[allow(dead_code)]
-pub fn canonical_sha256_hex(value: &Value) -> cokret_sdk::Result<String> {
-    cokret_sdk::canonical::canonical_sha256(value)
-}
-
 #[cfg(test)]
 mod appeal_tests {
     use super::*;

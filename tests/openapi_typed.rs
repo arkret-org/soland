@@ -211,7 +211,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "FederationPushOperationsReqBody",
         "FederationPushOperationsResBody",
         "FederationPullOperationsResBody",
-        "FederationSpaceMembersResBody",
+        "FederationRealmMembersResBody",
         "FederationVerifyActorReqBody",
         "FederationVerifyActorResBody",
     ] {

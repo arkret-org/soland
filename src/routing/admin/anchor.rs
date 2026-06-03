@@ -1827,7 +1827,7 @@ pub(super) async fn admin_rotate_signing_key(
             "cokret:signer:soland-anchorer:{}",
             state.config.service_did
         );
-        let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
+        let store = cokret_sdk::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {
                 keystore_persisted = true;

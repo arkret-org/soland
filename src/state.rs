@@ -1783,7 +1783,7 @@ impl AppState {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
                     let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
-                    let store = cokret_sdk::keystore::platform_default_keystore(&app_id);
+                    let store = cokret_sdk::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
                             let mut seed = [0u8; 32];
@@ -1863,7 +1863,7 @@ impl AppState {
         // `service_admin_signer` at signing time with a sticky-warn.
         let admin_app_id = format!("soland.{}", config.service_did);
         let admin_keystore_inner: Box<dyn cokret_sdk::KeyStore> = if config.use_keystore {
-            cokret_sdk::keystore::platform_default_keystore(&admin_app_id)
+            cokret_sdk::platform_default_keystore(&admin_app_id)
         } else {
             Box::new(cokret_sdk::keystore::InMemoryKeyStore::new())
         };

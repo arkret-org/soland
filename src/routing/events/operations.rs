@@ -4091,119 +4091,6 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
     Ok(())
 }
 
-/// Spec B1.10 — CAS check for `ck.cross_signing.publish`. The reducer
-/// accepts the publish only when:
-///
-/// - `expected_previous_generation == current_generation`, AND
-/// - `new_generation == current_generation + 1`.
-///
-/// The cell_subject for the CAS-register cell is the tuple
-/// `(principal_id, expected_previous_generation)`; producers and consumers
-/// MUST use [`publish_cell_subject`] to keep the canonical form aligned.
-#[allow(dead_code)]
-pub fn cross_signing_publish_cas_check(
-    current_generation: u64,
-    expected_previous_generation: u64,
-    new_generation: u64,
-) -> Result<(), (&'static str, String)> {
-    if expected_previous_generation != current_generation {
-        return Err((
-            "cas_conflict",
-            format!(
-                "cross_signing.publish expected_previous_generation={expected_previous_generation} \
-                 does not match current_generation={current_generation}"
-            ),
-        ));
-    }
-    if new_generation != current_generation.saturating_add(1) {
-        return Err((
-            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            format!(
-                "cross_signing.publish new_generation={new_generation} must equal \
-                 current_generation+1 ({})",
-                current_generation.saturating_add(1)
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Spec B1.10 — build the CAS-register cell_subject string for
-/// `ck.cross_signing.publish`. Delegates to the SDK helper.
-#[allow(dead_code)]
-pub fn publish_cell_subject(principal_id: &cokret_sdk::Did, expected_previous_generation: u64) -> String {
-    cokret_sdk::cross_signing_publish_cell_subject(principal_id, expected_previous_generation)
-}
-
-/// Spec B1.11 — request body for `/_cokret/self/blob/presign`. The `realm_id`
-/// field is REQUIRED for Realm-owned blobs. For deployment-owned
-/// (anonymous) blobs the field may be omitted; the matching metadata
-/// lookup is the only authoritative check.
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlobPresignRequest {
-    pub blob_ref: String,
-    pub purpose: String,
-    /// REQUIRED when the blob's metadata declares a realm.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub realm_id: Option<String>,
-}
-
-/// Spec B1.11 — verify the request `realm_id` matches the blob metadata's
-/// `realm_id`. Returns `Ok(())` on match (or when the blob has no realm
-/// binding); returns `Err((code, msg))` on mismatch.
-#[allow(dead_code)]
-pub fn verify_blob_presign_realm_binding(
-    request_realm_id: Option<&str>,
-    blob_metadata_realm_id: Option<&str>,
-) -> Result<(), (&'static str, String)> {
-    match (request_realm_id, blob_metadata_realm_id) {
-        (None, None) => Ok(()),
-        (Some(req), Some(meta)) if req == meta => Ok(()),
-        (None, Some(meta)) => Err((
-            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            format!("/blob/presign request MUST carry realm_id={meta:?} for Realm-owned blob"),
-        )),
-        (Some(req), None) => Err((
-            "capability_denied",
-            format!("/blob/presign request carries realm_id={req:?} but blob has no realm binding"),
-        )),
-        (Some(req), Some(meta)) => Err((
-            "capability_denied",
-            format!(
-                "/blob/presign request realm_id={req:?} does not match blob metadata realm_id={meta:?}"
-            ),
-        )),
-    }
-}
-
-/// Spec B1.15 — cell_subject for `ck.flow.update`. The cell family is
-/// `ck.component.flow.metadata.v1` with CAS-register semantics and
-/// `bottom=reject`. The subject is the flow_id.
-#[allow(dead_code)]
-pub fn flow_update_subject(flow_id: &cokret_sdk::FlowId) -> String {
-    cokret_sdk::flow_update_cell_subject(flow_id)
-}
-
-/// Spec B1.15 — cell_subject for `cx.flow.tracks_patch`. Same cell family
-/// as `ck.flow.update` — they compete via CAS.
-#[allow(dead_code)]
-pub fn flow_tracks_patch_subject(flow_id: &cokret_sdk::FlowId) -> String {
-    cokret_sdk::flow_tracks_patch_cell_subject(flow_id)
-}
-
-/// Spec B1.17 — accept an `agent_id` value. Must be a DID
-/// (`did:webvh:...` etc.). Returns the typed DID on success.
-#[allow(dead_code)]
-pub fn validate_agent_id(value: &str) -> Result<cokret_sdk::Did, (&'static str, String)> {
-    cokret_sdk::Did::new(value.to_owned()).map_err(|err| {
-        (
-            cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-            format!("agent_id must be a DID: {err}"),
-        )
-    })
-}
-
 /// Spec B1.17 — accept an `applet_id` value. Must be either a DID or a
 /// strictly-validated `ck:applet:<uuidv7>` typed id. Returns the typed
 /// wrapper on success.
@@ -4257,48 +4144,10 @@ mod wire_payload_tests {
     }
 
     #[test]
-    fn cross_signing_publish_cas_check_requires_exact_increment() {
-        cross_signing_publish_cas_check(5, 5, 6).unwrap();
-        // Wrong previous → cas_conflict.
-        assert!(cross_signing_publish_cas_check(5, 4, 6).is_err());
-        // Wrong new (skip) → schema_violation.
-        assert!(cross_signing_publish_cas_check(5, 5, 7).is_err());
-        // Same generation → schema_violation.
-        assert!(cross_signing_publish_cas_check(5, 5, 5).is_err());
-    }
-
-    #[test]
-    fn blob_presign_realm_binding_mismatch_rejects() {
-        verify_blob_presign_realm_binding(None, None).unwrap();
-        verify_blob_presign_realm_binding(Some("ck:realm:abc"), Some("ck:realm:abc")).unwrap();
-        // Blob has realm, request doesn't → schema_violation.
-        assert!(verify_blob_presign_realm_binding(None, Some("ck:realm:abc")).is_err());
-        // Blob has realm but mismatched → capability_denied.
-        let err = verify_blob_presign_realm_binding(Some("ck:realm:abc"), Some("ck:realm:def"))
-            .unwrap_err();
-        assert_eq!(err.0, "capability_denied");
-    }
-
-    #[test]
-    fn agent_id_must_be_did() {
-        assert!(validate_agent_id("did:web:agent.example").is_ok());
-        // Non-DID must reject.
-        assert!(validate_agent_id("ck:agent:01904100-0000-7000-8000-000000000001").is_err());
-    }
-
-    #[test]
     fn applet_id_accepts_did_or_cx_form() {
         assert!(validate_applet_id("did:web:applet.example").is_ok());
         assert!(validate_applet_id("ck:applet:01904100-0000-7000-8000-000000000001").is_ok());
         assert!(validate_applet_id("not-a-valid-id").is_err());
-    }
-
-    #[test]
-    fn flow_cell_subject_helpers_return_flow_id() {
-        let flow =
-            cokret_sdk::FlowId::new("ck:flow:01904100-0000-7000-8000-000000000001").unwrap();
-        assert_eq!(flow_update_subject(&flow), flow.as_str());
-        assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
     }
 
     #[test]

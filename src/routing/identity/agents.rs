@@ -633,7 +633,9 @@ async fn ensure_sidecar_thread(
     let realm_id = body
         .context_realm_id
         .unwrap_or_else(|| ids::generate("realm"));
-    let sidecar_circle_id = ids::generate("sidecar_circle");
+    // `sidecar_circle_id` 描述的是该值的用途(sidecar 线程的 Circle),其 typed
+    // 前缀必须是已注册的 `ck:circle:`,而非未注册的 `ck:sidecar_circle:`。
+    let sidecar_circle_id = ids::generate("circle");
     append_audit_log(
         state,
         Some(&session.actor),

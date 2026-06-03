@@ -330,10 +330,14 @@ async fn delete_policy_document(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.policy.check"))]
 async fn policy_check(
+    aa: AuthArgs,
     body: JsonBody<PolicyCheckReqBody>,
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<PolicyCheckResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let _ = &session;
     let body = body.into_inner();
     if validate_did(&body.actor).is_err() {
         return Err(AppError::invalid_param("invalid actor"));
@@ -367,6 +371,7 @@ async fn policy_check(
                 Vec::new(),
             )
         } else {
+            // TODO(policy-default): 默认 allow 是产品级默认,已要求端点认证;是否改 require_review 待产品决策。
             ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
         };
 

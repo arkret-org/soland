@@ -1263,7 +1263,7 @@ pub(super) async fn federation_operation_frontier(
 pub(super) async fn federation_space_members(
     space_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<cokret_sdk::FederationSpaceMembersResBody> {
+) -> JsonResult<cokret_sdk::FederationRealmMembersResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let space_id_value = RealmId::new(space_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -1283,7 +1283,7 @@ pub(super) async fn federation_space_members(
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(cokret_sdk::FederationSpaceMembersResBody {
+    json_ok(cokret_sdk::FederationRealmMembersResBody {
         members,
         membership_frontier: sync_token(state),
         next_cursor: None,
