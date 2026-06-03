@@ -13,7 +13,7 @@ mod identity_link;
 mod key_backup;
 mod keys;
 mod profile;
-// R3 spec-sync (contrix-spec b47ff6ec) — recovery policy / receipt
+// R3 spec-sync (cokret-spec b47ff6ec) — recovery policy / receipt
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
 pub(crate) mod recovery;

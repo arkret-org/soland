@@ -1,4 +1,4 @@
-//! HC-SOL-3 / SEC-SOL-1 (R3.2, contrix-spec @ b56cab1) — mention
+//! HC-SOL-3 / SEC-SOL-1 (R3.2, cokret-spec @ b56cab1) — mention
 //! reference shape v2 validator.
 //!
 //! The spec mention node (`models/flow-and-message.md §9.4`,

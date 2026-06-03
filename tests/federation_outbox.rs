@@ -32,7 +32,7 @@ use soland::state::AppState;
 
 const PEER_DID: &str = "did:web:peer.example";
 const FEDERATION_ENDPOINT: &str = "/api/v1/federation/push-operations";
-const IDEMPOTENCY_KEY: &str = "cx:outbox:test-idem-key-0001";
+const IDEMPOTENCY_KEY: &str = "ck:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
 
 struct CapturedSignedRequest {
@@ -124,7 +124,7 @@ fn outbox_test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: false,
-        trust_domain: "cx:trust_domain:soland-outbox.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland-outbox.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -141,7 +141,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
     // outbound POST per spec federation.md §3.2 + §8.5.
     let lower = captured.captured.to_ascii_lowercase();
     assert!(
-        lower.contains("idempotency-key: cx:outbox:test-idem-key-0001"),
+        lower.contains("idempotency-key: ck:outbox:test-idem-key-0001"),
         "captured request missing Idempotency-Key header; got: {}",
         captured.captured
     );
@@ -161,12 +161,12 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("source-trust-domain: cx:trust_domain:soland-outbox.local"),
+        lower.contains("source-trust-domain: ck:trust_domain:soland-outbox.local"),
         "captured request missing Source-Trust-Domain binding; got: {}",
         captured.captured
     );
     assert!(
-        lower.contains("destination-trust-domain: cx:trust_domain:peer.example"),
+        lower.contains("destination-trust-domain: ck:trust_domain:peer.example"),
         "captured request missing Destination-Trust-Domain binding; got: {}",
         captured.captured
     );
@@ -320,7 +320,7 @@ async fn outbound_signature_rejects_trust_domain_mismatch() {
     let mut headers = parse_headers(&captured.captured);
     headers.insert(
         "destination-trust-domain".to_owned(),
-        "cx:trust_domain:evil.example".to_owned(),
+        "ck:trust_domain:evil.example".to_owned(),
     );
 
     let verifying_key = captured.state.anchorer_signing_key().verifying_key();

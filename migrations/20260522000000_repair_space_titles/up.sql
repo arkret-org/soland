@@ -22,5 +22,5 @@ FROM (
     FROM spaces
 ) AS resolved
 WHERE spaces.id = resolved.id
-  AND spaces.title = ('cx:realm:' || spaces.id::TEXT)
+  AND spaces.title = ('ck:realm:' || spaces.id::TEXT)
   AND resolved.title IS NOT NULL;

@@ -182,7 +182,7 @@ async fn get_space_cell(
         .unwrap_or_default();
 
     json_ok(json!({
-        "cell_id": format!("cx:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
+        "cell_id": format!("ck:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
         "cell_family": CHILD_ORDER_CELL_FAMILY,
         "space_id": space_id,
         "state": "value",
@@ -256,7 +256,7 @@ async fn export_space(
 }
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
-    if space_id.starts_with("cx:space:") {
+    if space_id.starts_with("ck:space:") {
         SpaceId::new(space_id.to_owned())
             .map_err(|_| AppError::invalid_param("invalid space_id"))?;
         return Ok(());
@@ -985,7 +985,7 @@ mod space_lifecycle_payload_tests {
     #[test]
     fn space_state_transition_accepts_typed_shape() {
         parse_space_state_transition_payload(&json!({
-            "space_id": "cx:space:01904100-0000-7000-8000-000000000001",
+            "space_id": "ck:space:01904100-0000-7000-8000-000000000001",
             "new_state": "archived",
             "reason": "stale",
         }))

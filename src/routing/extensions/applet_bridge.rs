@@ -615,13 +615,13 @@ fn extension_actor_did_document(
 ) -> Value {
     let mut service = vec![json!({
         "id": format!("{did}#portal"),
-        "type": "ContrixPortalRealm",
+        "type": "CokretPortalRealm",
         "serviceEndpoint": applet.portal_realm_id,
     })];
     if actor_kind == "bot_actor" {
         service.push(json!({
             "id": format!("{did}#applet"),
-            "type": "ContrixApplet",
+            "type": "CokretApplet",
             "serviceEndpoint": applet.applet_id,
         }));
     }
@@ -718,7 +718,7 @@ fn ghost_actor_did_for(namespace: &str, applet_id: &str, external_id: &str) -> S
 fn portal_realm_id_for(namespace: &str, applet_id: &str) -> String {
     let digest = sha256_hex(applet_id.as_bytes());
     format!(
-        "cx:realm:portal:{}:{}",
+        "ck:realm:portal:{}:{}",
         safe_token(namespace),
         &digest[..12]
     )

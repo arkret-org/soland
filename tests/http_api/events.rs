@@ -65,7 +65,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         describe["registry"]["source"],
-        "contrix-spec/spec/v1/artifacts"
+        "cokret-spec/spec/v1/artifacts"
     );
     assert!(
         describe["registry"]["event_kinds"]
@@ -82,7 +82,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["capabilities"]["high_assurance"], false);
 
     let first = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
         1,
         Vec::new(),
     );
@@ -97,7 +97,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(submitted["status"], "accepted");
     assert_eq!(
         submitted["event_id"],
-        "cx:event:01904100-0000-7000-8000-f15c8ea06c11"
+        "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
     assert_eq!(submitted["canonical_digest"], first["canonical_digest"]);
 
@@ -113,7 +113,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["receipt"]["idempotent"], true);
 
     let fetched: Value = TestClient::get(
-        "http://server/api/v1/events/cx:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "http://server/api/v1/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -123,7 +123,7 @@ async fn events_describe_and_single_event_submit_work() {
     .unwrap();
     assert_eq!(
         fetched["event"]["event_id"],
-        "cx:event:01904100-0000-7000-8000-f15c8ea06c11"
+        "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
     assert_eq!(
         fetched["metadata"]["canonical_digest"],
@@ -131,13 +131,13 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         fetched["metadata"]["realm_id"],
-        "cx:realm:0196419b-0000-7000-8000-000000000000"
+        "ck:realm:0196419b-0000-7000-8000-000000000000"
     );
 
     let second = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-63f16896f0b0",
+        "ck:event:01904100-0000-7000-8000-63f16896f0b0",
         2,
-        vec!["cx:event:01904100-0000-7000-8000-f15c8ea06c11"],
+        vec!["ck:event:01904100-0000-7000-8000-f15c8ea06c11"],
     );
     let second_submitted: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -156,7 +156,7 @@ async fn events_describe_and_single_event_submit_work() {
     // accept path (kind/schema combo distinct from `cx.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
-            "id": "cx:flow:01904100-0000-7000-8000-aa11ccff0001",
+            "id": "ck:flow:01904100-0000-7000-8000-aa11ccff0001",
             "schema": "cx.schema.flow.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding flow" },
@@ -172,7 +172,7 @@ async fn events_describe_and_single_event_submit_work() {
         }
     });
     let mut artifact_kind_event = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-df827a7269a3",
+        "ck:event:01904100-0000-7000-8000-df827a7269a3",
         3,
         Vec::new(),
     );
@@ -194,7 +194,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(artifact_kind_submitted["status"], "accepted");
 
     let mut unknown_schema = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-80be9d943c27",
+        "ck:event:01904100-0000-7000-8000-80be9d943c27",
         4,
         Vec::new(),
     );
@@ -215,7 +215,7 @@ async fn events_describe_and_single_event_submit_work() {
     let batch: Value = TestClient::post("http://server/api/v1/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "event_ids": ["cx:event:01904100-0000-7000-8000-f15c8ea06c11", "cx:event:01904100-0000-7000-8000-30f4e405b35e"]
+            "event_ids": ["ck:event:01904100-0000-7000-8000-f15c8ea06c11", "ck:event:01904100-0000-7000-8000-30f4e405b35e"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -225,7 +225,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(batch["events"].as_array().unwrap().len(), 1);
     assert_eq!(
         batch["missing"],
-        serde_json::json!(["cx:event:01904100-0000-7000-8000-30f4e405b35e"])
+        serde_json::json!(["ck:event:01904100-0000-7000-8000-30f4e405b35e"])
     );
 
     let listed: Value =
@@ -239,12 +239,12 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(listed["events"].as_array().unwrap().len(), 3);
     assert_eq!(listed["frontier"]["actors"]["did:web:alice.example"], 3);
     assert_eq!(
-        listed["frontier"]["realms"]["cx:realm:0196419b-0000-7000-8000-000000000000"],
-        "cx:event:01904100-0000-7000-8000-df827a7269a3"
+        listed["frontier"]["realms"]["ck:realm:0196419b-0000-7000-8000-000000000000"],
+        "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
     let frontier: Value =
-        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example&realm_id=cx:realm:0196419b-0000-7000-8000-000000000000")
+        TestClient::get("http://server/api/v1/events/frontier?actor_id=did:web:alice.example&realm_id=ck:realm:0196419b-0000-7000-8000-000000000000")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -253,12 +253,12 @@ async fn events_describe_and_single_event_submit_work() {
             .unwrap();
     assert_eq!(frontier["actor_frontier"]["did:web:alice.example"], 3);
     assert_eq!(
-        frontier["realm_frontier"]["cx:realm:0196419b-0000-7000-8000-000000000000"]["event_id"],
-        "cx:event:01904100-0000-7000-8000-df827a7269a3"
+        frontier["realm_frontier"]["ck:realm:0196419b-0000-7000-8000-000000000000"]["event_id"],
+        "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
     let federation_frontier: Value =
-        TestClient::get("http://server/api/v1/events/frontier?realm_id=cx:realm:0196419b-0000-7000-8000-000000000000&peer_role=federation_peer")
+        TestClient::get("http://server/api/v1/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-000000000000&peer_role=federation_peer")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -298,7 +298,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let mut conflicting = signed_event_envelope(
-        "cx:event:01904100-0000-7000-8000-f15c8ea06c11",
+        "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
         4,
         Vec::new(),
     );
@@ -372,7 +372,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
 
 #[tokio::test]
 async fn contrix_openapi_spec_contains_facet_projection_contracts() {
-    let mut response = TestClient::get("http://server/.well-known/contrix/openapi.yaml")
+    let mut response = TestClient::get("http://server/.well-known/cokret/openapi.yaml")
         .send(&app())
         .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 200);
@@ -387,9 +387,9 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
     // `FacetName` / `ViewRenderer` / `allowed_entity_facets` were removed
     // alongside the entity/view scaffold in round 6 (no spec counterpart).
     // The renamed cell-family-bound constraint surfaces as
-    // `allowed_object_facets` in the `x-contrix-artifacts` extension.
+    // `allowed_object_facets` in the `x-cokret-artifacts` extension.
     assert!(body.contains("x-operation-aliases"));
-    assert!(body.contains("x-contrix-artifacts"));
+    assert!(body.contains("x-cokret-artifacts"));
     assert!(body.contains("allowed_object_facets"));
     let expected_operation_ids = [
         "cx.system.health",
@@ -506,7 +506,7 @@ async fn contrix_openapi_spec_contains_facet_projection_contracts() {
 async fn index_query_supports_facet_projection_binding() {
     let query: Value = TestClient::post("http://server/api/v1/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"],
+            "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
             "renderer": "collection",
             "limit": 20
@@ -518,7 +518,7 @@ async fn index_query_supports_facet_projection_binding() {
         .unwrap();
     let unsupported: Value = TestClient::post("http://server/api/v1/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["cx:space:0196419b-0000-7000-8000-000000000000"],
+            "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
             "limit": 20
         }))
@@ -550,7 +550,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         &token,
         "did:web:alice.example",
         space_id,
-        "cx:flow:debug-reducer",
+        "ck:flow:debug-reducer",
         serde_json::json!({"body": "debug reducer"}),
         false,
     )
@@ -677,7 +677,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
             &token,
             "did:web:alice.example",
             space_id,
-            "cx:flow:backfill-pages",
+            "ck:flow:backfill-pages",
             serde_json::json!({"body": body}),
             false,
         )
@@ -728,7 +728,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/api/v1/events?realms={space_id}&after=cx:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/api/v1/events?realms={space_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

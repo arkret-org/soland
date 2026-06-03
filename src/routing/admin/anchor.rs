@@ -5,7 +5,7 @@
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
 //! - `POST /admin/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
 //!   writes the new anchorer cell value (cas-register on
-//!   `cx:cell:cx.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
+//!   `ck:cell:cx.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
 //! - `GET  /admin/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
@@ -420,7 +420,7 @@ fn pick_admin_anchor_ref(state: &AppState, realm_id: &SpaceId) -> AnchorId {
     if let Some(first) = leaves.into_iter().next() {
         return first;
     }
-    AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).expect("valid genesis anchor id")
+    AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32))).expect("valid genesis anchor id")
 }
 
 /// Build a fresh Hlc for an admin-issued Move using the server's
@@ -432,7 +432,7 @@ fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 
 /// Build the canonical anchorer cell ref for a Space.
 fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("cx:cell:cx.component.anchorer.v1:{realm_id}")).map_err(|e| {
+    CellRef::new(format!("ck:cell:cx.component.anchorer.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })
@@ -970,7 +970,7 @@ pub(super) async fn admin_repair_bottom(
                 critical: true,
             };
             let inclusion_proof_ref = contrix_sdk::move_event::SemanticRef {
-                id: format!("cx:proof:bottom-repair:{}", head.move_id),
+                id: format!("ck:proof:bottom-repair:{}", head.move_id),
                 role: "inclusion_proof".to_owned(),
                 critical: true,
             };
@@ -1056,7 +1056,7 @@ pub(super) async fn admin_repair_bottom(
                 if touched.is_empty() {
                     return Err(AppError::new(
                         ErrorCode::InvalidParam,
-                        "manual repair effects must declare a `cell` (cx:cell:* id)".to_owned(),
+                        "manual repair effects must declare a `cell` (ck:cell:* id)".to_owned(),
                     )
                     .with_status(StatusCode::BAD_REQUEST));
                 }
@@ -1442,7 +1442,7 @@ pub(super) async fn admin_prune_anchor_dag(
 
     // Genesis check — soland's `MemoryAnchorStore` tracks genesis via
     // `set_genesis_if_absent`; the spec-canonical zero-anchor placeholder
-    // (`cx:anchor:sha256:000...`) used at `apply_anchor` genesis is also
+    // (`ck:anchor:sha256:000...`) used at `apply_anchor` genesis is also
     // treated as genesis when present.
     let is_genesis = match anchor_store.genesis(&realm) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
@@ -1758,7 +1758,7 @@ pub(super) async fn admin_list_multisig_pending(
 /// ```
 ///
 /// When `use_keystore=true`, the new seed is also stored under
-/// `contrix:signer:soland-anchorer:<service_did>` so it survives
+/// `cokret:signer:soland-anchorer:<service_did>` so it survives
 /// process restart. When `use_keystore=false`, the rotation lives only
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
@@ -1824,7 +1824,7 @@ pub(super) async fn admin_rotate_signing_key(
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
         let key_id = format!(
-            "contrix:signer:soland-anchorer:{}",
+            "cokret:signer:soland-anchorer:{}",
             state.config.service_did
         );
         let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
@@ -2009,7 +2009,7 @@ mod tests {
             "shape": "threshold",
             "k": 2,
             "n": 3,
-            "dids": ["did:cx:a", "did:cx:b", "did:cx:c"],
+            "dids": ["did:ck:a", "did:ck:b", "did:ck:c"],
         });
         let resp = anchorer_value_from_cell(Some(&v), "did:web:s");
         assert_eq!(resp.kind_raw, "threshold");
@@ -2043,18 +2043,18 @@ mod tests {
         // shaping helper bridges the two.
         let bottom = json!({
             "kind": "Conflict",
-            "move_ids": ["cx:move:a", "cx:move:b"],
+            "move_ids": ["ck:move:a", "ck:move:b"],
             "details": "two heads"
         });
         let entry = bottom_entry_from(
-            "cx:space:01904100-0000-7000-8000-2dd3431bd65a",
-            "cx:cell:cx.component.space.title.v1:cx:space:01904100-0000-7000-8000-2dd3431bd65a",
+            "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+            "ck:cell:cx.component.space.title.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a",
             &bottom,
         );
         assert_eq!(entry.kind, "conflict");
         assert_eq!(entry.move_ids.len(), 2);
         assert_eq!(entry.candidate_heads.len(), 2);
-        assert_eq!(entry.candidate_heads[0].move_id, "cx:move:a");
+        assert_eq!(entry.candidate_heads[0].move_id, "ck:move:a");
         assert_eq!(entry.details.as_deref(), Some("two heads"));
     }
 
@@ -2062,12 +2062,12 @@ mod tests {
     fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
         let bottom = json!({
             "kind": "InvalidTransition",
-            "move_ids": ["cx:move:x"],
+            "move_ids": ["ck:move:x"],
             "details": "fsm rejected from invited→ban"
         });
         let entry = bottom_entry_from(
-            "cx:space:01904100-0000-7000-8000-2dd3431bd65a",
-            "cx:cell:cx.component.member.state.v1:did.web.alice",
+            "ck:space:01904100-0000-7000-8000-2dd3431bd65a",
+            "ck:cell:cx.component.member.state.v1:did.web.alice",
             &bottom,
         );
         assert_eq!(entry.kind, "invalid_transition");
@@ -2078,8 +2078,8 @@ mod tests {
     fn bottom_repair_strategy_round_trips_through_serde() {
         let head_in = BottomRepairStrategyBody::HeadInWinner {
             head: WinnerHeadResponse {
-                move_id: "cx:move:abc".to_owned(),
-                issuer: Some("did:cx:alice".to_owned()),
+                move_id: "ck:move:abc".to_owned(),
+                issuer: Some("did:ck:alice".to_owned()),
                 hlc: None,
                 summary: None,
             },
@@ -2092,7 +2092,7 @@ mod tests {
         let back: BottomRepairStrategyBody = serde_json::from_value(j).unwrap();
         match back {
             BottomRepairStrategyBody::HeadInWinner { head } => {
-                assert_eq!(head.move_id, "cx:move:abc");
+                assert_eq!(head.move_id, "ck:move:abc");
             }
             other => panic!("expected HeadInWinner, got {other:?}"),
         }
@@ -2115,7 +2115,7 @@ mod tests {
             kind: "threshold".to_owned(),
             threshold_k: Some(2),
             threshold_n: Some(3),
-            threshold_dids: vec!["did:cx:a".to_owned(), "did:cx:b".to_owned()],
+            threshold_dids: vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()],
             ..Default::default()
         };
         let j = serde_json::to_value(&body).unwrap();
@@ -2130,10 +2130,10 @@ mod tests {
 
     #[test]
     fn anchorer_cell_for_builds_canonical_cell_ref() {
-        let cell = anchorer_cell_for("cx:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
+        let cell = anchorer_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
         assert_eq!(
             cell.as_str(),
-            "cx:cell:cx.component.anchorer.v1:cx:space:01904100-0000-7000-8000-2dd3431bd65a"
+            "ck:cell:cx.component.anchorer.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
         );
     }
 

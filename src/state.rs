@@ -348,7 +348,7 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
     score
 }
 
-/// R3.1/R3.2 (contrix-spec @ b56cab1) — Realm-scoped MemberIdentity event
+/// R3.1/R3.2 (cokret-spec @ b56cab1) — Realm-scoped MemberIdentity event
 /// registry. Stores every accepted `cx.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
 /// per the SDK helper `effective_identity_events`, and materializes both
@@ -720,8 +720,8 @@ fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&
 /// JCS-sorted `effective_events` array shared by both R3.2 digest formulas.
 /// Each entry is `{event_id, segment, payload_digest}`; the array is sorted
 /// by `(segment, event_id)` exactly as the SDK helpers do. Kept as raw JSON
-/// (rather than the SDK newtypes) because soland stores `cx:operation:`
-/// event ids, which the strict `EventId` `cx:event:` validator would reject —
+/// (rather than the SDK newtypes) because soland stores `ck:operation:`
+/// event ids, which the strict `EventId` `ck:event:` validator would reject —
 /// the on-the-wire JCS bytes are identical either way.
 fn effective_events_projection(entries: &[EffectiveIdentityEntry]) -> Vec<Value> {
     let mut sorted: Vec<&EffectiveIdentityEntry> = entries.iter().collect();
@@ -992,7 +992,7 @@ pub struct AppState {
     /// is unset / file missing / file malformed — that's the dev-mode
     /// invariant in service-surface.md §3.0.
     pub verified_profiles: Arc<Vec<VerifiedProfileDescriptor>>,
-    /// MID-1..6 (R3.1 spec-sync 2026-05-27, contrix-spec @ 7157ee8) — in-
+    /// MID-1..6 (R3.1 spec-sync 2026-05-27, cokret-spec @ 7157ee8) — in-
     /// memory registry of `cx.member.identity.update` events. Reducer
     /// dispatch (`apply_member_identity_update`) and the sync roster
     /// projection (`SYNC-MEM-1..3`) both go through this. See
@@ -1051,10 +1051,10 @@ pub struct AccountLifecycleRecord {
     pub changed_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// REC-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — accepted
+/// REC-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — accepted
 /// recovery policy snapshot persisted by `RecoveryPolicyStore`.
 ///
-/// Spec: `contrix-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
+/// Spec: `cokret-spec/spec/v1/artifacts/schemas/recovery-policy.schema.json`.
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyRecord {
     pub policy_id: String,
@@ -1076,7 +1076,7 @@ pub struct RecoveryPolicyRecord {
 
 /// REC-1 — accepted recovery receipt snapshot.
 ///
-/// Spec: `contrix-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
+/// Spec: `cokret-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
 #[derive(Clone, Debug)]
 pub struct RecoveryReceiptRecord {
     pub receipt_id: String,
@@ -1215,7 +1215,7 @@ pub struct ConsentCellRecord {
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
 /// (e.g. `cx.read_receipt.preferences`, `cx.contacts.actor.did:web:alice.example`,
-/// `cx.contacts.space.cx:space:0196419b-0000-7000-8000-000000000000`). Soland
+/// `cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///
@@ -1297,7 +1297,7 @@ pub struct CanonicalEventRecord {
 pub struct ProjectionEventRecord {
     pub event_id: String,
     pub realm_id: String,
-    /// Canonical Contrix event kind (e.g. `cx.message.create`).
+    /// Canonical Cokret event kind (e.g. `cx.message.create`).
     pub event_kind: String,
     pub operation_type: String,
     pub operation_id: Option<String>,
@@ -1735,7 +1735,7 @@ impl AppState {
         // Seed the deterministic demo Realm into the in-memory directory index
         // when explicitly opted in (tests via `test_config()`, dev harnesses via
         // `SOLAND_SEED_DEMO_DATA=true`). In production this stays off so soland
-        // deployments don't all advertise the same hard-coded "Contrix Demo
+        // deployments don't all advertise the same hard-coded "Cokret Demo
         // Space" id across federation peers.
         //
         // The DB-touching half of the demo seed (writing the demo account +
@@ -1744,10 +1744,10 @@ impl AppState {
         // async boot step driven from `main`, so the synchronous constructor
         // never touches the database.
         if config.seed_demo_data {
-            let demo_realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+            let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
             let mut demo = RealmDirectoryEntry::new(
                 RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
-                "Contrix Demo Realm",
+                "Cokret Demo Realm",
             );
             demo.description = Some("Shared demo Realm served by soland".to_owned());
             demo.public = true;
@@ -1781,7 +1781,7 @@ impl AppState {
             (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
-                    let key_id = format!("contrix:signer:soland-anchorer:{service_did}");
+                    let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
                     let store = contrix_sdk::keystore::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
@@ -1968,7 +1968,7 @@ impl AppState {
     pub async fn hydrate(&self) {
         let now = chrono::Utc::now();
         if self.config.seed_demo_data {
-            let demo_realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
+            let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
             let demo_account = AccountRecord {
                 did: "did:web:alice.example".to_owned(),
                 handle: "@alice".to_owned(),
@@ -2509,7 +2509,7 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
 }
 
 fn normalize_persisted_realm_id(id: &str) -> String {
-    id.strip_prefix("cx:space:")
-        .map(|suffix| format!("cx:realm:{suffix}"))
+    id.strip_prefix("ck:space:")
+        .map(|suffix| format!("ck:realm:{suffix}"))
         .unwrap_or_else(|| id.to_owned())
 }

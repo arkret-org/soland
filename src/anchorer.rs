@@ -212,14 +212,14 @@ impl AnchorerWorker {
             .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?;
 
         // canonical_bytes_for_id excludes `id` + `anchorer_signature` (see
-        // `Anchor::canonical_bytes_for_id` in contrix-core/src/anchor.rs).
+        // `Anchor::canonical_bytes_for_id` in cokret-core/src/anchor.rs).
         // We therefore compute canonical bytes from an Anchor whose `id`
         // is the well-known zero sentinel and whose `anchorer_signature` is a
         // zero-byte-signature placeholder — both fields are EXCLUDED from
         // the canonical body so the sentinels never influence the signing
         // target. Then we derive the real id and sign over those same
         // canonical bytes, keeping the signature byte-stable.
-        let zero_anchor_id = AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
+        let zero_anchor_id = AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32)))
             .expect("zero AnchorId is well-formed");
         let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
@@ -266,7 +266,7 @@ impl AnchorerWorker {
         //
         // Capture mls.epoch before reload so we can detect rotation.
         let mls_epoch_cell = CellRef::new(format!(
-            "cx:cell:cx.component.mls.epoch.v1:{}",
+            "ck:cell:cx.component.mls.epoch.v1:{}",
             realm_id.as_str()
         ))
         .ok();
@@ -349,7 +349,7 @@ impl AnchorerWorker {
         space_id: &SpaceId,
     ) -> Result<bool, AnchorerError> {
         let anchorer_cell = match CellRef::new(format!(
-            "cx:cell:cx.component.anchorer.v1:{}",
+            "ck:cell:cx.component.anchorer.v1:{}",
             space_id.as_str()
         )) {
             Ok(c) => c,
@@ -591,7 +591,7 @@ impl AnchorerWorker {
         state: &AppState,
         realm_id: &SpaceId,
     ) -> Result<Anchor, AnchorerError> {
-        let zero_anchor_id = AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32)))
+        let zero_anchor_id = AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32)))
             .expect("zero AnchorId is well-formed");
         let zero_sig = zero_anchorer_sig_placeholder()?;
         let mut anchor = Anchor {
@@ -705,11 +705,11 @@ mod tests {
     #[test]
     fn read_did_list_picks_first_present_alias() {
         let v = json!({
-            "members": ["did:cx:a", "did:cx:b"],
+            "members": ["did:ck:a", "did:ck:b"],
             "threshold_dids": ["did:should-not-be-read"],
         });
         let dids = read_did_list(&v, &["members", "threshold_dids"]);
-        assert_eq!(dids, vec!["did:cx:a".to_owned(), "did:cx:b".to_owned()]);
+        assert_eq!(dids, vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()]);
     }
 
     #[test]
@@ -721,37 +721,37 @@ mod tests {
     #[test]
     fn read_did_list_filters_non_string_entries_silently() {
         let v = json!({
-            "members": ["did:cx:a", 42, null, "did:cx:b"],
+            "members": ["did:ck:a", 42, null, "did:ck:b"],
         });
         let dids = read_did_list(&v, &["members"]);
-        assert_eq!(dids, vec!["did:cx:a".to_owned(), "did:cx:b".to_owned()]);
+        assert_eq!(dids, vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()]);
     }
 
     #[test]
     fn is_round_leader_picks_lex_smallest_did() {
-        let worker = AnchorerWorker::for_service("did:cx:b");
+        let worker = AnchorerWorker::for_service("did:ck:b");
         assert!(!worker.is_round_leader(&[
-            "did:cx:a".to_owned(),
-            "did:cx:b".to_owned(),
-            "did:cx:c".to_owned(),
+            "did:ck:a".to_owned(),
+            "did:ck:b".to_owned(),
+            "did:ck:c".to_owned(),
         ]));
-        let worker = AnchorerWorker::for_service("did:cx:a");
+        let worker = AnchorerWorker::for_service("did:ck:a");
         assert!(worker.is_round_leader(&[
-            "did:cx:a".to_owned(),
-            "did:cx:b".to_owned(),
-            "did:cx:c".to_owned(),
+            "did:ck:a".to_owned(),
+            "did:ck:b".to_owned(),
+            "did:ck:c".to_owned(),
         ]));
     }
 
     #[test]
     fn is_round_leader_rejects_when_not_a_member() {
-        let worker = AnchorerWorker::for_service("did:cx:other");
-        assert!(!worker.is_round_leader(&["did:cx:a".to_owned(), "did:cx:b".to_owned(),]));
+        let worker = AnchorerWorker::for_service("did:ck:other");
+        assert!(!worker.is_round_leader(&["did:ck:a".to_owned(), "did:ck:b".to_owned(),]));
     }
 
     #[test]
     fn is_round_leader_returns_false_for_empty_member_set() {
-        let worker = AnchorerWorker::for_service("did:cx:a");
+        let worker = AnchorerWorker::for_service("did:ck:a");
         assert!(!worker.is_round_leader(&[]));
     }
 }

@@ -58,7 +58,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -85,7 +85,7 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&json!({
             "actor": actor,
-            "device_id": format!("cx:device:01904100-0000-7000-8000-{device_suffix}"),
+            "device_id": format!("ck:device:01904100-0000-7000-8000-{device_suffix}"),
             "display_name": actor,
         }))
         .send(&app_from_state(state))
@@ -106,7 +106,7 @@ async fn seed_realm(
     title: &str,
     history_visibility: &str,
 ) -> String {
-    let realm_id = new_prefixed_uuid7("cx:realm:");
+    let realm_id = new_prefixed_uuid7("ck:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -164,7 +164,7 @@ async fn admit_member(
         "delivery_status": "unroutable",
     });
     let mut event = json!({
-        "event_id": new_prefixed_uuid7("cx:event:"),
+        "event_id": new_prefixed_uuid7("ck:event:"),
         "kind": "cx.member.state",
         "schema_id": "cx.schema.event.v1",
         "actor_id": owner_did,
@@ -212,13 +212,13 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
         }
     });
     let mut event = json!({
-        "event_id": new_prefixed_uuid7("cx:event:"),
+        "event_id": new_prefixed_uuid7("ck:event:"),
         "kind": "cx.message.create",
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": space_id,
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": [],
@@ -227,7 +227,7 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -274,7 +274,7 @@ fn install_projected_circle_scope(
                 history_visibility: "joined".to_owned(),
                 metadata_encryption_floor: Some("minimal_encrypted".to_owned()),
                 encryption_profile: "mls_rfc9420".to_owned(),
-                mls_group_ref: Some(format!("cx:mls:mls_rfc9420:{circle_id}")),
+                mls_group_ref: Some(format!("ck:mls:mls_rfc9420:{circle_id}")),
                 state: CircleLifecycleState::Active,
                 state_changed_at: None,
                 created_by: created_by.to_owned(),
@@ -328,7 +328,7 @@ async fn send_circle_scoped_encrypted_message(
     device_id: &str,
     space_id: &str,
 ) -> String {
-    let event_id = new_prefixed_uuid7("cx:event:");
+    let event_id = new_prefixed_uuid7("ck:event:");
     // Spec-conforming encrypted message: `encrypted_content` (not the retired
     // `encrypted_payload`), `track_name`, and an aad carrying ONLY realm_id +
     // event_kind. The message does NOT carry scope_circle_id — its circle
@@ -403,7 +403,7 @@ async fn submit_projection_event(
     kind: &str,
     payload: Value,
 ) -> String {
-    let event_id = new_prefixed_uuid7("cx:event:");
+    let event_id = new_prefixed_uuid7("ck:event:");
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
@@ -452,7 +452,7 @@ async fn submit_projection_event_status(
     kind: &str,
     payload: Value,
 ) -> (u16, String) {
-    let event_id = new_prefixed_uuid7("cx:event:");
+    let event_id = new_prefixed_uuid7("ck:event:");
     let mut event = json!({
         "event_id": event_id.clone(),
         "kind": kind,
@@ -496,9 +496,9 @@ fn sha256_json(value: &Value) -> String {
 
 fn flow_id_for_realm(realm_id: &str) -> String {
     realm_id
-        .strip_prefix("cx:realm:")
-        .map(|suffix| format!("cx:flow:{suffix}"))
-        .unwrap_or_else(|| "cx:flow:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .strip_prefix("ck:realm:")
+        .map(|suffix| format!("ck:flow:{suffix}"))
+        .unwrap_or_else(|| "ck:flow:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 fn event_canonical_digest(event: &Value) -> String {
@@ -538,7 +538,7 @@ fn event_query_bodies(events: &Value) -> Vec<String> {
 async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_did = "did:web:alice.example";
-    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = "did:web:bob.example";
     let _bob_session_device = dev_token(state.clone(), bob_did, "b0b000000000").await;
@@ -594,7 +594,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
 async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_did = "did:web:alice.example";
-    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = "did:web:bob.example";
     let bob = dev_token(state.clone(), bob_did, "b0b000000002").await;
@@ -637,7 +637,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
 async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_circle() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_did = "did:web:alice.example";
-    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000010";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000010";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000010").await;
     let bob_did = "did:web:bob.example";
     let bob = dev_token(state.clone(), bob_did, "b0b000000010").await;
@@ -656,7 +656,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await;
     }
 
-    let circle_id = new_prefixed_uuid7("cx:circle:");
+    let circle_id = new_prefixed_uuid7("ck:circle:");
     install_projected_circle_scope(
         &state,
         &space_id,
@@ -735,10 +735,10 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_did = "did:web:alice.example";
-    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = "did:web:bob.example";
-    let bob_device_id = "cx:device:01904100-0000-7000-8000-b0b000000011";
+    let bob_device_id = "ck:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
     let space_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
     admit_member(
@@ -775,7 +775,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         }),
     )
     .await;
-    let root_message_ref = root_event_id.replacen("cx:event:", "cx:message:", 1);
+    let root_message_ref = root_event_id.replacen("ck:event:", "ck:message:", 1);
     let reply_event_id = submit_projection_event(
         state.clone(),
         &bob,
@@ -884,13 +884,13 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
 async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice_did = "did:web:alice.example";
-    let alice_device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = "did:web:bob.example";
-    let bob_device_id = "cx:device:01904100-0000-7000-8000-b0b000000022";
+    let bob_device_id = "ck:device:01904100-0000-7000-8000-b0b000000022";
     let bob = dev_token(state.clone(), bob_did, "b0b000000022").await;
     let carol_did = "did:web:carol.example";
-    let carol_device_id = "cx:device:01904100-0000-7000-8000-ca2010000022";
+    let carol_device_id = "ck:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
     let space_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
     admit_member(

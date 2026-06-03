@@ -10,13 +10,13 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let state = AppState::new(test_config(), Db { pool: None });
     let push_url = "http://server/api/v1/federation/push-operations";
     let operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
-        RealmId::new("cx:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
+        OperationId::new("ck:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
+        RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e",
+            "event_id": "ck:event:01904100-0000-7000-8000-19d11d370b0e",
             "sender": "did:web:remote.example",
-            "flow_id": "cx:flow:01904100-0000-7000-8000-fede00000001",
+            "flow_id": "ck:flow:01904100-0000-7000-8000-fede00000001",
             "track_name": "discussion",
             "content": {"kind": "cx.content.text", "body": "from federation"}
         }),
@@ -25,7 +25,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let first_body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:soland.local",
-        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "space_id": "ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [operation.clone()]
     });
@@ -46,7 +46,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
         .unwrap();
     assert_eq!(
         first["accepted"][0],
-        "cx:operation:01904100-0000-7000-8000-4b147e97831e"
+        "ck:operation:01904100-0000-7000-8000-4b147e97831e"
     );
     assert!(first["rejected"].as_array().unwrap().is_empty());
 
@@ -63,7 +63,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     assert_eq!(unsigned_body["error"]["code"], "schema_violation");
 
     let pulled: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/api/v1/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -72,11 +72,11 @@ async fn federation_accepts_idempotent_replayed_operations() {
     .unwrap();
     assert_eq!(
         pulled["operations"][0]["operation_id"],
-        "cx:operation:01904100-0000-7000-8000-4b147e97831e"
+        "ck:operation:01904100-0000-7000-8000-4b147e97831e"
     );
 
     let bootstrap: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6&snapshot_bootstrap=true",
+        "http://server/api/v1/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6&snapshot_bootstrap=true",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -85,7 +85,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     .unwrap();
     assert_eq!(
         bootstrap["snapshot_bootstrap"]["manifest"]["space_id"],
-        "cx:realm:01904100-0000-7000-8000-20d6cfd24be6"
+        "ck:realm:01904100-0000-7000-8000-20d6cfd24be6"
     );
     assert!(
         bootstrap["snapshot_bootstrap"]["state_digest"]
@@ -97,7 +97,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let replay_body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:soland.local",
-        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "space_id": "ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [operation]
     });
@@ -118,11 +118,11 @@ async fn federation_accepts_idempotent_replayed_operations() {
         .unwrap();
     assert_eq!(
         replay["accepted"][0],
-        "cx:operation:01904100-0000-7000-8000-4b147e97831e"
+        "ck:operation:01904100-0000-7000-8000-4b147e97831e"
     );
     assert!(replay["rejected"].as_array().unwrap().is_empty());
     let after_replay: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/api/v1/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -136,11 +136,11 @@ async fn federation_accepts_idempotent_replayed_operations() {
     );
 
     let invalid_operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-1cac81a395b6").unwrap(),
-        RealmId::new("cx:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
+        OperationId::new("ck:operation:01904100-0000-7000-8000-1cac81a395b6").unwrap(),
+        RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-97aea7e40a20",
+            "event_id": "ck:event:01904100-0000-7000-8000-97aea7e40a20",
             "sender": "did:web:remote.example",
             "encrypted": true,
             "content": {"ciphertext": "missing-envelope-fields"}
@@ -149,7 +149,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     let invalid_body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:soland.local",
-        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "space_id": "ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [invalid_operation]
     });
@@ -172,18 +172,18 @@ async fn federation_accepts_idempotent_replayed_operations() {
     assert_eq!(invalid_push["rejected"][0]["reason"], "invalid_semantics");
 
     let redaction = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-fd0b34f35181").unwrap(),
-        RealmId::new("cx:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
+        OperationId::new("ck:operation:01904100-0000-7000-8000-fd0b34f35181").unwrap(),
+        RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
         kinds::CX_MESSAGE_REDACT,
         serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-9494a7271728",
-            "target_event_id": "cx:event:01904100-0000-7000-8000-19d11d370b0e"
+            "event_id": "ck:event:01904100-0000-7000-8000-9494a7271728",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-19d11d370b0e"
         }),
     );
     let redaction_body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:soland.local",
-        "space_id": "cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "space_id": "ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [redaction]
     });
@@ -204,11 +204,11 @@ async fn federation_accepts_idempotent_replayed_operations() {
         .unwrap();
     assert_eq!(
         redaction_push["accepted"][0],
-        "cx:operation:01904100-0000-7000-8000-fd0b34f35181"
+        "ck:operation:01904100-0000-7000-8000-fd0b34f35181"
     );
 
     let redacted_pull: Value = TestClient::get(
-        "http://server/api/v1/federation/pull-operations?space_id=cx:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/api/v1/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -223,20 +223,20 @@ async fn federation_push_rejects_bad_rfc9421_and_missing_relay_inner_signature()
     let state = AppState::new(test_config(), Db { pool: None });
     let push_url = "http://server/api/v1/federation/push-operations";
     let operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-7e173b950001").unwrap(),
-        RealmId::new("cx:realm:01904100-0000-7000-8000-7e173b950002").unwrap(),
+        OperationId::new("ck:operation:01904100-0000-7000-8000-7e173b950001").unwrap(),
+        RealmId::new("ck:realm:01904100-0000-7000-8000-7e173b950002").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-7e173b950003",
+            "event_id": "ck:event:01904100-0000-7000-8000-7e173b950003",
             "sender": "did:web:remote.example",
-            "thread_id": "cx:flow:federation-bad-signature",
+            "thread_id": "ck:flow:federation-bad-signature",
             "body": "bad signature should not land"
         }),
     );
     let body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:soland.local",
-        "space_id": "cx:realm:01904100-0000-7000-8000-7e173b950002",
+        "space_id": "ck:realm:01904100-0000-7000-8000-7e173b950002",
         "service_binding_ref": "did:web:remote.example#soland",
         "operations": [operation]
     });
@@ -359,13 +359,13 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let state = AppState::new(test_config(), Db { pool: None });
     let txn_url = "http://server/api/v1/federation/transactions/txn-idem";
     let operation = Operation::create(
-        OperationId::new("cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
-        RealmId::new("cx:realm:01904100-0000-7000-8000-788d17d38a52").unwrap(),
+        OperationId::new("ck:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
+        RealmId::new("ck:realm:01904100-0000-7000-8000-788d17d38a52").unwrap(),
         kinds::CX_MESSAGE_CREATE,
         serde_json::json!({
-            "event_id": "cx:event:01904100-0000-7000-8000-f10d061a12a7",
+            "event_id": "ck:event:01904100-0000-7000-8000-f10d061a12a7",
             "sender": "did:web:remote.example",
-            "flow_id": "cx:flow:01904100-0000-7000-8000-fede00000002",
+            "flow_id": "ck:flow:01904100-0000-7000-8000-fede00000002",
             "track_name": "discussion",
             "content": {"kind": "cx.content.text", "body": "transaction body"}
         }),
@@ -394,7 +394,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         .unwrap();
     assert_eq!(
         first["accepted"][0],
-        "cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
+        "ck:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
     );
 
     let mut duplicate_req = TestClient::put(txn_url).json(&transaction_body);
@@ -414,7 +414,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         .unwrap();
     assert_eq!(
         duplicate["accepted"][0],
-        "cx:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
+        "ck:operation:01904100-0000-7000-8000-91a2f2e7a3b4"
     );
     assert!(duplicate["rejected"].as_array().unwrap().is_empty());
 
@@ -564,11 +564,11 @@ fn verify_actor_headers(body: &Value) -> Vec<(&'static str, String)> {
     vec![
         (
             "source-trust-domain",
-            "cx:trust_domain:remote.example".to_owned(),
+            "ck:trust_domain:remote.example".to_owned(),
         ),
         (
             "destination-trust-domain",
-            "cx:trust_domain:soland.local".to_owned(),
+            "ck:trust_domain:soland.local".to_owned(),
         ),
         ("request-canonical-digest", digest),
     ]

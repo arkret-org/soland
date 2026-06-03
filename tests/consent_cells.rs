@@ -51,7 +51,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: false,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -63,7 +63,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
-            "device_id": format!("cx:device:test-{}", actor.replace(':', "-")),
+            "device_id": format!("ck:device:test-{}", actor.replace(':', "-")),
             "display_name": actor,
         }))
         .send(app)
@@ -239,7 +239,7 @@ async fn create_realm(app: &salvo::Service, token: &str, actor: &str) -> String 
                 "title": "Consent event projection",
                 "summary": "Consent reducer test realm",
                 "created_by": actor,
-                "trust_domain": "cx:trust_domain:soland.local",
+                "trust_domain": "ck:trust_domain:soland.local",
                 "schema_refs": ["cx.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
@@ -335,7 +335,7 @@ async fn consent_events_project_cells_and_contact_gate() {
     assert_eq!(granted["state"], "granted");
     assert_eq!(
         granted["cell_id"],
-        format!("cx:cell:cx.component.consent.grant.v1:{consent_id}")
+        format!("ck:cell:cx.component.consent.grant.v1:{consent_id}")
     );
     assert!(
         granted["grant_dots"]

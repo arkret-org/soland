@@ -63,7 +63,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -75,7 +75,7 @@ async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice"
         }))
         .send(&service(state))
@@ -91,7 +91,7 @@ async fn applet_manifest_verify_smoke() {
     // Build a freshly-signed manifest and verify it via the HTTP
     // route. We don't need an authenticated session for this route —
     // it's intentionally open so applet registries can probe before
-    // committing to a Contrix account.
+    // committing to a Cokret account.
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
 
@@ -229,10 +229,10 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         register["portal_realm_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:realm:portal:bridge-smoke-")
+            .starts_with("ck:realm:portal:bridge-smoke-")
     );
 
-    let space_id = format!("cx:realm:applet-bridge-smoke-{suffix}");
+    let space_id = format!("ck:realm:applet-bridge-smoke-{suffix}");
     let ghost: Value = TestClient::post(format!(
         "http://server/api/v1/extensions/applets/{applet_id}/ghosts"
     ))
@@ -253,7 +253,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         ghost["message_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:message:")
+            .starts_with("ck:message:")
     );
     assert!(
         ghost["accountability"]
@@ -363,7 +363,7 @@ async fn tsp_transport_route_audit_smoke() {
             "transport_id": "tspt:alice-smoke",
             "transport_type": "tsp-pairwise",
             "endpoint_url": "https://alice.example/tsp",
-            "supported_protocols": ["contrix"]
+            "supported_protocols": ["cokret"]
         }))
         .send(&app)
         .await

@@ -252,7 +252,7 @@ async fn upsert_organization_policy(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| {
             format!(
-                "cx:org-policy:{}:{version}",
+                "ck:org-policy:{}:{version}",
                 safe_id_fragment(&organization_id)
             )
         });
@@ -750,9 +750,9 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
     if value.starts_with("did:") {
         validate_did(value)
             .map_err(|_| AppError::invalid_param("organization_id DID is invalid"))?;
-    } else if !value.starts_with("cx:org:") {
+    } else if !value.starts_with("ck:org:") {
         return Err(AppError::invalid_param(
-            "organization_id must be a DID or cx:org: identifier",
+            "organization_id must be a DID or ck:org: identifier",
         ));
     }
     Ok(value.to_owned())
@@ -761,7 +761,7 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
 fn display_name_from_organization_id(organization_id: &str) -> String {
     organization_id
         .trim_start_matches("did:web:")
-        .trim_start_matches("cx:org:")
+        .trim_start_matches("ck:org:")
         .replace(['.', '-'], " ")
 }
 

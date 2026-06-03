@@ -1,6 +1,6 @@
 //! Flow ID derivation + discussion-track projection helpers.
 //!
-//! Flow IDs are derived from Realm/Space IDs via typed-id → `cx:flow:` re-tagging
+//! Flow IDs are derived from Realm/Space IDs via typed-id → `ck:flow:` re-tagging
 //! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
 //! discussion track as the const string `discussion`.
 //!
@@ -22,18 +22,18 @@ pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option
 
 pub fn derived_flow_id(seed: &str) -> String {
     let digest = sha256_hex(seed.as_bytes());
-    format!("cx:flow:{}", &digest[..26])
+    format!("ck:flow:{}", &digest[..26])
 }
 
 pub fn flow_id_from_space_id(space_id: &str) -> String {
-    retag_typed_id(space_id, "cx:realm:", "cx:flow:")
-        .or_else(|| retag_typed_id(space_id, "cx:space:", "cx:flow:"))
+    retag_typed_id(space_id, "ck:realm:", "ck:flow:")
+        .or_else(|| retag_typed_id(space_id, "ck:space:", "ck:flow:"))
         .unwrap_or_else(|| derived_flow_id(space_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {
-    retag_typed_id(event_id, "cx:event:", "cx:message:")
-        .unwrap_or_else(|| format!("cx:message:{event_id}"))
+    retag_typed_id(event_id, "ck:event:", "ck:message:")
+        .unwrap_or_else(|| format!("ck:message:{event_id}"))
 }
 
 pub fn default_discussion_track(_flow_id: &str, _track_id: &str) -> serde_json::Value {
@@ -98,7 +98,7 @@ pub async fn flow_projection_for_space(
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
     let history_visibility = flow_history_visibility_for_space(state, space_id).await;
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
-    // (see contrix-spec `artifacts/registry/forbidden-wire-fields.json`
+    // (see cokret-spec `artifacts/registry/forbidden-wire-fields.json`
     // entries `kind=room` and `room_kind`); Space is the v1 boundary and
     // the Flow.kind discriminator MUST be a v1 value (e.g. "discussion").
     json!({

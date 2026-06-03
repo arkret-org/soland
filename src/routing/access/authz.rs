@@ -80,8 +80,8 @@ async fn authz_check(
                     .flatten()
             })
             .unwrap_or_default();
-        // SEL-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
-        // `kind=circle` resources MUST carry a `cx:circle:<uuid>`
+        // SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
+        // `kind=circle` resources MUST carry a `ck:circle:<uuid>`
         // identifier; accept either `circle_id` or the canonical `id`
         // field. The Circle is scoped to its parent Realm; the resource
         // resolver pairs it with the calling realm_id below.

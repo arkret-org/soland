@@ -65,7 +65,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -84,7 +84,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice Desktop"
         }))
         .send(svc)
@@ -103,7 +103,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
 async fn realms_delivery_binding_policy_endpoint_responds() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let realm_id = "cx:space:01904100-0000-7000-8000-d00ddeadbeef";
+    let realm_id = "ck:space:01904100-0000-7000-8000-d00ddeadbeef";
     let body: Value = TestClient::get(format!(
         "http://server/admin/realms/{realm_id}/delivery-binding-policy"
     ))

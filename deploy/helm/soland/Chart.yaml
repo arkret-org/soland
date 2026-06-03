@@ -1,6 +1,6 @@
 apiVersion: v2
 name: soland
-description: Production Helm chart for the soland Contrix principal server
+description: Production Helm chart for the soland Cokret principal server
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

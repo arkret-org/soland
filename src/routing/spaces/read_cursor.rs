@@ -199,7 +199,7 @@ fn validate_track(track: &str) -> Result<(), AppError> {
 }
 
 fn validate_position(position: &ReadCursorPositionWire) -> Result<(), AppError> {
-    if !position.event_id.starts_with("cx:event:") {
+    if !position.event_id.starts_with("ck:event:") {
         return Err(AppError::invalid_param("invalid position.event_id"));
     }
     let parts = position.hlc.split('-').collect::<Vec<_>>();

@@ -79,7 +79,7 @@ pub(super) fn router() -> Router {
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(OutboundPushBridgeDescribeResponse {
-        contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
+        contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         api_base_path: "/api/v1/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
@@ -101,9 +101,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "cx.push.notify".to_owned(),
-            origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
-            destination_service_did_header: "X-Contrix-Destination-Service-Did".to_owned(),
-            request_id_header: "X-Contrix-Request-Id".to_owned(),
+            origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
+            destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
+            request_id_header: "X-Cokret-Request-Id".to_owned(),
             idempotency_key_header: "Idempotency-Key".to_owned(),
             payload_mode: format!(
                 "blind_wakeup_from_principal_service_did={}",
@@ -120,9 +120,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "force_refresh": true
             }),
             notify_headers: json!({
-                "X-Contrix-Origin-Service-Did": state.config.service_did,
-                "X-Contrix-Destination-Service-Did": "did:web:floria.example",
-                "X-Contrix-Request-Id": "req_01js0000000000000000000000",
+                "X-Cokret-Origin-Service-Did": state.config.service_did,
+                "X-Cokret-Destination-Service-Did": "did:web:floria.example",
+                "X-Cokret-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"
             }),
             cache_import_request: json!({
@@ -537,11 +537,11 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
 
     for suffix in [
         "/api/v1/push/bridge/describe",
-        "/contrix/push/v1/bridge/describe",
+        "/cokret/push/v1/bridge/describe",
         "/api/v1/push/notify",
-        "/contrix/push/v1/notify",
+        "/cokret/push/v1/notify",
         "/api/v1/push",
-        "/contrix/push/v1",
+        "/cokret/push/v1",
     ] {
         if let Some(prefix) = value.strip_suffix(suffix) {
             value = prefix.trim_end_matches('/').to_owned();
@@ -569,9 +569,9 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
         contract: "cx.push.bridge.describe".to_owned(),
         expected_notify_path: "/api/v1/push/notify".to_owned(),
         expected_operation_id: "cx.push.notify".to_owned(),
-        expected_origin_service_did_header: "X-Contrix-Origin-Service-Did".to_owned(),
-        expected_destination_service_did_header: "X-Contrix-Destination-Service-Did".to_owned(),
-        expected_request_id_header: "X-Contrix-Request-Id".to_owned(),
+        expected_origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
+        expected_destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
+        expected_request_id_header: "X-Cokret-Request-Id".to_owned(),
         expected_idempotency_key_header: "Idempotency-Key".to_owned(),
         auth_modes: vec!["bearer".to_owned()],
         privacy_mode: "blind_wakeup".to_owned(),

@@ -367,7 +367,7 @@ async fn resolve_space_for_address(
             .collect()
     };
     candidates.into_iter().find(|entry| match &parsed.realm {
-        RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("cx:realm:{uuid}"),
+        RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("ck:realm:{uuid}"),
         RealmRef::Alias(alias) => entry.name.eq_ignore_ascii_case(alias),
     })
 }
@@ -469,11 +469,11 @@ fn member_count_bucket(count: usize) -> &'static str {
 }
 
 fn object_preview_for_address(parsed: &contrix_sdk::ParsedAddress) -> Option<Value> {
-    let flow_id = parsed.flow.as_deref().map(|flow| format!("cx:flow:{flow}"));
+    let flow_id = parsed.flow.as_deref().map(|flow| format!("ck:flow:{flow}"));
     let message_id = parsed
         .message
         .as_deref()
-        .map(|message| format!("cx:message:{message}"));
+        .map(|message| format!("ck:message:{message}"));
     flow_id.map(|flow_id| {
         let mut preview = serde_json::Map::new();
         preview.insert("flow_id".to_owned(), json!(flow_id));
@@ -586,7 +586,7 @@ fn token_target_matches_claim(
 fn decode_preview_token(token: &str) -> Option<Value> {
     let encoded = token
         .trim()
-        .strip_prefix("cx:preview-token:")
+        .strip_prefix("ck:preview-token:")
         .unwrap_or_else(|| token.trim());
     if encoded.starts_with('{') {
         return serde_json::from_str(encoded).ok();
@@ -844,7 +844,7 @@ async fn resolve_organization(
     let matches_handle = body
         .handle
         .as_deref()
-        .is_some_and(|handle| handle.eq_ignore_ascii_case("@contrix-demo"));
+        .is_some_and(|handle| handle.eq_ignore_ascii_case("@cokret-demo"));
     if !matches_id && !matches_handle {
         return Err(AppError::not_found("not found"));
     }
@@ -882,7 +882,7 @@ async fn search_actors(
     let body = body.into_inner();
     let limit = checked_limit(body.limit)?;
     if let Some(organization_id) = body.organization_id.as_deref()
-        && organization_id != "cx:org:demo"
+        && organization_id != "ck:org:demo"
     {
         return json_ok(DirectoryValueSearchResponse {
             results: Vec::new(),
@@ -925,7 +925,7 @@ async fn search_users(
     let limit = checked_limit(body.limit)?;
     let query = body.query;
     let session = authenticated_session(state, req).await.ok();
-    // DIR-1 (R3.1, contrix-spec @ 7157ee8) — `cx.directory.search_users`
+    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `cx.directory.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
@@ -950,7 +950,7 @@ async fn search_users(
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
 /// `cx.directory.search_users` response entry. Only `handle` (canonical
-/// `<localpart>:<domain>` per handle-claim.schema.json, contrix-spec @
+/// `<localpart>:<domain>` per handle-claim.schema.json, cokret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
     let service_domain = state
@@ -1030,7 +1030,7 @@ async fn resolve_handle(
             let handle_claim = signed_handle_claim(state, &normalized, &did, &audience)?;
             // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
             // from the freshly signed claim so the top-level response field
-            // matches handle-claim.schema.json (contrix-spec @ 7157ee8). The
+            // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
             let canonical_handle = handle_claim.handle.clone();
             let member_delivery_binding = handle_claim.member_delivery_binding.clone();
@@ -1056,7 +1056,7 @@ fn signed_handle_claim(
     audience: &str,
 ) -> Result<HandleClaim, AppError> {
     // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
-    // holder/principal DID (e.g. a `cx:actor:` / `cx:account:` typed id).
+    // holder/principal DID (e.g. a `ck:actor:` / `ck:account:` typed id).
     // Delegates to the SDK rejection rule via the shared wire validator.
     if let Err(rejection) =
         crate::wire_validators::handle_claim_subject::validate_subject(&json!({ "subject": did }))
@@ -1077,8 +1077,8 @@ fn signed_handle_claim(
         .next()
         .unwrap_or(handle)
         .to_ascii_lowercase();
-    // HDLREN-1 (contrix-spec @ 7157ee8) — canonical handle wire form is
-    // `<localpart>:<domain>`. The retired `contrix://<domain>/users/<localpart>`
+    // HDLREN-1 (cokret-spec @ 7157ee8) — canonical handle wire form is
+    // `<localpart>:<domain>`. The retired `cokret://<domain>/users/<localpart>`
     // URI is dropped from R3.1 wire; `acct:<local>@<domain>` survives as an
     // interop alias only.
     let canonical_handle = format!("{localpart}:{service_domain}");
@@ -1092,7 +1092,7 @@ fn signed_handle_claim(
         "issuer": service_did,
         "issuer_service_did": service_did,
         "binding_state": "verified",
-        // HC-SOL-1 (R3.2, contrix-spec @ b56cab1) — `claim_type=service_handle`
+        // HC-SOL-1 (R3.2, cokret-spec @ b56cab1) — `claim_type=service_handle`
         // is removed from `cx.schema.handle_claim.v1`. The demo directory
         // issues a user/principal handle claim, so `user_handle` is the
         // correct class here.
@@ -1279,7 +1279,7 @@ async fn directory_announce(
         ));
     }
     let announcement_id = format!(
-        "cx:announcement:{}",
+        "ck:announcement:{}",
         super::sha256_hex(
             format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes()
         )
@@ -1323,7 +1323,7 @@ async fn directory_withdraw(
                 .and_then(Value::as_str)
                 .map(|resource_id| {
                     format!(
-                        "cx:announcement:{}",
+                        "ck:announcement:{}",
                         super::sha256_hex(
                             format!("{}:realm:{}", session.actor, resource_id).as_bytes()
                         )
@@ -1412,9 +1412,9 @@ fn require_demo_directory_provider(state: &AppState) -> Result<(), AppError> {
 
 pub fn demo_organization(spaces: &[&RealmDirectoryEntry], service_did: &str) -> Value {
     json!({
-        "organization_id": "cx:org:demo",
-        "handle": "@contrix-demo",
-        "name": "Contrix Demo Organization",
+        "organization_id": "ck:org:demo",
+        "handle": "@cokret-demo",
+        "name": "Cokret Demo Organization",
         "description": "Demo organization projected by soland",
         "service_did": service_did,
         "space_count": spaces.len(),
@@ -1427,7 +1427,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "did": "did:web:alice.example",
         "handle": "@alice",
         "display_name": "Alice Example",
-        "organization_id": "cx:org:demo",
+        "organization_id": "ck:org:demo",
         "avatar_url": null,
         "presence": {"status": "online", "updated_at": now()},
     })];
@@ -1458,7 +1458,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "state": account_state.clone(),
             "account_state": account_state,
             "bio": account.bio,
-            "organization_id": "cx:org:demo",
+            "organization_id": "ck:org:demo",
             "avatar_url": account.avatar_url,
             "presence": {"status": "offline", "updated_at": now()},
         }));
@@ -1501,7 +1501,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "display_name": display_name,
             "state": account_state.clone(),
             "account_state": account_state,
-            "organization_id": "cx:org:demo",
+            "organization_id": "ck:org:demo",
             "avatar_url": null,
             "presence": {"status": "offline", "updated_at": now()},
         }));

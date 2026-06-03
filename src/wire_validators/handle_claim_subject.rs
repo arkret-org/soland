@@ -4,7 +4,7 @@
 //!   `organization_handle`. The retired `claim_type` and `class` field names MUST be rejected as
 //!   forbidden wire fields.
 //! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
-//!   (`cx:actor:`), a server-local `account_id` (`cx:account:`), a service DID, or a generic
+//!   (`ck:actor:`), a server-local `account_id` (`ck:account:`), a service DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
 //!   cotest agree on the exact rejection surface, mapping its error to reason
 //!   `handle_claim_subject_not_principal_did`.
@@ -105,7 +105,7 @@ mod tests {
     fn rejects_actor_id_subject() {
         let claim = json!({
             "claim_kind": "handle_binding",
-            "subject": "cx:actor:01904100-0000-7000-8000-000000000001"
+            "subject": "ck:actor:01904100-0000-7000-8000-000000000001"
         });
         let err = validate_handle_claim_ingest(&claim).unwrap_err();
         assert_eq!(err.reason, reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID);
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn rejects_account_id_subject() {
-        let claim = json!({"subject": "cx:account:01904100-0000-7000-8000-000000000001"});
+        let claim = json!({"subject": "ck:account:01904100-0000-7000-8000-000000000001"});
         let err = validate_handle_claim_ingest(&claim).unwrap_err();
         assert_eq!(err.reason, reasons::HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID);
     }

@@ -39,7 +39,7 @@ async fn sync_directory_and_index_share_demo_space() {
         sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key("cx:realm:0196419b-0000-7000-8000-000000000000")
+            .contains_key("ck:realm:0196419b-0000-7000-8000-000000000000")
     );
 
     let directory: Value = TestClient::post("http://server/api/v1/directory/search-realms")
@@ -52,7 +52,7 @@ async fn sync_directory_and_index_share_demo_space() {
     assert_eq!(directory["results"].as_array().unwrap().len(), 1);
 
     let index: Value = TestClient::post("http://server/api/v1/index/query")
-        .json(&serde_json::json!({"realm_ids": ["cx:realm:0196419b-0000-7000-8000-000000000000"]}))
+        .json(&serde_json::json!({"realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
         .take_json()
@@ -65,7 +65,7 @@ async fn sync_directory_and_index_share_demo_space() {
 async fn directory_product_endpoints_return_demo_projection_shapes() {
     let organizations: Value =
         TestClient::post("http://server/api/v1/directory/search-organizations")
-            .json(&serde_json::json!({"query": "contrix", "limit": 10}))
+            .json(&serde_json::json!({"query": "cokret", "limit": 10}))
             .send(&app())
             .await
             .take_json()
@@ -73,18 +73,18 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .unwrap();
     assert_eq!(
         organizations["results"][0]["organization_id"],
-        "cx:org:demo"
+        "ck:org:demo"
     );
 
     let organization: Value =
         TestClient::post("http://server/api/v1/directory/resolve-organization")
-            .json(&serde_json::json!({"organization_id": "cx:org:demo"}))
+            .json(&serde_json::json!({"organization_id": "ck:org:demo"}))
             .send(&app())
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(organization["organization"]["handle"], "@contrix-demo");
+    assert_eq!(organization["organization"]["handle"], "@cokret-demo");
     assert_eq!(organization["spaces"].as_array().unwrap().len(), 1);
 
     let actors: Value = TestClient::post("http://server/api/v1/directory/search-actors")
@@ -103,7 +103,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    // DIR-1 (R3.1, contrix-spec @ 7157ee8) — search_users rows surface the
+    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — search_users rows surface the
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
     assert_eq!(users["results"][0]["handle"], "alice:soland.local");
@@ -123,7 +123,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         handle["handle_claim"]["schema"],
         "cx.schema.handle_claim.v1"
     );
-    // HDLREN-2 (contrix-spec @ 7157ee8) — canonical handle wire form is
+    // HDLREN-2 (cokret-spec @ 7157ee8) — canonical handle wire form is
     // `<localpart>:<domain>`. `handle_uri` is gone from the claim shape.
     assert_eq!(handle["handle_claim"]["handle"], "alice:soland.local");
     assert!(handle["handle_claim"].get("handle_uri").is_none());
@@ -155,7 +155,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     let not_found_cases = [
         (
             "resolve-organization",
-            serde_json::json!({"organization_id": "cx:org:demo"}),
+            serde_json::json!({"organization_id": "ck:org:demo"}),
         ),
         ("search-actors", serde_json::json!({"query": "alice"})),
         ("search-users", serde_json::json!({"query": "alice"})),
@@ -180,7 +180,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
 
     let empty_search_cases = [(
         "search-organizations",
-        serde_json::json!({"query": "contrix", "limit": 10}),
+        serde_json::json!({"query": "cokret", "limit": 10}),
     )];
 
     for (path, body) in empty_search_cases {
@@ -208,11 +208,11 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     )
     .await;
     let realm_id = realm["space_id"].as_str().unwrap();
-    let realm_uuid = realm_id.strip_prefix("cx:realm:").unwrap();
-    let flow_id = new_prefixed_uuid7("cx:flow:");
-    let flow_uuid = flow_id.strip_prefix("cx:flow:").unwrap();
+    let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
+    let flow_id = new_prefixed_uuid7("ck:flow:");
+    let flow_uuid = flow_id.strip_prefix("ck:flow:").unwrap();
     let address = format!(
-        "web+contrix:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+        "web+cokret:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(
         &state,
@@ -266,11 +266,11 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .await
         .unwrap();
 
-    let realm_uuid = realm_id.strip_prefix("cx:realm:").unwrap();
-    let flow_id = new_prefixed_uuid7("cx:flow:");
-    let flow_uuid = flow_id.strip_prefix("cx:flow:").unwrap();
+    let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
+    let flow_id = new_prefixed_uuid7("ck:flow:");
+    let flow_uuid = flow_id.strip_prefix("ck:flow:").unwrap();
     let address = format!(
-        "web+contrix:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+        "web+cokret:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
     let resolved: Value = TestClient::post("http://server/api/v1/directory/resolve-target")
@@ -316,7 +316,7 @@ fn preview_token_for_address(
         "iss": state.config.service_did.clone(),
         "aud": "anonymous",
         "exp": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
-        "nonce": new_prefixed_uuid7("cx:nonce:"),
+        "nonce": new_prefixed_uuid7("ck:nonce:"),
         "target_digest": target_digest,
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
@@ -333,7 +333,7 @@ fn preview_token_for_address(
         "jws": jws,
     });
     format!(
-        "cx:preview-token:{}",
+        "ck:preview-token:{}",
         URL_SAFE_NO_PAD.encode(claim.to_string())
     )
 }
@@ -342,9 +342,9 @@ fn preview_token_for_address(
 async fn index_product_endpoints_return_demo_projection_shapes() {
     // `/api/v1/index/object` is the polymorphic typed-id describe (renamed
     // from `/index/entity` in round 6); it returns `{object: {object_id,
-    // kind, schema}}` for any spec-registered `cx:<kind>:` prefix.
+    // kind, schema}}` for any spec-registered `ck:<kind>:` prefix.
     let object: Value = TestClient::get(
-        "http://server/api/v1/index/object?object_id=cx:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/api/v1/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -353,13 +353,13 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(object["object"]["kind"], "space");
 
-    let thread: Value = TestClient::get("http://server/api/v1/index/thread?thread_id=cx:flow:demo")
+    let thread: Value = TestClient::get("http://server/api/v1/index/thread?thread_id=ck:flow:demo")
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(thread["thread"]["thread_id"], "cx:flow:demo");
+    assert_eq!(thread["thread"]["thread_id"], "ck:flow:demo");
     assert!(thread["events"].as_array().unwrap().is_empty());
 
     let notifications: Value =
@@ -390,7 +390,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
     let hierarchy: Value = TestClient::get(
-        "http://server/api/v1/index/space-hierarchy?root_space_id=cx:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/api/v1/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -399,7 +399,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(
         hierarchy["root_space_id"],
-        "cx:space:0196419b-0000-7000-8000-000000000000"
+        "ck:space:0196419b-0000-7000-8000-000000000000"
     );
 
     let invalid = TestClient::post("http://server/api/v1/index/search")
@@ -429,7 +429,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/api/v1/events?realms=cx:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/api/v1/events?realms=ck:realm:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -458,13 +458,13 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
+    let ice: Value = TestClient::post("http://server/cokret/v1/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ck:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
         }))
         .send(&app_from_state(state))
         .await
@@ -544,7 +544,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .unwrap();
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
         device["actor"] == "did:web:alice.example"
-            && device["device_id"] == "cx:device:01904100-0000-7000-8000-a11ce0000001"
+            && device["device_id"] == "ck:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
     let unknown = TestClient::get("http://server/admin/not-real")

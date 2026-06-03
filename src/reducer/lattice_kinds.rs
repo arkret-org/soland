@@ -116,7 +116,7 @@ mod tests {
     /// cell family. Locked at 79 after the agent status, Circle, and
     /// member-identity families landed in the spec registry —
     /// see the matching assertion in
-    /// `contrix-rust-sdk/crates/sdk/src/lattice_registry.rs` for the
+    /// `cokret-rust-sdk/crates/sdk/src/lattice_registry.rs` for the
     /// breakdown. Bump deliberately when a new spec family lands.
     #[test]
     fn default_registry_still_covers_every_spec_family() {

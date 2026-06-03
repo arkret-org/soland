@@ -16,7 +16,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, x-contrix-wait-for",
+            "authorization, content-type, x-cokret-wait-for",
             true,
         )
         .send(&service)
@@ -53,7 +53,7 @@ async fn configured_cors_allows_only_explicit_origin() {
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // The Realm bootstrap flow in yougen emits a
     // `cx.member.state{membership="invite"}` event for each seed member
-    // (see contrix-rust-sdk + yougen/src/api.rs `build_realm_bootstrap_events`).
+    // (see cokret-rust-sdk + yougen/src/api.rs `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
     // expect the invitee to see that invite via `GET /authz/invites`.
     // This test pins that contract on the event path.
@@ -67,14 +67,14 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let alice = dev_token_for_device(
         state.clone(),
         alice_did,
-        "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice",
     )
     .await;
     let bob = dev_token_for_device(
         state.clone(),
         bob_did,
-        "cx:device:01904100-0000-7000-8000-b0b000000002",
+        "ck:device:01904100-0000-7000-8000-b0b000000002",
         "Bob",
     )
     .await;
@@ -92,7 +92,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
 
     // Submit alice's cx.member.state{membership=invite} pointing at bob.
-    let event_id = "cx:event:01904100-0000-7000-8000-aa00000000ee";
+    let event_id = "ck:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "actor_id": bob_did,
         "membership": "invite",
@@ -105,7 +105,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "actor_id": alice_did,
         "actor_seq": 100_u64,
         "realm_id": space_id.clone(),
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "created_at": "2026-05-20T16:00:00Z",
@@ -115,7 +115,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "proofs": [{
             "type": "dev-proof",
             "verification_method": format!("{alice_did}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload),
@@ -309,13 +309,13 @@ async fn service_did_is_config_driven_across_public_metadata() {
         .unwrap();
     assert_eq!(index["service_did"], service_did);
 
-    let ice: Value = TestClient::post("http://server/contrix/v1/ice-config")
+    let ice: Value = TestClient::post("http://server/cokret/v1/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "cx:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ck:call:01964137-0000-7000-8000-000000000001",
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
         }))
         .send(&service)
         .await

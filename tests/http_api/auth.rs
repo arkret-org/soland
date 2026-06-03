@@ -34,10 +34,10 @@ async fn oauth_bearer_introspection_authenticates_directly() {
     let oauth_device = devices
         .iter()
         .find(|device| {
-            device.payload["raw_device_id"] == "cx:device:01904100-0000-7000-8000-0a4a40000006"
+            device.payload["raw_device_id"] == "ck:device:01904100-0000-7000-8000-0a4a40000006"
         })
         .expect("OAuth device auto-provisioned");
-    assert!(oauth_device.device_id.starts_with("cx:device:"));
+    assert!(oauth_device.device_id.starts_with("ck:device:"));
 }
 
 #[tokio::test]
@@ -49,7 +49,7 @@ async fn dev_login_is_unavailable_in_production_mode() {
     let response = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-0a4a40000006"
+            "device_id": "ck:device:01904100-0000-7000-8000-0a4a40000006"
         }))
         .send(&app_from_state(state))
         .await;
@@ -112,7 +112,7 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after() {
         limited["request_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:request:")
+            .starts_with("ck:request:")
     );
 }
 

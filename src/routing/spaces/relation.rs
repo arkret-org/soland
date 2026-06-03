@@ -65,7 +65,7 @@ async fn create_relation(
             let Some(ref_id) = ref_opt.as_deref() else {
                 continue;
             };
-            if ref_id.starts_with("cx:flow:")
+            if ref_id.starts_with("ck:flow:")
                 && let Some(flow) = proj.flows.get(ref_id)
                 && flow.realm_id != body.realm_id
             {

@@ -1,6 +1,6 @@
 //! identity_link cache policy-frontier digest + invalidation triggers.
 //!
-//! Spec T13 (contrix-spec round 2+3 cleanup, 8b7978d): an identity_link
+//! Spec T13 (cokret-spec round 2+3 cleanup, 8b7978d): an identity_link
 //! routing-cache entry is keyed by a four-field policy frontier digest;
 //! a tightening change to any of the four governance inputs MUST eagerly
 //! invalidate the cached decision.

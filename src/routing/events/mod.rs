@@ -6,7 +6,7 @@ pub(super) mod event_log;
 pub(super) mod frontier;
 // Flow + projection helpers are `pub(crate)` so the MIMI interop
 // facade can reuse the canonical space→flow mapping + projection-event
-// JSON shape when ingesting MIMI traffic into the Contrix timeline.
+// JSON shape when ingesting MIMI traffic into the Cokret timeline.
 pub(crate) mod flow;
 pub(super) mod operations;
 pub(crate) mod projection;

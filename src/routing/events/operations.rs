@@ -588,10 +588,10 @@ pub fn validate_operation_semantics(
 }
 
 /// flow-and-message.md §9.8.2 — v1 core reactions may only target a
-/// `cx:message:`. The reducer keys the OR-Set on the message's storage id
-/// (`cx:event:`), so both the canonical `cx:message:` object ref and the
-/// internal `cx:event:` form are accepted; every other typed object kind
-/// (`cx:flow:`, `cx:morph:`, `cx:circle:`, …) is rejected fail-closed with
+/// `ck:message:`. The reducer keys the OR-Set on the message's storage id
+/// (`ck:event:`), so both the canonical `ck:message:` object ref and the
+/// internal `ck:event:` form are accepted; every other typed object kind
+/// (`ck:flow:`, `ck:morph:`, `ck:circle:`, …) is rejected fail-closed with
 /// `reaction_target_unsupported` (a `schema_violation` sub-reason).
 /// Profiles MAY register additional target kinds; v1 core does not.
 fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<(), &'static str> {
@@ -612,7 +612,7 @@ fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<()
         // unsupported so the canonical reason still surfaces.
         return Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED);
     };
-    if target.starts_with("cx:message:") || target.starts_with("cx:event:") {
+    if target.starts_with("ck:message:") || target.starts_with("ck:event:") {
         Ok(())
     } else {
         Err(contrix_sdk::error::REASON_REACTION_TARGET_UNSUPPORTED)
@@ -699,13 +699,13 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
         }
         // cx.applet.protocol_session.start — round 4 requires the
         // `applet_id` to be either a DID or a strictly-validated
-        // `cx:applet:<uuidv7>` typed id.
+        // `ck:applet:<uuidv7>` typed id.
         "cx.applet.protocol_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
                 validate_applet_id(applet_id)
                     .map(|_| ())
                     .map_err(
-                        |_| "applet_id must be a DID or cx:applet:<uuidv7> (typed-id wire break)",
+                        |_| "applet_id must be a DID or ck:applet:<uuidv7> (typed-id wire break)",
                     )?;
             }
             Ok(())
@@ -730,10 +730,10 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-5 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+        // REDU-5 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
         // `cx.realm.media_service` legacy single `sfu_endpoint` shape.
         // Default in v1 is to NORMALIZE the legacy shape into the
-        // canonical `foci=[{focus_id:"legacy", type:"contrix-native",
+        // canonical `foci=[{focus_id:"legacy", type:"cokret-native",
         // connect_url: <old sfu_endpoint>, service_did: <issuer>}]`
         // form + emit an audit-log note. Setting
         // `SOLAND_MEDIA_SERVICE_LEGACY_REJECT=1` (v1.1 deployments)
@@ -870,7 +870,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-8 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — the
+        // REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
         // `cx.audit.epoch_destruction_failsafe` event cannot serve as a
         // delayed remediation for an Audit Agent remove batch that lacks
         // the same-batch `cx.audit.epoch_key_destruction` attestation.
@@ -977,7 +977,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // here so `accept_local_operations` doesn't fall through to
         // the SDK artifact validator (whose `realm_id` pattern is
         // stricter than the in-tree fixtures need for testing —
-        // existing reducer-level tests use `cx:space:` prefixes).
+        // existing reducer-level tests use `ck:space:` prefixes).
         kinds::CX_REALM_LINK => OperationPayloadSchema {
             requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
@@ -1152,7 +1152,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             validate: Some(validate_morph_schema_migrate_payload),
         },
         // `cx.field.position.move` / `cx.field.position.reorder` were removed
-        // in revision 0a5ab85 (see contrix-spec
+        // in revision 0a5ab85 (see cokret-spec
         // `artifacts/registry/removed-event-kinds.json`). The generic
         // unknown-event-kind path in `event_log::submit_event` already
         // hard-rejects these kinds; no operation schema branch is needed.
@@ -1402,7 +1402,7 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
     if position
         .get("event_id")
         .and_then(|value| value.as_str())
-        .is_none_or(|value| !value.starts_with("cx:event:"))
+        .is_none_or(|value| !value.starts_with("ck:event:"))
     {
         return Err("read marker position.event_id is invalid");
     }
@@ -1457,8 +1457,8 @@ fn validate_conflict_repair_payload(operation: &Operation) -> Result<(), &'stati
         .get("cell_id")
         .and_then(serde_json::Value::as_str)
         .ok_or("conflict repair requires cell_id")?;
-    if !cell_id.starts_with("cx:cell:") {
-        return Err("conflict repair cell_id must use cx:cell:");
+    if !cell_id.starts_with("ck:cell:") {
+        return Err("conflict repair cell_id must use ck:cell:");
     }
     let heads = operation
         .payload
@@ -1883,12 +1883,12 @@ fn validate_principal_control_realm_binding(operation: &Operation) -> Result<(),
     }
 }
 
-/// Compare two realm identifiers tolerating the `cx:realm:` / `cx:space:`
+/// Compare two realm identifiers tolerating the `ck:realm:` / `ck:space:`
 /// alias soland uses interchangeably for a Realm's id.
 fn realm_ids_match(a: &str, b: &str) -> bool {
     fn canonical(id: &str) -> &str {
-        id.strip_prefix("cx:realm:")
-            .or_else(|| id.strip_prefix("cx:space:"))
+        id.strip_prefix("ck:realm:")
+            .or_else(|| id.strip_prefix("ck:space:"))
             .unwrap_or(id)
     }
     a == b || canonical(a) == canonical(b)
@@ -2355,8 +2355,8 @@ async fn realm_owner_and_members(
         .flatten();
     if meta.is_none()
         && let Some(space_id) = realm_id
-            .strip_prefix("cx:realm:")
-            .map(|suffix| format!("cx:space:{suffix}"))
+            .strip_prefix("ck:realm:")
+            .map(|suffix| format!("ck:space:{suffix}"))
     {
         meta = state
             .persistence
@@ -2379,8 +2379,8 @@ async fn realm_owner_and_members(
                 return realm.members.iter().map(ToString::to_string).collect();
             }
             realm_id
-                .strip_prefix("cx:realm:")
-                .and_then(|suffix| contrix_sdk::RealmId::new(format!("cx:space:{suffix}")).ok())
+                .strip_prefix("ck:realm:")
+                .and_then(|suffix| contrix_sdk::RealmId::new(format!("ck:space:{suffix}")).ok())
                 .and_then(|id| realms.get(&id))
                 .map(|realm| realm.members.iter().map(ToString::to_string).collect())
                 .unwrap_or_default()
@@ -2415,8 +2415,8 @@ async fn effective_audience_mention_policy_for_realm(
     realm_id: &str,
 ) -> Option<Value> {
     let mut candidates = vec![realm_id.to_owned()];
-    if let Some(suffix) = realm_id.strip_prefix("cx:realm:") {
-        candidates.push(format!("cx:space:{suffix}"));
+    if let Some(suffix) = realm_id.strip_prefix("ck:realm:") {
+        candidates.push(format!("ck:space:{suffix}"));
     }
     let events = state.persistence.events().snapshot_all().await.ok()?;
     events.into_iter().rev().find_map(|record| {
@@ -2545,7 +2545,7 @@ fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(),
         .payload
         .get("authorization_ref")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| value.starts_with("cx:event:"))
+        .filter(|value| value.starts_with("ck:event:"))
         .is_none()
     {
         return Err("cx.morph.schema_migrate requires authorization_ref");
@@ -2566,8 +2566,8 @@ async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> 
     let mut realm_meta = store.get(realm_id).await.ok().flatten();
     if realm_meta.is_none()
         && let Some(space_id) = realm_id
-            .strip_prefix("cx:realm:")
-            .map(|suffix| format!("cx:space:{suffix}"))
+            .strip_prefix("ck:realm:")
+            .map(|suffix| format!("ck:space:{suffix}"))
     {
         realm_meta = store.get(&space_id).await.ok().flatten();
     }
@@ -2856,7 +2856,7 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
                 if !mention
                     .get("flow_id")
                     .and_then(|value| value.as_str())
-                    .is_some_and(|value| value.starts_with("cx:flow:"))
+                    .is_some_and(|value| value.starts_with("ck:flow:"))
                 {
                     return Err("flow mention requires flow_id");
                 }
@@ -3089,7 +3089,7 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
             let has_blob_ref = block
                 .get("blob_ref")
                 .and_then(|value| value.as_str())
-                .is_some_and(|value| value.starts_with("cx:blob:sha256:"));
+                .is_some_and(|value| value.starts_with("ck:blob:sha256:"));
             let has_url = block
                 .get("url")
                 .and_then(|value| value.as_str())
@@ -3161,9 +3161,9 @@ mod flow_tracks_update_tests {
 
     fn op(payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kinds::CX_FLOW_TRACKS_UPDATE,
             payload,
         )
@@ -3172,7 +3172,7 @@ mod flow_tracks_update_tests {
     #[test]
     fn canonical_flow_tracks_update_accepts_patch_payload() {
         let operation = op(json!({
-            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+            "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
             "patch": {
                 "tracks": {
                     "discussion": {"profile": "discussion"}
@@ -3190,7 +3190,7 @@ mod flow_tracks_update_tests {
     #[test]
     fn canonical_flow_tracks_update_accepts_tracks_payload() {
         let operation = op(json!({
-            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+            "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
             "tracks": {
                 "review": {"profile": "review"}
             }
@@ -3214,7 +3214,7 @@ mod flow_tracks_update_tests {
         );
 
         let missing_patch_or_tracks = op(json!({
-            "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001"
+            "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001"
         }));
         assert_eq!(
             validate_operation_schema(&missing_patch_or_tracks, schema),
@@ -3224,7 +3224,7 @@ mod flow_tracks_update_tests {
 
     #[test]
     fn encrypted_realm_flow_content_detector_matches_content_only_boundary() {
-        let flow_id = "cx:flow:01904100-0000-7000-8000-000000000001";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-000000000001";
         let content_update = flow_position_op(
             kinds::CX_FLOW_UPDATE,
             json!({
@@ -3262,7 +3262,7 @@ mod flow_tracks_update_tests {
                             "scheme": "mls-rfc9420",
                             "group_id": "cx_space_01904100_0000_7000_8000_000000000001",
                             "epoch": 1,
-                            "content_type": "application/vnd.contrix.flow.patch-value+json",
+                            "content_type": "application/vnd.cokret.flow.patch-value+json",
                             "ciphertext": "T1BBUVVFX0NJUEhFUlRFWFQ",
                             "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                         }
@@ -3321,7 +3321,7 @@ mod flow_tracks_update_tests {
         let pointer_patch = flow_position_op(
             kinds::CX_CIRCLE_UPDATE,
             json!({
-                "circle_id": "cx:circle:01904100-0000-7000-8000-000000000001",
+                "circle_id": "ck:circle:01904100-0000-7000-8000-000000000001",
                 "patch": {
                     "/object/encryption_profile": {
                         "$op": "replace",
@@ -3345,9 +3345,9 @@ mod flow_tracks_update_tests {
 
     fn flow_position_op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c6")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3359,9 +3359,9 @@ mod flow_tracks_update_tests {
         let operation = flow_position_op(
             kinds::CX_FLOW_MOVE,
             json!({
-                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
-                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
-                "target_space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
+                "target_space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "rank": "a1"
             }),
         );
@@ -3370,8 +3370,8 @@ mod flow_tracks_update_tests {
         let missing_target = flow_position_op(
             kinds::CX_FLOW_MOVE,
             json!({
-                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
-                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
+                "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
                 "rank": "a1"
             }),
         );
@@ -3387,9 +3387,9 @@ mod flow_tracks_update_tests {
         let operation = flow_position_op(
             kinds::CX_FLOW_REORDER,
             json!({
-                "board_space_id": "cx:space:01904100-0000-7000-8000-000000000001",
-                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000002",
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "board_space_id": "ck:space:01904100-0000-7000-8000-000000000001",
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000002",
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "rank": "a1"
             }),
         );
@@ -3398,9 +3398,9 @@ mod flow_tracks_update_tests {
 
     fn space_container_op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c7")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c7")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3412,7 +3412,7 @@ mod flow_tracks_update_tests {
         let operation = space_container_op(
             kinds::CX_SPACE_CONTAINER_UPDATE,
             json!({
-                "target_ref": "cx:space:01904100-0000-7000-8000-000000000003",
+                "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
             }),
         );
@@ -3421,7 +3421,7 @@ mod flow_tracks_update_tests {
         let legacy_space_id = space_container_op(
             kinds::CX_SPACE_CONTAINER_UPDATE,
             json!({
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
             }),
         );
@@ -3443,8 +3443,8 @@ mod flow_tracks_update_tests {
         let operation = space_container_op(
             kinds::CX_SPACE_CONTAINER_PARENT,
             json!({
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
-                "parent_space_id": "cx:space:01904100-0000-7000-8000-000000000004",
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
+                "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004",
                 "expected_parent_space_id": null
             }),
         );
@@ -3453,8 +3453,8 @@ mod flow_tracks_update_tests {
         let missing_expected = space_container_op(
             kinds::CX_SPACE_CONTAINER_PARENT,
             json!({
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000003",
-                "parent_space_id": "cx:space:01904100-0000-7000-8000-000000000004"
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
+                "parent_space_id": "ck:space:01904100-0000-7000-8000-000000000004"
             }),
         );
         assert_eq!(
@@ -3473,9 +3473,9 @@ mod message_projection_schema_tests {
 
     fn op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3486,7 +3486,7 @@ mod message_projection_schema_tests {
         let operation = op(
             kinds::CX_MESSAGE_REVISE,
             json!({
-                "target_ref": "cx:event:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "content": {"kind": "cx.content.text", "body": "edited"}
             }),
         );
@@ -3500,7 +3500,7 @@ mod message_projection_schema_tests {
         let operation = op(
             kinds::CX_REACTION_ADD,
             json!({
-                "target_ref": "cx:event:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ck:event:01904100-0000-7000-8000-000000000001",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
@@ -3522,9 +3522,9 @@ mod spec_sync_validator_tests {
 
     fn op(kind: &'static str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3533,14 +3533,14 @@ mod spec_sync_validator_tests {
     #[test]
     fn sender_commitment_feature_requires_matching_unsigned_sidecar() {
         let commitment = json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "seq": 1
         });
         let digest = canonical_json_digest(&commitment).unwrap().to_string();
         let valid = op(
             kinds::CX_MESSAGE_CREATE,
             json!({
-                "flow_id": "cx:flow:01904100-0000-7000-8000-000000000001",
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
                 "track_name": "discussion",
                 "content": {"kind": "cx.content.text", "body": "hello"},
                 "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
@@ -3585,7 +3585,7 @@ mod spec_sync_validator_tests {
             kinds::CX_MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                    "id": "ck:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
                     "schema_refs": ["cx.schema.morph.v1"],
                     "metadata": {"title": "Spec"},
@@ -3599,7 +3599,7 @@ mod spec_sync_validator_tests {
             kinds::CX_MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                    "id": "ck:morph:01904100-0000-7000-8000-000000000001",
                     "morph_type": "document",
                     "schema_refs": ["cx.schema.morph.v1"],
                     "content": {},
@@ -3619,7 +3619,7 @@ mod spec_sync_validator_tests {
         let update = op(
             kinds::CX_MORPH_UPDATE,
             json!({
-                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "patch": {"schema_refs": ["cx.schema.new"]}
             }),
         );
@@ -3631,11 +3631,11 @@ mod spec_sync_validator_tests {
         let migrate = op(
             kinds::CX_MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["cx.schema.old"],
                 "to_schema_refs": ["cx.schema.old", "cx.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "cx:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "cx.morph.schema.migrate"
             }),
         );
@@ -3646,7 +3646,7 @@ mod spec_sync_validator_tests {
         let missing_gate = op(
             kinds::CX_MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["cx.schema.old"],
                 "to_schema_refs": ["cx.schema.new"],
                 "compatibility_class": "additive"
@@ -3660,11 +3660,11 @@ mod spec_sync_validator_tests {
         let unsupported = op(
             kinds::CX_MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "cx:morph:01904100-0000-7000-8000-000000000001",
+                "morph_id": "ck:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["cx.schema.old"],
                 "to_schema_refs": ["cx.schema.new"],
                 "compatibility_class": "breaking",
-                "authorization_ref": "cx:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "capability_action": "cx.morph.schema.migrate"
             }),
         );
@@ -3684,9 +3684,9 @@ mod sdk_artifact_schema_tests {
 
     fn cross_signing_reset(payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             "cx.cross_signing.reset",
             payload,
         )
@@ -3708,8 +3708,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
             "issued_at": issued_at
         }));
         assert_eq!(
@@ -3729,8 +3729,8 @@ mod sdk_artifact_schema_tests {
             "previous_generation": 1,
             "new_generation": 2,
             "reset_reason_code": "rotation",
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
@@ -3750,7 +3750,7 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert!(
@@ -3775,8 +3775,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
             "issued_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
         assert_eq!(
@@ -3795,8 +3795,8 @@ mod sdk_artifact_schema_tests {
                 "alg": "EdDSA",
                 "signature": "abc"
             },
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000002",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000002",
             "issued_at": (chrono::Utc::now() - chrono::Duration::seconds(CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }));
@@ -3928,9 +3928,9 @@ mod reaction_and_window_policy_tests {
 
     fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-57d7d85564c5")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
                 .unwrap(),
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-668e2181b41d").unwrap(),
             kind,
             payload,
         )
@@ -3941,7 +3941,7 @@ mod reaction_and_window_policy_tests {
         let op = reaction_op(
             kinds::CX_REACTION_ADD,
             json!({
-                "target_ref": "cx:message:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ck:message:01904100-0000-7000-8000-000000000001",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
@@ -3953,7 +3953,7 @@ mod reaction_and_window_policy_tests {
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
             kinds::CX_REACTION_ADD,
-            json!({ "target_ref": "cx:event:01904100-0000-7000-8000-000000000001" }),
+            json!({ "target_ref": "ck:event:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(validate_reaction_target_kind(kinds::CX_REACTION_ADD, &op).is_ok());
     }
@@ -3961,9 +3961,9 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_non_message_target_is_rejected() {
         for target in [
-            "cx:flow:01904100-0000-7000-8000-000000000001",
-            "cx:morph:01904100-0000-7000-8000-000000000001",
-            "cx:circle:01904100-0000-7000-8000-000000000001",
+            "ck:flow:01904100-0000-7000-8000-000000000001",
+            "ck:morph:01904100-0000-7000-8000-000000000001",
+            "ck:circle:01904100-0000-7000-8000-000000000001",
         ] {
             let op = reaction_op(kinds::CX_REACTION_ADD, json!({ "target_ref": target }));
             assert_eq!(
@@ -3978,7 +3978,7 @@ mod reaction_and_window_policy_tests {
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
             kinds::CX_MESSAGE_CREATE,
-            json!({ "target_ref": "cx:flow:01904100-0000-7000-8000-000000000001" }),
+            json!({ "target_ref": "ck:flow:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(validate_reaction_target_kind(kinds::CX_MESSAGE_CREATE, &op).is_ok());
     }
@@ -3986,11 +3986,11 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn realm_id_alias_forms_match() {
         assert!(realm_ids_match(
-            "cx:realm:01904100-0000-7000-8000-668e2181b41d",
-            "cx:space:01904100-0000-7000-8000-668e2181b41d",
+            "ck:realm:01904100-0000-7000-8000-668e2181b41d",
+            "ck:space:01904100-0000-7000-8000-668e2181b41d",
         ));
-        assert!(realm_ids_match("cx:realm:abc", "cx:realm:abc"));
-        assert!(!realm_ids_match("cx:realm:abc", "cx:realm:def"));
+        assert!(realm_ids_match("ck:realm:abc", "ck:realm:abc"));
+        assert!(!realm_ids_match("ck:realm:abc", "ck:realm:def"));
     }
 
     fn dur(value: u64, unit: &str) -> contrix_sdk::authz::ConstraintDuration {
@@ -4205,14 +4205,14 @@ pub fn validate_agent_id(value: &str) -> Result<contrix_sdk::Did, (&'static str,
 }
 
 /// Spec B1.17 — accept an `applet_id` value. Must be either a DID or a
-/// strictly-validated `cx:applet:<uuidv7>` typed id. Returns the typed
+/// strictly-validated `ck:applet:<uuidv7>` typed id. Returns the typed
 /// wrapper on success.
 pub fn validate_applet_id(
     value: &str,
 ) -> Result<contrix_sdk::AppletIdentifier, (&'static str, String)> {
     // The SDK's `AppletIdentifier` is `enum { Did(Did), Cx(AppletId) }`.
     // We attempt the DID form first (covers `did:webvh:applet.example`
-    // and similar), then fall back to the typed `cx:applet:` form.
+    // and similar), then fall back to the typed `ck:applet:` form.
     if let Ok(did) = contrix_sdk::Did::new(value.to_owned()) {
         return Ok(contrix_sdk::AppletIdentifier::Did(did));
     }
@@ -4221,7 +4221,7 @@ pub fn validate_applet_id(
     }
     Err((
         contrix_sdk::ERROR_CODE_SCHEMA_VIOLATION,
-        format!("applet_id must be a DID or cx:applet:<uuidv7>: got {value:?}"),
+        format!("applet_id must be a DID or ck:applet:<uuidv7>: got {value:?}"),
     ))
 }
 
@@ -4270,11 +4270,11 @@ mod wire_payload_tests {
     #[test]
     fn blob_presign_realm_binding_mismatch_rejects() {
         verify_blob_presign_realm_binding(None, None).unwrap();
-        verify_blob_presign_realm_binding(Some("cx:realm:abc"), Some("cx:realm:abc")).unwrap();
+        verify_blob_presign_realm_binding(Some("ck:realm:abc"), Some("ck:realm:abc")).unwrap();
         // Blob has realm, request doesn't → schema_violation.
-        assert!(verify_blob_presign_realm_binding(None, Some("cx:realm:abc")).is_err());
+        assert!(verify_blob_presign_realm_binding(None, Some("ck:realm:abc")).is_err());
         // Blob has realm but mismatched → capability_denied.
-        let err = verify_blob_presign_realm_binding(Some("cx:realm:abc"), Some("cx:realm:def"))
+        let err = verify_blob_presign_realm_binding(Some("ck:realm:abc"), Some("ck:realm:def"))
             .unwrap_err();
         assert_eq!(err.0, "capability_denied");
     }
@@ -4283,20 +4283,20 @@ mod wire_payload_tests {
     fn agent_id_must_be_did() {
         assert!(validate_agent_id("did:web:agent.example").is_ok());
         // Non-DID must reject.
-        assert!(validate_agent_id("cx:agent:01904100-0000-7000-8000-000000000001").is_err());
+        assert!(validate_agent_id("ck:agent:01904100-0000-7000-8000-000000000001").is_err());
     }
 
     #[test]
     fn applet_id_accepts_did_or_cx_form() {
         assert!(validate_applet_id("did:web:applet.example").is_ok());
-        assert!(validate_applet_id("cx:applet:01904100-0000-7000-8000-000000000001").is_ok());
+        assert!(validate_applet_id("ck:applet:01904100-0000-7000-8000-000000000001").is_ok());
         assert!(validate_applet_id("not-a-valid-id").is_err());
     }
 
     #[test]
     fn flow_cell_subject_helpers_return_flow_id() {
         let flow =
-            contrix_sdk::FlowId::new("cx:flow:01904100-0000-7000-8000-000000000001").unwrap();
+            contrix_sdk::FlowId::new("ck:flow:01904100-0000-7000-8000-000000000001").unwrap();
         assert_eq!(flow_update_subject(&flow), flow.as_str());
         assert_eq!(flow_tracks_patch_subject(&flow), flow.as_str());
     }
@@ -4308,7 +4308,7 @@ mod wire_payload_tests {
             crate::routing::identity::recovery::principal_control_realm_for_did(principal);
         let payload = serde_json::json!({
             "principal_id": principal,
-            "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
         });
         let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
             contrix_sdk::Operation::create(
@@ -4326,7 +4326,7 @@ mod wire_payload_tests {
             ))
             .is_ok()
         );
-        let wrong = "cx:realm:01904100-0000-7000-8000-0000000000ff";
+        let wrong = "ck:realm:01904100-0000-7000-8000-0000000000ff";
         assert_eq!(
             validate_principal_control_realm_binding(&mk(wrong, "cx.device.authorize", payload))
                 .unwrap_err(),

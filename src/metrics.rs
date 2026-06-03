@@ -19,7 +19,7 @@ const DURATION_BUCKETS: [f64; 11] = [
 /// `soland_request_duration_seconds`. Above this we still record (no
 /// data loss) but emit a sticky warning so on-call can audit whether a
 /// path normalizer regressed and started leaking an unbounded id segment
-/// (e.g. forgot to fold `cx:...` ids in `normalize_path_for_metrics`).
+/// (e.g. forgot to fold `ck:...` ids in `normalize_path_for_metrics`).
 const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
 
 static METRICS: OnceLock<Mutex<HttpMetrics>> = OnceLock::new();
@@ -435,7 +435,7 @@ fn normalize_path_for_metrics(path: &str) -> String {
 }
 
 fn looks_like_path_id(segment: &str) -> bool {
-    segment.starts_with("cx:")
+    segment.starts_with("ck:")
         || segment.starts_with("did:")
         || (segment.len() >= 16
             && segment
@@ -507,7 +507,7 @@ mod tests {
     fn path_ids_are_normalized_for_operation_label() {
         assert_eq!(
             normalize_path_for_metrics(
-                "/api/v1/realms/cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb/events"
+                "/api/v1/realms/ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb/events"
             ),
             "/api/v1/realms/{id}/events"
         );

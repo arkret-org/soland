@@ -2,20 +2,20 @@
 
 All notable wire-affecting changes to the soland Principal Server are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
-and the project tracks Contrix v1 spec revisions.
+and the project tracks Cokret v1 spec revisions.
 
-## R3.4 — Spec sync 2026-05-31 (contrix-spec @ c2848a4)
+## R3.4 — Spec sync 2026-05-31 (cokret-spec @ c2848a4)
 
-- Synced protocol-facing names and fixtures to `c2848a4`: event envelope schema naming, `_ids` grant constraints, accountability principal vocabulary, `cx:rtc_participant:` media participants, agent session start fields, and key-backup signature algorithm naming where applicable.
-
-> No version tag, no crates.io / Docker Hub / npm publish — git commit only.
-
-## R3.3 — Spec sync 2026-05-28 (contrix-spec @ cced4b8)
-
-- R3.3 spec sync — pin to contrix-spec @ cced4b8 (CXP-0011 shareable object addressing / `cx.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- Synced protocol-facing names and fixtures to `c2848a4`: event envelope schema naming, `_ids` grant constraints, accountability principal vocabulary, `ck:rtc_participant:` media participants, agent session start fields, and key-backup signature algorithm naming where applicable.
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
-## R3.2 — Spec sync 2026-05-28 (contrix-spec @ b56cab1)
+
+## R3.3 — Spec sync 2026-05-28 (cokret-spec @ cced4b8)
+
+- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CXP-0011 shareable object addressing / `cx.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+
+> No version tag, no crates.io / Docker Hub / npm publish — git commit only.
+## R3.2 — Spec sync 2026-05-28 (cokret-spec @ b56cab1)
 
 - Roster v2: `identity_state_digest` → `member_display_state_digest`; added disclosure-gated `subject_id` / `handle_claim_digests` / `handle_claims` / `handle_claims_limited` (omitted together unless subject disclosed).
 - `cx.member.identity.update` payload `identity_state_digest` → `identity_payload_digest`; `expected_state_digest` uses the segment-inclusive effective-set formula; effective set stays multi-valued (no last-writer-wins).
@@ -23,7 +23,7 @@ and the project tracks Contrix v1 spec revisions.
 - Real handle-claim evidence population + Realm subject_id disclosure policy deferred `TODO(R3.2.1)` (fails closed).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
-## R3 — Spec sync 2026-05-27 (contrix-spec @ b47ff6ec)
+## R3 — Spec sync 2026-05-27 (cokret-spec @ b47ff6ec)
 
 - HTTP-1: `POST /api/v1/rtc/token` (cx.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
@@ -35,12 +35,12 @@ and the project tracks Contrix v1 spec revisions.
 
 ## [Unreleased]
 
-### CXP-0007 — Circle primitive rollout (P2A; contrix-spec floor `2b0d70d`)
+### CXP-0007 — Circle primitive rollout (P2A; cokret-spec floor `2b0d70d`)
 
 Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
 (`circle-rollout` branch) and consumes the seven `cx.circle.*` durable event
 kinds, six `cx.circle.*` capability actions, and six new failed-precondition
-reason codes registered in `contrix-spec` `9cb47c1..2b0d70d`.
+reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 
 - **BREAKING** `Flow.discussion_realm_ref` is no longer accepted on the wire.
   The legacy cross-Realm discussion routing has been removed (CXP-0007 hard
@@ -92,7 +92,7 @@ reason codes registered in `contrix-spec` `9cb47c1..2b0d70d`.
   `SOLAND_METRICS_BIND` default so the metrics endpoint surfaces under
   the new sidecar port `9698`.
 
-### Round R4 — protocol review closures (2026-05-20; contrix-spec `2a4d39b..a77b995`)
+### Round R4 — protocol review closures (2026-05-20; cokret-spec `2a4d39b..a77b995`)
 
 Aggressive mode; no compatibility shim. Closes 8 protocol-review commits
 on the reducer / federation / state-machine surfaces. See
@@ -150,11 +150,11 @@ on the reducer / federation / state-machine surfaces. See
   `cx.audit.policy_access{access_kind=e2ee_late_recovery,
   late_recovery_original_event_id}`.
 - **BREAKING** `agent_id` and `applet_id` MUST be DID-shaped (applet also
-  accepts `cx:applet:<uuidv7>`); non-DID values reject.
+  accepts `ck:applet:<uuidv7>`); non-DID values reject.
 - **Added** DID method-name regex sweep tightened to
   `^did:[a-z0-9]+:[^\s]+$` across all parsers and fixtures.
 
-### Round R2/R3 (2026-05-20; contrix-spec `8b7978d`) — 17 wire-breaking tasks
+### Round R2/R3 (2026-05-20; cokret-spec `8b7978d`) — 17 wire-breaking tasks
 
 Aggressive mode — there is no compatibility shim for any of the changes
 below. Producers on the old wire MUST upgrade.
@@ -219,7 +219,7 @@ below. Producers on the old wire MUST upgrade.
   `mls_governance_binding_stale` (T09 + T12).
 - **`POST /api/v1/anchors` frontier validation** — every entry in
   `Anchor.frontier[]` MUST match `sha256:<64 lowercase hex>`; the legacy
-  `cx:event:<uuid>` form hard-rejects (T04).
+  `ck:event:<uuid>` form hard-rejects (T04).
 - **`GET /api/v1/blob/get` fail-closed gates** — E2EE, legal-hold,
   redacted, and actor_private blobs return the registered error code
   rather than a presign URL. Responses now carry

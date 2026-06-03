@@ -1,12 +1,12 @@
 # Media Token Issuer
 
-> Spec: `contrix-spec @ b47ff6ec`, `cx.call.media.token_exchange` operation.
+> Spec: `cokret-spec @ b47ff6ec`, `cx.call.media.token_exchange` operation.
 > Companion runbook: [`../runbook.md` → Media token issuer](../runbook.md#media-token-issuer-rotating-service_signaturekid-focus-binding-troubleshooting).
 > SDK type reference:
-> [`contrix-rust-sdk docs/architecture.md`](../../../contrix-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).
+> [`cokret-rust-sdk docs/architecture.md`](../../../cokret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).
 
 This document is the architectural reference for soland's role as the
-**canonical media-token issuer** in the Contrix v1 protocol family. It is
+**canonical media-token issuer** in the Cokret v1 protocol family. It is
 the source of truth for: who issues, when floria proxies, focus_id derivation
 rules, participant_binding canonical bytes, TTL policy, and kid rotation.
 
@@ -21,7 +21,7 @@ rules, participant_binding canonical bytes, TTL policy, and kid rotation.
 | Rotates `issuer_kid` | **Yes** | No |
 | Exposes `POST /rtc/token` to clients | **Yes (direct)** | Yes (proxy in v1) |
 
-In Contrix v1, soland is always the canonical signing authority. floria may
+In Cokret v1, soland is always the canonical signing authority. floria may
 proxy the request from the client to soland (e.g. when push-side network
 constraints make a direct client→soland call awkward), but floria never
 forges, re-signs, or augments the token. Specifically:
@@ -45,14 +45,14 @@ Each focus in a realm's `cx.realm.media_service.foci[]` advertises a
 canonical `focus_id` of the form:
 
 ```text
-cx:focus:<backend>:<region>:<instance-disambiguator>
+ck:focus:<backend>:<region>:<instance-disambiguator>
 ```
 
 Examples:
 
-- `cx:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
-- `cx:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
-- `cx:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>` — synthesized by
+- `ck:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
+- `ck:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
+- `ck:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>` — synthesized by
   the v1.0 → v1 migration for realms that haven't been re-declared.
 
 Derivation rules:
@@ -79,12 +79,12 @@ the realm's `cx.realm.media_service.foci[]` set, returning `focus_mismatch`.
 {
   "scheme": "cx.media.participant_binding.v1",
   "issuer_kid": "cx-media-issuer/example/2026-05",
-  "realm_id": "cx:realm:...",
-  "call_id": "cx:call:...",
-  "focus_id": "cx:focus:livekit:eu-west-1",
-  "actor_id": "did:cx:...",
-  "device_id": "cx:device:...",
-  "participant_identity": "cx:participant:<realm>:<actor>:<device>:<call>",
+  "realm_id": "ck:realm:...",
+  "call_id": "ck:call:...",
+  "focus_id": "ck:focus:livekit:eu-west-1",
+  "actor_id": "did:ck:...",
+  "device_id": "ck:device:...",
+  "participant_identity": "ck:participant:<realm>:<actor>:<device>:<call>",
   "expires_at": "2026-05-27T12:34:56.789Z",
   "sig": "<base64url>"
 }
@@ -108,7 +108,7 @@ soland.
 `participant_identity` is its own canonical string:
 
 ```text
-cx:participant:<realm_short>:<actor_short>:<device_short>:<call_short>
+ck:participant:<realm_short>:<actor_short>:<device_short>:<call_short>
 ```
 
 where `_short` is the trailing-8-hex of each id's UUID portion. The full

@@ -16,7 +16,7 @@
 //! 4. **Capabilities** — every entry in `requested_capabilities` MUST be in the known registry
 //!    below (`KNOWN_APPLET_CAPABILITIES`).
 //!
-//! Spec anchor: `contrix-spec/spec/v1/zh/extensions/applet-integration.md`
+//! Spec anchor: `cokret-spec/spec/v1/zh/extensions/applet-integration.md`
 //! §3 (manifest shape) + `extensions/applet-schema.md` (JSON schema).
 //!
 //! TODO(G3.S9-followup): resolve `signer_did` through the live
@@ -227,11 +227,11 @@ pub fn current_applet_schema_hash() -> String {
 
 fn locate_applet_schema() -> Option<PathBuf> {
     // Walk up from `CARGO_MANIFEST_DIR` until we find a sibling
-    // `contrix-spec` checkout. Mirrors how `cotest` locates its fixtures.
+    // `cokret-spec` checkout. Mirrors how `cotest` locates its fixtures.
     let start = Path::new(env!("CARGO_MANIFEST_DIR"));
     for ancestor in start.ancestors() {
         let candidate = ancestor
-            .join("contrix-spec")
+            .join("cokret-spec")
             .join("spec")
             .join("v1")
             .join("artifacts")

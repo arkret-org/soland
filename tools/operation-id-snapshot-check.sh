@@ -4,7 +4,7 @@
 # Compares the operation_id values that soland's source code registers
 # (any `operation_id = "cx.*"` string literal under `src/`) against the
 # canonical spec registry at
-# `contrix-spec/spec/v1/artifacts/registry/operation-registry.json`.
+# `cokret-spec/spec/v1/artifacts/registry/operation-registry.json`.
 #
 # Exit codes:
 #   0 — every soland-registered operation_id is in the canonical
@@ -36,7 +36,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOLAND_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-SPEC_ROOT_DEFAULT="${SOLAND_ROOT}/../contrix-spec"
+SPEC_ROOT_DEFAULT="${SOLAND_ROOT}/../cokret-spec"
 SPEC_ROOT="${1:-${SPEC_ROOT_DEFAULT}}"
 REGISTRY="${SPEC_ROOT}/spec/v1/artifacts/registry/operation-registry.json"
 BASELINE="${SOLAND_ROOT}/scripts/operation_id_baseline.json"

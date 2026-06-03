@@ -14,14 +14,14 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     let token = dev_token(state.clone()).await;
 
     let unauthenticated = TestClient::post("http://server/api/v1/devices/pairing-challenge")
-        .json(&serde_json::json!({"device_id": "cx:device:01904100-0000-7000-8000-9b04e0000007"}))
+        .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
     let challenge: Value = TestClient::post("http://server/api/v1/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"device_id": "cx:device:01904100-0000-7000-8000-9b04e0000007"}))
+        .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -31,11 +31,11 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         challenge["challenge_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:device_pairing:")
+            .starts_with("ck:device_pairing:")
     );
     assert_eq!(
         challenge["device_id"],
-        "cx:device:01904100-0000-7000-8000-9b04e0000007"
+        "ck:device:01904100-0000-7000-8000-9b04e0000007"
     );
     assert_eq!(
         challenge["production_gap"],
@@ -46,7 +46,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "challenge_id": challenge["challenge_id"],
-            "device_id": "cx:device:01904100-0000-7000-8000-9b04e0000007",
+            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
             "display_name": "Paired Phone",
             "proof": {"alg": "dev-none"}
         }))
@@ -58,7 +58,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     assert_eq!(authorized["status"], "authorized");
     assert_eq!(
         authorized["device"]["device_id"],
-        "cx:device:01904100-0000-7000-8000-9b04e0000007"
+        "ck:device:01904100-0000-7000-8000-9b04e0000007"
     );
     assert_eq!(
         authorized["authorization_event"]["event_kind"],
@@ -78,10 +78,10 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     assert_eq!(devices["actor"], "did:web:alice.example");
     assert_eq!(
         devices["current_device_id"],
-        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        "ck:device:01904100-0000-7000-8000-a11ce0000001"
     );
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
-        device["device_id"] == "cx:device:01904100-0000-7000-8000-9b04e0000007"
+        device["device_id"] == "ck:device:01904100-0000-7000-8000-9b04e0000007"
             && device["verification_state"] == "verified"
             && device["is_current_session_device"] == false
     }));
@@ -97,7 +97,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
                 event["action"] == "device.authorize_pairing"
                     && event["outcome"] == "accepted"
                     && event["target"]["target_device_id"]
-                        == "cx:device:01904100-0000-7000-8000-9b04e0000007"
+                        == "ck:device:01904100-0000-7000-8000-9b04e0000007"
             })
     );
 }
@@ -106,7 +106,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
 async fn device_rename_updates_display_name() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let sibling = "cx:device:01904100-0000-7000-8000-9b04e0000077";
+    let sibling = "ck:device:01904100-0000-7000-8000-9b04e0000077";
 
     // Register a sibling device to rename (current session device is
     // alice's own device; pairing gives us a second one).
@@ -157,7 +157,7 @@ async fn device_rename_updates_display_name() {
 
     // Renaming an unknown device is a 404.
     let unknown = TestClient::post(
-        "http://server/api/v1/devices/cx:device:01904100-0000-7000-8000-000000000404/rename",
+        "http://server/api/v1/devices/ck:device:01904100-0000-7000-8000-000000000404/rename",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "Ghost" }))
@@ -233,7 +233,7 @@ async fn webrtc_signaling_contracts_work() {
         .await
         .unwrap();
     let session_id = session["session_id"].as_str().unwrap().to_owned();
-    assert!(session_id.starts_with("cx:call:"));
+    assert!(session_id.starts_with("ck:call:"));
     assert_eq!(session["participants"].as_array().unwrap().len(), 1);
     assert_eq!(session["mode"], "p2p");
     assert_eq!(session["recording_policy"], "none");
@@ -245,7 +245,7 @@ async fn webrtc_signaling_contracts_work() {
             "space_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -269,7 +269,7 @@ async fn webrtc_signaling_contracts_work() {
     .json(&serde_json::json!({
         "space_id": DEMO_REALM_ID,
         "actor_id": "did:web:alice.example",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
     }))
     .send(&app_from_state(state.clone()))
     .await
@@ -303,7 +303,7 @@ async fn webrtc_signaling_contracts_work() {
         "message_type": "offer",
         "payload": {
             "description_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "encrypted_description_ref": "cx:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "encrypted_description_ref": "ck:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
         "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
     }))
@@ -426,7 +426,7 @@ async fn webrtc_signaling_contracts_work() {
         recording["recording_blob_ref"]
             .as_str()
             .unwrap()
-            .starts_with("cx:blob:sha256:")
+            .starts_with("ck:blob:sha256:")
     );
 
     let closed: Value =
@@ -462,7 +462,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     .json(&serde_json::json!({
         "message_type": "focus_join",
         "payload": {
-            "foci_preferred": ["cx:focus:mediasoup:blue", "cx:focus:livekit:green"]
+            "foci_preferred": ["ck:focus:mediasoup:blue", "ck:focus:livekit:green"]
         },
         "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
     }))
@@ -480,8 +480,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "cx:focus:mediasoup:blue"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -505,11 +505,11 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(token_response["participant_binding"]["call_id"], session_id);
     assert_eq!(
         token_response["participant_binding"]["device_id"],
-        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        "ck:device:01904100-0000-7000-8000-a11ce0000001"
     );
     assert_eq!(
         token_response["participant_binding"]["focus_id"],
-        "cx:focus:mediasoup:blue"
+        "ck:focus:mediasoup:blue"
     );
     assert!(
         token_response["service_signature"]
@@ -541,7 +541,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(backend_payload["actor_id"], "did:web:alice.example");
     assert_eq!(
         backend_payload["device_id"],
-        "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        "ck:device:01904100-0000-7000-8000-a11ce0000001"
     );
 
     let second_token_response: Value = TestClient::post("http://server/api/v1/rtc/token")
@@ -550,8 +550,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "cx:focus:mediasoup:blue"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state))
         .await
@@ -577,7 +577,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
         "message_type": "focus_join",
-        "payload": {"foci_preferred": ["cx:focus:mediasoup:blue"]},
+        "payload": {"foci_preferred": ["ck:focus:mediasoup:blue"]},
         "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
     }))
     .send(&app_from_state(state.clone()))
@@ -592,8 +592,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "cx:focus:livekit:green"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:livekit:green"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -605,7 +605,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         serde_json::json!({
             "service_id": "did:web:media.example",
             "foci": [{
-                "focus_id": "cx:focus:mediasoup:blue",
+                "focus_id": "ck:focus:mediasoup:blue",
                 "backend": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:rogue.example#kid-1",
@@ -619,8 +619,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
-            "focus_id": "cx:focus:mediasoup:blue"
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:mediasoup:blue"
         }))
         .send(&app_from_state(state))
         .await;
@@ -640,7 +640,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
-        "cx:device:01904100-0000-7000-8000-b0b000000001",
+        "ck:device:01904100-0000-7000-8000-b0b000000001",
         "Bob Phone",
     )
     .await;
@@ -651,8 +651,8 @@ async fn rtc_media_token_rejects_non_member_actor() {
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:bob.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-b0b000000001",
-            "focus_id": "cx:focus:livekit:green"
+            "device_id": "ck:device:01904100-0000-7000-8000-b0b000000001",
+            "focus_id": "ck:focus:livekit:green"
         }))
         .send(&app_from_state(state))
         .await;
@@ -681,7 +681,7 @@ async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
     let cell_id = CellRef::new(format!(
-        "cx:cell:cx.component.realm.media_service.v1:{DEMO_REALM_ID}"
+        "ck:cell:cx.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
     state.projection.lock().unwrap().cells.insert(
@@ -696,7 +696,7 @@ fn good_media_service_epoch() -> Value {
         "e2ee_key_sources_allowed": ["mls_epoch"],
         "foci": [
             {
-                "focus_id": "cx:focus:livekit:green",
+                "focus_id": "ck:focus:livekit:green",
                 "backend": "livekit",
                 "connect_url": "wss://media.example/livekit",
                 "issuer_kid": "did:web:media.example#livekit-2026-05",
@@ -705,7 +705,7 @@ fn good_media_service_epoch() -> Value {
                 "e2ee_key_source": "mls_epoch"
             },
             {
-                "focus_id": "cx:focus:mediasoup:blue",
+                "focus_id": "ck:focus:mediasoup:blue",
                 "backend": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:media.example#mediasoup-2026-05",

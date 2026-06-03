@@ -9,7 +9,7 @@
 //!   helper block at the bottom of this file).
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
-//! `X-Contrix-Session-Grant` header for clients that haven't yet picked up a
+//! `X-Cokret-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
 //! the same audience/scope/proof validation as `auth/session-grant/exchange`.
 //! Spec rule: no DID in push payload / TURN username.
@@ -85,7 +85,7 @@ pub(super) async fn push_register(
     if body.device_id.trim().is_empty() {
         return Err(AppError::invalid_param("invalid device_id"));
     }
-    let registration_id = format!("cx:push:{}", body.device_id);
+    let registration_id = format!("ck:push:{}", body.device_id);
     let principal_id = body.principal_id.clone();
     let device_id = body.device_id.clone();
     let platform = body.platform.clone();
@@ -437,21 +437,21 @@ async fn push_register_session_grant_bridge(
     req: &Request,
     body: &PushRegisterRequest,
 ) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
-    let Some(grant) = req.headers().get("x-contrix-session-grant") else {
+    let Some(grant) = req.headers().get("x-cokret-session-grant") else {
         return Ok(None);
     };
     let grant = grant.to_str().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             "invalid_header",
-            "X-Contrix-Session-Grant must be ASCII",
+            "X-Cokret-Session-Grant must be ASCII",
         )
     })?;
     if grant.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_header",
-            "X-Contrix-Session-Grant must not be empty",
+            "X-Cokret-Session-Grant must not be empty",
         ));
     }
     let Some(principal_id) = body
@@ -463,25 +463,25 @@ async fn push_register_session_grant_bridge(
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_id is required when using X-Contrix-Session-Grant",
+            "principal_id is required when using X-Cokret-Session-Grant",
         ));
     };
     if !principal_id.starts_with("did:") {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_id must use the did: prefix when using X-Contrix-Session-Grant",
+            "principal_id must use the did: prefix when using X-Cokret-Session-Grant",
         ));
     }
     let challenge = optional_ascii_header(
         req,
-        "x-contrix-session-grant-challenge",
-        "X-Contrix-Session-Grant-Challenge",
+        "x-cokret-session-grant-challenge",
+        "X-Cokret-Session-Grant-Challenge",
     )?;
     let proof_jwt = optional_ascii_header(
         req,
-        "x-contrix-session-grant-proof",
-        "X-Contrix-Session-Grant-Proof",
+        "x-cokret-session-grant-proof",
+        "X-Cokret-Session-Grant-Proof",
     )?;
     let proof = match (challenge, proof_jwt) {
         (Some(challenge), Some(proof_jwt)) => Some(SessionGrantIntrospectionProof {

@@ -1,6 +1,6 @@
 //! Federation endpoint stubs for the B.3 outbound surface.
 //!
-//! - `GET /.well-known/contrix` — server description. Spec-aligned shape so peers can discover the
+//! - `GET /.well-known/cokret` — server description. Spec-aligned shape so peers can discover the
 //!   service DID, trust domain, public base URL, and federation policy without an auth round-trip.
 //!   The body is built from the live `AppConfig`; the route is unauthenticated.
 //! - `POST /api/v1/federation/send-event` — outbound federation send-event stub. Returns 501
@@ -16,20 +16,20 @@ use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
-/// Build the `/.well-known/contrix` router. Mounted alongside the
-/// existing `/.well-known/contrix/openapi.json` entry; salvo routes the
+/// Build the `/.well-known/cokret` router. Mounted alongside the
+/// existing `/.well-known/cokret/openapi.json` entry; salvo routes the
 /// exact-match path here and falls through to the openapi router for
 /// the `/openapi.{json,yaml}` siblings.
 pub fn well_known_contrix_router() -> Router {
-    Router::with_path(".well-known/contrix").get(well_known_contrix)
+    Router::with_path(".well-known/cokret").get(well_known_contrix)
 }
 
 #[endpoint(
-    operation_id = "cx.extension.soland.well_known.contrix",
+    operation_id = "cx.extension.soland.well_known.cokret",
     tags("federation"),
     summary = "Server description for federation discovery"
 )]
-#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.well_known.contrix"))]
+#[tracing::instrument(skip_all, fields(op = "cx.extension.soland.well_known.cokret"))]
 async fn well_known_contrix(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set
@@ -50,7 +50,7 @@ async fn well_known_contrix(depot: &mut Depot) -> JsonResult<Value> {
         "federation_policy": policy,
         "endpoints": {
             "openapi": format!(
-                "{}/.well-known/contrix/openapi.json",
+                "{}/.well-known/cokret/openapi.json",
                 state.config.public_base_url.trim_end_matches('/')
             ),
             "federation_transaction": format!(

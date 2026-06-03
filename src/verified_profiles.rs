@@ -59,7 +59,7 @@ pub const VERIFIED_PROFILES_ARTIFACT_ENV: &str = "SOLAND_VERIFIED_PROFILES_ARTIF
 
 /// soland's role string in the cotest writer's `service_role` filter. Mirrors
 /// the canonical role names in
-/// `contrix-spec/spec/v1/artifacts/profiles/conformance-profiles.json#/profile_role_map`.
+/// `cokret-spec/spec/v1/artifacts/profiles/conformance-profiles.json#/profile_role_map`.
 pub const SOLAND_SERVICE_ROLE: &str = "principal_server";
 
 /// Raw shape of the JSON file produced by `write-verified-profiles.mjs`.

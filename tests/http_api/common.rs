@@ -28,7 +28,7 @@ pub(crate) use soland::{
     artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
 
-pub(crate) const DEMO_REALM_ID: &str = "cx:realm:0196419b-0000-7000-8000-000000000000";
+pub(crate) const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
@@ -77,7 +77,7 @@ pub(crate) fn test_config() -> AppConfig {
 
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -125,14 +125,14 @@ pub(crate) async fn account_subscribe_frame(
 
 pub(crate) fn decode_cursor(token: &str) -> Value {
     let encoded = token
-        .strip_prefix("cx:cursor:")
+        .strip_prefix("ck:cursor:")
         .expect("structured cursor prefix");
     let bytes = URL_SAFE_NO_PAD.decode(encoded).expect("base64url cursor");
     serde_json::from_slice(&bytes).expect("cursor json")
 }
 
 pub(crate) fn encode_cursor(cursor: &Value) -> String {
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
+    format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(cursor.to_string()))
 }
 
 pub(crate) fn signed_federation_push_headers(
@@ -228,14 +228,14 @@ pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
         .unwrap_or(service_did)
         .to_ascii_lowercase()
         .replace(':', ".");
-    format!("cx:trust_domain:{scope}")
+    format!("ck:trust_domain:{scope}")
 }
 
 pub(crate) async fn dev_token(state: AppState) -> String {
     dev_token_for_device(
         state,
         "did:web:alice.example",
-        "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await
@@ -270,7 +270,7 @@ pub(crate) async fn seed_test_realm(
     plaintext_visible_services: &[&str],
     invitees: &[&str],
 ) -> Value {
-    let realm_id = new_prefixed_uuid7("cx:realm:");
+    let realm_id = new_prefixed_uuid7("ck:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -309,8 +309,8 @@ pub(crate) async fn seed_test_realm(
         .unwrap();
 
     for invitee in invitees {
-        let invite_id = new_prefixed_uuid7("cx:invite:");
-        let invite_token = new_prefixed_uuid7("cx:invite-token:");
+        let invite_id = new_prefixed_uuid7("ck:invite:");
+        let invite_token = new_prefixed_uuid7("ck:invite-token:");
         state
             .persistence
             .space_invites()
@@ -376,7 +376,7 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
 }
 
 fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
-    // HDLREN-4/5 (contrix-spec @ 7157ee8) — roster rows MUST NOT carry
+    // HDLREN-4/5 (cokret-spec @ 7157ee8) — roster rows MUST NOT carry
     // `handle` / `handle_uri` directly; identity is resolved through the
     // `cx.member.identity.update` events surfaced via
     // `MemberRosterEntry.identity_event_ids[]`. The test helper now only
@@ -411,7 +411,7 @@ pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value 
     serde_json::json!({
         "scheme": "mls-rfc9420",
         "version": 1,
-        "group_id": "cx:mls:test",
+        "group_id": "ck:mls:test",
         "epoch": 1,
         "content_type": content_type,
         "ciphertext": ciphertext,
@@ -434,20 +434,20 @@ pub(crate) fn sha256_json(value: &Value) -> String {
 
 pub(crate) fn expected_flow_id_for_scope(scope_id: &str) -> String {
     scope_id
-        .strip_prefix("cx:space:")
-        .or_else(|| scope_id.strip_prefix("cx:realm:"))
-        .map(|suffix| format!("cx:flow:{suffix}"))
+        .strip_prefix("ck:space:")
+        .or_else(|| scope_id.strip_prefix("ck:realm:"))
+        .map(|suffix| format!("ck:flow:{suffix}"))
         .unwrap_or_else(|| {
             let digest = Sha256::digest(scope_id.as_bytes());
-            format!("cx:flow:{:x}", digest)
+            format!("ck:flow:{:x}", digest)
                 .chars()
-                .take("cx:flow:".len() + 26)
+                .take("ck:flow:".len() + 26)
                 .collect()
         })
 }
 
 pub(crate) fn event_canonical_digest(event: &Value) -> String {
-    // Mirror server-side `event_canonical_source` (contrix-spec
+    // Mirror server-side `event_canonical_source` (cokret-spec
     // conformance-vectors.md §1.6): canonical digest is sha256 over the
     // event envelope JSON with `proofs`, `unsigned`, and the derived
     // `canonical_digest` / `canonical_hash` slots removed.
@@ -463,7 +463,7 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
-        "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+        "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
         "track_name": "discussion",
         "content": {
             "kind": "cx.content.text",
@@ -477,8 +477,8 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "schema_id": "cx.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -487,7 +487,7 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -504,7 +504,7 @@ pub(crate) fn signed_message_event_envelope(
     content: Value,
     encrypted: bool,
 ) -> Value {
-    let event_id = new_prefixed_uuid7("cx:event:");
+    let event_id = new_prefixed_uuid7("ck:event:");
     let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut payload = serde_json::json!({
         "flow_id": expected_flow_id_for_scope(realm_id),
@@ -519,7 +519,7 @@ pub(crate) fn signed_message_event_envelope(
             object.insert("group_id".to_owned(), Value::String("mls_test".to_owned()));
             object.insert(
                 "content_type".to_owned(),
-                Value::String("application/vnd.contrix.message+json".to_owned()),
+                Value::String("application/vnd.cokret.message+json".to_owned()),
             );
             object.insert(
                 "aad_visibility_event_id".to_owned(),
@@ -579,7 +579,7 @@ pub(crate) fn signed_message_event_envelope(
         "actor_id": actor,
         "actor_seq": actor_seq,
         "realm_id": realm_id,
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": [],
@@ -588,7 +588,7 @@ pub(crate) fn signed_message_event_envelope(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": format!("{actor}#01904100-0000-7000-8000-a11ce0000001"),
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -637,10 +637,10 @@ pub(crate) async fn submit_message_event(
         .unwrap();
     if let Some(event_id) = response["event_id"].as_str() {
         let event_id = event_id.to_owned();
-        let event_suffix = event_id.strip_prefix("cx:event:").unwrap_or(&event_id);
-        response["operation_id"] = Value::String(format!("cx:operation:{event_suffix}"));
+        let event_suffix = event_id.strip_prefix("ck:event:").unwrap_or(&event_id);
+        response["operation_id"] = Value::String(format!("ck:operation:{event_suffix}"));
         response["kind"] = Value::String("cx.message.create".to_owned());
-        response["message_id"] = Value::String(format!("cx:message:{event_suffix}"));
+        response["message_id"] = Value::String(format!("ck:message:{event_suffix}"));
         response["realm_id"] = Value::String(realm_id.to_owned());
         response["space_id"] = Value::String(realm_id.to_owned());
         response["source_realm_id"] = Value::String(realm_id.to_owned());
@@ -707,11 +707,11 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
                 "200 OK",
                 serde_json::json!({
                     "active": true,
-                    "scope": "urn:contrix:principal-server:session.bind",
+                    "scope": "urn:cokret:principal-server:session.bind",
                     "sub": "coauth-subject-1",
                     "username": "OAuth Alice",
-                    "org.contrix.principal_did": "did:web:oauth.example",
-                    "org.contrix.device_id": "cx:device:01904100-0000-7000-8000-0a4a40000006",
+                    "org.cokret.principal_did": "did:web:oauth.example",
+                    "org.cokret.device_id": "ck:device:01904100-0000-7000-8000-0a4a40000006",
                     "exp": 4102444800_i64
                 })
                 .to_string(),
@@ -734,7 +734,7 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
 // the legacy http_api integration suite and are exercised via the helpers
 // below.
 
-// MIMI facade writes map into the canonical Contrix reducer chain via the
+// MIMI facade writes map into the canonical Cokret reducer chain via the
 // four reducer-bound mappings: room_update, submit_message, notify, and
 // report_abuse. See the live test suite for the executable coverage.
 
@@ -779,7 +779,7 @@ pub(crate) fn test_embedded_webvh_proof(
             "alsoKnownAs": ["acct:alice@example.com"],
             "service": [{
                 "id": format!("{placeholder_did}#soland"),
-                "type": "ContrixPrincipalServer",
+                "type": "CokretPrincipalServer",
                 "serviceEndpoint": principal_server_url.trim_end_matches('/'),
             }],
         },
@@ -853,8 +853,8 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in
-// `contrix-spec/v1`. Typed objects in the protocol are `cx:flow:` / `cx:space:`
-// / `cx:morph:` / `cx:relation:` / `cx:view:`, each with its own dedicated
+// `cokret-spec/v1`. Typed objects in the protocol are `ck:flow:` / `ck:space:`
+// / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `cx.view.*` events going
 // through the reducer, not on a free-form `/api/v1/entities` /
 // `/api/v1/views` scaffold.
@@ -878,9 +878,9 @@ pub(crate) fn signed_place_event(
         "schema_id": "cx.schema.space.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
         "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -889,7 +889,7 @@ pub(crate) fn signed_place_event(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -909,7 +909,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
                 .entry("schema".to_owned())
                 .or_insert_with(|| Value::String("cx.schema.space.v1".to_owned()));
             space.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+                Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
             space
                 .entry("created_at".to_owned())
@@ -920,7 +920,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 // End-to-end check that the server-side Space-container state-machine guard
 // rejects illegal lifecycle transitions with HTTP 412 + the spec-canonical
-// reason_code per `contrix-spec/v1/zh/models/common-fields.md §5.1`.
+// reason_code per `cokret-spec/v1/zh/models/common-fields.md §5.1`.
 // Reducer-level unit coverage lives in `src/reducer.rs::tests`; this test
 // verifies the wire mapping (`event_log::submit_event` →
 // `check_space_container_lifecycle_transition` →
@@ -943,9 +943,9 @@ pub(crate) fn signed_flow_event(
         "schema_id": "cx.schema.flow.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
         "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -954,7 +954,7 @@ pub(crate) fn signed_flow_event(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -973,7 +973,7 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
             flow.entry("schema".to_owned())
                 .or_insert_with(|| Value::String("cx.schema.flow.v1".to_owned()));
             flow.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+                Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
             flow.entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
@@ -1031,9 +1031,9 @@ pub(crate) fn signed_morph_event(
         "schema_id": "cx.schema.morph.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
-        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
         "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -1042,7 +1042,7 @@ pub(crate) fn signed_morph_event(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -1062,7 +1062,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
                 .entry("schema".to_owned())
                 .or_insert_with(|| Value::String("cx.schema.morph.v1".to_owned()));
             morph.entry("realm_id".to_owned()).or_insert_with(|| {
-                Value::String("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned())
+                Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
             morph
                 .entry("created_at".to_owned())
@@ -1163,7 +1163,7 @@ pub(crate) fn signed_relation_event(
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,
         "created_at": "2026-05-17T00:00:00Z",
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -1172,7 +1172,7 @@ pub(crate) fn signed_relation_event(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -1215,7 +1215,7 @@ pub(crate) fn signed_redaction_event(
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": DEMO_REALM_ID,
-        "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
@@ -1224,7 +1224,7 @@ pub(crate) fn signed_redaction_event(
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
             "payload_digest": sha256_json(&payload)
@@ -1255,12 +1255,12 @@ pub(crate) async fn persist_test_message(
     sender: &str,
     body: &str,
 ) -> MessageRecord {
-    let event_id = new_prefixed_uuid7("cx:event:");
+    let event_id = new_prefixed_uuid7("ck:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
         sender: sender.to_owned(),
-        thread_id: format!("cx:flow:test-{}", event_id),
+        thread_id: format!("ck:flow:test-{}", event_id),
         content: serde_json::json!({"body": body}),
         encrypted: false,
         created_at: chrono::Utc::now(),

@@ -59,9 +59,9 @@ pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// Payload shape (validated below):
 /// ```json
 /// {
-///   "keypackage_id": "cx:mls_keypackage:<uuid>",
+///   "keypackage_id": "ck:mls_keypackage:<uuid>",
 ///   "actor_id": "did:web:alice.example",
-///   "device_id": "cx:device:<uuid>",
+///   "device_id": "ck:device:<uuid>",
 ///   "lifetime": { "not_before": <unix_secs>, "not_after": <unix_secs> },
 ///   "key_package_bytes_b64": "<base64url(opaque MLS KeyPackage)>"
 /// }
@@ -129,8 +129,8 @@ pub fn apply_keypackage_publish(
 /// Payload shape:
 /// ```json
 /// {
-///   "keypackage_id": "cx:mls_keypackage:<uuid>",
-///   "group_id":      "cx:mls_group:<uuid>"
+///   "keypackage_id": "ck:mls_keypackage:<uuid>",
+///   "group_id":      "ck:mls_group:<uuid>"
 /// }
 /// ```
 ///
@@ -174,12 +174,12 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// Payload shape:
 /// ```json
 /// {
-///   "welcome_id":             "cx:mls_welcome:<uuid>",
-///   "group_id":               "cx:mls_group:<uuid>",
+///   "welcome_id":             "ck:mls_welcome:<uuid>",
+///   "group_id":               "ck:mls_group:<uuid>",
 ///   "recipient_actor_id":     "did:web:bob.example",
-///   "recipient_device_id":    "cx:device:<uuid>",
+///   "recipient_device_id":    "ck:device:<uuid>",
 ///   "welcome_bytes_b64":      "<base64url(opaque MLS Welcome)>",
-///   "key_package_id":         "cx:mls_keypackage:<uuid>"
+///   "key_package_id":         "ck:mls_keypackage:<uuid>"
 /// }
 /// ```
 ///
@@ -328,7 +328,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// Payload shape:
 /// ```json
 /// {
-///   "group_id":            "cx:mls_group:<uuid>",
+///   "group_id":            "ck:mls_group:<uuid>",
 ///   "expected_prev_epoch": <u64>,
 ///   "leader_actor_id":     "did:web:alice.example",
 ///   "commit_bytes_b64":    "<base64url(opaque MLS Commit)>"
@@ -565,9 +565,9 @@ mod tests {
 
     fn op_at(secs: i64, object_type: &str, payload: serde_json::Value) -> Operation {
         let mut op = Operation::create(
-            OperationId::new("cx:operation:0196419b-0000-7000-8000-000000000001")
+            OperationId::new("ck:operation:0196419b-0000-7000-8000-000000000001")
                 .expect("op id parses"),
-            RealmId::new("cx:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
+            RealmId::new("ck:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
             object_type,
             payload,
         );
@@ -580,8 +580,8 @@ mod tests {
     }
 
     fn governance_binding(previous_epoch: u64) -> Value {
-        let realm_id = "cx:realm:0196419b-0000-7000-8000-000000000000";
-        let frontier = format!("cx:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
+        let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+        let frontier = format!("ck:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
         json!({
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -590,7 +590,7 @@ mod tests {
                 "kind": "realm",
                 "realm_id": realm_id
             },
-            "mls_group_id": "cx:mls_group:abc",
+            "mls_group_id": "ck:mls_group:abc",
             "previous_epoch": previous_epoch,
             "next_epoch": previous_epoch + 1,
             "membership_frontier": [
@@ -618,9 +618,9 @@ mod tests {
             100,
             "cx.mls.keypackage",
             publish_payload(
-                "cx:mls_keypackage:01",
+                "ck:mls_keypackage:01",
                 "did:web:alice.example",
-                "cx:device:alice-desktop",
+                "ck:device:alice-desktop",
                 1_000_000,
             ),
         );
@@ -628,12 +628,12 @@ mod tests {
         assert!(matches!(
             effect,
             ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { ref keypackage_id, .. })
-                if keypackage_id == "cx:mls_keypackage:01"
+                if keypackage_id == "ck:mls_keypackage:01"
         ));
         assert!(
             state
                 .mls_key_packages
-                .get("cx:mls_keypackage:01")
+                .get("ck:mls_keypackage:01")
                 .unwrap()
                 .claimed_by
                 .is_none()
@@ -644,8 +644,8 @@ mod tests {
             "cx.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "cx:mls_keypackage:01",
-                "group_id": "cx:mls_group:abc"
+                "keypackage_id": "ck:mls_keypackage:01",
+                "group_id": "ck:mls_group:abc"
             }),
         );
         let claim_effect = apply_keypackage_claim(&mut state, &claim);
@@ -655,14 +655,14 @@ mod tests {
                 group_id,
                 consumed_at,
             }) => {
-                assert_eq!(keypackage_id, "cx:mls_keypackage:01");
-                assert_eq!(group_id, "cx:mls_group:abc");
+                assert_eq!(keypackage_id, "ck:mls_keypackage:01");
+                assert_eq!(group_id, "ck:mls_group:abc");
                 assert_eq!(consumed_at, 200);
             }
             other => panic!("expected KeyPackageClaimed, got {other:?}"),
         }
-        let row = state.mls_key_packages.get("cx:mls_keypackage:01").unwrap();
-        assert_eq!(row.claimed_by.as_deref(), Some("cx:mls_group:abc"));
+        let row = state.mls_key_packages.get("ck:mls_keypackage:01").unwrap();
+        assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:abc"));
         assert_eq!(row.consumed_at, Some(200));
     }
 
@@ -673,9 +673,9 @@ mod tests {
             100,
             "cx.mls.keypackage",
             publish_payload(
-                "cx:mls_keypackage:02",
+                "ck:mls_keypackage:02",
                 "did:web:alice.example",
-                "cx:device:alice-desktop",
+                "ck:device:alice-desktop",
                 1_000_000,
             ),
         );
@@ -687,8 +687,8 @@ mod tests {
             "cx.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "cx:mls_keypackage:02",
-                "group_id": "cx:mls_group:first"
+                "keypackage_id": "ck:mls_keypackage:02",
+                "group_id": "ck:mls_group:first"
             }),
         );
         let e1 = apply_keypackage_claim(&mut state, &claim1);
@@ -703,8 +703,8 @@ mod tests {
             "cx.mls.keypackage",
             json!({
                 "action": "claim",
-                "keypackage_id": "cx:mls_keypackage:02",
-                "group_id": "cx:mls_group:second"
+                "keypackage_id": "ck:mls_keypackage:02",
+                "group_id": "ck:mls_group:second"
             }),
         );
         let e2 = apply_keypackage_claim(&mut state, &claim2);
@@ -715,8 +715,8 @@ mod tests {
             other => panic!("expected Rejected, got {other:?}"),
         }
         // First claim's group must still own the row — losers don't overwrite.
-        let row = state.mls_key_packages.get("cx:mls_keypackage:02").unwrap();
-        assert_eq!(row.claimed_by.as_deref(), Some("cx:mls_group:first"));
+        let row = state.mls_key_packages.get("ck:mls_keypackage:02").unwrap();
+        assert_eq!(row.claimed_by.as_deref(), Some("ck:mls_group:first"));
         assert_eq!(row.consumed_at, Some(200));
     }
 
@@ -727,12 +727,12 @@ mod tests {
             300,
             "cx.mls.welcome",
             json!({
-                "welcome_id": "cx:mls_welcome:w1",
-                "group_id": "cx:mls_group:abc",
+                "welcome_id": "ck:mls_welcome:w1",
+                "group_id": "ck:mls_group:abc",
                 "recipient_actor_id": "did:web:bob.example",
-                "recipient_device_id": "cx:device:bob-phone",
+                "recipient_device_id": "ck:device:bob-phone",
                 "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
-                "key_package_id": "cx:mls_keypackage:01",
+                "key_package_id": "ck:mls_keypackage:01",
             }),
         );
         let effect = apply_welcome_enqueue(&mut state, &enqueue);
@@ -743,7 +743,7 @@ mod tests {
 
         let key = (
             "did:web:bob.example".to_owned(),
-            "cx:device:bob-phone".to_owned(),
+            "ck:device:bob-phone".to_owned(),
         );
         let queue = state.mls_welcomes.get(&key).unwrap();
         assert_eq!(queue.len(), 1);
@@ -784,12 +784,12 @@ mod tests {
             300,
             "cx.mls.welcome",
             json!({
-                "welcome_id": "cx:mls_welcome:w-leaky",
-                "group_id": "cx:mls_group:abc",
+                "welcome_id": "ck:mls_welcome:w-leaky",
+                "group_id": "ck:mls_group:abc",
                 "recipient_actor_id": "did:web:bob.example",
-                "recipient_device_id": "cx:device:bob-phone",
+                "recipient_device_id": "ck:device:bob-phone",
                 "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
-                "key_package_id": "cx:mls_keypackage:01",
+                "key_package_id": "ck:mls_keypackage:01",
                 "metadata": {
                     "sender_handle": "@alice",
                     "routing_hint": "ok"
@@ -812,7 +812,7 @@ mod tests {
             500,
             "cx.mls.commit",
             json!({
-                "group_id": "cx:mls_group:abc",
+                "group_id": "ck:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
                 "leader_actor_id": "did:web:alice.example",
@@ -832,7 +832,7 @@ mod tests {
                 assert_eq!(new_epoch, 1);
                 assert_eq!(
                     covered_frontier,
-                    &vec!["cx:event:0196419b-0000-7000-8000-000000000000".to_owned()]
+                    &vec!["ck:event:0196419b-0000-7000-8000-000000000000".to_owned()]
                 );
             }
             other => panic!("expected CommitEpochAdvanced, got {other:?}"),
@@ -843,7 +843,7 @@ mod tests {
             501,
             "cx.mls.commit",
             json!({
-                "group_id": "cx:mls_group:abc",
+                "group_id": "ck:mls_group:abc",
                 "expected_prev_epoch": 1,
                 "next_epoch": 2,
                 "leader_actor_id": "did:web:alice.example",
@@ -857,14 +857,14 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 2, .. })
         ));
         assert_eq!(
-            state.mls_commit_epochs.get("cx:mls_group:abc").unwrap(),
+            state.mls_commit_epochs.get("ck:mls_group:abc").unwrap(),
             &MlsCommitEpoch {
-                group_id: "cx:mls_group:abc".to_owned(),
+                group_id: "ck:mls_group:abc".to_owned(),
                 epoch: 2,
                 leader_actor_did: "did:web:alice.example".to_owned(),
                 covered_frontier: vec![
-                    "cx:event:0196419b-0000-7000-8000-000000000000".to_owned(),
-                    "cx:event:0196419b-0000-7000-8000-000000000001".to_owned()
+                    "ck:event:0196419b-0000-7000-8000-000000000000".to_owned(),
+                    "ck:event:0196419b-0000-7000-8000-000000000001".to_owned()
                 ],
                 committed_at: 501,
             }
@@ -880,7 +880,7 @@ mod tests {
                 500,
                 "cx.mls.commit",
                 json!({
-                    "group_id": "cx:mls_group:abc",
+                    "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
                     "leader_actor_id": "did:web:alice.example",
@@ -888,12 +888,12 @@ mod tests {
                     "governance_binding": {
                         "binding_version": 1,
                         "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                        "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                         "effective_scope": {
                             "kind": "realm",
-                            "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000"
+                            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
                         },
-                        "mls_group_id": "cx:mls_group:abc",
+                        "mls_group_id": "ck:mls_group:abc",
                         "previous_epoch": 0,
                         "next_epoch": 1,
                         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -918,7 +918,7 @@ mod tests {
                 600,
                 "cx.mls.commit",
                 json!({
-                    "group_id": "cx:mls_group:abc",
+                    "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
                     "leader_actor_id": "did:web:alice.example",
@@ -935,7 +935,7 @@ mod tests {
                 601,
                 "cx.mls.commit",
                 json!({
-                    "group_id": "cx:mls_group:abc",
+                    "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 0,
                     "next_epoch": 1,
                     "leader_actor_id": "did:web:alice.example",
@@ -954,7 +954,7 @@ mod tests {
         assert_eq!(
             state
                 .mls_commit_epochs
-                .get("cx:mls_group:abc")
+                .get("ck:mls_group:abc")
                 .unwrap()
                 .epoch,
             1
@@ -967,7 +967,7 @@ mod tests {
                 602,
                 "cx.mls.commit",
                 json!({
-                    "group_id": "cx:mls_group:abc",
+                    "group_id": "ck:mls_group:abc",
                     "expected_prev_epoch": 5,
                     "next_epoch": 6,
                     "leader_actor_id": "did:web:alice.example",
@@ -982,7 +982,7 @@ mod tests {
         assert_eq!(
             state
                 .mls_commit_epochs
-                .get("cx:mls_group:abc")
+                .get("ck:mls_group:abc")
                 .unwrap()
                 .epoch,
             1

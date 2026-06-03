@@ -1,6 +1,6 @@
 # Account lifecycle (soland)
 
-Reference for the soland implementation of the Contrix account lifecycle
+Reference for the soland implementation of the Cokret account lifecycle
 state machine. The wire surface is `/api/v1/account/*`; this document
 covers the soland-side behaviours: the lifecycle states, the audit
 contract, and the GDPR erasure cascade.

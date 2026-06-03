@@ -7,7 +7,7 @@
 //! - **Transport declaration** — an actor publishes a TSP transport (endpoint URL + supported
 //!   protocols). Spec `identity/tsp-integration.md` §4 (Endpoint).
 //! - **Route establishment** — two actors agree on a sequence of transports forming a TSP route.
-//!   Spec §3 (Relationship) + §5 (Contrix over TSP).
+//!   Spec §3 (Relationship) + §5 (Cokret over TSP).
 //! - **Audit chain** — every TSP route hop emits an audit entry. Spec §8 (Security: audit log
 //!   records relationship id + payload hash + verification result).
 //!
@@ -447,7 +447,7 @@ mod tests {
             transport_id: "tspt:alice".to_owned(),
             transport_type: "tsp-pairwise".to_owned(),
             endpoint_url: "https://alice.example/tsp".to_owned(),
-            supported_protocols: vec!["contrix".to_owned()],
+            supported_protocols: vec!["cokret".to_owned()],
             created_at: chrono::Utc::now(),
             owner_actor_did: "did:web:alice".to_owned(),
         });

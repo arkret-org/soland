@@ -1,7 +1,7 @@
 //! G3.S1 — MLS / E2EE lifecycle HTTP surface.
 //!
 //! Spec-canonical binding under `/api/v1/keys/keypackages/*` (see
-//! `contrix-service-api.openapi.yaml §/keys/keypackages/*`):
+//! `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
 //! - `POST /api/v1/keys/keypackages/upload` — op `cx.keys.keypackages.upload` (publishes a fresh
 //!   KeyPackage).
@@ -52,7 +52,7 @@ use crate::wire::now;
 /// from `routing::mod::api_v1_router`.
 ///
 /// Spec-canonical paths (see
-/// `contrix-service-api.openapi.yaml §/keys/keypackages/*`):
+/// `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
 ///   - `POST /api/v1/keys/keypackages/upload`
 ///   - `POST /api/v1/keys/keypackages/claim`
 ///   - `GET  /api/v1/keys/keypackages/welcomes/pending` (soland extension)
@@ -493,8 +493,8 @@ fn keypackage_refs_from_body(body: &Value) -> Result<Vec<String>, AppError> {
 /// MLS kinds.
 fn build_op(object_type: &str, payload: Value) -> Operation {
     let op_id =
-        OperationId::new("cx:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
+        OperationId::new("ck:operation:01904100-0000-7000-8000-000000000001").expect("op id");
+    let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
     Operation::create(op_id, realm_id, object_type, payload)
 }
 

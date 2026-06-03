@@ -584,14 +584,14 @@ fn consent_key(holder: &str, peer: &str, scope: &str) -> ConsentCellKey {
 
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
-    format!("cx:cell:cx.component.consent.grant.v1:{}", &digest[..32])
+    format!("ck:cell:cx.component.consent.grant.v1:{}", &digest[..32])
 }
 
 fn consent_cell_id_for_consent_id(consent_id: &str) -> String {
-    if consent_id.starts_with("cx:cell:") {
+    if consent_id.starts_with("ck:cell:") {
         consent_id.to_owned()
     } else {
-        format!("cx:cell:cx.component.consent.grant.v1:{consent_id}")
+        format!("ck:cell:cx.component.consent.grant.v1:{consent_id}")
     }
 }
 

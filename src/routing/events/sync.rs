@@ -430,7 +430,7 @@ async fn build_sync_snapshot(
     body: &ClientSyncRequest,
     after_cursor: &SyncCursor,
 ) -> contrix_sdk::model::SyncResBody {
-    // SYNC-MEM-1 + ROST-SOL-1..3 (contrix-spec @ b56cab1) — `members[]` is
+    // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
     // row carries `{actor_id, membership, subject_id?, identity_event_ids?,
@@ -583,7 +583,7 @@ async fn build_sync_snapshot(
                 "history_visibility": history_visibility,
                 "encryption_profile": encryption_profile,
                 "members": members,
-                // SYNC-MEM-2 (contrix-spec @ 7157ee8) — `members_limited`
+                // SYNC-MEM-2 (cokret-spec @ 7157ee8) — `members_limited`
                 // is always `false` until lazy-load truncation lands; the
                 // spec requires the flag to be present so clients can tell
                 // a small roster from a truncated one.
@@ -671,7 +671,7 @@ async fn build_sync_snapshot(
     }
 }
 
-/// SYNC-MEM-1..4 + ROST-SOL-1..3 (contrix-spec @ b56cab1) — build the
+/// SYNC-MEM-1..4 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — build the
 /// per-Realm `members[]` roster v2 projection from the in-memory
 /// `RealmDirectoryEntry` plus the MemberIdentity registry.
 ///
@@ -1312,7 +1312,7 @@ fn message_scope_circle_id(content: &Value) -> Option<&str> {
     content
         .get("scope_circle_id")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("cx:circle:"))
+        .filter(|value| value.starts_with("ck:circle:"))
 }
 
 fn circle_scope_visible_to_session(
@@ -1354,7 +1354,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
     // flow_id is always derived from realm_id (one flow per space for
     // the message timeline) — thread_id is the discussion *track* within
     // that flow, NOT the flow itself. The legacy top-level `branch` object
-    // was removed in revision 0a5ab85 (see contrix-spec
+    // was removed in revision 0a5ab85 (see cokret-spec
     // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
     // `track_name` is the concrete v1 wire field.
     let flow_id = flow_id_from_space_id(&message.realm_id);
@@ -1510,7 +1510,7 @@ pub(crate) fn sync_token_for_state(state: &AppState) -> String {
 pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+    format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
@@ -1829,7 +1829,7 @@ pub fn parse_and_validate_sync_cursor(
     if expires_at <= now_ms {
         return Err(SyncCursorError::Expired);
     }
-    // CURSOR-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+    // CURSOR-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
     // core schema rejects stateless body fields unless the server
     // declares `cx.profile.stateless_cursor.v1`. Stateless body markers
     // per `_before_todos.md §0.14`: `_mac`, `_sig`, `s`, `d`, `target`,
@@ -1949,9 +1949,9 @@ pub fn parse_and_validate_sync_cursor(
 }
 
 pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCursorError> {
-    let Some(encoded) = token.strip_prefix("cx:cursor:") else {
+    let Some(encoded) = token.strip_prefix("ck:cursor:") else {
         return Err(SyncCursorError::Invalid(
-            "after must use a cx:cursor account token",
+            "after must use a ck:cursor account token",
         ));
     };
     let bytes = URL_SAFE_NO_PAD
@@ -1964,9 +1964,9 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// Translate an optional client cursor to a backfill (event-id) cursor.
 ///
 /// - `None` → `None` (start from the beginning).
-/// - Plain string that does NOT start with `cx:cursor:` → pass through unchanged; the caller
+/// - Plain string that does NOT start with `ck:cursor:` → pass through unchanged; the caller
 ///   already speaks the projection's `event_id` cursor.
-/// - `cx:cursor:...` → decode the structured cursor, look up the handle's stored position for
+/// - `ck:cursor:...` → decode the structured cursor, look up the handle's stored position for
 ///   `realm_id` (a `timestamp_micros` checkpoint), then walk the space's projected events and
 ///   persisted messages to find the most recent event at-or-before that checkpoint and return its
 ///   `event_id`. When no event sits at-or-before the checkpoint, return `None` so backfill streams
@@ -1979,11 +1979,11 @@ pub async fn resolve_sync_cursor_to_event_id(
     let Some(cursor) = cursor else {
         return Ok(None);
     };
-    if !cursor.starts_with("cx:cursor:") {
+    if !cursor.starts_with("ck:cursor:") {
         return Ok(Some(cursor));
     }
     let value = decode_sync_cursor_value(&cursor)
-        .map_err(|_| "sync cursor is not a valid cx:cursor token")?;
+        .map_err(|_| "sync cursor is not a valid ck:cursor token")?;
     let has_stateless_marker = has_stateless_cursor_marker(&value);
     if has_stateless_marker {
         if !is_stateless_cursor_profile_declared(state) {
@@ -2499,7 +2499,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                             // catchup_cursor we already have, so Dropped is
                             // safe here.
                             let cursor_str = catchup_cursor.clone();
-                            // Use the typed-id form (cx:cursor:<base64url>),
+                            // Use the typed-id form (ck:cursor:<base64url>),
                             // not the cursor::Cursor struct.
                             let cursor_typed =
                                 contrix_sdk::identifiers::Cursor::new(cursor_str.clone()).ok();
@@ -3001,7 +3001,7 @@ async fn sync_gap_backfill(
     let from_cursor = from_cursor.into_inner();
     let to_cursor = to_cursor.into_inner();
 
-    // Resolve sync `cx:cursor:` tokens to reducer event cursors.
+    // Resolve sync `ck:cursor:` tokens to reducer event cursors.
     let from_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, from_cursor)
         .await
         .map_err(crate::error::AppError::invalid_param)?;
@@ -3185,11 +3185,11 @@ mod tests {
             .with_timezone(&Utc);
         let realm_create = timestamp_position_with_tie_breaker(
             created_at,
-            "cx:event:019e507b-16b2-719a-84fd-a9319ab43a36",
+            "ck:event:019e507b-16b2-719a-84fd-a9319ab43a36",
         );
         let welcome_message = timestamp_position_with_tie_breaker(
             created_at,
-            "cx:event:019e507b-1857-73b7-9579-a00706bf0af4",
+            "ck:event:019e507b-1857-73b7-9579-a00706bf0af4",
         );
 
         assert_ne!(realm_create, welcome_message);
@@ -3257,7 +3257,7 @@ mod tests {
             compaction_prune_walk_interval_seconds: 0,
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -3269,7 +3269,7 @@ mod tests {
         AppState::new(test_config(), crate::db::Db { pool: None })
     }
 
-    const ROSTER_REALM: &str = "cx:realm:01904100-0000-7000-8000-00000000a001";
+    const ROSTER_REALM: &str = "ck:realm:01904100-0000-7000-8000-00000000a001";
     const ROSTER_ACTOR: &str = "did:web:alice.example";
     const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
     const ROSTER_CALLER: &str = "did:web:bob.example";
@@ -3328,7 +3328,7 @@ mod tests {
             .lock()
             .expect("member_identity lock")
             .insert(MemberIdentityEventRecord {
-                event_id: "cx:operation:roster-identity-1".to_owned(),
+                event_id: "ck:operation:roster-identity-1".to_owned(),
                 subject: MemberIdentitySubjectKey {
                     realm_id: ROSTER_REALM.to_owned(),
                     actor_id: ROSTER_ACTOR.to_owned(),
@@ -3337,7 +3337,7 @@ mod tests {
                 payload_digest,
                 replaces: Vec::new(),
                 raw_event: json!({
-                    "operation_id": "cx:operation:roster-identity-1",
+                    "operation_id": "ck:operation:roster-identity-1",
                     "event_kind": crate::kinds::CX_MEMBER_IDENTITY_UPDATE,
                     "realm_id": ROSTER_REALM,
                     "created_at": now(),
@@ -3597,7 +3597,7 @@ mod tests {
             state,
             None,
             None,
-            BTreeMap::from([("cx:realm:stateless-cursor-test".to_owned(), 7)]),
+            BTreeMap::from([("ck:realm:stateless-cursor-test".to_owned(), 7)]),
             12,
         );
         decode_sync_cursor_value(&token).expect("issued cursor decodes")
@@ -3631,7 +3631,7 @@ mod tests {
         .expect("signed stateless cursor must verify");
 
         assert_eq!(
-            parsed.positions.get("cx:realm:stateless-cursor-test"),
+            parsed.positions.get("ck:realm:stateless-cursor-test"),
             Some(&7)
         );
         assert_eq!(parsed.to_device_position, 12);
@@ -3774,7 +3774,7 @@ pub struct SubscribeFrameEnvelope {
 /// correct frame body from an optional cursor.
 ///
 /// Note: the cursor type expected by `EventsSubscribeFrameBody::Dropped`
-/// is the typed-id `contrix_identifiers::Cursor` (`cx:cursor:<base64url>`),
+/// is the typed-id `contrix_identifiers::Cursor` (`ck:cursor:<base64url>`),
 /// NOT the `contrix_sdk::Cursor` struct produced by `cursor::Cursor::new()`.
 /// The typed-id is exposed as `contrix_sdk::identifiers::Cursor`.
 pub fn dropped_or_resync(
@@ -3833,7 +3833,7 @@ mod cursor_frame_tests {
             body,
             contrix_sdk::EventsSubscribeFrameBody::ResyncRequired { .. }
         ));
-        let cursor = contrix_sdk::identifiers::Cursor::new("cx:cursor:resume").unwrap();
+        let cursor = contrix_sdk::identifiers::Cursor::new("ck:cursor:resume").unwrap();
         let body = dropped_or_resync(Some(cursor), "broadcast_lag", Some(10_000));
         assert!(matches!(
             body,

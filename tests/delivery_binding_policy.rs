@@ -12,11 +12,11 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const SPACE_A: &str = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+const SPACE_A: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
@@ -84,7 +84,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:rogue.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
     );
@@ -103,7 +103,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:principal.acme.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
             "resolved_at": "2026-05-19T00:00:00Z",
         }),
     );
@@ -136,7 +136,7 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:principal.acme.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-cccccccccccc",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-cccccccccccc",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -273,7 +273,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
             "required_endorsers": [],
             // Lexicographic comparison is fine here — frontier strings
             // are spec'd as monotonic per-Space identifiers.
-            "policy_frontier": "cx:frontier:02000000",
+            "policy_frontier": "ck:frontier:02000000",
         }),
     );
 
@@ -283,8 +283,8 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:principal.acme.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-dddddddddddd",
-            "delivery_binding_frontier": "cx:frontier:01000000",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-dddddddddddd",
+            "delivery_binding_frontier": "ck:frontier:01000000",
         }),
     );
     match state.apply(&stale, &hlc) {
@@ -300,8 +300,8 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:principal.acme.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-eeeeeeeeeeee",
-            "delivery_binding_frontier": "cx:frontier:02000000",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-eeeeeeeeeeee",
+            "delivery_binding_frontier": "ck:frontier:02000000",
         }),
     );
     let effect = state.apply(&fresh, &hlc);
@@ -327,7 +327,7 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
             "allow_did_document_default": false,
             "allowed_recipient_services": [],
             "required_endorsers": [],
-            "policy_frontier": "cx:frontier:02000000",
+            "policy_frontier": "ck:frontier:02000000",
         }),
     );
 
@@ -336,7 +336,7 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
         json!({
             "binding_source": "explicit",
             "recipient_service_did": "did:web:principal.acme.example",
-            "service_acceptance_ref": "cx:event:01904100-0000-7000-8000-ffffffffffff",
+            "service_acceptance_ref": "ck:event:01904100-0000-7000-8000-ffffffffffff",
         }),
     );
     match state.apply(&no_frontier, &hlc) {
@@ -368,7 +368,7 @@ fn delivery_binding_policy_event_projects_cell_value() {
             "required_endorsers": ["did:web:acme.example"],
             "allow_unroutable_membership": false,
             "rebind_authorization": "member_and_admin",
-            "policy_frontier": "cx:frontier:02000000"
+            "policy_frontier": "ck:frontier:02000000"
         }),
     );
 
@@ -385,6 +385,6 @@ fn delivery_binding_policy_event_projects_cell_value() {
     );
     assert_eq!(
         state.delivery_binding_policy_frontier(SPACE_A),
-        Some("cx:frontier:02000000")
+        Some("ck:frontier:02000000")
     );
 }

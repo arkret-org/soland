@@ -1,6 +1,6 @@
 //! Canonical `cx.admin.*` endpoints from the public service spec.
 //!
-//! Per contrix-spec `service-http-binding.md` §2.1 the admin surface is a
+//! Per cokret-spec `service-http-binding.md` §2.1 the admin surface is a
 //! deployment-local namespace served at the bare `/admin/*` path (NOT under
 //! the `/api/v1` protocol prefix). These canonical operations share that
 //! `/admin/*` namespace with the soland operator infrastructure (anchor DAG,

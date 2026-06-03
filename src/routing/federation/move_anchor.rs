@@ -33,7 +33,7 @@ use crate::{JsonResult, json_ok};
 
 /// Map an SDK [`AnchorReject`] onto an [`AppError`].
 ///
-/// Every reject reason routes through the canonical Contrix error
+/// Every reject reason routes through the canonical Cokret error
 /// registry:
 ///
 /// - `UnknownPredecessor`, `FrontierNotMonotonic`, `Structural`, `MissingMove`, `StateRootMismatch`
@@ -290,7 +290,7 @@ async fn submit_anchor(
     let anchor = body.into_inner();
 
     // Round R2/R3 (T04) — frontier entries MUST be sha256:<hex>; reject the
-    // legacy `cx:event:<uuid>` form fail-closed.
+    // legacy `ck:event:<uuid>` form fail-closed.
     let frontier_entries: Vec<String> = anchor
         .frontier
         .iter()
@@ -348,7 +348,7 @@ async fn submit_anchor(
     // Capture mls.epoch before the reload so we can detect a
     // shift after the reload writes the new value.
     let mls_epoch_cell = contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.mls.epoch.v1:{}",
+        "ck:cell:cx.component.mls.epoch.v1:{}",
         anchor.realm_id.as_str()
     ))
     .ok();
@@ -523,7 +523,7 @@ impl MoveStorePutVia for contrix_sdk::state_res::MemoryMoveStore {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Validate every entry in an Anchor `frontier[]` is shaped as
-/// `sha256:<64 lowercase hex>` — never a `cx:event:<uuid>` form. Spec T04.
+/// `sha256:<64 lowercase hex>` — never a `ck:event:<uuid>` form. Spec T04.
 ///
 /// Receivers MUST recompute and verify entries; the strict shape check
 /// here guards against the legacy event-id form that was permitted in
@@ -561,7 +561,7 @@ mod anchor_frontier_tests {
 
     #[test]
     fn anchor_frontier_rejects_event_id_form() {
-        let entries = vec!["cx:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        let entries = vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()];
         let err = validate_anchor_frontier_entries(&entries).unwrap_err();
         assert_eq!(err.0, ErrorCode::SchemaViolation);
     }

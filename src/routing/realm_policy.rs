@@ -11,7 +11,7 @@
 //!   remove the per-realm policy server config (callers fall back to the `governed_by` chain or the
 //!   local-only capability check after this lands).
 //!
-//! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
+//! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use contrix_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -193,7 +193,7 @@ async fn delete_realm_policy_server(
         ));
     }
     if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.realm.policy_server.v1:{realm_id}"
+        "ck:cell:cx.component.realm.policy_server.v1:{realm_id}"
     )) {
         projection.cells.remove(&cell_id);
     }

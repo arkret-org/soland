@@ -1,7 +1,7 @@
 -- CXP-0007 (spec b7d35be / floor 2b0d70d) — durable mirror tables for the
 -- Circle projection (`ProjectionState::circles`). Mirrors the
 -- `cx.schema.circle.v1` shape from
--- `contrix-spec/spec/v1/artifacts/schemas/circle.schema.json` plus the
+-- `cokret-spec/spec/v1/artifacts/schemas/circle.schema.json` plus the
 -- per-actor membership row used to enforce the
 -- `Circle.members ⊆ Realm.members` invariant.
 --
@@ -11,7 +11,7 @@
 
 CREATE TABLE projection_circles (
     circle_id                  TEXT PRIMARY KEY
-        CHECK (circle_id LIKE 'cx:circle:%'),
+        CHECK (circle_id LIKE 'ck:circle:%'),
     realm_id                   TEXT NOT NULL,
     title                      TEXT NOT NULL,
     summary                    TEXT,

@@ -18,7 +18,7 @@ async fn account_data_space_remark_round_trip() {
     let bob =
         dev_token_for_device(state.clone(), "did:web:bob.example", "device-bob-1", "Bob").await;
 
-    let space_id = "cx:space:0196419b-0000-7000-8000-000000000000";
+    let space_id = "ck:space:0196419b-0000-7000-8000-000000000000";
     let key = format!("cx.contacts.space.{space_id}");
     let remark = serde_json::json!({
         "version": 1,
@@ -121,7 +121,7 @@ async fn account_data_space_remark_round_trip() {
 
 #[tokio::test]
 async fn account_data_requires_auth() {
-    let resp = TestClient::put("http://server/api/v1/account_data/cx.contacts.space.cx:space:0196419b-0000-7000-8000-000000000000")
+    let resp = TestClient::put("http://server/api/v1/account_data/cx.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000")
         .json(&serde_json::json!({"content": {"local_name": "x"}}))
         .send(&app())
         .await;

@@ -1,7 +1,7 @@
 //! WebRTC session + signaling handlers.
 //!
 //! Surfaces:
-//! - `POST /contrix/v1/ice-config` (TURN / STUN list — currently empty)
+//! - `POST /cokret/v1/ice-config` (TURN / STUN list — currently empty)
 //! - `POST /api/v1/webrtc/sessions` create
 //! - `PUT/GET /api/v1/webrtc/sessions/{session_id}/signals`
 //! - `DELETE /api/v1/webrtc/sessions/{session_id}` close
@@ -58,14 +58,14 @@ pub(super) fn router() -> Router {
 
 pub(super) fn contrix_router() -> Router {
     Router::new()
-        .push(Router::with_path("contrix/v1/ice-config").post(contrix_ice_config))
-        // CXP-0010 — `POST /rtc/token` per CXP-0010 / contrix-spec
+        .push(Router::with_path("cokret/v1/ice-config").post(contrix_ice_config))
+        // CXP-0010 — `POST /rtc/token` per CXP-0010 / cokret-spec
         // b47ff6ec. Spec path lives at the deployment root (not under
-        // `/contrix/v1/`); both shapes are mounted so deployments behind
-        // an ingress that strips the `/contrix/v1/` prefix can still
+        // `/cokret/v1/`); both shapes are mounted so deployments behind
+        // an ingress that strips the `/cokret/v1/` prefix can still
         // reach the handler.
         .push(Router::with_path("rtc/token").post(contrix_rtc_token))
-        .push(Router::with_path("contrix/v1/rtc/token").post(contrix_rtc_token))
+        .push(Router::with_path("cokret/v1/rtc/token").post(contrix_rtc_token))
 }
 
 #[endpoint(
@@ -643,12 +643,12 @@ async fn start_recording(
     let recording_id = body
         .get("recording_id")
         .and_then(Value::as_str)
-        .filter(|id| id.starts_with("cx:recording:"))
+        .filter(|id| id.starts_with("ck:recording:"))
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| ids::generate("recording"));
     let blob_digest =
         sha256_hex(format!("{}:{}:{}", record.session_id, recording_id, session.actor).as_bytes());
-    let recording_blob_ref = format!("cx:blob:sha256:{blob_digest}");
+    let recording_blob_ref = format!("ck:blob:sha256:{blob_digest}");
     record.recording_started_by = Some(session.actor.clone());
     record.recording_blob_ref = Some(recording_blob_ref.clone());
     state
@@ -668,7 +668,7 @@ async fn start_recording(
     }))
 }
 
-// ── CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+// ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
 // caller that already has a committed `cx.call.state.session_focus`.
 //
@@ -686,7 +686,7 @@ const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "cx.component.realm.media_service.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
-    ContrixNative,
+    CokretNative,
     LiveKit,
     Mediasoup,
 }
@@ -694,7 +694,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "contrix-native" | "contrix_native" => Ok(Self::ContrixNative),
+            "cokret-native" | "contrix_native" => Ok(Self::CokretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -706,7 +706,7 @@ impl MediaProviderKind {
 
     fn as_wire(self) -> &'static str {
         match self {
-            Self::ContrixNative => "contrix-native",
+            Self::CokretNative => "cokret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -714,7 +714,7 @@ impl MediaProviderKind {
 
     fn token_prefix(self) -> &'static str {
         match self {
-            Self::ContrixNative => "contrix-native",
+            Self::CokretNative => "cokret-native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -777,17 +777,17 @@ trait MediaTokenIssuer {
     ) -> IssuedMediaToken;
 }
 
-struct ContrixNativeMediaIssuer;
+struct CokretNativeMediaIssuer;
 struct LiveKitMediaIssuer;
 struct MediasoupMediaIssuer;
 
-impl MediaTokenIssuer for ContrixNativeMediaIssuer {
+impl MediaTokenIssuer for CokretNativeMediaIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequest<'_>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> IssuedMediaToken {
-        issue_signed_backend_token(MediaProviderKind::ContrixNative, request, signing_key)
+        issue_signed_backend_token(MediaProviderKind::CokretNative, request, signing_key)
     }
 }
 
@@ -868,7 +868,7 @@ async fn handle_rtc_token(
     // projection (TODO(R4)).
     //
     //   - UNKNOWN_FOCUS_TYPE: emitted by the foci[] type validator when the requested focus.type
-    //     isn't in the {contrix-native, livekit, mediasoup, jitsi} enum.
+    //     isn't in the {cokret-native, livekit, mediasoup, jitsi} enum.
     //   - FOCUS_UNAVAILABLE_FOR_CLIENT: emitted when the realm's `cx.realm.media_service` cell
     //     doesn't expose a focus that intersects the caller's `foci_preferred[]`.
     //   - E2EE_KEY_SOURCE_UNAUTHORISED: emitted when the caller's `e2ee_key_source` doesn't appear
@@ -930,7 +930,7 @@ async fn handle_rtc_token(
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
     let participant_identity = format!(
-        "cx:rtc_participant:{}",
+        "ck:rtc_participant:{}",
         &sha256_hex(
             format!(
                 "participant\0{}\0{}\0{}\0{}",
@@ -1088,7 +1088,7 @@ fn media_service_epoch_for_realm(
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
     let cell_id = contrix_sdk::CellRef::new(format!(
-        "cx:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+        "ck:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
@@ -1119,9 +1119,9 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     let mut foci = Vec::new();
     for focus_value in foci_value {
         let focus_id = required_json_string(&focus_value, "focus_id")?;
-        if !focus_id.starts_with("cx:focus:") {
+        if !focus_id.starts_with("ck:focus:") {
             return Err(AppError::invalid_param(
-                "media focus_id must start with cx:focus:",
+                "media focus_id must start with ck:focus:",
             ));
         }
         let provider = focus_value
@@ -1147,7 +1147,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("contrix:media:{realm_id}:{focus_id}"));
+            .unwrap_or_else(|| format!("cokret:media:{realm_id}:{focus_id}"));
         let ttl_seconds = focus_value
             .get("ttl_seconds")
             .or_else(|| focus_value.get("token_ttl_seconds"))
@@ -1222,7 +1222,7 @@ fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, A
             .get("backend")
             .or_else(|| config.get("type"))
             .and_then(Value::as_str)
-            .unwrap_or("contrix-native");
+            .unwrap_or("cokret-native");
         let issuer_kid = config.get("issuer_kid").cloned().unwrap_or_else(|| {
             let service_id = config
                 .get("service_id")
@@ -1282,7 +1282,7 @@ fn focus_preferences_for_member(webrtc: &WebrtcSessionRecord, actor: &str) -> Ve
 
 fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
     match provider {
-        MediaProviderKind::ContrixNative => Box::new(ContrixNativeMediaIssuer),
+        MediaProviderKind::CokretNative => Box::new(CokretNativeMediaIssuer),
         MediaProviderKind::LiveKit => Box::new(LiveKitMediaIssuer),
         MediaProviderKind::Mediasoup => Box::new(MediasoupMediaIssuer),
     }
@@ -1348,7 +1348,7 @@ fn legacy_focus_id(realm_id: &str, endpoint: &str) -> String {
         .take(8)
         .collect::<String>();
     format!(
-        "cx:focus:legacy:{realm_short}:{}",
+        "ck:focus:legacy:{realm_short}:{}",
         &sha256_hex(endpoint.as_bytes())[..8]
     )
 }
@@ -1424,11 +1424,11 @@ async fn prune_expired_webrtc_sessions(state: &AppState) {
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
-    // v1 wire ID: `cx:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
+    // v1 wire ID: `ck:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
     // version=7, variant ∈ {8,9,a,b}) — per
-    // `contrix-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
-    // call surface uses `cx:call:`.
-    let Some(rest) = value.strip_prefix("cx:call:") else {
+    // `cokret-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
+    // call surface uses `ck:call:`.
+    let Some(rest) = value.strip_prefix("ck:call:") else {
         return false;
     };
     let Ok(parsed) = uuid::Uuid::parse_str(rest) else {

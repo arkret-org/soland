@@ -1,4 +1,4 @@
-//! Deterministic state reducer for contrix operations.
+//! Deterministic state reducer for cokret operations.
 //!
 //! Applies operations to produce projection state using well-known
 //! conflict resolution rules:
@@ -90,7 +90,7 @@ pub struct ProjectionState {
     /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
-    /// `cx:cell:cx.component.space.read_receipt_policy.v1:<space_id>`).
+    /// `ck:cell:cx.component.space.read_receipt_policy.v1:<space_id>`).
     /// Each successful apply_anchor (`routing::federation::move_anchor::submit_anchor` or
     /// `crate::anchorer::AnchorerWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -119,7 +119,7 @@ pub struct ProjectionState {
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
-    /// `contrix-spec/v1/zh/models/common-fields.md §5.1` for `cx.space.*`
+    /// `cokret-spec/v1/zh/models/common-fields.md §5.1` for `cx.space.*`
     /// lifecycle events. Used by `event_log::submit_event` to reject
     /// invalid transitions with HTTP 412 before persisting. Reducer applies
     /// `cx.space.create` / update / parent / archive / restore / tombstone;
@@ -134,7 +134,7 @@ pub struct ProjectionState {
     /// CXP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `cx.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
-    /// (`cx:circle:<uuid>`); membership and parent-Realm binding live in
+    /// (`ck:circle:<uuid>`); membership and parent-Realm binding live in
     /// the struct so the wire layer can enforce
     /// `Circle.members ⊆ Realm.members` without an extra DB hop.
     pub circles: BTreeMap<String, CircleProjection>,
@@ -157,7 +157,7 @@ pub struct ProjectionState {
     /// (`cx.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, AgentProjection>,
-    /// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — FSM lifecycle
+    /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_principal_id. Driven by
     /// `cx.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
@@ -263,7 +263,7 @@ pub struct FanoutPeerStatus {
 /// Stream-F (Wave 1B) — `cx.audit.erasure_receipt` projection record.
 /// Mirrors a subset of the canonical `cx.schema.erasure_receipt.v1`
 /// payload (see
-/// `contrix-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
+/// `cokret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
 /// We only keep the fields the local audit / federation fanout layer
 /// actually consults — the rest of the payload (`proofs`,
 /// `erased_classes`, `retained_stub_digest`, …) round-trips through the
@@ -418,7 +418,7 @@ pub struct KeyPackageLifetime {
 /// `consumed_at`; a second claim against the same `id` is rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
-    /// Canonical `cx:mls_keypackage:<uuid>` identifier.
+    /// Canonical `ck:mls_keypackage:<uuid>` identifier.
     pub id: String,
     pub actor_did: String,
     pub device_id: String,
@@ -445,7 +445,7 @@ pub struct MlsKeyPackage {
 /// with `delivered_at = now()` so a re-poll won't redeliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
-    /// Canonical `cx:mls_welcome:<uuid>` identifier.
+    /// Canonical `ck:mls_welcome:<uuid>` identifier.
     pub id: String,
     /// MLS group the Welcome admits the recipient into.
     pub group_id: String,
@@ -473,7 +473,7 @@ pub struct MlsWelcome {
 /// commits for this group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
-    /// MLS group id (`cx:mls_group:<...>`).
+    /// MLS group id (`ck:mls_group:<...>`).
     pub group_id: String,
     /// Monotonic epoch counter. Starts at 0 before the first commit;
     /// each commit bumps by +1.
@@ -560,7 +560,7 @@ pub struct FlowProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CXP-0007 — the Circle this Flow is scoped to, if any (`cx:circle:…`).
+    /// CXP-0007 — the Circle this Flow is scoped to, if any (`ck:circle:…`).
     /// A message's effective circle-scope is derived from its Flow's
     /// `scope_circle_id` (spec: `scope_circle_id` is a Flow field, not a
     /// message field); messages never carry their own scope.
@@ -711,7 +711,7 @@ pub struct AgentProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — FSM-lattice state
+/// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM-lattice state
 /// for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 /// `Deactivated` is terminal (no transition out). Reducer enforcement
 /// lives in [`ProjectionState::apply_agent_lifecycle`] (REDU-1).
@@ -852,8 +852,8 @@ pub struct PollState {
 
 fn message_event_id_from_ref(value: &str) -> String {
     value
-        .strip_prefix("cx:message:")
-        .map(|suffix| format!("cx:event:{suffix}"))
+        .strip_prefix("ck:message:")
+        .map(|suffix| format!("ck:event:{suffix}"))
         .unwrap_or_else(|| value.to_owned())
 }
 
@@ -1096,7 +1096,7 @@ pub struct SpaceState {
     /// immutable on the first `cx.realm.create`; subsequent events that
     /// attempt to set a different trust domain MUST be rejected with
     /// `cross_domain_replay_rejected`. Stored as the canonical
-    /// `cx:trust_domain:<scope>` string form.
+    /// `ck:trust_domain:<scope>` string form.
     pub trust_domain: Option<String>,
     /// Stream-F (Wave 1B) — Realm terminal-state marker. Set by
     /// `apply_realm_lifecycle` when a `cx.realm.tombstone` or
@@ -1111,7 +1111,7 @@ pub struct SpaceState {
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
     /// Stream-F (Wave 1B) — for `cx.realm.tombstone` only: the
-    /// `cx:realm:<uuid>` of the successor Realm that takes over child
+    /// `ck:realm:<uuid>` of the successor Realm that takes over child
     /// Space/Flow placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
 }
@@ -1239,7 +1239,7 @@ pub enum ProjectionEffect {
     AgentProjectionUpdated {
         agent_id: String,
     },
-    /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — agent
+    /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — agent
     /// lifecycle FSM transition projected. `agent_principal_id` is the DID
     /// from the payload; `new_state` is the post-transition
     /// AgentLifecycleState. Bottom = `Reject`;
@@ -1255,7 +1255,7 @@ pub enum ProjectionEffect {
         kind: &'static str,
         event_id: String,
     },
-    /// MID-1..6 (R3.1/R3.2, contrix-spec @ b56cab1) —
+    /// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) —
     /// `cx.member.identity.update` accepted into the ordered-log
     /// `cx.component.member.identity.v1` cell. The actual replacement-edge
     /// filter + per-actor effective-set / `member_display_state_digest`
@@ -1714,7 +1714,7 @@ fn apply_agent_endpoint_dispatch(
     s.apply_agent_endpoint(op, op.created_at)
 }
 
-// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — FSM-lattice
+// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — FSM-lattice
 // dispatch for `cx.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
 // `Deactivated` is terminal (no transition out, no resume after).
 fn apply_agent_pause_dispatch(
@@ -1784,7 +1784,7 @@ fn apply_agent_action_reject_dispatch(
         event_id: op.operation_id.to_string(),
     }
 }
-/// MID-1..6 (R3.1/R3.2, contrix-spec @ b56cab1) — reducer-side dispatch for
+/// MID-1..6 (R3.1/R3.2, cokret-spec @ b56cab1) — reducer-side dispatch for
 /// `cx.member.identity.update`. The full ordered-log projection +
 /// per-actor effective-set / `member_display_state_digest` materialization
 /// happens on `AppState::member_identity` (see
@@ -1861,7 +1861,7 @@ fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkState) {
 
 /// R3.2 — extract a string EventRef id from an `EventRef`-shaped
 /// payload field. Accepts both the canonical object shape
-/// `{"id": "cx:event:...", "role": "..."}` and a bare string form
+/// `{"id": "ck:event:...", "role": "..."}` and a bare string form
 /// (older client tolerance).
 fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
     let v = payload.get(field)?;
@@ -1871,7 +1871,7 @@ fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
     v.get("id").and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
-const CAPABILITY_GRANT_CELL_PREFIX: &str = "cx:cell:cx.component.capability.grant.v1:";
+const CAPABILITY_GRANT_CELL_PREFIX: &str = "ck:cell:cx.component.capability.grant.v1:";
 
 #[derive(Clone, Debug)]
 struct CapabilityGrantSnapshot {
@@ -1939,7 +1939,7 @@ fn has_active_realm_link_to_source(
 
 fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
     CellRef::new(format!(
-        "cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+        "ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
     ))
     .ok()
 }
@@ -1949,7 +1949,7 @@ fn inheritance_policy_ref_matches(
     realm_id: &str,
     policy_ref: &str,
 ) -> bool {
-    let cell_ref_string = format!("cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}");
+    let cell_ref_string = format!("ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}");
     if policy_ref == cell_ref_string {
         return true;
     }
@@ -2399,7 +2399,7 @@ fn apply_realm_audit_policy_downgrade_dispatch(
 // module can grow independently (see top-level `pub mod mls;`).
 //
 // Canonical event kinds per
-// `contrix-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
+// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json`: a single
 // `cx.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
@@ -2545,7 +2545,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CX_CONTAINER_MOVE_ITEM, apply_container_position_dispatch);
     m.insert(CX_CONTAINER_REBALANCE, apply_container_position_dispatch);
     m.insert(CX_MEMBER_STATE, apply_membership_dispatch);
-    // MID-1..6 (R3.1/R3.2 spec-sync, contrix-spec @ b56cab1) —
+    // MID-1..6 (R3.1/R3.2 spec-sync, cokret-spec @ b56cab1) —
     // `cx.member.identity.update`. Cell family
     // `cx.component.member.identity.v1`, lattice `ordered_log`, bottom
     // `expose`. The ordered-log projection (effective-set filter,
@@ -2730,8 +2730,8 @@ fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
 
 fn realm_organization_space_id_from_cell(cell_id: &str) -> Option<String> {
     cell_id
-        .strip_prefix("cx:cell:cx.component.realm.organization.v1:")
-        .filter(|space_id| space_id.starts_with("cx:realm:"))
+        .strip_prefix("ck:cell:cx.component.realm.organization.v1:")
+        .filter(|space_id| space_id.starts_with("ck:realm:"))
         .map(ToOwned::to_owned)
 }
 
@@ -2826,7 +2826,7 @@ fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
     ])
     .ok()?;
     CellRef::new(format!(
-        "cx:cell:cx.component.device.push_route.v1:{cell_subject}"
+        "ck:cell:cx.component.device.push_route.v1:{cell_subject}"
     ))
     .ok()
 }
@@ -3039,7 +3039,7 @@ fn flow_id_from_payload(payload: &Value) -> Option<&str> {
         .or_else(|| payload.get("target_ref"))
         .or_else(|| payload.get("object_ref"))
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("cx:flow:"))
+        .filter(|value| value.starts_with("ck:flow:"))
 }
 
 fn check_flow_status_patch(
@@ -3530,7 +3530,7 @@ impl ProjectionState {
         rank: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
-        let relation_id = format!("cx:relation:kanban.position:{board_space_id}:{flow_id}");
+        let relation_id = format!("ck:relation:kanban.position:{board_space_id}:{flow_id}");
         let relation = self
             .relations
             .entry(relation_id.clone())
@@ -3755,7 +3755,7 @@ impl ProjectionState {
 
     fn apply_poll_create(&mut self, message: &MessageState) {
         let poll_id = poll_id_from_content(&message.content)
-            .unwrap_or_else(|| message.event_id.replacen("cx:event:", "cx:message:", 1));
+            .unwrap_or_else(|| message.event_id.replacen("ck:event:", "ck:message:", 1));
         let Some(question) = poll_question_from_content(&message.content) else {
             return;
         };
@@ -3959,7 +3959,7 @@ impl ProjectionState {
     /// resets the cas-register and removes the tombstone.
     ///
     /// When the payload also carries `object_ref` / `target_object_ref`
-    /// naming a `cx:flow:` or `cx:morph:` typed-id, the redaction
+    /// naming a `ck:flow:` or `ck:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
     /// Space containers are intentionally excluded — they have no Redacted
@@ -4406,7 +4406,7 @@ impl ProjectionState {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{realm_id}"
+            "ck:cell:cx.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -4498,7 +4498,7 @@ impl ProjectionState {
         // as `(realm, target, link_kind)` joined by `|` (cells store
         // strings; reducer-side decoders re-split).
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
+            "ck:cell:cx.component.realm.link.v1:{realm_id}|{target_realm_id}|{link_kind}"
         )) {
             let value = serde_json::json!({
                 "realm_id": realm_id,
@@ -4616,7 +4616,7 @@ impl ProjectionState {
         }
 
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
+            "ck:cell:cx.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
                 "operation_id": operation.operation_id.as_str(),
@@ -4751,7 +4751,7 @@ impl ProjectionState {
         };
 
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.capability.derived.v1:{capability_id}"
+            "ck:cell:cx.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
             value.insert(
@@ -4880,7 +4880,7 @@ impl ProjectionState {
             "operation_id": operation.operation_id.as_str(),
         });
         if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.audit_policy_downgrade.v1:{realm_id}"
+            "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{realm_id}"
         )) {
             let new_log = match self.cells.get(&cell_id) {
                 Some(CellState::Value(Value::Array(existing))) => {
@@ -5035,11 +5035,11 @@ impl ProjectionState {
         );
 
         // Synthesize the FSM cell state. Cell ref shape per spec
-        // `cx:cell:cx.component.member.state.v1:<actor_did>` — note the
+        // `ck:cell:cx.component.member.state.v1:<actor_did>` — note the
         // cell_subject is `actor_id` (per-actor), not (space_id, actor)
         // composite. The Space scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.member.state.v1:{member}"))
+            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{member}"))
         {
             self.cells.insert(
                 cell_id,
@@ -5056,7 +5056,7 @@ impl ProjectionState {
 
     fn realm_organization_cell_id(space_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
-            "cx:cell:cx.component.realm.organization.v1:{space_id}"
+            "ck:cell:cx.component.realm.organization.v1:{space_id}"
         ))
         .ok()
     }
@@ -5221,7 +5221,7 @@ impl ProjectionState {
             .payload
             .get("state_witness")
             .and_then(Value::as_str)
-            && !witness.starts_with("cx:anchor:sha256:")
+            && !witness.starts_with("ck:anchor:sha256:")
         {
             return Err("repair_state_witness_invalid");
         }
@@ -5417,7 +5417,7 @@ impl ProjectionState {
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
-            // Shape MUST be `cx:trust_domain:<scope>` — delegate to SDK
+            // Shape MUST be `ck:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
             if contrix_sdk::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
@@ -5443,7 +5443,7 @@ impl ProjectionState {
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
             contrix_sdk::CellRef::new(format!(
-                "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+                "ck:cell:cx.component.realm.organization.v1:{realm_id}"
             ))
             .ok()
             .and_then(|c| self.cell_value(&c).cloned())
@@ -5479,7 +5479,7 @@ impl ProjectionState {
 
         // Stream-F (Wave 1B): cx.realm.tombstone preconditions. The
         // event MUST carry a syntactically valid `successor_realm_id`
-        // pointing at a `cx:realm:<UUIDv7>` distinct from the
+        // pointing at a `ck:realm:<UUIDv7>` distinct from the
         // terminating Realm. Absent → `missing_successor`; malformed →
         // `schema_violation`; self-reference → `successor_self_reference`.
         let payload_successor_realm_id = operation
@@ -5589,7 +5589,7 @@ impl ProjectionState {
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.create.v1:{realm_id}"
+                    "ck:cell:cx.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
                         "owner": owner,
@@ -5617,7 +5617,7 @@ impl ProjectionState {
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+                    "ck:cell:cx.component.realm.organization.v1:{realm_id}"
                 )) {
                     // Start from the existing cell value so partial
                     // updates retain previously-set fields.
@@ -5654,7 +5654,7 @@ impl ProjectionState {
                 // Bottom = reject (the structured-cache preflight above
                 // mirrors that).
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.destroy.v1:{realm_id}"
+                    "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "tombstoned",
@@ -5673,7 +5673,7 @@ impl ProjectionState {
             k if k == crate::kinds::CX_REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 if let Ok(cell_id) = contrix_sdk::CellRef::new(format!(
-                    "cx:cell:cx.component.realm.destroy.v1:{realm_id}"
+                    "ck:cell:cx.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
@@ -6320,7 +6320,7 @@ impl ProjectionState {
                 relation
                     .to_ref
                     .as_deref()
-                    .filter(|flow_id| flow_id.starts_with("cx:flow:"))
+                    .filter(|flow_id| flow_id.starts_with("ck:flow:"))
                     .map(|flow_id| (relation_id.clone(), flow_id.to_owned()))
             })
             .collect::<Vec<_>>();
@@ -7120,7 +7120,7 @@ impl ProjectionState {
 
     // ── CXP-0007 Circle reducer ─────────────────────────────────────────
     //
-    // Spec source: `contrix-spec/spec/v1/zh/models/circle.md` +
+    // Spec source: `cokret-spec/spec/v1/zh/models/circle.md` +
     // `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
     // reducer-input kinds are dispatched here (the seventh,
     // `cx.circle.anchor_commit`, is reducer-derived and emitted by the
@@ -7142,7 +7142,7 @@ impl ProjectionState {
                 reason: "circle_create_missing_id".to_owned(),
             };
         };
-        if !circle_id.starts_with("cx:circle:") {
+        if !circle_id.starts_with("ck:circle:") {
             return ProjectionEffect::Rejected {
                 reason: "circle_create_invalid_id_prefix".to_owned(),
             };
@@ -7515,7 +7515,7 @@ impl ProjectionState {
         })
     }
 
-    /// CXP-0007 — resolve the Circle (`cx:circle:…`) a Flow is scoped to, if
+    /// CXP-0007 — resolve the Circle (`ck:circle:…`) a Flow is scoped to, if
     /// any. A message's effective circle-scope is derived from its Flow via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
     /// is a Flow field). Returns `None` for unknown Flows or Realm-default
@@ -7524,7 +7524,7 @@ impl ProjectionState {
         self.flows
             .get(flow_id)
             .and_then(|flow| flow.scope_circle_id.clone())
-            .filter(|scope| scope.starts_with("cx:circle:"))
+            .filter(|scope| scope.starts_with("ck:circle:"))
     }
 
     /// Apply `cx.applet.registration`. Upserts the
@@ -7678,7 +7678,7 @@ impl ProjectionState {
         ProjectionEffect::AgentProjectionUpdated { agent_id }
     }
 
-    /// REDU-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — apply
+    /// REDU-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — apply
     /// an `cx.agent.{pause,resume,deactivate}` FSM transition. The
     /// lattice is `fsm` with `bottom=reject`; allowed transitions are:
     ///   - Active → Paused                 via `cx.agent.pause`
@@ -7778,7 +7778,7 @@ impl ProjectionState {
     }
 
     /// Resolve a Message's `(created_at, sender, thread_id)` by target ref,
-    /// accepting either the `cx:event:` storage id or the `cx:message:`
+    /// accepting either the `ck:event:` storage id or the `ck:message:`
     /// object-ref form. Used by the constraint-schema.md §14.2 edit/redact
     /// window evaluator, which needs the original Message `created_at` to
     /// measure the elapsed window. Returns `None` for unknown targets.
@@ -7795,7 +7795,7 @@ impl ProjectionState {
     }
 
     /// Resolve the `realm_id` (effective scope) of a Message by target ref,
-    /// accepting the `cx:message:` object-ref or `cx:event:` storage id.
+    /// accepting the `ck:message:` object-ref or `ck:event:` storage id.
     /// Used by the flow-and-message.md §9.8.2 reaction scope check. Returns
     /// `None` for unknown targets (the reducer's dependency handling then
     /// keeps the reaction pending).
@@ -7918,7 +7918,7 @@ impl ProjectionState {
     /// `cx.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
         let cell_id =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.member.state.v1:{actor_did}"))
+            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.member.state.v1:{actor_did}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
@@ -7933,7 +7933,7 @@ impl ProjectionState {
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
+            "ck:cell:cx.component.space.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -7947,7 +7947,7 @@ impl ProjectionState {
     /// if the cell is in `Bottom` (concurrent admin updates require recovery).
     pub fn space_organization_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.organization.v1:{space_id}"
+            "ck:cell:cx.component.realm.organization.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -7958,7 +7958,7 @@ impl ProjectionState {
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn space_create_log(&self, space_id: &str) -> Option<&[Value]> {
         let cell_id =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.create.v1:{space_id}"))
+            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{space_id}"))
                 .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
@@ -7978,7 +7978,7 @@ impl ProjectionState {
     /// [`Self::space_is_in_terminal_state`] / [`SpaceState::terminal_state`].
     pub fn space_is_destroyed(&self, space_id: &str) -> bool {
         let Ok(cell_id) =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.destroy.v1:{space_id}"))
+            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.destroy.v1:{space_id}"))
         else {
             return false;
         };
@@ -8011,7 +8011,7 @@ impl ProjectionState {
     /// cells map to the structured cache.
     pub fn delivery_binding_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
+            "ck:cell:cx.component.realm.delivery_binding_policy.v1:{space_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -8149,7 +8149,7 @@ impl ProjectionState {
         // First check the organization cell (cas-register, last write
         // wins; carries the most recent update).
         if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+            "ck:cell:cx.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
                 .cell_value(&org_cell)
@@ -8161,7 +8161,7 @@ impl ProjectionState {
         }
         // Fallback: check the create-log cell's last entry.
         if let Ok(create_cell) =
-            contrix_sdk::CellRef::new(format!("cx:cell:cx.component.realm.create.v1:{realm_id}"))
+            contrix_sdk::CellRef::new(format!("ck:cell:cx.component.realm.create.v1:{realm_id}"))
         {
             if let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array) {
                 if let Some(last) = arr.last() {
@@ -8180,7 +8180,7 @@ impl ProjectionState {
     /// initial `federation_policy`.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
         if let Ok(org_cell) = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.organization.v1:{realm_id}"
+            "ck:cell:cx.component.realm.organization.v1:{realm_id}"
         )) {
             if let Some(v) = self
                 .cell_value(&org_cell)
@@ -8229,7 +8229,7 @@ mod tests {
     #[test]
     fn redaction_human_reason_prefers_explicit_field() {
         let payload = serde_json::json!({
-            "target_event_id": "cx:event:01904100-0000-7000-8000-000000000abc",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-000000000abc",
             "reason": "machine policy",
             "human_reason": "moderator request"
         });
@@ -8243,7 +8243,7 @@ mod tests {
 
     fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
-            contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7()))
+            contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             contrix_sdk::RealmId::new(realm_id).unwrap(),
             object_type,
@@ -8257,22 +8257,22 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let op = make_operation(
             crate::kinds::CX_MESSAGE_CREATE,
-            "cx:realm:01904100-0000-7000-8000-cfc039892036",
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
-                "thread_id": "cx:flow:1",
+                "thread_id": "ck:flow:1",
                 "content": {"kind": "cx.content.text", "body": "hello"}
             }),
         );
         let effect = state.apply(&op, &hlc);
         assert!(matches!(effect, ProjectionEffect::MessageCreated(_)));
 
-        let msgs = state.messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036");
+        let msgs = state.messages_for_space("ck:realm:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 1);
         assert_eq!(
             msgs[0].event_id,
-            "cx:event:01904100-0000-7000-8000-caaa6a15bce1"
+            "ck:event:01904100-0000-7000-8000-caaa6a15bce1"
         );
     }
 
@@ -8284,11 +8284,11 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
-                    "thread_id": "cx:flow:1",
+                    "thread_id": "ck:flow:1",
                     "content": {"kind": "cx.content.text", "body": "hello"}
                 }),
             ),
@@ -8297,9 +8297,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "target_event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "by": "did:web:alice",
                     "reason": "wrong room"
                 }),
@@ -8309,24 +8309,24 @@ mod tests {
 
         assert!(
             state
-                .messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
+                .messages_for_space("ck:realm:01904100-0000-7000-8000-cfc039892036")
                 .is_empty()
         );
         assert!(
             state
                 .redactions
-                .contains("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+                .contains("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
         );
         // The original MessageState is preserved (only the
         // parallel cell + flat redactions index move).
         assert!(
             state
                 .messages
-                .contains_key("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+                .contains_key("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
         );
         let cell = state
             .redaction_cells
-            .get("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .get("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
             .cloned()
             .unwrap()
             .unwrap();
@@ -8340,11 +8340,11 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "event_id": event_id,
                     "sender": "did:web:alice",
-                    "thread_id": "cx:flow:1",
+                    "thread_id": "ck:flow:1",
                     "content": {"kind": "cx.content.text", "body": "hello"}
                 }),
             ),
@@ -8356,12 +8356,12 @@ mod tests {
     fn mal14_tombstone_visible_to_author() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa1";
+        let event_id = "ck:event:01904100-0000-7000-8000-aaaaaaaaaaa1";
         redact_make_message(&mut state, &hlc, event_id);
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -8384,12 +8384,12 @@ mod tests {
     fn mal14_tombstone_hidden_from_members() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa2";
+        let event_id = "ck:event:01904100-0000-7000-8000-aaaaaaaaaaa2";
         redact_make_message(&mut state, &hlc, event_id);
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -8406,13 +8406,13 @@ mod tests {
     fn mal14_unredaction_clears_cell_and_index() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa3";
+        let event_id = "ck:event:01904100-0000-7000-8000-aaaaaaaaaaa3";
         redact_make_message(&mut state, &hlc, event_id);
         // Redact.
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -8425,7 +8425,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "redaction_value": serde_json::Value::Null,
@@ -8449,7 +8449,7 @@ mod tests {
     fn mal14_late_arriving_redaction_still_takes_effect() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let event_id = "cx:event:01904100-0000-7000-8000-aaaaaaaaaaa4";
+        let event_id = "ck:event:01904100-0000-7000-8000-aaaaaaaaaaa4";
         // Pre-create the projected message and let the projection
         // rendering query it once before the redaction lands.
         redact_make_message(&mut state, &hlc, event_id);
@@ -8460,7 +8460,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REDACT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "target_event_id": event_id,
                     "by": "did:web:alice",
@@ -8491,9 +8491,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_ADD,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
                     "key": "👍"
                 }),
@@ -8502,7 +8502,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+                .reactions_for_event("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
                 .len(),
             1
         );
@@ -8510,9 +8510,9 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REACTION_REMOVE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "actor": "did:web:alice",
                     "key": "👍"
                 }),
@@ -8521,7 +8521,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .reactions_for_event("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+                .reactions_for_event("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
                 .len(),
             0
         );
@@ -8533,7 +8533,7 @@ mod tests {
         let hlc = ServerHlc::new("test");
 
         // `membership=join` MUST carry `delivery_status` per
-        // contrix-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
+        // cokret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
         // We use `unroutable` so the projection write path does not
         // additionally require a projected `cx.realm.delivery_binding_policy`
         // cell (`routable` joins are exercised by the delivery-binding
@@ -8541,7 +8541,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": "join",
@@ -8553,7 +8553,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("ck:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             1
         );
@@ -8561,7 +8561,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:bob",
                     "membership": "leave"
@@ -8571,7 +8571,7 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("ck:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             0
         );
@@ -8585,11 +8585,11 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_CREATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "event_id": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                     "sender": "did:web:alice",
-                    "thread_id": "cx:flow:1",
+                    "thread_id": "ck:flow:1",
                     "content": {"kind": "cx.content.text", "body": "original"}
                 }),
             ),
@@ -8599,25 +8599,25 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MESSAGE_REVISE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "target_ref": "cx:event:01904100-0000-7000-8000-caaa6a15bce1",
-                    "new_event_id": "cx:event:01904100-0000-7000-8000-c4daaba541fc",
+                    "target_ref": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
+                    "new_event_id": "ck:event:01904100-0000-7000-8000-c4daaba541fc",
                     "content": {"kind": "cx.content.text", "body": "revised"}
                 }),
             ),
             &hlc,
         );
 
-        let msgs = state.messages_for_space("cx:realm:01904100-0000-7000-8000-cfc039892036");
+        let msgs = state.messages_for_space("ck:realm:01904100-0000-7000-8000-cfc039892036");
         assert_eq!(msgs.len(), 2); // original + revision
         let revision = msgs
             .iter()
-            .find(|m| m.event_id == "cx:event:01904100-0000-7000-8000-c4daaba541fc")
+            .find(|m| m.event_id == "ck:event:01904100-0000-7000-8000-c4daaba541fc")
             .unwrap();
         assert_eq!(
             revision.revision_of.as_deref(),
-            Some("cx:event:01904100-0000-7000-8000-caaa6a15bce1")
+            Some("ck:event:01904100-0000-7000-8000-caaa6a15bce1")
         );
     }
 
@@ -8627,7 +8627,7 @@ mod tests {
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         assert!(state.cell(&cell_id).is_none());
@@ -8639,7 +8639,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036"
+            "ck:cell:cx.component.space.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
                 .to_owned(),
         )
         .unwrap();
@@ -8671,14 +8671,14 @@ mod tests {
         let hlc = ServerHlc::new("test");
 
         // `membership=join` MUST carry `delivery_status` per
-        // contrix-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
+        // cokret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
         // `unroutable` keeps the projection focused on the FSM cell +
         // structured cache write paths without requiring a projected
         // realm delivery-binding policy.
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "actor_id": "did:web:alice",
                     "membership": "join",
@@ -8692,7 +8692,7 @@ mod tests {
         // Structured cache populated with state="join" + role="admin".
         let m = state
             .member(
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 "did:web:alice",
             )
             .expect("member entry should exist after join");
@@ -8708,7 +8708,7 @@ mod tests {
         // members_of_space only returns entries in `state="join"`.
         assert_eq!(
             state
-                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("ck:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             1
         );
@@ -8724,7 +8724,7 @@ mod tests {
             state.apply(
                 &make_operation(
                     crate::kinds::CX_MEMBER_STATE,
-                    "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                    "ck:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({
                         "actor_id": "did:web:bob",
                         "membership": membership,
@@ -8739,13 +8739,13 @@ mod tests {
         // `members_of_space()` (which filters by `state="join"`).
         assert_eq!(
             state
-                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "ban")
+                .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "ban")
                 .len(),
             1
         );
         assert_eq!(
             state
-                .members_of_space("cx:realm:01904100-0000-7000-8000-cfc039892036")
+                .members_of_space("ck:realm:01904100-0000-7000-8000-cfc039892036")
                 .len(),
             0
         );
@@ -8758,7 +8758,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
             ),
             &hlc,
@@ -8769,13 +8769,13 @@ mod tests {
         );
         assert_eq!(
             state
-                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "ban")
+                .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "ban")
                 .len(),
             0
         );
         assert_eq!(
             state
-                .members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "invite")
+                .members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "invite")
                 .len(),
             1
         );
@@ -8790,7 +8790,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REALM_CREATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "create",
                     "owner": "did:web:alice",
@@ -8803,7 +8803,7 @@ mod tests {
         // Structured cache populated.
         let space = state
             .space_states
-            .get("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .get("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("space_states entry should exist after create");
         assert_eq!(space.owner.as_deref(), Some("did:web:alice"));
         assert_eq!(space.title.as_deref(), Some("Test Space"));
@@ -8811,7 +8811,7 @@ mod tests {
 
         // Ordered-log cell has one entry.
         let log = state
-            .space_create_log("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .space_create_log("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("create cell should be a Value(Array)");
         assert_eq!(log.len(), 1);
         assert_eq!(
@@ -8827,7 +8827,7 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REALM_UPDATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
                     "action": "update",
                     "owner": "did:web:alice",
@@ -8838,7 +8838,7 @@ mod tests {
         );
 
         let value = state
-            .space_organization_cell_value("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .space_organization_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("organization cell should resolve to Value");
         assert_eq!(
             value.get("title").and_then(Value::as_str),
@@ -8856,9 +8856,9 @@ mod tests {
     fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let realm = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         let basis =
-            "cx:anchor:sha256:0000000000000000000000000000000000000000000000000000000000000000";
+            "ck:anchor:sha256:0000000000000000000000000000000000000000000000000000000000000000";
         let first = make_operation(
             crate::kinds::CX_REALM_UPDATE,
             realm,
@@ -8941,29 +8941,29 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_REALM_CREATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "create", "owner": "did:web:alice"}),
             ),
             &hlc,
         );
-        assert!(!state.space_is_destroyed("cx:realm:01904100-0000-7000-8000-cfc039892036"));
+        assert!(!state.space_is_destroyed("ck:realm:01904100-0000-7000-8000-cfc039892036"));
 
         // ...then destroy.
         state.apply(
             &make_operation(
                 crate::kinds::CX_REALM_DESTROY,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"action": "destroy"}),
             ),
             &hlc,
         );
 
         // Cell-keyed query returns true.
-        assert!(state.space_is_destroyed("cx:realm:01904100-0000-7000-8000-cfc039892036"));
+        assert!(state.space_is_destroyed("ck:realm:01904100-0000-7000-8000-cfc039892036"));
         // Structured cache mirror agrees.
         let space = state
             .space_states
-            .get("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .get("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .unwrap();
         assert!(space.deleted);
     }
@@ -8978,10 +8978,10 @@ mod tests {
     fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_a = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-        let realm_b = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
-        let parent_in_a = "cx:space:01904100-0000-7000-8000-000000000001";
-        let child_in_b = "cx:space:01904100-0000-7000-8000-000000000002";
+        let realm_a = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+        let realm_b = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+        let parent_in_a = "ck:space:01904100-0000-7000-8000-000000000001";
+        let child_in_b = "ck:space:01904100-0000-7000-8000-000000000002";
         // Container hosted inside Realm A (the to-be-destroyed Realm).
         state.apply(
             &make_operation(
@@ -9065,15 +9065,15 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_AUDIT_ERASURE_RECEIPT,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "receipt_id": "cx:receipt:01",
+                    "receipt_id": "ck:receipt:01",
                     "schema": "cx.schema.erasure_receipt.v1",
                     "issuer": "did:web:soland.local",
-                    "subject": {"kind": "realm", "ref": "cx:realm:01904100-0000-7000-8000-cfc039892036"},
+                    "subject": {"kind": "realm", "ref": "ck:realm:01904100-0000-7000-8000-cfc039892036"},
                     "scope": {
                         "storage_boundary": "projection_store",
-                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                        "realm_id": "ck:realm:01904100-0000-7000-8000-cfc039892036",
                     },
                     "outcome": "completed",
                 }),
@@ -9082,11 +9082,11 @@ mod tests {
         );
         assert_eq!(state.erasure_receipts.len(), 1);
         let record = &state.erasure_receipts[0];
-        assert_eq!(record.receipt_id.as_deref(), Some("cx:receipt:01"));
+        assert_eq!(record.receipt_id.as_deref(), Some("ck:receipt:01"));
         assert_eq!(record.outcome, "completed");
         assert_eq!(
             record.scope_realm_id.as_deref(),
-            Some("cx:realm:01904100-0000-7000-8000-cfc039892036"),
+            Some("ck:realm:01904100-0000-7000-8000-cfc039892036"),
             "scope.realm_id MUST be extracted for the federation fanout pass"
         );
         assert_eq!(record.fanout_status, "pending");
@@ -9104,14 +9104,14 @@ mod tests {
             state.apply(
                 &make_operation(
                     crate::kinds::CX_REALM_CREATE,
-                    "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                    "ck:realm:01904100-0000-7000-8000-cfc039892036",
                     serde_json::json!({"action": "create", "owner": owner}),
                 ),
                 &hlc,
             );
         }
         let log = state
-            .space_create_log("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .space_create_log("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .unwrap();
         assert_eq!(log.len(), 2, "ordered-log should accumulate entries");
     }
@@ -9121,15 +9121,15 @@ mod tests {
         let state = ProjectionState::new();
         assert!(
             state
-                .space_organization_cell_value("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
+                .space_organization_cell_value("ck:space:01904100-0000-7000-8000-0f863ed7d6d2")
                 .is_none()
         );
         assert!(
             state
-                .space_create_log("cx:space:01904100-0000-7000-8000-0f863ed7d6d2")
+                .space_create_log("ck:space:01904100-0000-7000-8000-0f863ed7d6d2")
                 .is_none()
         );
-        assert!(!state.space_is_destroyed("cx:space:01904100-0000-7000-8000-0f863ed7d6d2"));
+        assert!(!state.space_is_destroyed("ck:space:01904100-0000-7000-8000-0f863ed7d6d2"));
     }
 
     #[test]
@@ -9139,13 +9139,13 @@ mod tests {
         state.apply(
             &make_operation(
                 crate::kinds::CX_MEMBER_STATE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
             ),
             &hlc,
         );
         let knockers =
-            state.members_in_state("cx:realm:01904100-0000-7000-8000-cfc039892036", "knock");
+            state.members_in_state("ck:realm:01904100-0000-7000-8000-cfc039892036", "knock");
         assert_eq!(knockers.len(), 1);
         assert_eq!(knockers[0].member, "did:web:carol");
         assert_eq!(
@@ -9159,7 +9159,7 @@ mod tests {
         use contrix_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = contrix_sdk::CellRef::new(
-            "cx:cell:cx.component.space.read_receipt_policy.v1:cx:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:cx.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         state.cells.insert(
@@ -9171,7 +9171,7 @@ mod tests {
             })),
         );
         let value = state
-            .read_receipt_policy_cell_value("cx:realm:01904100-0000-7000-8000-cfc039892036")
+            .read_receipt_policy_cell_value("ck:realm:01904100-0000-7000-8000-cfc039892036")
             .expect("policy cell should resolve");
         assert_eq!(
             value.get("disclosure").and_then(Value::as_str),
@@ -9198,8 +9198,8 @@ mod tests {
     fn space_container_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad42";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let container_space_id = "ck:space:01904100-0000-7000-8000-1fb50799ad42";
 
         // create
         let create_effect = state.apply(
@@ -9209,7 +9209,7 @@ mod tests {
                 serde_json::json!({
                     "object": {
                         "id": container_space_id,
-                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                        "realm_id": "ck:realm:01904100-0000-7000-8000-cfc039892036",
                         "kind": "board",
                         "title": "Roadmap",
                         "created_by": "did:web:alice.example",
@@ -9296,13 +9296,13 @@ mod tests {
 
     /// Preflight `check_space_container_lifecycle_transition` rejects each illegal
     /// transition with the spec-canonical reason_code per
-    /// `contrix-spec/v1/zh/models/common-fields.md §5.1`.
+    /// `cokret-spec/v1/zh/models/common-fields.md §5.1`.
     #[test]
     fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let container_space_id = "cx:space:01904100-0000-7000-8000-1fb50799ad43";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let container_space_id = "ck:space:01904100-0000-7000-8000-1fb50799ad43";
 
         // Create the place (Active).
         state.apply(
@@ -9312,7 +9312,7 @@ mod tests {
                 serde_json::json!({
                     "object": {
                         "id": container_space_id,
-                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                        "realm_id": "ck:realm:01904100-0000-7000-8000-cfc039892036",
                         "kind": "list",
                         "title": "Todo",
                         "created_by": "did:web:alice.example",
@@ -9404,8 +9404,8 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_SPACE_CONTAINER_ARCHIVE,
-            "cx:realm:01904100-0000-7000-8000-cfc039892036",
-            serde_json::json!({ "space_id": "cx:space:01904100-0000-7000-8000-cfc039892039" }),
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "space_id": "ck:space:01904100-0000-7000-8000-cfc039892039" }),
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&archive_unknown),
@@ -9417,9 +9417,9 @@ mod tests {
     fn space_update_and_parent_accept_canonical_payload_fields() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let container_space_id = "cx:space:01904100-0000-7000-8000-cfc039892037";
-        let parent_space_id = "cx:space:01904100-0000-7000-8000-cfc039892038";
+        let realm_space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let container_space_id = "ck:space:01904100-0000-7000-8000-cfc039892037";
+        let parent_space_id = "ck:space:01904100-0000-7000-8000-cfc039892038";
 
         state.apply(
             &make_operation(
@@ -9428,7 +9428,7 @@ mod tests {
                 serde_json::json!({
                     "object": {
                         "id": container_space_id,
-                        "realm_id": "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                        "realm_id": "ck:realm:01904100-0000-7000-8000-cfc039892036",
                         "kind": "list",
                         "title": "Original",
                         "created_by": "did:web:alice.example"
@@ -9504,11 +9504,11 @@ mod tests {
     fn space_container_child_order_tracks_rank_updates() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
-        let first_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
-        let second_id = "cx:space:01904100-0000-7000-8000-0000000000a2";
-        let third_id = "cx:space:01904100-0000-7000-8000-0000000000a3";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "ck:space:01904100-0000-7000-8000-0000000000b0";
+        let first_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
+        let second_id = "ck:space:01904100-0000-7000-8000-0000000000a2";
+        let third_id = "ck:space:01904100-0000-7000-8000-0000000000a3";
 
         state.apply(
             &make_operation(
@@ -9581,10 +9581,10 @@ mod tests {
     fn list_archive_cascades_card_and_restore_preserves_rank() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
-        let list_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-0000000000f1";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "ck:space:01904100-0000-7000-8000-0000000000b0";
+        let list_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-0000000000f1";
 
         state.apply(
             &make_operation(
@@ -9694,10 +9694,10 @@ mod tests {
     fn board_archive_cascades_child_lists_and_cards() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let realm_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let board_id = "cx:space:01904100-0000-7000-8000-0000000000b0";
-        let list_id = "cx:space:01904100-0000-7000-8000-0000000000a1";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-0000000000f1";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let board_id = "ck:space:01904100-0000-7000-8000-0000000000b0";
+        let list_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-0000000000f1";
 
         state.apply(
             &make_operation(
@@ -9807,8 +9807,8 @@ mod tests {
     fn flow_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad50";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-1fb50799ad50";
 
         let create_effect = state.apply(
             &make_operation(
@@ -9876,8 +9876,8 @@ mod tests {
     fn flow_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-1fb50799ad51";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-1fb50799ad51";
 
         state.apply(
             &make_operation(
@@ -9945,8 +9945,8 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_FLOW_ARCHIVE,
-            "cx:realm:01904100-0000-7000-8000-cfc039892036",
-            serde_json::json!({ "flow_id": "cx:flow:nope-not-here" }),
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "flow_id": "ck:flow:nope-not-here" }),
         );
         assert_eq!(
             state.check_flow_lifecycle_transition(&archive_unknown),
@@ -9960,8 +9960,8 @@ mod tests {
     fn morph_lifecycle_round_trip() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad60";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "ck:morph:01904100-0000-7000-8000-1fb50799ad60";
 
         let create_effect = state.apply(
             &make_operation(
@@ -10013,8 +10013,8 @@ mod tests {
     fn morph_lifecycle_preflight_rejects_illegal_transitions() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let morph_id = "cx:morph:01904100-0000-7000-8000-1fb50799ad61";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "ck:morph:01904100-0000-7000-8000-1fb50799ad61";
 
         state.apply(
             &make_operation(
@@ -10082,8 +10082,8 @@ mod tests {
         let state = ProjectionState::new();
         let archive_unknown = make_operation(
             crate::kinds::CX_MORPH_ARCHIVE,
-            "cx:realm:01904100-0000-7000-8000-cfc039892036",
-            serde_json::json!({ "morph_id": "cx:morph:nope-not-here" }),
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({ "morph_id": "ck:morph:nope-not-here" }),
         );
         assert_eq!(
             state.check_morph_lifecycle_transition(&archive_unknown),
@@ -10100,9 +10100,9 @@ mod tests {
     fn flow_position_events_touch_projection_without_changing_state() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-2fb50799ad50";
-        let board_space_id = "cx:space:01904100-0000-7000-8000-c10dc0000001";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-2fb50799ad50";
+        let board_space_id = "ck:space:01904100-0000-7000-8000-c10dc0000001";
 
         state.apply(
             &make_operation(
@@ -10135,7 +10135,7 @@ mod tests {
                 serde_json::json!({
                     "flow_id": flow_id,
                     "board_space_id": board_space_id,
-                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
                     "sender": "did:web:alice.example",
                 }),
@@ -10167,7 +10167,7 @@ mod tests {
                 serde_json::json!({
                     "flow_id": flow_id,
                     "board_space_id": board_space_id,
-                    "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a2",
                     "sender": "did:web:alice.example",
                 }),
@@ -10193,11 +10193,11 @@ mod tests {
         let effect = state.apply(
             &make_operation(
                 crate::kinds::CX_FLOW_MOVE,
-                "cx:realm:01904100-0000-7000-8000-cfc039892036",
+                "ck:realm:01904100-0000-7000-8000-cfc039892036",
                 serde_json::json!({
-                    "flow_id": "cx:flow:nope-not-here",
-                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
-                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "flow_id": "ck:flow:nope-not-here",
+                    "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
+                    "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
                 }),
             ),
@@ -10208,15 +10208,15 @@ mod tests {
 
     // ── cx.redaction -> Flow / Morph terminal-state push ──
 
-    /// `cx.redaction` carrying `object_ref: cx:flow:...` flips the
+    /// `cx.redaction` carrying `object_ref: ck:flow:...` flips the
     /// FlowProjection state to Redacted (terminal) per spec
     /// common-fields.md §5.1.
     #[test]
     fn redaction_with_flow_object_ref_flips_to_redacted() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad50";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-3fb50799ad50";
 
         state.apply(
             &make_operation(
@@ -10240,7 +10240,7 @@ mod tests {
                 crate::kinds::CX_REDACTION,
                 space_id,
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000001",
+                    "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000001",
                     "object_ref": flow_id,
                     "by": "did:web:alice.example",
                     "reason": "policy violation",
@@ -10259,13 +10259,13 @@ mod tests {
         assert!(state.flows[flow_id].state.is_terminal());
     }
 
-    /// Same for Morph via `object_ref: cx:morph:...`.
+    /// Same for Morph via `object_ref: ck:morph:...`.
     #[test]
     fn redaction_with_morph_object_ref_flips_to_redacted() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad60";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let morph_id = "ck:morph:01904100-0000-7000-8000-3fb50799ad60";
 
         state.apply(
             &make_operation(
@@ -10288,7 +10288,7 @@ mod tests {
                 crate::kinds::CX_REDACTION,
                 space_id,
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000002",
+                    "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000002",
                     "object_ref": morph_id,
                     "sender": "did:web:alice.example",
                 }),
@@ -10311,9 +10311,9 @@ mod tests {
     fn redaction_preflight_rejects_against_already_terminal() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-3fb50799ad51";
-        let morph_id = "cx:morph:01904100-0000-7000-8000-3fb50799ad61";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-3fb50799ad51";
+        let morph_id = "ck:morph:01904100-0000-7000-8000-3fb50799ad61";
 
         // Materialise + redact a Flow once (legal first redaction).
         state.apply(
@@ -10336,7 +10336,7 @@ mod tests {
                 crate::kinds::CX_REDACTION,
                 space_id,
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000003",
+                    "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000003",
                     "object_ref": flow_id,
                 }),
             ),
@@ -10349,7 +10349,7 @@ mod tests {
             crate::kinds::CX_REDACTION,
             space_id,
             serde_json::json!({
-                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000004",
+                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000004",
                 "object_ref": flow_id,
             }),
         );
@@ -10380,7 +10380,7 @@ mod tests {
                 crate::kinds::CX_REDACTION,
                 space_id,
                 serde_json::json!({
-                    "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000005",
+                    "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000005",
                     "object_ref": morph_id,
                 }),
             ),
@@ -10390,7 +10390,7 @@ mod tests {
             crate::kinds::CX_REDACTION,
             space_id,
             serde_json::json!({
-                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000006",
+                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000006",
                 "object_ref": morph_id,
             }),
         );
@@ -10410,8 +10410,8 @@ mod tests {
     fn flow_tracks_update_touches_active_flow_only() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad50";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-4fb50799ad50";
 
         state.apply(
             &make_operation(
@@ -10463,8 +10463,8 @@ mod tests {
     fn flow_tracks_preflight_rejects_when_flow_archived() {
         let mut state = ProjectionState::new();
         let hlc = ServerHlc::new("test");
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
-        let flow_id = "cx:flow:01904100-0000-7000-8000-4fb50799ad51";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-4fb50799ad51";
 
         state.apply(
             &make_operation(
@@ -10518,9 +10518,9 @@ mod tests {
         let state = ProjectionState::new();
         let tracks_op = make_operation(
             crate::kinds::CX_FLOW_TRACKS_UPDATE,
-            "cx:realm:01904100-0000-7000-8000-cfc039892036",
+            "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "flow_id": "cx:flow:nope-not-here",
+                "flow_id": "ck:flow:nope-not-here",
                 "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
             }),
         );
@@ -10533,14 +10533,14 @@ mod tests {
     #[test]
     fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         let state = ProjectionState::new();
-        let space_id = "cx:realm:01904100-0000-7000-8000-cfc039892036";
+        let space_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         // Unknown object_ref.
         let unknown = make_operation(
             crate::kinds::CX_REDACTION,
             space_id,
             serde_json::json!({
-                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000007",
-                "object_ref": "cx:flow:nope-not-here",
+                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000007",
+                "object_ref": "ck:flow:nope-not-here",
             }),
         );
         assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
@@ -10549,7 +10549,7 @@ mod tests {
             crate::kinds::CX_REDACTION,
             space_id,
             serde_json::json!({
-                "target_event_id": "cx:event:01904100-0000-7000-8000-1d10dc000008",
+                "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000008",
             }),
         );
         assert_eq!(

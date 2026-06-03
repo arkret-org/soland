@@ -13,7 +13,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         "did:web:bob.example",
         "@bob",
-        "cx:device:01904100-0000-7000-8000-b0b0b0000002",
+        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
 
@@ -21,7 +21,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .json(&serde_json::json!({
             "did": "did:web:bob.example",
             "handle": "@bob",
-            "device_id": "cx:device:01904100-0000-7000-8000-b0b0b0000022"
+            "device_id": "ck:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -132,7 +132,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     let space_id = created_space["space_id"].as_str().unwrap().to_owned();
-    assert!(space_id.starts_with("cx:realm:"));
+    assert!(space_id.starts_with("ck:realm:"));
     let realm_id = space_id.clone();
     assert_eq!(created_space["owner"], "did:web:alice.example");
 
@@ -170,7 +170,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap()
         .to_owned();
     let invalid_invite_resolve = TestClient::post("http://server/api/v1/directory/resolve-realm")
-        .json(&serde_json::json!({"invite_token": "cx:invite-token:invalid"}))
+        .json(&serde_json::json!({"invite_token": "ck:invite-token:invalid"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
@@ -310,7 +310,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         encrypted_message["event_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:event:")
+            .starts_with("ck:event:")
     );
 
     let bob_private_sync = account_subscribe_frame(state.clone(), Some(&bob), "catchup=true").await;
@@ -335,7 +335,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({"body": "hello workflow"}),
         false,
     )
@@ -344,7 +344,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         sent_message["operation_id"]
             .as_str()
             .unwrap()
-            .starts_with("cx:operation:")
+            .starts_with("ck:operation:")
     );
     assert_eq!(sent_message["realm_id"], realm_id);
     assert_eq!(sent_message["space_id"], space_id);
@@ -359,7 +359,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &space_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({"kind": "cx.content.composite", "body": "invalid", "parts": [{"kind": "cx.content.image", "body": "image"}]}),
         false,
     )
@@ -371,7 +371,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &space_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({"kind": "cx.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
@@ -383,7 +383,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &space_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]}),
         false,
     )
@@ -395,13 +395,13 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &space_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({
             "kind": "cx.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
-                {"type": "flow", "flow_id": "cx:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
+                {"type": "flow", "flow_id": "ck:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
             "parts": [
                 {"kind": "cx.content.text", "body": "structured hello"},
@@ -415,7 +415,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(
         block_message["event_id"]
             .as_str()
-            .is_some_and(|event_id| event_id.starts_with("cx:event:")),
+            .is_some_and(|event_id| event_id.starts_with("ck:event:")),
         "block message response: {block_message}"
     );
 
@@ -541,7 +541,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &space_id,
-        "cx:flow:workflow",
+        "ck:flow:workflow",
         serde_json::json!({"body": "second workflow"}),
         false,
     )
@@ -620,7 +620,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let invalid_wait = TestClient::get("http://server/api/v1/account/subscribe?catchup=true")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .add_header("x-contrix-wait-for", "not-a-sync-token", true)
+        .add_header("x-cokret-wait-for", "not-a-sync-token", true)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
@@ -638,7 +638,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         snapshot["snapshot_ref"]
             .as_str()
             .unwrap()
-            .starts_with("cx:snapshot:")
+            .starts_with("ck:snapshot:")
     );
     assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
     assert_eq!(snapshot["manifest"]["reducer_profile"], "cx.reducer.v1");

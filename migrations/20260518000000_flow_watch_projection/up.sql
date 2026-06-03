@@ -1,5 +1,5 @@
 -- Flow watch subscription projection. Spec:
--- contrix-spec/spec/v1/zh/models/flow-and-message.md §8.
+-- cokret-spec/spec/v1/zh/models/flow-and-message.md §8.
 --
 -- Truth source is the cas-register cell `cx.component.flow.watch.v1`
 -- keyed by (flow_id, actor_did). The cell write happens on the Move/

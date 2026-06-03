@@ -1,9 +1,9 @@
 # Contributing to soland
 
-Thanks for considering a contribution! soland is a reference Contrix v1
+Thanks for considering a contribution! soland is a reference Cokret v1
 principal server; the protocol contract lives in
-[`contrix-spec`](https://github.com/contrix/contrix-spec) and the Rust SDK
-in [`contrix-rust-sdk`](https://github.com/contrix/contrix-rust-sdk).
+[`cokret-spec`](https://github.com/cokret/cokret-spec) and the Rust SDK
+in [`cokret-rust-sdk`](https://github.com/cokret/cokret-rust-sdk).
 
 ## Pre-commit hook setup
 
@@ -16,17 +16,17 @@ git config core.hooksPath .githooks
 The hook runs `cargo fmt --all -- --check` plus `cargo clippy --no-deps -- -D
 warnings` on staged Rust changes. If `.githooks/` is missing or you want a
 richer hook, copy `.githooks/pre-commit` from
-[`contrix-rust-sdk`](https://github.com/contrix-dev/contrix-rust-sdk) and
+[`cokret-rust-sdk`](https://github.com/cokret-dev/cokret-rust-sdk) and
 adapt to your local toolchain.
 
 ## Repository layout
 
-soland depends on the `contrix` SDK at a sibling path. The CI workflows clone
+soland depends on the `cokret` SDK at a sibling path. The CI workflows clone
 both repositories side by side; reproduce the same layout locally:
 
 ```
-contrix-dev/
-├── contrix-rust-sdk/
+cokret-dev/
+├── cokret-rust-sdk/
 │   └── crates/sdk
 └── soland/                # this repo
     ├── src/
@@ -34,7 +34,7 @@ contrix-dev/
     └── Cargo.toml
 ```
 
-The Cargo `path = "../contrix-rust-sdk/crates/sdk"` reference assumes this
+The Cargo `path = "../cokret-rust-sdk/crates/sdk"` reference assumes this
 layout. If you check out into a different structure, override the dependency
 locally with a `[patch.crates-io]` entry in `~/.cargo/config.toml` rather than
 editing `Cargo.toml`.

@@ -5,11 +5,11 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
@@ -52,7 +52,7 @@ fn audit_policy_downgrade_projects_log_and_cache() {
 
     // Cell projection.
     let cell_id = contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
+        "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell present");
@@ -85,7 +85,7 @@ fn audit_policy_downgrade_appends_to_existing_log() {
     let entries = state.realm_audit_downgrades(REALM_A);
     assert_eq!(entries.len(), 2);
     let cell_id = contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
+        "ck:cell:cx.component.realm.audit_policy_downgrade.v1:{REALM_A}"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell present");

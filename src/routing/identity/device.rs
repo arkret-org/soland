@@ -120,7 +120,7 @@ async fn device_revoke(
 
 /// Maximum length (in Unicode scalar values) of a device `display_name`,
 /// aligned with the actor / profile `display_name` bound in
-/// `contrix-spec` (`models/actor.md`, `discovery/profiles-presence.md`).
+/// `cokret-spec` (`models/actor.md`, `discovery/profiles-presence.md`).
 const DEVICE_DISPLAY_NAME_MAX_CHARS: usize = 128;
 
 #[endpoint(

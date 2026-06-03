@@ -258,7 +258,7 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     let mut hasher = Sha256::new();
     hasher.update(event_ids.join(",").as_bytes());
     let digest: [u8; 32] = hasher.finalize().into();
-    // Fold the SHA-256 into a u64 for the `x` field — the `cx:cursor:`
+    // Fold the SHA-256 into a u64 for the `x` field — the `ck:cursor:`
     // envelope hashes are opaque to the client, so a 64-bit truncation
     // is sufficient and keeps the cursor short.
     let mut x_bytes = [0u8; 8];
@@ -538,9 +538,9 @@ pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Val
     }
     let operation_id = query_param(req, "operation_id")
         .ok_or_else(|| AppError::missing_param("missing operation_id"))?;
-    if !operation_id.starts_with("cx:operation:") {
+    if !operation_id.starts_with("ck:operation:") {
         return Err(AppError::invalid_param(
-            "operation_id must use cx:operation:",
+            "operation_id must use ck:operation:",
         ));
     }
 
@@ -880,7 +880,7 @@ fn encode_query_cursor(offset: usize, query_digest: &str) -> Result<String, AppE
     });
     let canonical = canonical_json(&shape).map_err(schema_error)?;
     Ok(format!(
-        "cx:cursor:{}",
+        "ck:cursor:{}",
         URL_SAFE_NO_PAD.encode(canonical.as_bytes())
     ))
 }
@@ -895,8 +895,8 @@ fn query_digest_value(query_value: &Value) -> Value {
 
 fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, AppError> {
     let payload = cursor_token
-        .strip_prefix("cx:cursor:")
-        .ok_or_else(|| AppError::invalid_param("query cursor must start with cx:cursor:"))?;
+        .strip_prefix("ck:cursor:")
+        .ok_or_else(|| AppError::invalid_param("query cursor must start with ck:cursor:"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|_| AppError::invalid_param("query cursor is not base64url"))?;
@@ -959,13 +959,13 @@ fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String>
         .and_then(Value::as_object)
         .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("cx:operation:"))
+        .filter(|value| value.starts_with("ck:operation:"))
         .map(ToOwned::to_owned)
         .or_else(|| {
             record
                 .event_id
-                .strip_prefix("cx:event:")
-                .map(|suffix| format!("cx:operation:{suffix}"))
+                .strip_prefix("ck:event:")
+                .map(|suffix| format!("ck:operation:{suffix}"))
         })
 }
 
@@ -1010,7 +1010,7 @@ mod tests {
     #[test]
     fn strip_path_removes_nested_field() {
         let mut event = json!({
-            "event_id": "cx:event:1",
+            "event_id": "ck:event:1",
             "payload": { "content": "secret", "kind": "msg" },
             "sender": "did:alice",
         });
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(
             event,
             json!({
-                "event_id": "cx:event:1",
+                "event_id": "ck:event:1",
                 "payload": { "kind": "msg" },
                 "sender": "did:alice",
             })

@@ -4,7 +4,7 @@ DROP TABLE IF EXISTS recovery_session;
 
 CREATE TABLE recovery_session (
     recovery_session_id    TEXT PRIMARY KEY
-        CHECK (recovery_session_id LIKE 'cx:recovery_session:%'),
+        CHECK (recovery_session_id LIKE 'ck:recovery_session:%'),
     actor_id               TEXT NOT NULL,
     series_id              TEXT NOT NULL REFERENCES backup_series(series_id)
                             ON DELETE CASCADE,

@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 
-/// Error raised when an embedded Contrix artifact fails to parse.
+/// Error raised when an embedded Cokret artifact fails to parse.
 ///
 /// The artifacts (event-kind / schema / operation / id-kind registries) are
 /// `include_str!`'d at build time, so a parse failure represents a build-vs-spec
@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 /// startup path (see [`validate_embedded_artifacts`]) rather than allowing the
 /// first HTTP request to panic on lazy initialisation.
 #[derive(Debug, thiserror::Error)]
-#[error("invalid embedded Contrix {label}: {source}")]
+#[error("invalid embedded Cokret {label}: {source}")]
 pub struct ArtifactError {
     pub label: &'static str,
     #[source]
@@ -19,13 +19,13 @@ pub struct ArtifactError {
 }
 
 pub const EVENT_KIND_REGISTRY_JSON: &str =
-    include_str!("../../contrix-spec/spec/v1/artifacts/registry/event-kind-registry.json");
+    include_str!("../../cokret-spec/spec/v1/artifacts/registry/event-kind-registry.json");
 pub const SCHEMA_REGISTRY_JSON: &str =
-    include_str!("../../contrix-spec/spec/v1/artifacts/registry/schema-registry.json");
+    include_str!("../../cokret-spec/spec/v1/artifacts/registry/schema-registry.json");
 pub const OPERATION_REGISTRY_JSON: &str =
-    include_str!("../../contrix-spec/spec/v1/artifacts/registry/operation-registry.json");
+    include_str!("../../cokret-spec/spec/v1/artifacts/registry/operation-registry.json");
 pub const ID_KIND_REGISTRY_JSON: &str =
-    include_str!("../../contrix-spec/spec/v1/artifacts/registry/id-kind-registry.json");
+    include_str!("../../cokret-spec/spec/v1/artifacts/registry/id-kind-registry.json");
 
 static EVENT_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
 static SCHEMA_REGISTRY: OnceLock<Value> = OnceLock::new();
@@ -313,7 +313,7 @@ pub fn registry_versions() -> Value {
 
 pub fn registry_summary() -> Value {
     json!({
-        "source": "contrix-spec/spec/v1/artifacts",
+        "source": "cokret-spec/spec/v1/artifacts",
         "versions": registry_versions(),
         "counts": {
             "active_durable_event_kinds": active_durable_event_kinds().len(),
@@ -332,11 +332,11 @@ fn parse_artifact(source: &str, label: &str) -> Value {
         // Should be unreachable for release builds because
         // `validate_embedded_artifacts` runs in main.rs at startup. Lazy
         // callers may still hit this if validation was skipped — fail loudly.
-        panic!("invalid embedded Contrix {label}: {error}");
+        panic!("invalid embedded Cokret {label}: {error}");
     })
 }
 
-/// Validate every embedded Contrix artifact at startup.
+/// Validate every embedded Cokret artifact at startup.
 ///
 /// Call from `main` before binding the listener so that a malformed bundled
 /// artifact surfaces as a typed [`ArtifactError`] rather than crashing the

@@ -36,7 +36,7 @@ use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
 use soland::authz::{AuthzEngine, MergedAuthzDecision, check_with_policy_server};
 use soland::reducer::RealmPolicyServerConfig;
 
-const REALM_ID: &str = "cx:realm:01904100-0000-7000-8000-000000000001";
+const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
 const POLICY_SERVER_DID: &str = "did:web:policy.example.com";
 
 fn config_for(url: &str, timeout_ms: u64) -> RealmPolicyServerConfig {
@@ -229,7 +229,7 @@ async fn policy_server_integration_hits_mock() {
         // Use `read` so the LOCAL capability check passes via the
         // member-default rule (engine.check needs alice in `members`).
         "read",
-        "cx:realm:01904100-0000-7000-8000-000000000001",
+        "ck:realm:01904100-0000-7000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),
         &[],
@@ -287,7 +287,7 @@ async fn policy_server_integration_timeout_fails_closed() {
         &engine,
         "did:web:alice.example",
         "read",
-        "cx:realm:01904100-0000-7000-8000-000000000001",
+        "ck:realm:01904100-0000-7000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),
         &[],

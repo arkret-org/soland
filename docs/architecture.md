@@ -1,7 +1,7 @@
 # soland architecture
 
 This document describes the operator-visible internals of soland's reference
-Contrix v1 principal server: how a wire event becomes a projection row, how
+Cokret v1 principal server: how a wire event becomes a projection row, how
 federation outbound traffic is shaped, how MLS epochs flow through the
 event log, and what to watch when running more than one replica.
 

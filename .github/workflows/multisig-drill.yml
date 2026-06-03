@@ -60,11 +60,11 @@ jobs:
         with:
           path: soland
 
-      - name: Checkout Contrix Rust SDK
+      - name: Checkout Cokret Rust SDK
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/contrix-rust-sdk
-          path: contrix-rust-sdk
+          repository: ${{ github.repository_owner }}/cokret-rust-sdk
+          path: cokret-rust-sdk
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -129,8 +129,8 @@ jobs:
               anchor_id, space_id, threshold_k, threshold_n,
               members, canonical_b64, partials, claim_seq
           ) VALUES (
-              'cx:anchor:0196419b-0000-7000-8000-000000000a01',
-              'cx:space:0196419b-0000-7000-8000-000000000000',
+              'ck:anchor:0196419b-0000-7000-8000-000000000a01',
+              'ck:space:0196419b-0000-7000-8000-000000000000',
               2, 3,
               ARRAY['did:web:alice.example','did:web:bob.example','did:web:carol.example'],
               'Y2hlY2sgY2Fub25pY2FsX2I2NA==',
@@ -206,7 +206,7 @@ jobs:
           set -euxo pipefail
           export XDG_DATA_HOME="$GITHUB_WORKSPACE/_drill/keystore-xdg"
           mkdir -p "$XDG_DATA_HOME"
-          KEY_ID="contrix:signer:soland-anchorer:${SOLAND_SERVICE_DID}"
+          KEY_ID="cokret:signer:soland-anchorer:${SOLAND_SERVICE_DID}"
           SEED_B64="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           mkdir -p _drill
           cat > _drill/seed-in.json <<EOF

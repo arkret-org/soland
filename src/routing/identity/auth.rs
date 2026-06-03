@@ -37,7 +37,7 @@ use crate::wire::{
 };
 use crate::{JsonResult, ids, json_ok};
 
-const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:contrix:principal-server:session.bind";
+const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
 
 pub(super) fn router() -> Router {
@@ -1078,7 +1078,7 @@ fn parse_oauth_introspection(
         ));
     }
 
-    let actor = string_field(value, "org.contrix.principal_did")
+    let actor = string_field(value, "org.cokret.principal_did")
         .or_else(|| string_field(value, "sub").filter(|did| validate_did(did).is_ok()))
         .ok_or((
             StatusCode::UNAUTHORIZED,
@@ -1093,7 +1093,7 @@ fn parse_oauth_introspection(
         ));
     }
 
-    let raw_device_id = string_field(value, "org.contrix.device_id")
+    let raw_device_id = string_field(value, "org.cokret.device_id")
         .or_else(|| string_field(value, "device_id"))
         .map(str::to_owned);
     let device_id = raw_device_id
@@ -1298,13 +1298,13 @@ fn sanitized_handle(value: &str) -> Option<String> {
 }
 
 fn derived_oauth_device_id(value: &Value, token: &str) -> String {
-    let seed = string_field(value, "org.contrix.session_id")
+    let seed = string_field(value, "org.cokret.session_id")
         .or_else(|| string_field(value, "jti"))
         .or_else(|| string_field(value, "sub"))
         .unwrap_or(token);
     let digest = format!("{:x}", Sha256::digest(seed.as_bytes()));
     format!(
-        "cx:device:{}-{}-7{}-8{}-{}",
+        "ck:device:{}-{}-7{}-8{}-{}",
         &digest[0..8],
         &digest[8..12],
         &digest[12..15],

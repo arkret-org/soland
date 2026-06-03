@@ -83,7 +83,7 @@ async fn health_and_describe_work() {
     );
     assert_eq!(
         describe["limits"]["registries"]["source"],
-        "contrix-spec/spec/v1/artifacts"
+        "cokret-spec/spec/v1/artifacts"
     );
     assert_eq!(
         describe["limits"]["registries"]["versions"]["event_kind"],

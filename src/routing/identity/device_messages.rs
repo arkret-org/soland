@@ -5,7 +5,7 @@
 //!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
 //!   supplied via the `Idempotency-Key` request header.
 //! - `GET /api/v1/device_messages` — pull pending to-device messages for the bound session/device.
-//!   Uses the `cx:cursor:` `to_device_position` from `parse_and_validate_sync_cursor` so a
+//!   Uses the `ck:cursor:` `to_device_position` from `parse_and_validate_sync_cursor` so a
 //!   duplicate sync cannot prematurely ack a delivery (this is what the README calls out as the
 //!   cursor-acked eviction guarantee).
 

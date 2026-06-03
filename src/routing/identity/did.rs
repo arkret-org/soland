@@ -1022,7 +1022,7 @@ fn embedded_webvh_document_value(
         "alsoKnownAs": also_known_as,
         "service": [{
             "id": format!("{did}#soland"),
-            "type": "ContrixPrincipalServer",
+            "type": "CokretPrincipalServer",
             "serviceEndpoint": service_endpoint,
         }],
     })
@@ -1260,7 +1260,7 @@ fn default_did_document(did: &str) -> Value {
         "id": did,
         "verificationMethod": [],
         "authentication": [],
-        "service": [{"id": "soland", "type": "ContrixPrincipalServer", "serviceEndpoint": "/api/v1"}]
+        "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/api/v1"}]
     })
 }
 

@@ -1,6 +1,6 @@
 # Deploying soland
 
-Production guidance for running soland as a single-process Contrix v1 reference
+Production guidance for running soland as a single-process Cokret v1 reference
 server. soland is pre-1.0 — review [_todos.md](_todos.md) for the open scaffold
 endpoints (push outbound, MIMI provider directory and directory discovery)
 before serving real users.
@@ -77,7 +77,7 @@ soland --bind "${SOLAND_BIND}" --help    # cheap startup sanity check
 
 ```ini
 [Unit]
-Description=soland — Contrix v1 principal server
+Description=soland — Cokret v1 principal server
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -120,7 +120,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
   -v soland-objects:/var/lib/soland \
-  ghcr.io/contrix/soland:<tag>
+  ghcr.io/cokret/soland:<tag>
 ```
 
 The image runs as UID `10001`. Mounted volumes for
@@ -135,7 +135,7 @@ so secrets and network ranges are explicit in the release artifact:
 
 ```bash
 helm template soland ./deploy/helm/soland \
-  --namespace contrix \
+  --namespace cokret \
   --set image.tag=<tag> \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
   --set env.SOLAND_SERVICE_DID=did:web:soland.example \
@@ -148,7 +148,7 @@ Install the same values with:
 
 ```bash
 helm upgrade --install soland ./deploy/helm/soland \
-  --namespace contrix --create-namespace \
+  --namespace cokret --create-namespace \
   -f production-values.yaml
 ```
 
@@ -180,9 +180,9 @@ soland.example {
 }
 ```
 
-Make sure the proxy passes the `Authorization`, `X-Contrix-Wait-For`,
-`X-Contrix-SHA256`, and `Range` request headers; soland sends back
-`Retry-After`, `X-Contrix-Wait-For-Satisfied`, `Content-Range`, and
+Make sure the proxy passes the `Authorization`, `X-Cokret-Wait-For`,
+`X-Cokret-SHA256`, and `Range` request headers; soland sends back
+`Retry-After`, `X-Cokret-Wait-For-Satisfied`, `Content-Range`, and
 `Accept-Ranges`.
 
 ## 5. Health checks
@@ -447,7 +447,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
   CXP-0007 cutover would violate the forbidden-wire-fields contract.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
-  projected Event. For a typical `cx:circle:<uuid>` value the on-wire form
+  projected Event. For a typical `ck:circle:<uuid>` value the on-wire form
   is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50
   bytes per row, plus an additional ~20 bytes for the BTREE index entry on
   `projection_events_effective_scope_idx`. A 100M-event projection grows
@@ -506,7 +506,7 @@ geo-distributed pools):
   "media_service": {
     "foci": [
       {
-        "focus_id": "cx:focus:livekit:eu-west-1",
+        "focus_id": "ck:focus:livekit:eu-west-1",
         "backend": "livekit",
         "connect_url": "https://sfu.eu-west-1.example.org",
         "issuer_kid": "cx-media-issuer/example/2026-05"
@@ -523,7 +523,7 @@ old column. It:
 2. If `foci` already present and non-empty, no-ops.
 3. Otherwise, projects the legacy `sfu_endpoint` + `backend` pair into a
    single-entry `foci` array under a derived `focus_id` of
-   `cx:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>`.
+   `ck:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>`.
 4. Writes the merged payload back. The legacy keys remain available for
    one full release cycle; reader code accepts either shape and prefers
    `foci[]` when both are present.

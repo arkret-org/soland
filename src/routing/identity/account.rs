@@ -1068,13 +1068,13 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
         .unwrap_or_default()
     {
         if projection_event_belongs_to_actor(&event, actor) {
-            realms.insert(event.realm_id.replacen("cx:space:", "cx:realm:", 1));
+            realms.insert(event.realm_id.replacen("ck:space:", "ck:realm:", 1));
         }
     }
     if let Ok(projection) = state.projection.lock() {
         for message in projection.messages.values() {
             if message.sender == actor {
-                realms.insert(message.realm_id.replacen("cx:space:", "cx:realm:", 1));
+                realms.insert(message.realm_id.replacen("ck:space:", "ck:realm:", 1));
             }
         }
     }
@@ -1363,8 +1363,8 @@ fn notification_from_message(
         return encrypted_notification_from_message(message, notification_kind, read);
     }
     json!({
-        "id": format!("cx:notification:{}", message.event_id),
-        "notification_id": format!("cx:notification:{}", message.event_id),
+        "id": format!("ck:notification:{}", message.event_id),
+        "notification_id": format!("ck:notification:{}", message.event_id),
         "event_id": message.event_id,
         "event_kind": "cx.message.create",
         "notification_type": notification_kind,
@@ -1392,8 +1392,8 @@ fn encrypted_notification_from_message(
     read: bool,
 ) -> serde_json::Value {
     let mut item = json!({
-        "id": format!("cx:notification:{}", message.event_id),
-        "notification_id": format!("cx:notification:{}", message.event_id),
+        "id": format!("ck:notification:{}", message.event_id),
+        "notification_id": format!("ck:notification:{}", message.event_id),
         "event_id": message.event_id,
         "event_kind": "cx.message.create",
         "notification_type": "blind_wakeup",
@@ -1536,7 +1536,7 @@ fn flow_participants_include_actor(state: &AppState, flow_id: &str, actor: &str)
 }
 
 fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
-    let cell_id = format!("cx:cell:cx.component.flow.watch.v1:{flow_id}:{actor}");
+    let cell_id = format!("ck:cell:cx.component.flow.watch.v1:{flow_id}:{actor}");
     state
         .projection
         .lock()
@@ -1899,7 +1899,7 @@ async fn list_contacts(
 /// ```json
 /// {
 ///   "did": "did:web:alice.example",
-///   "space_id": "cx:space:01904100-0000-7000-8000-...",
+///   "space_id": "ck:space:01904100-0000-7000-8000-...",
 ///   "mapping_kind": "deterministic",
 ///   "stashed": true
 /// }
@@ -1980,7 +1980,7 @@ async fn account_principal_space(
 pub fn principal_space_for_did(holder_did: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"cx:space:principal-control:v1:");
+    hasher.update(b"ck:space:principal-control:v1:");
     hasher.update(holder_did.as_bytes());
     let digest = hasher.finalize();
     let mut bytes = [0u8; 16];
@@ -1992,7 +1992,7 @@ pub fn principal_space_for_did(holder_did: &str) -> String {
     let h = |b: u8| -> String { format!("{b:02x}") };
     let group = |slice: &[u8]| -> String { slice.iter().copied().map(h).collect::<String>() };
     format!(
-        "cx:space:{}-{}-{}-{}-{}",
+        "ck:space:{}-{}-{}-{}-{}",
         group(&bytes[0..4]),
         group(&bytes[4..6]),
         group(&bytes[6..8]),
@@ -2269,13 +2269,13 @@ mod tests {
     fn principal_space_for_did_matches_coauth_convention() {
         // Locks the shape against accidental drift from
         // `coauth::handlers::account::anchor_view_query::holder_principal_space_for_did`.
-        // Same domain separator (`cx:space:principal-control:v1:`),
+        // Same domain separator (`ck:space:principal-control:v1:`),
         // same UUIDv7 version/variant rewrite — verified by checking the
         // post-bitmask invariants (byte 6 high-nibble = 0x7, byte 8 top
         // two bits = 0b10).
         let s = principal_space_for_did("did:web:alice.example");
-        assert!(s.starts_with("cx:space:"), "got {s}");
-        let uuid_segment = s.strip_prefix("cx:space:").unwrap();
+        assert!(s.starts_with("ck:space:"), "got {s}");
+        let uuid_segment = s.strip_prefix("ck:space:").unwrap();
         // Sections separated by '-'.
         let parts: Vec<&str> = uuid_segment.split('-').collect();
         assert_eq!(parts.len(), 5, "uuid has 5 dash-separated groups");

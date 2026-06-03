@@ -1,9 +1,9 @@
 # soland
 
-> **Spec target**: [contrix-spec @ c2848a4](../contrix-spec) (R3.4 sync 2026-05-31)
+> **Spec target**: [cokret-spec @ c2848a4](../cokret-spec) (R3.4 sync 2026-05-31)
 
-Reference Contrix v1 principal server, built with Salvo, Diesel, and
-PostgreSQL. The HTTP surface mirrors `contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml`;
+Reference Cokret v1 principal server, built with Salvo, Diesel, and
+PostgreSQL. The HTTP surface mirrors `cokret-spec/spec/v1/artifacts/openapi/cokret-service-api.openapi.yaml`;
 in-memory mode keeps the same API for fast local iteration.
 
 > See [DEPLOYMENT.md](DEPLOYMENT.md) for production guidance, [SECURITY.md](SECURITY.md)
@@ -38,7 +38,7 @@ fields remain accepted as serde aliases.
 
 ## Round R4 (protocol review closures)
 
-Spec round 4 (`contrix-spec` range `2a4d39b..a77b995`, 8 commits) lands
+Spec round 4 (`cokret-spec` range `2a4d39b..a77b995`, 8 commits) lands
 on top of R2/R3. See [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
 [`../_todos.md`](../_todos.md) for the canonical wire-breaking list.
 Operator-visible highlights:
@@ -76,10 +76,10 @@ Operator-visible highlights:
 Spec rounds 2+3 (2026-05-20) introduced wire-breaking changes that the
 operator must address at boot — see
 [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]` and
-[`../contrix-spec/CHANGELOG.md`](../contrix-spec/CHANGELOG.md) for the
+[`../cokret-spec/CHANGELOG.md`](../cokret-spec/CHANGELOG.md) for the
 normative source. The key operational hooks:
 
-- **`SOLAND_TRUST_DOMAIN`** — required `cx:trust_domain:<scope>` value
+- **`SOLAND_TRUST_DOMAIN`** — required `ck:trust_domain:<scope>` value
   (defaults to a value derived from the configured `service_did`).
   Enters the canonical transcript of every `cx.cross_signing.reset`
   proof; rotating this value invalidates outstanding proofs.
@@ -94,12 +94,12 @@ normative source. The key operational hooks:
 
 ## Quick start
 
-soland depends on the `contrix` crate at `../contrix-rust-sdk/crates/sdk`.
+soland depends on the `cokret` crate at `../cokret-rust-sdk/crates/sdk`.
 Clone both repos side by side:
 
 ```bash
-git clone https://github.com/contrix/contrix-rust-sdk.git
-git clone https://github.com/contrix/soland.git
+git clone https://github.com/cokret/cokret-rust-sdk.git
+git clone https://github.com/cokret/soland.git
 cd soland
 ```
 
@@ -175,7 +175,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -v soland-objects:/var/lib/soland \
-  ghcr.io/contrix/soland:latest
+  ghcr.io/cokret/soland:latest
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for a full Docker / PostgreSQL / TLS guide.
@@ -316,12 +316,12 @@ client sends its coauth OAuth access token directly to soland as
 `Authorization: Bearer <access_token>`. If the token is not a local dev session,
 soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
 `Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
-token with `urn:contrix:principal-server:session.bind`, then maps
-`org.contrix.principal_did` and `org.contrix.device_id` into the local
+token with `urn:cokret:principal-server:session.bind`, then maps
+`org.cokret.principal_did` and `org.cokret.device_id` into the local
 account/device view. The older `/api/v1/auth/session-grant/exchange` bridge is
 kept as a legacy scaffold, not the primary login path.
 
-Account subscribe and Events API cursors are structured `cx:cursor:` tokens
+Account subscribe and Events API cursors are structured `ck:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and
 expiry. `/api/v1/account/subscribe` resumes with `after`; `/api/v1/events`
 paginates with `before` / `after`. Expired cursors fail with `cursor_expired`.
@@ -348,11 +348,11 @@ and reject plaintext blobs in private Spaces unless this service is listed in
 
 ## API surface
 
-soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
+soland exposes the canonical Cokret v1 routes (~180 routes total). Highlights:
 
 - `GET  /health` — liveness + DB / persistence probe (used as the Docker healthcheck)
 - `GET  /readyz` — readiness probe for DB, boot migrations, introspection bearer config, and external webvh boot probe state
-- `GET  /.well-known/contrix/openapi.json` and `.../openapi.yaml` — the
+- `GET  /.well-known/cokret/openapi.json` and `.../openapi.yaml` — the
   generated OpenAPI 3.1 document from soland's Salvo route wiring
 - `GET  /.well-known/mimi-protocol-directory`
 - `POST /api/v1/events`, `GET /api/v1/events/describe`, …
@@ -367,8 +367,8 @@ and `/api/v1/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 Workspace layout (the CI checkout assumes the same):
 
 ```
-contrix-dev/
-├── contrix-rust-sdk/       # https://github.com/contrix/contrix-rust-sdk
+cokret-dev/
+├── cokret-rust-sdk/       # https://github.com/cokret/cokret-rust-sdk
 │   └── crates/sdk
 └── soland/                 # this repo
     ├── src/
@@ -423,5 +423,5 @@ Apache-2.0 — see [LICENSE](LICENSE).
 
 <!-- circle-rollout milestone pointer -->
 > **Active milestone tracking** (local-only, gitignored): see
-> `_soland_todos.md` in the parent `contrix-dev/` directory for the
+> `_soland_todos.md` in the parent `cokret-dev/` directory for the
 > circle-rollout (CXP-0007) work item list and per-stage checkpoints.

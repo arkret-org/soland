@@ -284,7 +284,7 @@ fn fallback_federation_frontier_binding(
     space_frontier: &BTreeMap<SpaceId, Vec<EventId>>,
     actor_upper_bounds: &BTreeMap<Did, u64>,
 ) -> FederationFrontierBinding {
-    let realm_id = RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000".to_owned())
+    let realm_id = RealmId::new("ck:realm:00000000-0000-7000-8000-000000000000".to_owned())
         .expect("built-in fallback realm id is valid");
     let frontier_root = frontier_root(space_frontier, actor_upper_bounds)
         .expect("frontier root over typed ids must canonicalize");
@@ -306,7 +306,7 @@ mod tests {
     use super::*;
 
     fn realm() -> RealmId {
-        RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap()
+        RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap()
     }
     fn alice() -> Did {
         Did::new("did:web:alice.example").unwrap()
@@ -315,7 +315,7 @@ mod tests {
         Did::new("did:web:bob.example").unwrap()
     }
     fn space() -> SpaceId {
-        SpaceId::new("cx:space:01904100-0000-7000-8000-000000000001".to_owned()).unwrap()
+        SpaceId::new("ck:space:01904100-0000-7000-8000-000000000001".to_owned()).unwrap()
     }
     fn event(id: &str) -> EventId {
         EventId::new(id.to_owned()).unwrap()
@@ -365,16 +365,16 @@ mod tests {
         frontier_a.insert(
             space(),
             vec![
-                event("cx:event:01904100-0000-7000-8000-000000000002"),
-                event("cx:event:01904100-0000-7000-8000-000000000001"),
+                event("ck:event:01904100-0000-7000-8000-000000000002"),
+                event("ck:event:01904100-0000-7000-8000-000000000001"),
             ],
         );
         let mut frontier_b = BTreeMap::new();
         frontier_b.insert(
             space(),
             vec![
-                event("cx:event:01904100-0000-7000-8000-000000000001"),
-                event("cx:event:01904100-0000-7000-8000-000000000002"),
+                event("ck:event:01904100-0000-7000-8000-000000000001"),
+                event("ck:event:01904100-0000-7000-8000-000000000002"),
             ],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7), (bob(), 3)]);
@@ -393,7 +393,7 @@ mod tests {
         let mut frontier = BTreeMap::new();
         frontier.insert(
             space(),
-            vec![event("cx:event:01904100-0000-7000-8000-000000000001")],
+            vec![event("ck:event:01904100-0000-7000-8000-000000000001")],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
         let root = frontier_root(&frontier, &actors).unwrap();
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(signature["signed_payload"]["frontier_root"], root.as_str());
         assert_eq!(
             signature["signed_payload"]["realm_id"],
-            "cx:realm:01904100-0000-7000-8000-000000000001"
+            "ck:realm:01904100-0000-7000-8000-000000000001"
         );
 
         let bytes = canonical::canonical_json_bytes(&signature["signed_payload"]).unwrap();
@@ -427,7 +427,7 @@ mod tests {
         );
         // Keep TypedTrustDomainId import exercised for parity with the
         // federation suite fixtures.
-        let _ = TypedTrustDomainId::new("cx:trust_domain:soland.local").unwrap();
+        let _ = TypedTrustDomainId::new("ck:trust_domain:soland.local").unwrap();
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         let mut frontier = BTreeMap::new();
         frontier.insert(
             space(),
-            vec![event("cx:event:01904100-0000-7000-8000-000000000001")],
+            vec![event("ck:event:01904100-0000-7000-8000-000000000001")],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
         let root = frontier_root(&frontier, &actors).unwrap();

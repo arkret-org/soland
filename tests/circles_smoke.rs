@@ -26,18 +26,18 @@ use soland::kinds::{
 };
 use soland::reducer::{CircleLifecycleState, MembershipState, ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_B: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
-const CIRCLE_A: &str = "cx:circle:01904100-0000-7000-8000-c11111111111";
-const CIRCLE_B: &str = "cx:circle:01904100-0000-7000-8000-c22222222222";
-const FLOW_X: &str = "cx:flow:01904100-0000-7000-8000-f11111111111";
+const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-c11111111111";
+const CIRCLE_B: &str = "ck:circle:01904100-0000-7000-8000-c22222222222";
+const FLOW_X: &str = "ck:flow:01904100-0000-7000-8000-f11111111111";
 const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
         kind,
         payload,
@@ -403,7 +403,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
             CX_MESSAGE_CREATE,
             REALM_A,
             json!({
-                "event_id": "cx:event:01904100-0000-7000-8000-c1c1eeee0001",
+                "event_id": "ck:event:01904100-0000-7000-8000-c1c1eeee0001",
                 "flow_id": FLOW_X,
                 "sender": ALICE,
                 "content": {

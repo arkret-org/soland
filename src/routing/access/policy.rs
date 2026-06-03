@@ -342,7 +342,7 @@ async fn policy_check(
         && RealmId::new(realm_id.clone()).is_err()
     {
         return Err(AppError::invalid_param(
-            "invalid realm_id (must match cx:realm:<uuid>)",
+            "invalid realm_id (must match ck:realm:<uuid>)",
         ));
     }
     if !is_valid_sha256_digest(&body.request_canonical_digest) {
@@ -651,7 +651,7 @@ pub fn is_supported_policy_effect(value: &str) -> bool {
 }
 
 pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
-    let prefix = format!("cx:{kind}:");
+    let prefix = format!("ck:{kind}:");
     value.starts_with(&prefix)
         && value[prefix.len()..]
             .chars()

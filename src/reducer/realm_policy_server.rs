@@ -13,7 +13,7 @@
 //! mirror; the resolver just walks one link per hop until a configured
 //! Realm appears or the chain runs out.
 //!
-//! Spec: `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
+//! Spec: `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use contrix_sdk::lattice::CellState;
 use contrix_sdk::{CellRef, Operation};
@@ -114,7 +114,7 @@ pub fn apply_realm_policy_server(
     // Cell write — `cx.component.realm.policy_server.v1` (cas-register,
     // keyed by realm_id per SDK lattice_registry).
     if let Ok(cell_id) = CellRef::new(format!(
-        "cx:cell:cx.component.realm.policy_server.v1:{realm_id}"
+        "ck:cell:cx.component.realm.policy_server.v1:{realm_id}"
     )) {
         let value = serde_json::json!({
             "realm_id": realm_id,
@@ -155,12 +155,12 @@ mod tests {
     use super::*;
     use crate::reducer::RealmLinkState;
 
-    const REALM_CHILD: &str = "cx:realm:01904100-0000-7000-8000-cccccccccccc";
-    const REALM_ORG: &str = "cx:realm:01904100-0000-7000-8000-000000000000";
+    const REALM_CHILD: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
+    const REALM_ORG: &str = "ck:realm:01904100-0000-7000-8000-000000000000";
 
     fn op(space_id: &str, payload: Value) -> Operation {
         Operation::create(
-            OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+            OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(space_id).unwrap(),
             crate::kinds::CX_REALM_POLICY_SERVER,
             payload,
@@ -204,7 +204,7 @@ mod tests {
 
         // Cell projection.
         let cell_id = CellRef::new(format!(
-            "cx:cell:cx.component.realm.policy_server.v1:{REALM_CHILD}"
+            "ck:cell:cx.component.realm.policy_server.v1:{REALM_CHILD}"
         ))
         .unwrap();
         let value = state.cell_value(&cell_id).expect("cell present");

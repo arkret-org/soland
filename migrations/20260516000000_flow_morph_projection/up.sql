@@ -1,6 +1,6 @@
 -- Flow / Morph projection state — server-side state-machine for
 -- cx.flow.* and cx.morph.* lifecycle events. Spec:
--- contrix-spec/spec/v1/zh/models/common-fields.md §5.1 (canonical
+-- cokret-spec/spec/v1/zh/models/common-fields.md §5.1 (canonical
 -- state-transition table). soland's reducer maintains this in-memory
 -- (ProjectionState::flows / ProjectionState::morphs) and persists here
 -- for restart durability. Mirror of the projection_space_containers table from the
@@ -25,7 +25,7 @@ CREATE TABLE projection_flows (
     created_at        TIMESTAMPTZ NOT NULL,
     updated_by        TEXT,
     updated_at        TIMESTAMPTZ,
-    -- CXP-0007: the Circle this Flow is scoped to (`cx:circle:…`), if any.
+    -- CXP-0007: the Circle this Flow is scoped to (`ck:circle:…`), if any.
     -- A message's effective circle-scope is derived from its Flow's
     -- scope_circle_id (spec: scope_circle_id is a Flow field, not a message
     -- field), so it MUST survive restart to keep circle-scoped messages

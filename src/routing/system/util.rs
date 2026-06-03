@@ -19,7 +19,7 @@ use salvo::prelude::*;
 use crate::ids;
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
-/// Render a Contrix-shaped error envelope and stamp the response status.
+/// Render a Cokret-shaped error envelope and stamp the response status.
 ///
 /// Produces the spec-canonical SDK envelope:
 /// `{"ok": false, "error": {"code": <code>, "message": <message>},
@@ -60,7 +60,7 @@ pub fn render_error_with_detail(
 
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
-/// typed-id query args like `?space_id=cx:space:...` where browsers
+/// typed-id query args like `?space_id=ck:space:...` where browsers
 /// (and `encodeURIComponent`) emit `cx%3Aspace%3A...` — without
 /// decoding the downstream typed-id validator rejects the literal.
 pub fn query_param(req: &Request, key: &str) -> Option<String> {
@@ -150,13 +150,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 // ── Token / digest validators ───────────────────────────────────────────────
 
-/// Validate a `cx:cursor:<base64url>` token.
+/// Validate a `ck:cursor:<base64url>` token.
 ///
-/// `cx:cursor:` tokens are a base64url-encoded v1 cursor object with
+/// `ck:cursor:` tokens are a base64url-encoded v1 cursor object with
 /// `{v,purpose,t,x,h}`. Core cursors do not carry inline positions or
 /// stateless integrity material.
 pub fn is_valid_sync_token(token: &str) -> bool {
-    let Some(encoded) = token.strip_prefix("cx:cursor:") else {
+    let Some(encoded) = token.strip_prefix("ck:cursor:") else {
         return false;
     };
     let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
@@ -225,7 +225,7 @@ pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
 
 /// `@`-prefixed, lowercase, alphanumeric + `-_.` only.
 ///
-/// CXP R3 spec-sync (2026-05-27, contrix-spec b47ff6ec): the wire-level
+/// CXP R3 spec-sync (2026-05-27, cokret-spec b47ff6ec): the wire-level
 /// canonical comparison MUST run through NFC + UTS#39 confusable folding +
 /// script-mix rejection. We delegate that to the SDK helper
 /// (`contrix_core::model::handle::normalize_handle_localpart`) so any
@@ -296,9 +296,9 @@ pub fn handle_for_did(did: &str) -> String {
 
 // ── Discoverability validator ───────────────────────────────────────────────
 //
-// (The `entity` abstraction never landed in `contrix-spec/v1`; typed
-// objects in the protocol are `cx:space:` / `cx:flow:` / `cx:morph:` /
-// `cx:relation:` / `cx:view:`, each driven by its own dedicated event
+// (The `entity` abstraction never landed in `cokret-spec/v1`; typed
+// objects in the protocol are `ck:space:` / `ck:flow:` / `ck:morph:` /
+// `ck:relation:` / `ck:view:`, each driven by its own dedicated event
 // kind.)
 
 /// Allow-list of space-discoverability values.

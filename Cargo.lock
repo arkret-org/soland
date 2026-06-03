@@ -549,7 +549,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix"
+name = "cokret"
 version = "1.0.0"
 dependencies = [
  "argon2",
@@ -557,14 +557,14 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "chrono-tz",
- "contrix-contracts",
- "contrix-core",
- "contrix-crypto",
- "contrix-ffi",
- "contrix-html",
- "contrix-http-client",
- "contrix-server",
- "contrix-signatures",
+ "cokret-contracts",
+ "cokret-core",
+ "cokret-crypto",
+ "cokret-ffi",
+ "cokret-html",
+ "cokret-http-client",
+ "cokret-server",
+ "cokret-signatures",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hkdf 0.12.4",
@@ -587,26 +587,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix-contracts"
+name = "cokret-contracts"
 version = "1.0.0"
 dependencies = [
  "chrono",
- "contrix-core",
- "contrix-crypto",
- "contrix-html",
- "contrix-signatures",
+ "cokret-core",
+ "cokret-crypto",
+ "cokret-html",
+ "cokret-signatures",
  "serde",
  "serde_json",
  "tracing",
 ]
 
 [[package]]
-name = "contrix-core"
+name = "cokret-core"
 version = "1.0.0"
 dependencies = [
  "base64",
  "chrono",
- "contrix-identifiers",
+ "cokret-identifiers",
  "getrandom 0.3.4",
  "regex",
  "reqwest 0.12.28",
@@ -620,12 +620,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix-crypto"
+name = "cokret-crypto"
 version = "1.0.0"
 dependencies = [
  "chrono",
- "contrix-core",
- "contrix-signatures",
+ "cokret-core",
+ "cokret-signatures",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -633,29 +633,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix-ffi"
+name = "cokret-ffi"
 version = "1.0.0"
 dependencies = [
- "contrix-core",
+ "cokret-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "contrix-html"
+name = "cokret-html"
 version = "1.0.0"
 dependencies = [
- "contrix-core",
+ "cokret-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "contrix-http-client"
+name = "cokret-http-client"
 version = "1.0.0"
 dependencies = [
  "chrono",
- "contrix-core",
+ "cokret-core",
  "futures-util",
  "reqwest 0.12.28",
  "serde",
@@ -666,7 +666,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix-identifiers"
+name = "cokret-identifiers"
 version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
@@ -680,23 +680,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "contrix-server"
+name = "cokret-server"
 version = "1.0.0"
 dependencies = [
- "contrix-contracts",
- "contrix-core",
- "contrix-signatures",
+ "cokret-contracts",
+ "cokret-core",
+ "cokret-signatures",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "contrix-signatures"
+name = "cokret-signatures"
 version = "1.0.0"
 dependencies = [
  "base64",
  "chrono",
- "contrix-core",
+ "cokret-core",
  "ed25519-dalek",
  "serde",
  "serde_json",
@@ -4307,7 +4307,7 @@ dependencies = [
  "bs58",
  "bytes",
  "chrono",
- "contrix",
+ "cokret",
  "deadpool",
  "diesel",
  "diesel-async",

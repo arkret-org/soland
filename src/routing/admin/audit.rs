@@ -133,7 +133,7 @@ async fn audit_erasure_receipts(
 /// `POST /api/v1/audit/user-action` accepts a batched user-action audit
 /// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
 /// — the same shape that sodmin emits internally and that yougen posts
-/// via `ContrixApi::post_audit_user_action`.
+/// via `CokretApi::post_audit_user_action`.
 ///
 /// The endpoint is authenticated; the posted `actor` MUST match the
 /// session actor (no cross-actor writes). The audit entry is appended
@@ -419,13 +419,13 @@ mod audit_policy_tests {
     use super::*;
 
     fn realm() -> contrix_sdk::RealmId {
-        contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap()
+        contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap()
     }
     fn td() -> contrix_sdk::TypedTrustDomainId {
-        contrix_sdk::TypedTrustDomainId::new("cx:trust_domain:soland.local").unwrap()
+        contrix_sdk::TypedTrustDomainId::new("ck:trust_domain:soland.local").unwrap()
     }
     fn other_td() -> contrix_sdk::TypedTrustDomainId {
-        contrix_sdk::TypedTrustDomainId::new("cx:trust_domain:other.example").unwrap()
+        contrix_sdk::TypedTrustDomainId::new("ck:trust_domain:other.example").unwrap()
     }
 
     #[test]
@@ -450,7 +450,7 @@ mod audit_policy_tests {
         let payload = build_late_recovery_audit_payload(
             realm(),
             contrix_sdk::Did::new("did:web:alice.example").unwrap(),
-            contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001").unwrap(),
+            contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap(),
             chrono::Utc::now(),
         );
         assert!(matches!(

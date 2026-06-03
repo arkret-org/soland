@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 default-run = "soland"
-description = "Reference Contrix v1 principal server implementation built on Salvo, Diesel, and PostgreSQL."
+description = "Reference Cokret v1 principal server implementation built on Salvo, Diesel, and PostgreSQL."
 license = "Apache-2.0"
-repository = "https://github.com/contrix/soland"
-homepage = "https://github.com/contrix/soland"
+repository = "https://github.com/cokret/soland"
+homepage = "https://github.com/cokret/soland"
 readme = "README.md"
-keywords = ["contrix", "decentralized", "did", "salvo", "server"]
+keywords = ["cokret", "decentralized", "did", "salvo", "server"]
 categories = ["network-programming", "web-programming::http-server"]
-authors = ["Contrix contributors"]
+authors = ["Cokret contributors"]
 
 [features]
 default = []
@@ -25,7 +25,7 @@ otel = [
 [dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["serde"] }
-contrix-sdk = { package = "contrix", path = "../contrix-rust-sdk/crates/sdk", features = ["full-surface", "device-runtime", "salvo", "signer"] }
+cokret-sdk = { package = "cokret", path = "../cokret-rust-sdk/crates/sdk", features = ["full-surface", "device-runtime", "salvo", "signer"] }
 diesel = { version = "2.3.8", features = ["postgres", "r2d2", "serde_json", "chrono", "uuid", "pq-src"] }
 diesel-async = { version = "0.8", features = ["postgres", "deadpool", "async-connection-wrapper"] }
 deadpool = { version = "0.13", features = ["rt_tokio_1"] }

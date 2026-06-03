@@ -576,9 +576,9 @@ async fn detach_agent_grant(
     let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
-    if !grant_id.starts_with("cx:accountability_grant:") && !grant_id.starts_with("cx:grant:") {
+    if !grant_id.starts_with("ck:accountability_grant:") && !grant_id.starts_with("ck:grant:") {
         return Err(AppError::invalid_param(
-            "grant_id must be a cx:accountability_grant:<uuidv7> or cx:grant:<uuidv7> typed id",
+            "grant_id must be a ck:accountability_grant:<uuidv7> or ck:grant:<uuidv7> typed id",
         ));
     }
     let detached_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
@@ -668,7 +668,7 @@ mod tests {
     fn agent_principal_id_is_did_not_typed_id() {
         validate_agent_principal_id("did:web:agent.example").expect("DID-as-id must be accepted");
         assert!(
-            validate_agent_principal_id("cx:agent_principal:01999999-0000-7000-8000-00000000a001")
+            validate_agent_principal_id("ck:agent_principal:01999999-0000-7000-8000-00000000a001")
                 .is_err()
         );
     }

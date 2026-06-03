@@ -98,7 +98,7 @@ pub fn audit_router() -> Router {
 
 /// Deployment-local admin branch served at the bare `/admin/*`
 /// namespace (collection snapshot, cell inspection, control-frame
-/// triggers, retention), per contrix-spec `service-http-binding.md`
+/// triggers, retention), per cokret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
 /// `/api/v1` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
@@ -117,7 +117,7 @@ pub fn spec_router() -> Router {
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
     // namespace (anchorer / anchor-DAG / bottom repair / multisig /
-    // gc-candidates / delivery-binding / moderation). Per contrix-spec
+    // gc-candidates / delivery-binding / moderation). Per cokret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
     // deployment-local and MUST NOT carry the `/api/v1` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection

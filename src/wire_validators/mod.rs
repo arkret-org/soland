@@ -1,4 +1,4 @@
-//! R3.2 (contrix-spec @ b56cab1) — wire-shape deny validators for the
+//! R3.2 (cokret-spec @ b56cab1) — wire-shape deny validators for the
 //! member-identity / handle-claim / mention surfaces that went
 //! wire-breaking in this round.
 //!

@@ -32,7 +32,7 @@ CREATE INDEX agent_principal_state_idx ON agent_principal(state);
 
 CREATE TABLE agent_session (
     agent_session_id       TEXT PRIMARY KEY
-        CHECK (agent_session_id LIKE 'cx:agent_session:%'),
+        CHECK (agent_session_id LIKE 'ck:agent_session:%'),
     agent_principal_id     TEXT NOT NULL REFERENCES agent_principal(agent_principal_id)
                             ON DELETE CASCADE,
     verification_method    TEXT NOT NULL,
@@ -49,7 +49,7 @@ CREATE INDEX agent_session_state_idx ON agent_session(state);
 
 CREATE TABLE agent_key (
     agent_key_id           TEXT PRIMARY KEY
-        CHECK (agent_key_id LIKE 'cx:agent_key:%'),
+        CHECK (agent_key_id LIKE 'ck:agent_key:%'),
     agent_principal_id     TEXT NOT NULL REFERENCES agent_principal(agent_principal_id)
                             ON DELETE CASCADE,
     verification_method    TEXT NOT NULL,
@@ -65,7 +65,7 @@ CREATE INDEX agent_key_state_idx ON agent_key(state);
 
 CREATE TABLE agent_grant (
     grant_id               TEXT PRIMARY KEY
-        CHECK (grant_id LIKE 'cx:accountability_grant:%' OR grant_id LIKE 'cx:grant:%'),
+        CHECK (grant_id LIKE 'ck:accountability_grant:%' OR grant_id LIKE 'ck:grant:%'),
     agent_principal_id     TEXT NOT NULL REFERENCES agent_principal(agent_principal_id)
                             ON DELETE CASCADE,
     grant_kind             TEXT NOT NULL,
@@ -82,7 +82,7 @@ CREATE INDEX agent_grant_state_idx ON agent_grant(state);
 
 CREATE TABLE backup_series (
     series_id              TEXT PRIMARY KEY
-        CHECK (series_id LIKE 'cx:backup_series:%'),
+        CHECK (series_id LIKE 'ck:backup_series:%'),
     actor_id               TEXT NOT NULL,
     backup_class           TEXT NOT NULL
         CHECK (backup_class IN ('did_recovery', 'secret_storage', 'mls_history', 'external')),
@@ -103,7 +103,7 @@ CREATE UNIQUE INDEX backup_series_actor_class_uniq
 
 CREATE TABLE recovery_session (
     recovery_session_id    TEXT PRIMARY KEY
-        CHECK (recovery_session_id LIKE 'cx:recovery_session:%'),
+        CHECK (recovery_session_id LIKE 'ck:recovery_session:%'),
     actor_id               TEXT NOT NULL,
     series_id              TEXT NOT NULL REFERENCES backup_series(series_id)
                             ON DELETE CASCADE,
@@ -125,7 +125,7 @@ CREATE INDEX recovery_session_state_idx ON recovery_session(state);
 -- explicitly approves them (cx.agent.action_approve event).
 CREATE TABLE pending_agent_drafts (
     draft_id               TEXT PRIMARY KEY
-        CHECK (draft_id LIKE 'cx:agent_draft:%'),
+        CHECK (draft_id LIKE 'ck:agent_draft:%'),
     agent_principal_id     TEXT NOT NULL REFERENCES agent_principal(agent_principal_id)
                             ON DELETE CASCADE,
     controller_did         TEXT NOT NULL,

@@ -179,7 +179,7 @@ mod tests {
     async fn resync_required_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            realm_id: "cx:space:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ck:space:01904100-0000-7000-8000-000000000001".to_owned(),
             kind: EventNotificationKind::ResyncRequired {
                 reason: "compaction".to_owned(),
                 reconnect_after_ms: Some(7_500),
@@ -189,7 +189,7 @@ mod tests {
         let received = rx.recv().await.expect("receive");
         assert_eq!(
             received.realm_id,
-            "cx:space:01904100-0000-7000-8000-000000000001"
+            "ck:space:01904100-0000-7000-8000-000000000001"
         );
         match received.kind {
             EventNotificationKind::ResyncRequired {
@@ -207,7 +207,7 @@ mod tests {
     async fn unauthorized_notification_round_trips_through_channel() {
         let (tx, mut rx) = broadcast::channel::<EventNotification>(8);
         let n = EventNotification {
-            realm_id: "cx:space:01904100-0000-7000-8000-000000000002".to_owned(),
+            realm_id: "ck:space:01904100-0000-7000-8000-000000000002".to_owned(),
             kind: EventNotificationKind::Unauthorized {
                 reason: "session_revoked".to_owned(),
             },
@@ -216,7 +216,7 @@ mod tests {
         let received = rx.recv().await.expect("receive");
         assert_eq!(
             received.realm_id,
-            "cx:space:01904100-0000-7000-8000-000000000002"
+            "ck:space:01904100-0000-7000-8000-000000000002"
         );
         match received.kind {
             EventNotificationKind::Unauthorized { reason } => {

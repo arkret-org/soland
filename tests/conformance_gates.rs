@@ -3,7 +3,7 @@
 //!
 //! Stream J of `_claude_todos.md`. The goal is to prevent regressions
 //! where a new HTTP endpoint silently invents an `operation_id` that
-//! is neither registered with `contrix-spec/.../operation-registry.json`
+//! is neither registered with `cokret-spec/.../operation-registry.json`
 //! nor flagged as a soland-private extension.
 //!
 //! These gates are intentionally pure file-system + registry scans.
@@ -18,15 +18,15 @@ use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-/// Locate `contrix-spec/spec/v1/artifacts/...` relative to the soland
+/// Locate `cokret-spec/spec/v1/artifacts/...` relative to the soland
 /// crate root (`$CARGO_MANIFEST_DIR/..`). Mirrors the resolver used by
 /// `tests/conformance_vectors.rs`.
 fn spec_artifact(path: &str) -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
-        .expect("soland lives next to contrix-spec")
-        .join("contrix-spec")
+        .expect("soland lives next to cokret-spec")
+        .join("cokret-spec")
         .join("spec")
         .join("v1")
         .join("artifacts")

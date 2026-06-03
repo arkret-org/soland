@@ -506,7 +506,7 @@ fn poll_projection_json(
         .get("poll_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| event_id.replacen("cx:event:", "cx:message:", 1));
+        .unwrap_or_else(|| event_id.replacen("ck:event:", "ck:message:", 1));
     let Some(poll) = projection.poll(&poll_id) else {
         return Some(json!({
             "poll_id": poll_id,
@@ -801,7 +801,7 @@ fn tombstone_payload_value(payload: &Value) -> Value {
 }
 
 fn normalize_realm_scope(value: &str) -> String {
-    value.replacen("cx:space:", "cx:realm:", 1)
+    value.replacen("ck:space:", "ck:realm:", 1)
 }
 
 pub async fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
@@ -1349,7 +1349,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             id.and_then(|i| proj.morphs.get(&i))
                 .map(return_snapshot_morph)
         } else if is_redaction {
-            // object_ref may be cx:flow: or cx:morph:; try both.
+            // object_ref may be ck:flow: or ck:morph:; try both.
             if let Some(ref obj_ref) = object_ref {
                 if let Some(flow) = proj.flows.get(obj_ref) {
                     Some(return_snapshot_flow(flow))
@@ -1481,7 +1481,7 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         {
             project_membership_operation(state, origin, operation).await;
         }
-        // MID-3 (R3.1, contrix-spec @ 7157ee8) — persist accepted
+        // MID-3 (R3.1, cokret-spec @ 7157ee8) — persist accepted
         // `cx.member.identity.update` events into the in-memory registry.
         // Reducer-shape validation (segment whitelist, cross-cell guard,
         // digest binding) runs inside `project_member_identity_update`;
@@ -1739,7 +1739,7 @@ pub async fn persist_projected_operation(
 /// `cx.space.read_receipt_policy`) durable-event into
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
-/// `cx:cell:cx.component.realm.read_receipt_policy.v1:<realm_id>`.
+/// `ck:cell:cx.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
 /// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_space`
@@ -1773,7 +1773,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     // the cells-map fast-path serve reads without scanning the durable
     // Event store on every fanout.
     let cell_id = match contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.realm.read_receipt_policy.v1:{}",
+        "ck:cell:cx.component.realm.read_receipt_policy.v1:{}",
         realm_id.as_str()
     )) {
         Ok(c) => c,
@@ -2033,7 +2033,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 entry.members.remove(&member);
             } else if membership == Some("join") {
                 entry.members.insert(member);
-                // HDLREN-3/4 (contrix-spec @ 7157ee8) — `handle` is no longer
+                // HDLREN-3/4 (cokret-spec @ 7157ee8) — `handle` is no longer
                 // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
                 // roster; clients resolve identity by following the
                 // `cx.member.identity.update` events surfaced via
@@ -2048,7 +2048,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     touch_realm(state, operation.realm_id.as_str()).await;
 }
 
-/// MID-2..6 (R3.1, contrix-spec @ 7157ee8) — projection write for
+/// MID-2..6 (R3.1, cokret-spec @ 7157ee8) — projection write for
 /// `cx.member.identity.update`. Validates payload shape (segment
 /// whitelist, cell-subject coherence), computes the canonical
 /// payload digest, and inserts a [`crate::state::MemberIdentityEventRecord`]
@@ -2405,7 +2405,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| {
             format!(
-                "cx:event:{}",
+                "ck:event:{}",
                 operation.operation_id.as_str().replace(':', "")
             )
         });
@@ -2524,8 +2524,8 @@ mod tests {
 
     use super::*;
 
-    const REALM_ID: &str = "cx:realm:01904100-0000-7000-8000-000000000001";
-    const OPERATION_ID: &str = "cx:operation:01904100-0000-7000-8000-000000000002";
+    const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
+    const OPERATION_ID: &str = "ck:operation:01904100-0000-7000-8000-000000000002";
 
     fn op(kind: &str, payload: Value) -> Operation {
         Operation::create(
@@ -2597,7 +2597,7 @@ mod tests {
 
     #[test]
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
-        let invite_id = "cx:invite:01904100-0000-7000-8000-000000000003";
+        let invite_id = "ck:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(
             kinds::CX_MEMBER_STATE,
             json!({

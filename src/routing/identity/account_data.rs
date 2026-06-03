@@ -98,7 +98,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     }
     // Keys are dot-delimited namespaces (`cx.contacts.space.<space_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
-    // log-safe; everything else (including the `:` in `cx:space:<uuid>`) is
+    // log-safe; everything else (including the `:` in `ck:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
     if data_type.chars().any(|c| {
         c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#'

@@ -5,7 +5,7 @@
 
 CREATE TABLE recovery_policies (
     policy_id            TEXT PRIMARY KEY
-        CHECK (policy_id LIKE 'cx:policy:%'),
+        CHECK (policy_id LIKE 'ck:policy:%'),
     principal_id         TEXT NOT NULL,
     version              INTEGER NOT NULL CHECK (version >= 1),
     trust_domain         TEXT NOT NULL,
@@ -24,10 +24,10 @@ CREATE INDEX recovery_policies_principal_active_idx
 
 CREATE TABLE recovery_receipts (
     receipt_id           TEXT PRIMARY KEY
-        CHECK (receipt_id LIKE 'cx:receipt:%'),
+        CHECK (receipt_id LIKE 'ck:receipt:%'),
     principal_id         TEXT NOT NULL,
     recovery_session_id  TEXT NOT NULL UNIQUE
-        CHECK (recovery_session_id LIKE 'cx:recovery_session:%'),
+        CHECK (recovery_session_id LIKE 'ck:recovery_session:%'),
     policy_id            TEXT NOT NULL REFERENCES recovery_policies(policy_id),
     policy_version       INTEGER NOT NULL CHECK (policy_version >= 1),
     trust_domain         TEXT NOT NULL,

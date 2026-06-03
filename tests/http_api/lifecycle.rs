@@ -9,17 +9,17 @@ use super::common::*;
 async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let container_space_id = "cx:space:01904100-0000-7000-8000-c10dc0000001";
+    let container_space_id = "ck:space:01904100-0000-7000-8000-c10dc0000001";
 
     // 1) cx.space.create — Active.
     let create_event = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000001",
+        "ck:event:01904100-0000-7000-8000-d10dc0000001",
         1,
         "cx.space.create",
         serde_json::json!({
             "object": {
                 "id": container_space_id,
-                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                 "kind": "list",
                 "title": "Roadmap",
                 "created_by": "did:web:alice.example",
@@ -39,11 +39,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 2) cx.space.restore on Active → 412 place_not_archived.
     let bad_restore = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000002",
+        "ck:event:01904100-0000-7000-8000-d10dc0000002",
         2,
         "cx.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000001"],
     );
     let mut bad_restore_response = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -60,11 +60,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 3) cx.space.archive — legal (Active → Archived).
     let archive_event = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000003",
+        "ck:event:01904100-0000-7000-8000-d10dc0000003",
         3,
         "cx.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000001"],
     );
     let archive_response: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -78,11 +78,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 4) cx.space.restore — legal now (Archived → Active).
     let good_restore = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000004",
+        "ck:event:01904100-0000-7000-8000-d10dc0000004",
         4,
         "cx.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000003"],
     );
     let restore_response: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -96,11 +96,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 5) cx.space.tombstone — legal (Active → Tombstoned).
     let tombstone_event = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000005",
+        "ck:event:01904100-0000-7000-8000-d10dc0000005",
         5,
         "cx.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000004"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000004"],
     );
     let tombstone_response: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -114,11 +114,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 6) cx.space.tombstone again on Tombstoned → 412 place_already_terminal.
     let bad_tombstone = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000006",
+        "ck:event:01904100-0000-7000-8000-d10dc0000006",
         6,
         "cx.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000005"],
     );
     let mut bad_tombstone_response = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -137,11 +137,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // state cannot be revived even though tombstone-vs-restore are different
     // transitions).
     let bad_restore_terminal = signed_place_event(
-        "cx:event:01904100-0000-7000-8000-d10dc0000007",
+        "ck:event:01904100-0000-7000-8000-d10dc0000007",
         7,
         "cx.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["cx:event:01904100-0000-7000-8000-d10dc0000005"],
+        vec!["ck:event:01904100-0000-7000-8000-d10dc0000005"],
     );
     let mut bad_restore_terminal_response = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -160,14 +160,14 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "cx:flow:01904100-0000-7000-8000-e10dc0000001";
-    let morph_id = "cx:morph:01904100-0000-7000-8000-e20dc0000001";
+    let flow_id = "ck:flow:01904100-0000-7000-8000-e10dc0000001";
+    let morph_id = "ck:morph:01904100-0000-7000-8000-e20dc0000001";
 
     // ── Flow path ────────────────────────────────────────────────────
 
     // 1) flow create — Active.
     let create_flow = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000001",
+        "ck:event:01904100-0000-7000-8000-e10ec0000001",
         1,
         "cx.flow.create",
         serde_json::json!({
@@ -192,11 +192,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // 2) flow restore on Active → 412 flow_not_archived.
     let bad_restore = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000002",
+        "ck:event:01904100-0000-7000-8000-e10ec0000002",
         2,
         "cx.flow.restore",
         serde_json::json!({ "flow_id": flow_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e10ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-e10ec0000001"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -209,11 +209,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // 3) flow archive — legal.
     let archive = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000003",
+        "ck:event:01904100-0000-7000-8000-e10ec0000003",
         3,
         "cx.flow.archive",
         serde_json::json!({ "flow_id": flow_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e10ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-e10ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -227,11 +227,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // 4) flow archive again on Archived → 412 flow_not_active.
     let bad_archive = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000004",
+        "ck:event:01904100-0000-7000-8000-e10ec0000004",
         4,
         "cx.flow.archive",
         serde_json::json!({ "flow_id": flow_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -244,7 +244,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // 5) flow update on Archived → 412 flow_not_active.
     let bad_update = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000005",
+        "ck:event:01904100-0000-7000-8000-e10ec0000005",
         5,
         "cx.flow.update",
         serde_json::json!({
@@ -252,7 +252,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
             "flow_id": flow_id,
             "patch": { "metadata": { "title": "Edit while archived" } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -265,11 +265,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // 6) flow restore — legal now.
     let good_restore = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e10ec0000006",
+        "ck:event:01904100-0000-7000-8000-e10ec0000006",
         6,
         "cx.flow.restore",
         serde_json::json!({ "flow_id": flow_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e10ec0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -284,7 +284,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
     // ── Morph path ───────────────────────────────────────────────────
 
     let create_morph = signed_morph_event(
-        "cx:event:01904100-0000-7000-8000-e20ec0000001",
+        "ck:event:01904100-0000-7000-8000-e20ec0000001",
         7,
         "cx.morph.create",
         serde_json::json!({
@@ -310,11 +310,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // morph restore on Active → 412 morph_not_archived.
     let bad_morph_restore = signed_morph_event(
-        "cx:event:01904100-0000-7000-8000-e20ec0000002",
+        "ck:event:01904100-0000-7000-8000-e20ec0000002",
         8,
         "cx.morph.restore",
         serde_json::json!({ "morph_id": morph_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e20ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-e20ec0000001"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -327,11 +327,11 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // morph archive — legal.
     let morph_archive = signed_morph_event(
-        "cx:event:01904100-0000-7000-8000-e20ec0000003",
+        "ck:event:01904100-0000-7000-8000-e20ec0000003",
         9,
         "cx.morph.archive",
         serde_json::json!({ "morph_id": morph_id }),
-        vec!["cx:event:01904100-0000-7000-8000-e20ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-e20ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -345,7 +345,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 
     // morph update on Archived → 412 morph_not_active.
     let bad_morph_update = signed_morph_event(
-        "cx:event:01904100-0000-7000-8000-e20ec0000004",
+        "ck:event:01904100-0000-7000-8000-e20ec0000004",
         10,
         "cx.morph.update",
         serde_json::json!({
@@ -353,7 +353,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
             "morph_id": morph_id,
             "patch": { "metadata": { "title": "Renamed" } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-e20ec0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-e20ec0000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -393,9 +393,9 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         .await
         .unwrap();
 
-    let flow_id = "cx:flow:01904100-0000-7000-8000-e30dc0000001";
+    let flow_id = "ck:flow:01904100-0000-7000-8000-e30dc0000001";
     let create_flow = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e30ec0000001",
+        "ck:event:01904100-0000-7000-8000-e30ec0000001",
         1,
         "cx.flow.create",
         serde_json::json!({
@@ -419,7 +419,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
     assert_eq!(response["status"], "accepted");
 
     let plaintext_body_update = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-e30ec0000002",
+        "ck:event:01904100-0000-7000-8000-e30ec0000002",
         2,
         "cx.flow.update",
         serde_json::json!({
@@ -432,7 +432,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
                 }
             }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-e30ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-e30ec0000001"],
     );
     let mut response = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -446,7 +446,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         state
             .persistence
             .events()
-            .get("cx:event:01904100-0000-7000-8000-e30ec0000002")
+            .get("ck:event:01904100-0000-7000-8000-e30ec0000002")
             .await
             .unwrap()
             .is_none(),
@@ -458,11 +458,11 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
 async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let task_flow_id = "cx:flow:01904100-0000-7000-8000-f51dc0000001";
-    let incident_flow_id = "cx:flow:01904100-0000-7000-8000-f51dc0000002";
+    let task_flow_id = "ck:flow:01904100-0000-7000-8000-f51dc0000001";
+    let incident_flow_id = "ck:flow:01904100-0000-7000-8000-f51dc0000002";
 
     let create_task = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000001",
+        "ck:event:01904100-0000-7000-8000-f51ec0000001",
         1,
         "cx.flow.create",
         serde_json::json!({
@@ -486,7 +486,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let bad_done = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000002",
+        "ck:event:01904100-0000-7000-8000-f51ec0000002",
         2,
         "cx.flow.update",
         serde_json::json!({
@@ -494,7 +494,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "flow_id": task_flow_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-f51ec0000001"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -506,7 +506,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
 
     let good_in_progress = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000003",
+        "ck:event:01904100-0000-7000-8000-f51ec0000003",
         3,
         "cx.flow.update",
         serde_json::json!({
@@ -514,7 +514,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "flow_id": task_flow_id,
             "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f51ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-f51ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -527,7 +527,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let good_done = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000004",
+        "ck:event:01904100-0000-7000-8000-f51ec0000004",
         4,
         "cx.flow.update",
         serde_json::json!({
@@ -535,7 +535,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "flow_id": task_flow_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f51ec0000003"],
+        vec!["ck:event:01904100-0000-7000-8000-f51ec0000003"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -548,7 +548,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let create_incident = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000005",
+        "ck:event:01904100-0000-7000-8000-f51ec0000005",
         5,
         "cx.flow.create",
         serde_json::json!({
@@ -559,7 +559,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f51ec0000004"],
+        vec!["ck:event:01904100-0000-7000-8000-f51ec0000004"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -572,7 +572,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let bad_resolved = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f51ec0000006",
+        "ck:event:01904100-0000-7000-8000-f51ec0000006",
         6,
         "cx.flow.update",
         serde_json::json!({
@@ -580,7 +580,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
             "flow_id": incident_flow_id,
             "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f51ec0000005"],
+        vec!["ck:event:01904100-0000-7000-8000-f51ec0000005"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -636,13 +636,13 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
 async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
-    let morph_id = "cx:morph:01904100-0000-7000-8000-f20dc0000001";
+    let flow_id = "ck:flow:01904100-0000-7000-8000-f10dc0000001";
+    let morph_id = "ck:morph:01904100-0000-7000-8000-f20dc0000001";
 
     // ── Flow path ────────────────────────────────────────────────────
 
     let create_flow = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-f10ec0000001",
+        "ck:event:01904100-0000-7000-8000-f10ec0000001",
         1,
         "cx.flow.create",
         serde_json::json!({
@@ -667,15 +667,15 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
 
     // First redaction — legal (Active source).
     let redact1 = signed_redaction_event(
-        "cx:event:01904100-0000-7000-8000-f10ec0000002",
+        "ck:event:01904100-0000-7000-8000-f10ec0000002",
         2,
         serde_json::json!({
-            "target_event_id": "cx:event:01904100-0000-7000-8000-f10ec0000001",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-f10ec0000001",
             "object_ref": flow_id,
             "by": "did:web:alice.example",
             "reason": "policy",
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f10ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-f10ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -700,13 +700,13 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
 
     // Second redaction against terminal Flow → 412 flow_already_terminal.
     let redact2 = signed_redaction_event(
-        "cx:event:01904100-0000-7000-8000-f10ec0000003",
+        "ck:event:01904100-0000-7000-8000-f10ec0000003",
         3,
         serde_json::json!({
-            "target_event_id": "cx:event:01904100-0000-7000-8000-f10ec0000001",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-f10ec0000001",
             "object_ref": flow_id,
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f10ec0000002"],
+        vec!["ck:event:01904100-0000-7000-8000-f10ec0000002"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -720,7 +720,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
     // ── Morph path ───────────────────────────────────────────────────
 
     let create_morph = signed_morph_event(
-        "cx:event:01904100-0000-7000-8000-f20ec0000001",
+        "ck:event:01904100-0000-7000-8000-f20ec0000001",
         4,
         "cx.morph.create",
         serde_json::json!({
@@ -745,13 +745,13 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
     assert_eq!(resp["status"], "accepted");
 
     let morph_redact = signed_redaction_event(
-        "cx:event:01904100-0000-7000-8000-f20ec0000002",
+        "ck:event:01904100-0000-7000-8000-f20ec0000002",
         5,
         serde_json::json!({
-            "target_event_id": "cx:event:01904100-0000-7000-8000-f20ec0000001",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-f20ec0000001",
             "object_ref": morph_id,
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f20ec0000001"],
+        vec!["ck:event:01904100-0000-7000-8000-f20ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -770,13 +770,13 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
 
     // Second morph redaction → 412 morph_already_terminal.
     let bad_morph_redact = signed_redaction_event(
-        "cx:event:01904100-0000-7000-8000-f20ec0000003",
+        "ck:event:01904100-0000-7000-8000-f20ec0000003",
         6,
         serde_json::json!({
-            "target_event_id": "cx:event:01904100-0000-7000-8000-f20ec0000001",
+            "target_event_id": "ck:event:01904100-0000-7000-8000-f20ec0000001",
             "object_ref": morph_id,
         }),
-        vec!["cx:event:01904100-0000-7000-8000-f20ec0000002"],
+        vec!["ck:event:01904100-0000-7000-8000-f20ec0000002"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -792,10 +792,10 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
 async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "cx:flow:01904100-0000-7000-8000-aabbccdd0001";
+    let flow_id = "ck:flow:01904100-0000-7000-8000-aabbccdd0001";
 
     let create_flow = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-aabbcc000001",
+        "ck:event:01904100-0000-7000-8000-aabbcc000001",
         1,
         "cx.flow.create",
         serde_json::json!({
@@ -819,14 +819,14 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     assert_eq!(resp["status"], "accepted");
 
     let tracks_active = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-aabbcc000002",
+        "ck:event:01904100-0000-7000-8000-aabbcc000002",
         2,
         "cx.flow.tracks.update",
         serde_json::json!({
             "flow_id": flow_id,
             "patch": {"tracks": {"discussion": {"profile": "discussion"}}}
         }),
-        vec!["cx:event:01904100-0000-7000-8000-aabbcc000001"],
+        vec!["ck:event:01904100-0000-7000-8000-aabbcc000001"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -839,11 +839,11 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     assert_eq!(resp["status"], "accepted");
 
     let archive = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-aabbcc000003",
+        "ck:event:01904100-0000-7000-8000-aabbcc000003",
         3,
         "cx.flow.archive",
         serde_json::json!({ "flow_id": flow_id }),
-        vec!["cx:event:01904100-0000-7000-8000-aabbcc000002"],
+        vec!["ck:event:01904100-0000-7000-8000-aabbcc000002"],
     );
     let resp: Value = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -856,14 +856,14 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     assert_eq!(resp["status"], "accepted");
 
     let tracks_archived = signed_flow_event(
-        "cx:event:01904100-0000-7000-8000-aabbcc000004",
+        "ck:event:01904100-0000-7000-8000-aabbcc000004",
         4,
         "cx.flow.tracks.update",
         serde_json::json!({
             "flow_id": flow_id,
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
-        vec!["cx:event:01904100-0000-7000-8000-aabbcc000003"],
+        vec!["ck:event:01904100-0000-7000-8000-aabbcc000003"],
     );
     let mut resp = TestClient::post("http://server/api/v1/events")
         .add_header("authorization", format!("Bearer {token}"), true)

@@ -16,7 +16,7 @@
 //! Call sites that need to make outbound HTTP MUST first check
 //! [`outbound_allowed`] and bail if false.
 //!
-//! Spec anchor: `contrix-spec/spec/v1/zh/sync/sovereign-deployment.md`
+//! Spec anchor: `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md`
 //! §2 (sovereign client + trust roots), §4 (controlled collaboration
 //! Realm / enclave deployment), §5 (enclave boundary — no escape to
 //! main), §6 (network outage + audit).
@@ -143,7 +143,7 @@ fn url_host(url: &str) -> Option<String> {
 
 /// The conformance profile id soland claims on `/server/describe` when
 /// `sovereign_enclave_enabled=true`. Registered in
-/// `contrix-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
+/// `cokret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
 pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "cx.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -801,7 +801,7 @@ async fn ingest_store_forward(
                 .get("id")
                 .or_else(|| operation.get("operation_id"))
                 .and_then(Value::as_str)
-                .unwrap_or("cx:operation:unknown")
+                .unwrap_or("ck:operation:unknown")
                 .to_owned(),
             realm_id: realm_id.clone(),
             actor: operation
@@ -1052,7 +1052,7 @@ mod tests {
             compaction_prune_walk_interval_seconds: 0,
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: false,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,

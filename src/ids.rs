@@ -1,22 +1,22 @@
-//! Contrix v1 protocol-compliant ID generation.
+//! Cokret v1 protocol-compliant ID generation.
 //!
-//! All typed object IDs follow the format `cx:<kind>:<uuid>` where `<uuid>`
+//! All typed object IDs follow the format `ck:<kind>:<uuid>` where `<uuid>`
 //! is RFC 9562 UUID version 7 (48-bit Unix-millisecond timestamp + 4-bit
 //! version=7 + 12-bit rand_a + 2-bit variant=10 + 62-bit rand_b), serialized
 //! as the canonical 36-character lowercase hex form
 //! `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` where N ∈ {8,9,a,b}.
 //!
-//! See `contrix-spec/spec/v1/zh/conformance/encoding.md` §4.
+//! See `cokret-spec/spec/v1/zh/conformance/encoding.md` §4.
 
 use uuid::Uuid;
 
-/// Typed wire identifiers are owned by the SDK `contrix` (identifiers) crate.
+/// Typed wire identifiers are owned by the SDK `cokret` (identifiers) crate.
 /// soland re-exports them so the whole server shares one validated newtype per
 /// id-kind instead of maintaining parallel local copies.
 ///
-/// - [`RealmId`] is the SDK `cx:realm:<UUIDv7>` security-boundary id.
+/// - [`RealmId`] is the SDK `ck:realm:<UUIDv7>` security-boundary id.
 /// - [`SpaceContainerId`] is an alias for the SDK [`SpaceId`]
-///   (`cx:space:` / `cx:realm:` strict-typed id) per the Realm/Space inversion.
+///   (`ck:space:` / `ck:realm:` strict-typed id) per the Realm/Space inversion.
 pub use contrix_sdk::{RealmId, SpaceId};
 
 /// Space-container typed id. Alias for the SDK [`SpaceId`] newtype; the local
@@ -25,11 +25,11 @@ pub type SpaceContainerId = SpaceId;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
-/// Format: `cx:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
+/// Format: `ck:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
 /// [`contrix_sdk::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
 pub fn generate(kind: &str) -> String {
-    contrix_sdk::new_prefixed_uuid7(&format!("cx:{kind}:"))
+    contrix_sdk::new_prefixed_uuid7(&format!("ck:{kind}:"))
 }
 
 pub fn generate_space_id() -> String {
@@ -52,7 +52,7 @@ pub fn generate_relation_id() -> String {
     generate("relation")
 }
 
-/// CXP-0007 (spec b7d35be) — generate a new `cx:circle:<uuid7>` identifier
+/// CXP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
 /// for the Circle primitive. Used by `POST /api/v1/circles` to mint the new
 /// Circle's typed wire id before submitting `cx.circle.create`.
 pub fn generate_circle_id() -> String {
@@ -79,7 +79,7 @@ pub fn generate_read_cursor_id() -> String {
     generate("read_cursor")
 }
 
-/// Notification id helper. Spec uses the full `cx:notification:` kind.
+/// Notification id helper. Spec uses the full `ck:notification:` kind.
 pub fn generate_notification_id() -> String {
     generate("notification")
 }
@@ -92,20 +92,20 @@ pub fn generate_request_id() -> String {
     generate("request")
 }
 
-/// Convert a wire-form `cx:<kind>:<uuid>` typed ID to its raw `Uuid` for
+/// Convert a wire-form `ck:<kind>:<uuid>` typed ID to its raw `Uuid` for
 /// PostgreSQL `uuid` column storage. Returns `None` if the input is not a
 /// well-formed typed ID with a parseable UUID segment. The kind segment is
 /// not validated here; callers that care MUST check it separately (the kind
 /// is canonical bytes of the wire value, see encoding.md §4).
 pub fn parse_typed_uuid(typed: &str, expected_kind: &str) -> Option<Uuid> {
-    let prefix = format!("cx:{}:", expected_kind);
+    let prefix = format!("ck:{}:", expected_kind);
     let rest = typed.strip_prefix(&prefix)?;
     Uuid::parse_str(rest).ok()
 }
 
 /// Kind-agnostic helper: parse the trailing UUID part of any
-/// `cx:<kind>:<uuid>` typed ID. Returns `None` if the string has no
-/// `cx:<kind>:` prefix or the trailing segment is not a valid UUID.
+/// `ck:<kind>:<uuid>` typed ID. Returns `None` if the string has no
+/// `ck:<kind>:` prefix or the trailing segment is not a valid UUID.
 /// Use this at persistence boundaries where the column is `UUID` but the
 /// in-memory value carries the typed wire form.
 pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
@@ -129,14 +129,14 @@ pub fn typed_uuid_part_or_panic(typed: &str) -> Uuid {
         .unwrap_or_else(|| panic!("malformed typed wire ID at persistence boundary: {typed:?}"))
 }
 
-/// Format a raw `Uuid` back to a typed wire ID `cx:<kind>:<uuid>`.
+/// Format a raw `Uuid` back to a typed wire ID `ck:<kind>:<uuid>`.
 pub fn format_typed_uuid(kind: &str, uuid: &Uuid) -> String {
-    format!("cx:{}:{}", kind, uuid)
+    format!("ck:{}:{}", kind, uuid)
 }
 
 /// Percent-encode reserved characters in a **cell subject** segment.
 ///
-/// Per Contrix v1 (spec encoding §9.5), composite cell subjects are joined
+/// Per Cokret v1 (spec encoding §9.5), composite cell subjects are joined
 /// with `|`. Raw DIDs and identifiers may contain `|` themselves, which
 /// would collide with the separator. We encode `%`, `|`, and ASCII control
 /// characters using percent-escape (`%XX`) so that segments roundtrip
@@ -185,8 +185,8 @@ mod tests {
     #[test]
     fn id_format_is_cx_kind_uuid() {
         let id = generate_space_id();
-        assert!(id.starts_with("cx:space:"));
-        let uuid_part = &id["cx:space:".len()..];
+        assert!(id.starts_with("ck:space:"));
+        let uuid_part = &id["ck:space:".len()..];
         // 36-char canonical UUID form: 8-4-4-4-12 hex with dashes
         assert_eq!(uuid_part.len(), 36);
         let parsed = Uuid::parse_str(uuid_part).expect("uuid parse");
@@ -196,18 +196,18 @@ mod tests {
 
     #[test]
     fn all_generators_produce_valid_prefixes() {
-        assert!(generate_realm_id().starts_with("cx:realm:"));
-        assert!(generate_space_id().starts_with("cx:space:"));
-        assert!(generate_event_id().starts_with("cx:event:"));
-        assert!(generate_operation_id().starts_with("cx:operation:"));
-        assert!(generate_relation_id().starts_with("cx:relation:"));
-        assert!(generate_grant_id().starts_with("cx:grant:"));
-        assert!(generate_invite_id().starts_with("cx:invite:"));
-        assert!(generate_snapshot_id().starts_with("cx:snapshot:"));
-        assert!(generate_report_id().starts_with("cx:report:"));
-        assert!(generate_notification_id().starts_with("cx:notification:"));
-        assert!(generate_view_id().starts_with("cx:view:"));
-        assert!(generate_request_id().starts_with("cx:request:"));
+        assert!(generate_realm_id().starts_with("ck:realm:"));
+        assert!(generate_space_id().starts_with("ck:space:"));
+        assert!(generate_event_id().starts_with("ck:event:"));
+        assert!(generate_operation_id().starts_with("ck:operation:"));
+        assert!(generate_relation_id().starts_with("ck:relation:"));
+        assert!(generate_grant_id().starts_with("ck:grant:"));
+        assert!(generate_invite_id().starts_with("ck:invite:"));
+        assert!(generate_snapshot_id().starts_with("ck:snapshot:"));
+        assert!(generate_report_id().starts_with("ck:report:"));
+        assert!(generate_notification_id().starts_with("ck:notification:"));
+        assert!(generate_view_id().starts_with("ck:view:"));
+        assert!(generate_request_id().starts_with("ck:request:"));
     }
 
     #[test]
@@ -277,8 +277,8 @@ mod tests {
     fn realm_id_rejects_wrong_kind_and_bad_uuid() {
         let space = generate_space_id();
         assert!(RealmId::new(space).is_err());
-        assert!(RealmId::new("cx:realm:not-a-uuid").is_err());
-        assert!(RealmId::new("cx:realm:00000000-0000-0000-0000-000000000000").is_err());
+        assert!(RealmId::new("ck:realm:not-a-uuid").is_err());
+        assert!(RealmId::new("ck:realm:00000000-0000-0000-0000-000000000000").is_err());
         assert!(RealmId::new("").is_err());
     }
 
@@ -308,10 +308,10 @@ mod tests {
     #[test]
     fn space_container_id_rejects_bad_kind() {
         // `SpaceContainerId` aliases the SDK `SpaceId`, whose validator accepts
-        // both `cx:space:` and `cx:realm:` strict-typed ids (Realm/Space
+        // both `ck:space:` and `ck:realm:` strict-typed ids (Realm/Space
         // inversion). Non-typed / wrong-prefix forms are still rejected.
-        assert!(SpaceContainerId::new("cx:place:00000000-0000-7000-8000-000000000000").is_err());
-        assert!(SpaceContainerId::new("cx:space:not-a-uuid").is_err());
+        assert!(SpaceContainerId::new("ck:place:00000000-0000-7000-8000-000000000000").is_err());
+        assert!(SpaceContainerId::new("ck:space:not-a-uuid").is_err());
         assert!(SpaceContainerId::new("").is_err());
     }
 

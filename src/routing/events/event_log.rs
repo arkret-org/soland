@@ -109,7 +109,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
             "cx.profile.principal_server_events_api.v1".to_owned(),
         ],
         registry: json!({
-            "source": "contrix-spec/spec/v1/artifacts",
+            "source": "cokret-spec/spec/v1/artifacts",
             "event_kind_registry_version": artifacts::event_kind_registry()["version"].clone(),
             "schema_registry_version": artifacts::schema_registry()["version"].clone(),
             "operation_registry_version": artifacts::operation_registry()["version"].clone(),
@@ -266,7 +266,7 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
         .and_then(Value::as_object)
         .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("cx:operation:"))
+        .filter(|value| value.starts_with("ck:operation:"))
         .map(ToOwned::to_owned)
 }
 
@@ -623,7 +623,7 @@ async fn events_frontier(
     };
     let federation_binding = if matches!(peer_role, contrix_sdk::FrontierPeerRole::FederationPeer) {
         let binding_realm = selected_realm_id.clone().unwrap_or_else(|| {
-            RealmId::new("cx:realm:00000000-0000-7000-8000-000000000000".to_owned())
+            RealmId::new("ck:realm:00000000-0000-7000-8000-000000000000".to_owned())
                 .expect("built-in fallback realm id is valid")
         });
         let service_binding_ref = super::frontier::frontier_service_binding_ref(
@@ -1405,7 +1405,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "realm_id must use the cx:realm: typed prefix",
+                "realm_id must use the ck:realm: typed prefix",
             ));
         }
         return Ok(realm_id.clone());
@@ -1443,7 +1443,7 @@ async fn validate_event_envelope(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "event_id must use the cx:event: typed prefix",
+            "event_id must use the ck:event: typed prefix",
         ));
     }
 
@@ -1541,7 +1541,7 @@ async fn validate_event_envelope(
     }
 
     // REDU-7 / CXP-0008 / CXP-0009 (R3 spec-sync 2026-05-27,
-    // contrix-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
+    // cokret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
     // reject any client-supplied value with the spec-canonical
     // `actor_kind_reducer_managed` reason code. The reducer derives the
     // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) from
@@ -2198,7 +2198,7 @@ fn validate_audit_accessed_payload(
         ));
     }
     let target_ref = required_payload_string(payload, "target_ref")?;
-    if !target_ref.starts_with("cx:") {
+    if !target_ref.starts_with("ck:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -2270,11 +2270,11 @@ fn validate_watch_audit_payload_fields(
         )
     })?;
     let target_cell_id = required_payload_string(payload, "target_cell_id")?;
-    if !target_cell_id.starts_with("cx:cell:") {
+    if !target_cell_id.starts_with("ck:cell:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "cx.audit.accessed target_cell_id must use cx:cell:",
+            "cx.audit.accessed target_cell_id must use ck:cell:",
         ));
     }
     Ok(())
@@ -2414,7 +2414,7 @@ fn event_refs_with_role(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "audit_pair refs must use cx:event: typed ids",
+                    "audit_pair refs must use ck:event: typed ids",
                 ));
             }
             refs.push(id.to_owned());
@@ -2562,7 +2562,7 @@ fn validate_event_schema_and_payload(
     Ok(())
 }
 
-/// R3.2 (contrix-spec @ b56cab1) — wire-breaking deny validators applied on
+/// R3.2 (cokret-spec @ b56cab1) — wire-breaking deny validators applied on
 /// the event ingest path.
 ///
 /// - MIU-SOL-1: `cx.member.identity.update` payloads MUST NOT carry the removed handle fields
@@ -2732,11 +2732,11 @@ fn validate_conflict_repair_event_payload(payload: &Value) -> Result<(), EventVa
                 "conflict repair payload requires cell_id",
             )
         })?;
-    if !cell_id.starts_with("cx:cell:") {
+    if !cell_id.starts_with("ck:cell:") {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "conflict repair cell_id must use cx:cell:",
+            "conflict repair cell_id must use ck:cell:",
         ));
     }
     let heads = object
@@ -2843,7 +2843,7 @@ fn validate_space_container_lifecycle_payload(payload: &Value) -> Result<(), Eve
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "space lifecycle payload space_id must use cx:space:",
+            "space lifecycle payload space_id must use ck:space:",
         ));
     }
     if object.get("target_ref").is_some() {
@@ -2886,7 +2886,7 @@ fn event_requirements_schema_id(
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_schema",
-            "event schema_id is not in the contrix-spec schema registry",
+            "event schema_id is not in the cokret-spec schema registry",
         ));
     }
     Ok(schema_id)
@@ -3195,8 +3195,8 @@ async fn member_join_accepts_pending_invite(
     {
         return false;
     }
-    invite.realm_id.replacen("cx:space:", "cx:realm:", 1)
-        == space_id.replacen("cx:space:", "cx:realm:", 1)
+    invite.realm_id.replacen("ck:space:", "ck:realm:", 1)
+        == space_id.replacen("ck:space:", "ck:realm:", 1)
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used
@@ -3413,7 +3413,7 @@ fn event_ref_list(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "event references must use the cx:event: typed prefix",
+                    "event references must use the ck:event: typed prefix",
                 ));
             }
             Ok(event_id.to_owned())
@@ -3471,7 +3471,7 @@ fn event_semantic_refs(
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "authorized_by refs must use the cx:event: typed prefix",
+                    "authorized_by refs must use the ck:event: typed prefix",
                 ));
             }
             authorized_refs.push(id);
@@ -3481,7 +3481,7 @@ fn event_semantic_refs(
 }
 
 fn event_canonical_source(envelope: &Value) -> Value {
-    // Per contrix-spec conformance-vectors.md §1.6: both the event digest and
+    // Per cokret-spec conformance-vectors.md §1.6: both the event digest and
     // every proof's `event_digest` MUST be derived from canonical event bytes
     // with `proofs` and `unsigned` removed. Stripping derived `canonical_*`
     // slots as well keeps fixtures that round-trip them in the envelope from
@@ -3511,7 +3511,7 @@ fn event_digest(bytes: &[u8]) -> String {
 }
 
 fn is_valid_event_id(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("cx:event:") else {
+    let Some(rest) = value.strip_prefix("ck:event:") else {
         return false;
     };
     !rest.is_empty()
@@ -3584,17 +3584,17 @@ fn projection_operation_from_event(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     {
-        if target_ref.starts_with("cx:flow:") {
+        if target_ref.starts_with("ck:flow:") {
             payload_object
                 .entry("flow_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
-        if target_ref.starts_with("cx:space:") {
+        if target_ref.starts_with("ck:space:") {
             payload_object
                 .entry("space_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
-        if target_ref.starts_with("cx:morph:") {
+        if target_ref.starts_with("ck:morph:") {
             payload_object
                 .entry("morph_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref));
@@ -3689,19 +3689,19 @@ fn normalize_relation_create_payload(
 
     if !payload_object.contains_key("relation_id")
         && !payload_object.contains_key("id")
-        && let Some(suffix) = parsed.event_id.strip_prefix("cx:event:")
+        && let Some(suffix) = parsed.event_id.strip_prefix("ck:event:")
     {
         payload_object.insert(
             "relation_id".to_owned(),
-            Value::String(format!("cx:relation:{suffix}")),
+            Value::String(format!("ck:relation:{suffix}")),
         );
     }
 }
 
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
-    // (`cx:operation:<uuid v7>` per `contrix-rust-sdk/identifiers`).
-    // Older yougen builds shipped the event_id (cx:event:) verbatim in
+    // (`ck:operation:<uuid v7>` per `cokret-rust-sdk/identifiers`).
+    // Older yougen builds shipped the event_id (ck:event:) verbatim in
     // this slot; soland MUST NOT silently drop projection for such
     // events ── fall through to the event_id-derived form so the
     // projection chain (`project_accepted_operations` →
@@ -3717,8 +3717,8 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     {
         return Some(operation_id);
     }
-    let suffix = event_id.strip_prefix("cx:event:")?;
-    OperationId::new(format!("cx:operation:{suffix}")).ok()
+    let suffix = event_id.strip_prefix("ck:event:")?;
+    OperationId::new(format!("ck:operation:{suffix}")).ok()
 }
 
 pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
@@ -3873,8 +3873,8 @@ fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String
 }
 
 fn normalize_persisted_realm_id(id: &str) -> String {
-    id.strip_prefix("cx:space:")
-        .map(|suffix| format!("cx:realm:{suffix}"))
+    id.strip_prefix("ck:space:")
+        .map(|suffix| format!("ck:realm:{suffix}"))
         .unwrap_or_else(|| id.to_owned())
 }
 
@@ -3908,7 +3908,7 @@ fn circle_event_visible_to_session(
     session: &SessionRecord,
 ) -> bool {
     let Some(scope_circle_id) = effective_scope_for_envelope(&record.envelope)
-        .filter(|scope| scope.starts_with("cx:circle:"))
+        .filter(|scope| scope.starts_with("ck:circle:"))
     else {
         return true;
     };
@@ -3949,7 +3949,7 @@ pub async fn effective_read_receipt_policy_for_space(
     // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = contrix_sdk::CellRef::new(format!(
-            "cx:cell:cx.component.realm.read_receipt_policy.v1:{space_id}"
+            "ck:cell:cx.component.realm.read_receipt_policy.v1:{space_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
@@ -3977,7 +3977,7 @@ pub async fn effective_read_receipt_policy_for_space(
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
-        // canonical Contrix event kind string.
+        // canonical Cokret event kind string.
         if record.kind != "cx.realm.read_receipt_policy" {
             continue;
         }
@@ -4158,7 +4158,7 @@ pub fn cross_signing_reset_replay_check(
         return Err((
             ErrorCode::SchemaViolation,
             "cross_signing.reset.trust_domain must match \
-             cx:trust_domain:<scope> per spec"
+             ck:trust_domain:<scope> per spec"
                 .to_owned(),
         ));
     }
@@ -4184,7 +4184,7 @@ pub fn cross_signing_reset_replay_check(
     if contrix_sdk::EventId::new(payload_reset_event_id).is_err() {
         return Err((
             ErrorCode::SchemaViolation,
-            "cross_signing.reset.reset_event_id must be a cx:event:<uuidv7>".to_owned(),
+            "cross_signing.reset.reset_event_id must be a ck:event:<uuidv7>".to_owned(),
         ));
     }
     if payload_reset_event_id != event_id {
@@ -4327,13 +4327,13 @@ mod admission_tests {
     #[test]
     fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
         let payload = json!({
-            "trust_domain": "cx:trust_domain:other.example",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ck:trust_domain:other.example",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
         });
         let err = cross_signing_reset_replay_check(
             &payload,
-            "cx:event:01904100-0000-7000-8000-000000000001",
-            "cx:trust_domain:soland.local",
+            "ck:event:01904100-0000-7000-8000-000000000001",
+            "ck:trust_domain:soland.local",
         )
         .unwrap_err();
         assert_eq!(err.0, ErrorCode::CrossDomainReplayRejected);
@@ -4342,13 +4342,13 @@ mod admission_tests {
     #[test]
     fn cross_signing_reset_replay_rejects_wrong_event_id() {
         let payload = json!({
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000002",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000002",
         });
         let err = cross_signing_reset_replay_check(
             &payload,
-            "cx:event:01904100-0000-7000-8000-000000000001",
-            "cx:trust_domain:soland.local",
+            "ck:event:01904100-0000-7000-8000-000000000001",
+            "ck:trust_domain:soland.local",
         )
         .unwrap_err();
         assert_eq!(err.0, ErrorCode::ResetEventIdMismatch);
@@ -4357,13 +4357,13 @@ mod admission_tests {
     #[test]
     fn cross_signing_reset_replay_passes_when_matched() {
         let payload = json!({
-            "trust_domain": "cx:trust_domain:soland.local",
-            "reset_event_id": "cx:event:01904100-0000-7000-8000-000000000001",
+            "trust_domain": "ck:trust_domain:soland.local",
+            "reset_event_id": "ck:event:01904100-0000-7000-8000-000000000001",
         });
         cross_signing_reset_replay_check(
             &payload,
-            "cx:event:01904100-0000-7000-8000-000000000001",
-            "cx:trust_domain:soland.local",
+            "ck:event:01904100-0000-7000-8000-000000000001",
+            "ck:trust_domain:soland.local",
         )
         .unwrap();
     }
@@ -4412,13 +4412,13 @@ mod admission_tests {
     fn federation_binding_rejects_duplicate_frontier_entries() {
         let req = EventsSubmitFederationRequest {
             service_binding_ref: contrix_sdk::FederationServiceBindingRef {
-                realm_id: RealmId::new("cx:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 space_policy_hash: contrix_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                     .unwrap(),
                 membership_frontier: vec![
-                    contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001")
+                    contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
                         .unwrap(),
-                    contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001")
+                    contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")
                         .unwrap(),
                 ],
                 delivery_binding_frontier: Vec::new(),
@@ -4485,7 +4485,7 @@ mod proof_strictness_tests {
 
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -4512,7 +4512,7 @@ mod proof_strictness_tests {
         SessionRecord {
             token_hash: "hash".to_owned(),
             actor: "did:web:alice.example".to_owned(),
-            device_id: "cx:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            device_id: "ck:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
             audience: "did:web:soland.local".to_owned(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
@@ -4534,7 +4534,7 @@ mod proof_strictness_tests {
         let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
         let verification_method = format!("{did}#{did_key_fragment}");
         let realm_id =
-            contrix_sdk::RealmId::new("cx:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+            contrix_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
                 .unwrap();
         let actor_id = contrix_sdk::Did::new(did.clone()).unwrap();
         let subject_id = actor_id.clone();
@@ -4598,7 +4598,7 @@ mod proof_strictness_tests {
     fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
         let state = make_state(false);
         let payload = json!({
-            "realm_id": "cx:realm:01904100-0000-7000-8000-a11ce0000001",
+            "realm_id": "ck:realm:01904100-0000-7000-8000-a11ce0000001",
             "actor_id": "did:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
             "segment": "member_identity",
             "identity_payload": {
@@ -4651,7 +4651,7 @@ mod proof_strictness_tests {
     #[tokio::test]
     async fn policy_components_media_plaintext_reads_realm_meta() {
         let state = make_state(true);
-        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
         let now = chrono::Utc::now();
         state
             .persistence
@@ -4687,13 +4687,13 @@ mod proof_strictness_tests {
     #[test]
     fn policy_components_mls_governance_reads_projection_cell() {
         let state = make_state(true);
-        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
         let policy_root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         {
             let mut projection = state.projection.lock().unwrap();
             projection.cells.insert(
                 contrix_sdk::CellRef::new(
-                    "cx:cell:cx.component.mls.epoch.v1:cx:mls_group:unit-test".to_owned(),
+                    "ck:cell:cx.component.mls.epoch.v1:ck:mls_group:unit-test".to_owned(),
                 )
                 .unwrap(),
                 contrix_sdk::lattice::CellState::Value(json!({
@@ -4805,7 +4805,7 @@ mod proof_strictness_tests {
         let state = make_state(true);
         let envelope = json!({
             "payload": {
-                "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001"
+                "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001"
             }
         });
         let object = envelope.as_object().unwrap();
@@ -4828,7 +4828,7 @@ mod proof_strictness_tests {
                 "actor_id": "did:web:bob.example",
                 "membership": "join",
                 "reason": "invite_accept",
-                "invite_ref": "cx:invite:01904100-0000-7000-8000-000000000001",
+                "invite_ref": "ck:invite:01904100-0000-7000-8000-000000000001",
                 "delivery_status": "unroutable"
             }
         });
@@ -4845,7 +4845,7 @@ mod proof_strictness_tests {
     #[test]
     fn event_payload_validator_enforces_flow_update_object_patch_schema() {
         let state = make_state(true);
-        let flow_id = "cx:flow:01904100-0000-7000-8000-f10dc0000001";
+        let flow_id = "ck:flow:01904100-0000-7000-8000-f10dc0000001";
         let valid = json!({
             "payload": {
                 "target_ref": flow_id,
@@ -4934,7 +4934,7 @@ mod proof_strictness_tests {
                 .validate_payload(
                     event_kind,
                     &json!({
-                            "target_ref": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                            "target_ref": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                             "patch": patch
                     }),
                 )
@@ -4946,7 +4946,7 @@ mod proof_strictness_tests {
                     .validate_payload(
                         event_kind,
                         &json!({
-                            "target_ref": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                            "target_ref": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                             "patch": {
                                 "title": { "$op": "replace", "value": "Roadmap" }
                             }
@@ -4961,7 +4961,7 @@ mod proof_strictness_tests {
             .validate_payload(
                 "cx.flow.tracks.update",
                 &json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                    "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                     "tracks": {
                         "discussion": {
                             "enabled": true,
@@ -4979,7 +4979,7 @@ mod proof_strictness_tests {
                     "cx.flow.tracks.update",
                     &json!({
                         "type": "legacy_track_update",
-                        "flow_id": "cx:flow:01904100-0000-7000-8000-f10dc0000001",
+                        "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
                     }),
                 )
                 .is_err(),
@@ -4990,7 +4990,7 @@ mod proof_strictness_tests {
     #[test]
     fn realm_create_rejects_world_readable_encrypted_history() {
         let state = make_state(true);
-        let realm_id = "cx:realm:01904100-0000-7000-8000-a11ce0000001";
+        let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000001";
         let envelope = json!({
             "payload": {
                 "object": {
@@ -4998,7 +4998,7 @@ mod proof_strictness_tests {
                     "schema": "cx.schema.realm.v1",
                     "title": "encrypted public history",
                     "created_by": "did:web:alice.example",
-                    "trust_domain": "cx:trust_domain:soland.local",
+                    "trust_domain": "ck:trust_domain:soland.local",
                     "schema_refs": ["cx.schema.realm.v1"],
                     "default_discoverability": "listed",
                     "default_join_rule": "invite",
@@ -5081,7 +5081,7 @@ mod proof_strictness_tests {
     fn production_rejects_full_proof_without_valid_jws_signature() {
         let state = make_state(false);
         let session = session();
-        let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"cx:event:test"}"#;
+        let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
         let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
         let mut object = serde_json::Map::new();
         object.insert(

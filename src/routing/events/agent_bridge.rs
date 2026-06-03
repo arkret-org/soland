@@ -246,7 +246,7 @@ enum AgentInvocationOutcome {
 ///
 /// ```jsonc
 /// {
-///   "session_id": "cx:session:...",
+///   "session_id": "ck:session:...",
 ///   "counterparty_agent": "did:web:...",
 ///   "params": <verbatim caller params>
 /// }
@@ -484,7 +484,7 @@ mod tests {
 
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -499,16 +499,16 @@ mod tests {
         params: Value,
     ) -> Operation {
         let mut op = Operation::create(
-            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
+            OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
-            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({
                 "session_id": session_id,
                 "counterparty_agent": agent_principal_id,
                 "protocol": "http_custom",
                 "params": params,
-                "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
+                "capability_grant": "ck:grant:01904100-0000-7000-8000-000000000099",
             }),
         );
         op.object_id = Some(session_id.to_owned());
@@ -544,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn agent_echo_bridge_emits_status_and_result_for_session_start() {
         let state = test_state();
-        let session = "cx:session:01904100-0000-7000-8000-cccccccccccc";
+        let session = "ck:session:01904100-0000-7000-8000-cccccccccccc";
         let agent_id = "did:web:agent.example";
         register_agent(&state, agent_id);
         let echo_params = json!({"op": "summarize", "doc": "hello"});
@@ -625,7 +625,7 @@ mod tests {
     #[tokio::test]
     async fn agent_echo_bridge_fails_closed_for_unknown_agent() {
         let state = test_state();
-        let session = "cx:session:01904100-0000-7000-8000-deadbeefdead";
+        let session = "ck:session:01904100-0000-7000-8000-deadbeefdead";
         let agent_id = "did:web:unregistered-agent.example";
         // Intentionally do NOT call register_agent — this is the
         // dispatch-failure path we want to exercise.
@@ -684,7 +684,7 @@ mod tests {
         // deployment seed. AppState lets us mutate this in tests
         // because the field is owned.
         state.config.agent_audit_binding_signing_seed = Some(deployment_seed);
-        let session = "cx:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
+        let session = "ck:session:01904100-0000-7000-8000-b4b4b4b4b4b4";
         let agent_id = "did:web:agent-deployment.example";
         register_agent(&state, agent_id);
         let echo = json!({"op": "ping"});
@@ -746,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn agent_outbound_bridge_emits_upstream_unreachable_on_connection_failure() {
         let state = test_state();
-        let session = "cx:session:01904100-0000-7000-8000-eeeeeeeeeeee";
+        let session = "ck:session:01904100-0000-7000-8000-eeeeeeeeeeee";
         let agent_id = "did:web:agent-with-endpoint.example";
         // 127.0.0.1:1 is reserved + nothing listens → fast ECONNREFUSED.
         let endpoint_url = "http://127.0.0.1:1/agent-runtime";
@@ -813,7 +813,7 @@ mod tests {
     #[tokio::test]
     async fn agent_echo_bridge_renders_null_endpoint_url_when_not_registered() {
         let state = test_state();
-        let session = "cx:session:01904100-0000-7000-8000-ffffffffffff";
+        let session = "ck:session:01904100-0000-7000-8000-ffffffffffff";
         let agent_id = "did:web:agent-no-endpoint.example";
         register_agent_with_endpoint(&state, agent_id, None);
         let op = build_agent_session_start(session, agent_id, json!({}));
@@ -842,9 +842,9 @@ mod tests {
     async fn agent_echo_bridge_ignores_non_session_start_operations() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
+            OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000002".to_owned())
                 .unwrap(),
-            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_ENDPOINT,
             json!({"endpoint_url": "https://agent.example/api"}),
         );
@@ -869,9 +869,9 @@ mod tests {
     async fn agent_echo_bridge_ignores_session_start_without_session_id() {
         let state = test_state();
         let mut op = Operation::create(
-            OperationId::new("cx:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
+            OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
-            RealmId::new("cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
+            RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
             kinds::CX_AGENT_PROTOCOL_SESSION_START,
             json!({"counterparty_agent": "did:web:agent.example"}),
         );

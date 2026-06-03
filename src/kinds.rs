@@ -15,7 +15,7 @@ pub use contrix_sdk::events::kinds::VIEW_CREATE as CX_VIEW_CREATE;
 pub use contrix_sdk::events::kinds::VIEW_UPDATE as CX_VIEW_UPDATE;
 pub use contrix_sdk::events::kinds::VIEW_RECONCILE as CX_VIEW_RECONCILE;
 // Space-container lifecycle (`cx.space.*`). Spec
-// `contrix-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
+// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
 // container, distinct from the `cx.realm.*` security boundary below.
 pub use contrix_sdk::events::kinds::SPACE_CREATE as CX_SPACE_CONTAINER_CREATE;
 pub use contrix_sdk::events::kinds::SPACE_UPDATE as CX_SPACE_CONTAINER_UPDATE;
@@ -43,7 +43,7 @@ pub use contrix_sdk::events::kinds::FLOW_REORDER as CX_FLOW_REORDER;
 // Round 16 — Flow watch subscription event. Writes the
 // `cx.component.flow.watch.v1` cas-register cell keyed by
 // (flow_id, watcher_actor_id). Spec:
-// contrix-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
+// cokret-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
 // flow position events the Event-Envelope path only validates payload
 // shape; cell write happens on the Move/Anchor pipeline. The Flow
 // projection's updated_at is NOT bumped — watch is a per-(flow, actor)
@@ -86,7 +86,7 @@ pub use contrix_sdk::events::kinds::MORPH_UPDATE as CX_MORPH_UPDATE;
 pub use contrix_sdk::events::kinds::MORPH_ARCHIVE as CX_MORPH_ARCHIVE;
 pub use contrix_sdk::events::kinds::MORPH_RESTORE as CX_MORPH_RESTORE;
 // `cx.field.position.move` and `cx.field.position.reorder` were removed in
-// revision 0a5ab85 (see contrix-spec
+// revision 0a5ab85 (see cokret-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
 // was subsumed by track-relative ordering and the per-cell ordered-log
 // lattice. No replacement; reducer/wire MUST hard_reject these kinds. The
@@ -96,7 +96,7 @@ pub use contrix_sdk::events::kinds::CONTAINER_MOVE_ITEM as CX_CONTAINER_MOVE_ITE
 pub use contrix_sdk::events::kinds::CONTAINER_REBALANCE as CX_CONTAINER_REBALANCE;
 pub use contrix_sdk::events::kinds::INVITE_CREATE as CX_INVITE_CREATE;
 pub use contrix_sdk::events::kinds::MEMBER_STATE as CX_MEMBER_STATE;
-// R3.1 spec-sync (2026-05-27, contrix-spec @ 7157ee8) — Realm-scoped
+// R3.1 spec-sync (2026-05-27, cokret-spec @ 7157ee8) — Realm-scoped
 // MemberIdentity append-only replacement event. Cell family
 // `cx.component.member.identity.v1`; lattice `ordered_log`; bottom
 // `expose`. Composite cell subject is
@@ -106,7 +106,7 @@ pub use contrix_sdk::events::kinds::MEMBER_STATE as CX_MEMBER_STATE;
 pub use contrix_sdk::events::kinds::MEMBER_IDENTITY_UPDATE as CX_MEMBER_IDENTITY_UPDATE;
 pub use contrix_sdk::events::kinds::READ_CURSOR_ADVANCE as CX_READ_MARKER;
 // Realm security-boundary lifecycle (`cx.realm.*`). Spec
-// `contrix-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
+// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §1 + §4.
 //
 // `cx.realm.tombstone` is the irreversible terminal-state event that
 // freezes the Realm and triggers the erasure-receipt fanout chain via
@@ -141,7 +141,7 @@ pub const CX_AGENT_PROTOCOL_SESSION_START: &str = "cx.agent.protocol_session.sta
 pub use contrix_sdk::events::kinds::AGENT_PROTOCOL_SESSION_STATUS as CX_AGENT_PROTOCOL_SESSION_STATUS;
 pub use contrix_sdk::events::kinds::AGENT_PROTOCOL_SESSION_RESULT as CX_AGENT_PROTOCOL_SESSION_RESULT;
 
-// R3 spec-sync (2026-05-27, contrix-spec b47ff6ec) — agent lifecycle FSM
+// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
 // event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
 // deactivated) transitions lives in `reducer::apply_agent_lifecycle`
@@ -170,7 +170,7 @@ pub use contrix_sdk::events::kinds::AGENT_ACTION_REJECT as CX_AGENT_ACTION_REJEC
 // (still TODO stubs pending full attestation-chain verification).
 pub use contrix_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CX_REALM_AUDIT_POLICY_DOWNGRADE;
 
-// REDU-8 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — the
+// REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
 // `cx.audit.epoch_destruction_failsafe` event cannot serve as a delayed
 // remediation for a missing same-batch attestation. The spec wording
 // (see _before_todos.md §0.4) is: the failsafe MUST NOT be accepted in
@@ -256,13 +256,13 @@ pub use contrix_sdk::events::kinds::CAPABILITY_DERIVED as CX_CAPABILITY_DERIVED;
 // G3.S2 — `cx.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
 // `cx.component.realm.policy_server.v1` (cas-register per SDK lattice
-// registry). Spec `contrix-spec/spec/v1/zh/authz/policy-server.md` §2.
+// registry). Spec `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
 pub use contrix_sdk::events::kinds::REALM_POLICY_SERVER as CX_REALM_POLICY_SERVER;
 
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
 // Canonical kinds per
-// `contrix-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
+// `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `cx.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
 //     HTTP operation_id layer (`cx.keys.keypackages.upload` / `cx.keys.keypackages.claim`); the
 //     event log stores only the canonical kind. The reducer dispatches publish-vs-claim on the
@@ -499,7 +499,7 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
 /// admit audit-class
 /// writes even after a Realm has reached `cx.realm.tombstone` /
 /// `cx.realm.destroy` terminal state. Spec
-/// `contrix-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
+/// `cokret-spec/spec/v1/zh/models/realm-and-space.md` §2.5.1.
 pub fn is_audit_kind(kind: &str) -> bool {
     kind.starts_with("cx.audit.")
 }
@@ -695,15 +695,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["cx:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             }
         });
@@ -720,15 +720,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 6,
                 "next_epoch": 8,
-                "membership_frontier": ["cx:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             }
         });
@@ -744,15 +744,15 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "cx:realm:0196419b-0000-7000-8000-000000000999"
+                    "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000999"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["cx:event:0196419b-0000-7000-8000-000000000001"],
+                "membership_frontier": ["ck:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             }
         });

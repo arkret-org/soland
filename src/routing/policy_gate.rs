@@ -205,7 +205,7 @@ fn policy_request_for_operation(
     };
 
     Ok(PolicyCheckRequestInput {
-        request_id: format!("cx:policy_request:{}", ids::generate_event_id()),
+        request_id: format!("ck:policy_request:{}", ids::generate_event_id()),
         realm_id,
         actor,
         action: action.to_owned(),

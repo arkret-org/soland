@@ -11,13 +11,13 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "cx:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_B: &str = "cx:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
-const REALM_C: &str = "cx:realm:01904100-0000-7000-8000-cccccccccccc";
+const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
 
 fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
     Operation::create(
-        contrix_sdk::OperationId::new(format!("cx:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        contrix_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         contrix_sdk::RealmId::new(space_id).unwrap(),
         kind,
         payload,
@@ -165,7 +165,7 @@ fn realm_link_cell_value_persisted() {
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
     let cell_id = contrix_sdk::CellRef::new(format!(
-        "cx:cell:cx.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
+        "ck:cell:cx.component.realm.link.v1:{REALM_A}|{REALM_B}|join_gate_from"
     ))
     .unwrap();
     let value = state.cell_value(&cell_id).expect("cell must be projected");

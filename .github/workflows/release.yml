@@ -49,11 +49,11 @@ jobs:
         with:
           path: soland
 
-      - name: Checkout Contrix Rust SDK
+      - name: Checkout Cokret Rust SDK
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/contrix-rust-sdk
-          path: contrix-rust-sdk
+          repository: ${{ github.repository_owner }}/cokret-rust-sdk
+          path: cokret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust

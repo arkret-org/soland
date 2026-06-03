@@ -34,7 +34,7 @@ use crate::{JsonResult, app_error, json_ok};
 ///
 /// Mirrors sodmin's `RealmDeliveryBindingPolicy` DTO in
 /// `sodmin/src/types/api.rs`. `realm_id` is the security boundary id
-/// (today still keyed off the `cx:space:` typed prefix — Realm/Space
+/// (today still keyed off the `ck:space:` typed prefix — Realm/Space
 /// reversal renames the wire event/cell families but the realm
 /// identifier itself reuses the existing typed prefix per spec
 /// 59ac1d4). `policy_frontier` is reducer-written and read-only here.
@@ -127,7 +127,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     if validate_space_id(&realm_id).is_err() {
         return Err(app_error!(
             InvalidParam,
-            "invalid realm_id `{realm_id}`: must be a typed cx:space: id"
+            "invalid realm_id `{realm_id}`: must be a typed ck:space: id"
         )
         .with_status(StatusCode::BAD_REQUEST));
     }

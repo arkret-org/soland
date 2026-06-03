@@ -10,12 +10,12 @@
 //! state root.
 //!
 //! The Move/Anchor builders mirror those in
-//! `contrix-rust-sdk/crates/state-res/src/anchor.rs#tests` and
+//! `cokret-rust-sdk/crates/state-res/src/anchor.rs#tests` and
 //! `crates/testing/src/lib.rs#build_membership_move`. They're inlined
 //! here because those helpers are private to the SDK test modules.
 //!
 //! Cells: the test transitions
-//! `cx:cell:cx.component.member.state.v1:did.web.alice.example` from
+//! `ck:cell:cx.component.member.state.v1:did.web.alice.example` from
 //! `invite` to `join`. That cell family is pre-registered in
 //! `MemoryCellRegistry::default()` as an FSM with `invite -> join`
 //! transition, so the Move passes verify and the post-state is
@@ -92,7 +92,7 @@ fn test_config() -> AppConfig {
 
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -101,7 +101,7 @@ fn test_config() -> AppConfig {
 }
 
 fn realm_id() -> SpaceId {
-    SpaceId::new("cx:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
+    SpaceId::new("ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
 }
 
 fn space_id() -> SpaceId {
@@ -109,7 +109,7 @@ fn space_id() -> SpaceId {
 }
 
 fn member_cell() -> CellRef {
-    CellRef::new("cx:cell:cx.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
+    CellRef::new("ck:cell:cx.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
 }
 
 fn build_invited_to_join_move() -> Move {
@@ -121,7 +121,7 @@ fn build_invited_to_join_move() -> Move {
             "cell": member_cell().as_str(),
             "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
-        "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
+        "anchor_ref": format!("ck:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
         "hlc": "0189c4d2af00-0000-aabbccdd"
     });
@@ -168,7 +168,7 @@ fn build_anchor(
         jws: "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz".to_owned(),
     };
     let mut a = Anchor {
-        id: AnchorId::new(format!("cx:anchor:sha256:{}", "00".repeat(32))).unwrap(),
+        id: AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32))).unwrap(),
         realm_id: realm_id(),
         predecessor_refs,
         frontier,
@@ -195,7 +195,7 @@ async fn dev_token(state: AppState) -> String {
             "did": "did:web:admin.example",
             "handle": "@admin",
             "display_name": "Admin",
-            "device_id": "cx:device:01904100-0000-7000-8000-ad11d0000008"
+            "device_id": "ck:device:01904100-0000-7000-8000-ad11d0000008"
         }))
         .send(&app)
         .await
@@ -205,7 +205,7 @@ async fn dev_token(state: AppState) -> String {
     let login: Value = TestClient::post("http://server/api/v1/auth/dev-login")
         .json(&json!({
             "actor": "did:web:admin.example",
-            "device_id": "cx:device:01904100-0000-7000-8000-ad11d0000008",
+            "device_id": "ck:device:01904100-0000-7000-8000-ad11d0000008",
             "display_name": "Admin"
         }))
         .send(&app)
@@ -325,7 +325,7 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
 
-    let bad_pred = AnchorId::new(format!("cx:anchor:sha256:{}", "ee".repeat(32))).unwrap();
+    let bad_pred = AnchorId::new(format!("ck:anchor:sha256:{}", "ee".repeat(32))).unwrap();
     let anchor = build_anchor(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
 
     let mut resp = TestClient::post("http://server/api/v1/anchors")
@@ -452,7 +452,7 @@ fn cursor_helper_compiles() {
 /// with `unknown cell family` if soland hadn't replaced the SDK default
 /// with `build_sdk_cell_registry()`.
 fn build_consent_grant_add_move() -> Move {
-    let consent_cell = "cx:cell:cx.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
+    let consent_cell = "ck:cell:cx.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
     let body = json!({
         "issuer": "did:web:admin.example",
         "space_id": space_id().as_str(),
@@ -461,7 +461,7 @@ fn build_consent_grant_add_move() -> Move {
             "cell": consent_cell,
             "op": { "kind": "add", "tag": "consent_granted" }
         }],
-        "anchor_ref": format!("cx:anchor:sha256:{}", "bb".repeat(32)),
+        "anchor_ref": format!("ck:anchor:sha256:{}", "bb".repeat(32)),
         "refs": [],
         "hlc": "0189c4d2af00-0000-aabbccee"
     });
@@ -563,7 +563,7 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
         .as_str()
         .expect("anchor_id should be present when published=true");
     assert!(
-        anchor_id.starts_with("cx:anchor:sha256:"),
+        anchor_id.starts_with("ck:anchor:sha256:"),
         "anchor_id should be a content-addressed sha256 ref, got {anchor_id}"
     );
     let accepted = sign_resp["accepted_move_ids"]
@@ -592,11 +592,11 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
 /// registration. Other tests in this file use a different realm id
 /// (Move/Anchor tests don't go through space_id_accessible).
 fn demo_space_id() -> &'static str {
-    "cx:realm:0196419b-0000-7000-8000-000000000000"
+    "ck:realm:0196419b-0000-7000-8000-000000000000"
 }
 
 fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -> Value {
-    let suffix = event_id.trim_start_matches("cx:event:");
+    let suffix = event_id.trim_start_matches("ck:event:");
     let mut event = json!({
         "event_id": event_id,
         "kind": "cx.message.create",
@@ -609,7 +609,7 @@ fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -
         "prev_refs": [],
         "refs": [],
         "unsigned": {
-            "local_operation_idempotency_alias": format!("cx:operation:{suffix}"),
+            "local_operation_idempotency_alias": format!("ck:operation:{suffix}"),
         },
         "proofs": [{
             "kind": "detached_jws",
@@ -675,7 +675,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
         let app_writer = service(writer_state);
         // Wait for the subscribe request to land + register its receiver.
         sleep(StdDuration::from_millis(150)).await;
-        let event_id = "cx:event:01984101-0000-7000-8000-000000000abc";
+        let event_id = "ck:event:01984101-0000-7000-8000-000000000abc";
         let _: Value = TestClient::post("http://server/api/v1/events")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&event_envelope(
@@ -759,7 +759,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
             "cell": member_cell().as_str(),
             "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
-        "anchor_ref": format!("cx:anchor:sha256:{}", "aa".repeat(32)),
+        "anchor_ref": format!("ck:anchor:sha256:{}", "aa".repeat(32)),
         "refs": [],
         "hlc": hlc_str,
     });
@@ -1030,7 +1030,7 @@ async fn production_verifier_rejects_unknown_verification_method() {
 /// Subscribe to the demo space → trigger an Anchor sign for that space →
 /// verify the streaming subscriber sees a `kind=frontier` frame whose
 /// `state_root` matches the anchor's post_state_root and `anchor_id`
-/// starts with `cx:anchor:sha256:`.
+/// starts with `ck:anchor:sha256:`.
 ///
 /// **Note**: this test uses a different space (the Move/Anchor pipeline
 /// space, not the demo space) for the anchor, so we subscribe to that
@@ -1106,7 +1106,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
                         anchor_id,
                     } => {
                         assert!(
-                            anchor_id.starts_with("cx:anchor:sha256:"),
+                            anchor_id.starts_with("ck:anchor:sha256:"),
                             "frontier anchor_id should be content-addressed (got `{anchor_id}`)"
                         );
                         assert!(
@@ -1253,7 +1253,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "kind": "open_set",
-            "open_set_members": ["did:cx:alice", "did:cx:bob"],
+            "open_set_members": ["did:ck:alice", "did:ck:bob"],
         }))
         .send(&app)
         .await
@@ -1273,7 +1273,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
         .as_str()
         .expect("anchor_id should be set when this node is the round leader");
     assert!(
-        anchor_id.starts_with("cx:anchor:sha256:"),
+        anchor_id.starts_with("ck:anchor:sha256:"),
         "anchor_id should be content-addressed sha256, got {anchor_id}"
     );
 }
@@ -1296,7 +1296,7 @@ async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
         .json(&json!({
             "kind": "open_set",
             // service DID `did:web:soland.local` IS the admin signer.
-            "open_set_members": ["did:web:soland.local", "did:cx:other"],
+            "open_set_members": ["did:web:soland.local", "did:ck:other"],
         }))
         .send(&app)
         .await;
@@ -1399,7 +1399,7 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
     // Cell family is registered (member.state.v1 lives in the SDK default
     // registry) but no Move ever wrote to this subject — so the cell is
     // "absent" and the endpoint returns 404 with the canonical envelope.
-    let unknown = "cx:cell:cx.component.member.state.v1:did.web.nobody.example";
+    let unknown = "ck:cell:cx.component.member.state.v1:did.web.nobody.example";
     let mut resp = TestClient::get(format!("http://server/admin/cells/{unknown}"))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1689,8 +1689,8 @@ async fn account_principal_space_is_deterministic() {
     assert_eq!(resp_a["did"], "did:web:alice.example");
     let space_id_str = resp_a["space_id"].as_str().expect("space_id present");
     assert!(
-        space_id_str.starts_with("cx:space:"),
-        "space_id has cx:space: prefix (got {space_id_str})"
+        space_id_str.starts_with("ck:space:"),
+        "space_id has ck:space: prefix (got {space_id_str})"
     );
 
     let bob_url = "http://server/api/v1/account/did:web:bob.example/principal-space";

@@ -12,7 +12,7 @@ DROP TABLE IF EXISTS recovery_session;
 
 CREATE TABLE recovery_session (
     recovery_session_id   TEXT PRIMARY KEY
-        CHECK (recovery_session_id LIKE 'cx:recovery_session:%'),
+        CHECK (recovery_session_id LIKE 'ck:recovery_session:%'),
     principal_id          TEXT NOT NULL,
     requesting_device_id  TEXT NOT NULL,
     trust_domain          TEXT NOT NULL,

@@ -43,12 +43,12 @@ pub(super) fn router() -> Router {
 /// cell subject doesn't carry a recognisable space id. The MemoryCellRegistry
 /// resolves families uniformly across spaces; the scope only affects the
 /// per-Space lookup hook (currently inert for the in-memory backend).
-const SENTINEL_SPACE_SCOPE: &str = "cx:space:00000000-0000-7000-8000-000000000000";
+const SENTINEL_SPACE_SCOPE: &str = "ck:space:00000000-0000-7000-8000-000000000000";
 
 /// Response body for `GET /admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellStateResponse {
-    /// Canonical wire form of the cell id (`cx:cell:<family>:<subject>`).
+    /// Canonical wire form of the cell id (`ck:cell:<family>:<subject>`).
     pub cell_id: String,
     /// `"value"` when the cell holds a resolved JSON value; `"bottom"` when
     /// the join produced a `Bottom(_)` diagnostic; `"absent"` when the
@@ -107,7 +107,7 @@ fn state_response_from(
 }
 
 /// Synthesise a SpaceId for cell-registry resolution. If the cell's subject
-/// looks like a `cx:space:...` id (space-scoped families: `cx.component.space.*`)
+/// looks like a `ck:space:...` id (space-scoped families: `cx.component.space.*`)
 /// we use it; otherwise we fall back to a sentinel scope. The MemoryCellRegistry
 /// is space-agnostic today so this only affects future per-Space scoping.
 fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<SpaceId, AppError> {
@@ -122,7 +122,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
     }
     // Best-effort: subject of `cx.component.space.*` cells is the space id.
     if let Ok(parsed) = contrix_sdk::CellId::parse(cell_id.as_str())
-        && parsed.subject().starts_with("cx:space:")
+        && parsed.subject().starts_with("ck:space:")
     {
         if let Ok(space) = SpaceId::new(parsed.subject().to_owned()) {
             return Ok(space);
@@ -139,7 +139,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
 /// `GET /admin/cells/{cell_id}` — fetch one cell's state.
 ///
 /// `cell_id` is the URL-encoded canonical wire form
-/// (`cx:cell:<family>:<subject>`). Salvo decodes path segments before
+/// (`ck:cell:<family>:<subject>`). Salvo decodes path segments before
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
@@ -172,12 +172,12 @@ async fn admin_get_cell(
     })?;
 
     // Reject syntactically valid CellRef strings that fail the stricter
-    // `cx:cell:<family>:<subject>` parse. Without this guard a malformed
+    // `ck:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
     let _ = contrix_sdk::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
-            format!("cell_id is not a parseable cx:cell:<family>:<subject>: {e}"),
+            format!("cell_id is not a parseable ck:cell:<family>:<subject>: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn state_response_value_serializes_with_value_field() {
         let cell =
-            CellRef::new("cx:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ck:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let st = CellState::Value(json!("join"));
         let resp = state_response_from(&cell, Some(&st), "fsm", "reject");
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn state_response_absent_state_omits_value_and_bottom() {
         let cell =
-            CellRef::new("cx:cell:cx.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
+            CellRef::new("ck:cell:cx.component.consent.grant.v1:cnt.01abc".to_owned()).unwrap();
         let resp = state_response_from(&cell, None, "or_set", "expose");
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["state"], "absent");
@@ -389,21 +389,21 @@ mod tests {
     #[test]
     fn resolve_space_extracts_space_subject_when_no_explicit() {
         let cell = CellRef::new(
-            "cx:cell:cx.component.space.create.v1:cx:space:0196419b-0000-7000-8000-00000000014a"
+            "ck:cell:cx.component.space.create.v1:ck:space:0196419b-0000-7000-8000-00000000014a"
                 .to_owned(),
         )
         .unwrap();
         let space = resolve_space_for_cell(None, &cell).unwrap();
         assert_eq!(
             space.as_str(),
-            "cx:space:0196419b-0000-7000-8000-00000000014a"
+            "ck:space:0196419b-0000-7000-8000-00000000014a"
         );
     }
 
     #[test]
     fn resolve_space_uses_sentinel_for_actor_keyed_cell_when_no_explicit() {
         let cell =
-            CellRef::new("cx:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
+            CellRef::new("ck:cell:cx.component.member.state.v1:did.web.alice.example".to_owned())
                 .unwrap();
         let space = resolve_space_for_cell(None, &cell).unwrap();
         assert_eq!(space.as_str(), SENTINEL_SPACE_SCOPE);

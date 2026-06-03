@@ -248,7 +248,7 @@ fn string_array_contains(value: Option<&Value>, needle: &str) -> bool {
 }
 
 fn valid_trust_domain(value: &str) -> bool {
-    let Some(scope) = value.strip_prefix("cx:trust_domain:") else {
+    let Some(scope) = value.strip_prefix("ck:trust_domain:") else {
         return false;
     };
     if scope.is_empty() || scope.len() > 128 {
@@ -322,7 +322,7 @@ mod tests {
 
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -448,7 +448,7 @@ mod tests {
         let describe = json!({
             "service": "starid",
             "service_did": "did:web:starid.example",
-            "trust_domain": "cx:trust_domain:example.net",
+            "trust_domain": "ck:trust_domain:example.net",
             "development_mode": false,
             "supported_methods": ["did:webvh", "did:web"],
             "supported_method_versions": ["did:webvh:1.0"]
@@ -456,7 +456,7 @@ mod tests {
         validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("cx:trust_domain:example.net"),
+            Some("ck:trust_domain:example.net"),
         )
         .expect("valid starid provider describe should pass");
     }
@@ -466,7 +466,7 @@ mod tests {
         let mut describe = json!({
             "service": "starid",
             "service_did": "did:web:starid.example",
-            "trust_domain": "cx:trust_domain:example.net",
+            "trust_domain": "ck:trust_domain:example.net",
             "development_mode": false,
             "supported_methods": ["did:webvh", "did:web"],
             "supported_method_versions": ["did:webvh:1.0"]
@@ -474,7 +474,7 @@ mod tests {
         let err = validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("cx:trust_domain:other.example"),
+            Some("ck:trust_domain:other.example"),
         )
         .expect_err("trust-domain mismatch must fail closed");
         assert!(err.contains("trust_domain mismatch"), "{err}");
@@ -483,7 +483,7 @@ mod tests {
         let err = validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
-            Some("cx:trust_domain:example.net"),
+            Some("ck:trust_domain:example.net"),
         )
         .expect_err("development-mode provider must fail closed");
         assert!(err.contains("development_mode"), "{err}");

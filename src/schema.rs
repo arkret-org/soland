@@ -356,9 +356,9 @@ diesel::table! {
 }
 
 // Flow / Morph projection state for cx.flow.* / cx.morph.* lifecycle
-// events. Spec: contrix-spec/v1/zh/models/common-fields.md §5.1
+// events. Spec: cokret-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
-// from contrix-sdk: active / archived / deleted / redacted (no
+// from cokret-sdk: active / archived / deleted / redacted (no
 // "tombstoned" — Flow / Morph have no dedicated tombstone event).
 diesel::table! {
     projection_flows (flow_id) {

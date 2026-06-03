@@ -1,6 +1,6 @@
 //! Describe handlers (the `*_describe` family).
 //!
-//! These are the introspection / capability-probe surfaces every Contrix
+//! These are the introspection / capability-probe surfaces every Cokret
 //! client uses to discover what the server actually implements. None of them
 //! mutate state; most are static JSON literals + a small amount of state
 //! injection (config, registry version metadata).
@@ -228,7 +228,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
         serde_json::to_value(state.config.hardening_status()).expect("hardening status serializes");
 
     // T6.1 — claim-level partition of the describe response.
-    // See contrix-spec/spec/v1/zh/sync/service-surface.md §3.0 and
+    // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
     // `cx.schema.service_describe.v1`. The legacy `supported_operations`
     // already populated above is wire-callable only; the helper below
     // separates feature implementation from profile claims and dev-mode
@@ -406,7 +406,7 @@ pub(crate) fn apply_claim_level_partition(
 #[tracing::instrument(skip_all, fields(op = "cx.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
     json_ok(AuthBridgeDescribeResponse {
-        contract: "contrix.rest.principal_bridge.v1".to_owned(),
+        contract: "cokret.rest.principal_bridge.v1".to_owned(),
         version: "2026-05-12-oauth-introspection".to_owned(),
         api_base_path: "/api/v1".to_owned(),
         auth: AuthBridgeAuthDescriptor {
@@ -420,7 +420,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         push: AuthBridgePushDescriptor {
             register_device_path: "/api/v1/push/register-device".to_owned(),
             unregister_device_path: "/api/v1/push/unregister-device".to_owned(),
-            session_grant_header: "X-Contrix-Session-Grant".to_owned(),
+            session_grant_header: "X-Cokret-Session-Grant".to_owned(),
             principal_id_body_field: "principal_id".to_owned(),
             register_device_mode: "bearer_session_or_oauth_bearer_introspection".to_owned(),
         },
@@ -429,7 +429,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                 "legacy": true,
                 "grant_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6Y29hdXRoLmV4YW1wbGUjMSJ9.eyJpc3MiOiJkaWQ6d2ViOmNvYXV0aC5leGFtcGxlIiwic3ViIjoiZGlkOndlYjphbGljZS5leGFtcGxlIiwiYXVkIjoiZGlkOndlYjpzb2xhbmQubG9jYWwifQ.example",
                 "principal_id": "did:web:alice.example",
-                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
+                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
                 "introspection_proof": {
                     "challenge": "challenge-01js0000000000000000000000",
                     "proof_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.eyJjaGFsbGVuZ2UiOiJjaGFsbGVuZ2UtMDFqczAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ.example"
@@ -437,15 +437,15 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             }),
             register_device_request: json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
+                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
                 "push_gateway": "https://floria.example/api/v1/push/notify",
                 "push_key": "webpush:https://fcm.googleapis.com/wp/01js0000000000000000000000",
                 "platform": "web"
             }),
             unregister_device_request: json!({
                 "principal_id": "did:web:alice.example",
-                "device_id": "cx:device:01904100-0000-7000-8000-000000000001",
-                "registration_id": "cx:device:01904100-0000-7000-8000-000000000001#webpush"
+                "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
+                "registration_id": "ck:device:01904100-0000-7000-8000-000000000001#webpush"
             }),
         },
         todos: vec![
@@ -463,7 +463,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
 #[tracing::instrument(skip_all, fields(op = "cx.authz.describe"))]
 pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
     json_ok(json!({
-        "contract": "contrix.rest.authz_describe.v1",
+        "contract": "cokret.rest.authz_describe.v1",
         "version": "2026-05-17-limited-contract",
         "stability": "scaffold_contract",
         "profile_claim": "not_claimed",
@@ -480,14 +480,14 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         "resource_selector_examples": [
             {
                 "kind": "event",
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                "event_id": "cx:event:01904101-0000-7000-8000-000000000000",
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
+                "event_id": "ck:event:01904101-0000-7000-8000-000000000000",
                 "scope": "exact"
             },
             {
                 "kind": "blob",
-                "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
+                "blob_ref": "ck:blob:sha256:0123456789abcdef",
                 "object_type": "encrypted_backup",
                 "object_ref": "backup-scaffold-current-device",
                 "scope": "exact"
@@ -512,12 +512,12 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         "check_request_example": {
             "actor": "did:web:alice.example",
             "action": "cx.keys.backups.get",
-            "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
+            "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
                     "kind": "blob",
-                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                    "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
+                    "blob_ref": "ck:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": "backup-scaffold-current-device",
                     "scope": "exact"
@@ -544,7 +544,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.policies.describe"))]
 pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
     json_ok(json!({
-        "contract": "contrix.rest.policies_describe.v1",
+        "contract": "cokret.rest.policies_describe.v1",
         "version": "2026-05-17-limited-contract",
         "stability": "scaffold_contract",
         "profile_claim": "not_claimed",
@@ -565,8 +565,8 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
                 "actions": ["cx.keys.backups.get"],
                 "resource": {
                     "kind": "blob",
-                    "space_id": "cx:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "cx:blob:sha256:0123456789abcdef",
+                    "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
+                    "blob_ref": "ck:blob:sha256:0123456789abcdef",
                     "object_type": "encrypted_backup",
                     "object_ref": "backup-scaffold-current-device"
                 },
@@ -594,7 +594,7 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "cx.device_messages.describe"))]
 pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> {
     json_ok(json!({
-        "contract": "contrix.rest.device_messages_describe.v1",
+        "contract": "cokret.rest.device_messages_describe.v1",
         "version": "2026-05-04-scaffold",
         "collection_path": "/api/v1/device_messages",
         "send_path": "/api/v1/device_messages",
@@ -613,7 +613,7 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
         "send_request_example": {
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-000000000001": {
+                    "ck:device:01904100-0000-7000-8000-000000000001": {
                         "type": "cx.key.verification.request",
                         "content": {
                             "transaction_id": "verify-sas-01",
@@ -635,7 +635,7 @@ pub(in crate::routing) async fn device_messages_describe() -> JsonResult<Value> 
 #[tracing::instrument(skip_all, fields(op = "cx.keys.backups.describe"))]
 pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     json_ok(json!({
-        "contract": "contrix.rest.key_backups_describe.v1",
+        "contract": "cokret.rest.key_backups_describe.v1",
         "collection_path": "/api/v1/keys/backups",
         "item_path": "/api/v1/keys/backups/{backup_id}",
         "schema": "cx.schema.key_backup.v1",
@@ -656,7 +656,7 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "cx.integration.describe"))]
 async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
     json_ok(IntegrationDescribeResponse {
-        contract: "contrix.rest.integration_manifest.v1".to_owned(),
+        contract: "cokret.rest.integration_manifest.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),
         service_kind: "principal_server".to_owned(),
@@ -683,7 +683,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "auth_bridge".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/auth/bridge/describe".to_owned(),
-                contract: "contrix.rest.principal_bridge.v1".to_owned(),
+                contract: "cokret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
             },
@@ -699,7 +699,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "outbound_push_bridge".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/push/outbound/bridge/describe".to_owned(),
-                contract: "contrix.rest.outbound_push_bridge.v1".to_owned(),
+                contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
             },
@@ -707,7 +707,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "push_register_device".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/push/register-device".to_owned(),
-                contract: "contrix.rest.principal_push_register.v1".to_owned(),
+                contract: "cokret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
             },
@@ -715,7 +715,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "device_messages_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/device_messages/describe".to_owned(),
-                contract: "contrix.rest.device_messages_describe.v1".to_owned(),
+                contract: "cokret.rest.device_messages_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
             },
@@ -723,7 +723,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "key_backups_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/keys/backups/describe".to_owned(),
-                contract: "contrix.rest.key_backups_describe.v1".to_owned(),
+                contract: "cokret.rest.key_backups_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
             },
@@ -731,7 +731,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/authz/describe".to_owned(),
-                contract: "contrix.rest.authz_describe.v1".to_owned(),
+                contract: "cokret.rest.authz_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "inline examples only; server/describe limitations explicitly mark this as not a full authz profile surface.".to_owned(),
             },
@@ -739,7 +739,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "policies_describe".to_owned(),
                 method: "GET".to_owned(),
                 path: "/api/v1/policies/describe".to_owned(),
-                contract: "contrix.rest.policies_describe.v1".to_owned(),
+                contract: "cokret.rest.policies_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "policy document CRUD is implemented locally; describe is not a generated full-profile artifact.".to_owned(),
             },
@@ -747,7 +747,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "admin_bottom_manual_repair".to_owned(),
                 method: "POST".to_owned(),
                 path: "/admin/spaces/{space_id}/bottom/{cell_id}/repair".to_owned(),
-                contract: "contrix.rest.admin.bottom_repair.v1".to_owned(),
+                contract: "cokret.rest.admin.bottom_repair.v1".to_owned(),
                 stability: "unsupported_signing_path".to_owned(),
                 todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),
             },
@@ -755,7 +755,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "index_query".to_owned(),
                 method: "POST".to_owned(),
                 path: "/api/v1/index/query".to_owned(),
-                contract: "contrix.rest.index_query.v1".to_owned(),
+                contract: "cokret.rest.index_query.v1".to_owned(),
                 stability: "limited_projection".to_owned(),
                 todo: "backed by local projection state and demo fallback, not a full index-node profile.".to_owned(),
             },

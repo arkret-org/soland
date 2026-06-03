@@ -167,7 +167,7 @@ pub(super) async fn federation_transaction(
             let mut response_value = record.response.clone();
             let request_signals_historical = req
                 .headers()
-                .get("X-Contrix-Origin-Key-Rotated")
+                .get("X-Cokret-Origin-Key-Rotated")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| matches!(s, "true" | "1" | "yes"))
                 .unwrap_or(false);
@@ -1076,7 +1076,7 @@ pub(super) async fn federation_pull_operations(
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
-    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
+    let realm_id = space_id.replacen("ck:space:", "ck:realm:", 1);
     let space_operations = state
         .persistence
         .federation_operations()
@@ -1837,7 +1837,7 @@ fn trust_domain_from_service_did(service_did: &str) -> String {
         .unwrap_or(service_did)
         .to_ascii_lowercase()
         .replace(':', ".");
-    format!("cx:trust_domain:{scope}")
+    format!("ck:trust_domain:{scope}")
 }
 
 fn signature_error(message: impl Into<String>) -> AppError {
@@ -2108,7 +2108,7 @@ async fn pull_operations_page(
 }
 
 async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
-    let realm_id = space_id.replacen("cx:space:", "cx:realm:", 1);
+    let realm_id = space_id.replacen("ck:space:", "ck:realm:", 1);
     let operations = state
         .persistence
         .federation_operations()
@@ -2240,7 +2240,7 @@ async fn enqueue_operation_push(
     hasher.update(peer.did.as_bytes());
     hasher.update(b"|operation|");
     hasher.update(operation.operation_id.as_str().as_bytes());
-    let idempotency_key = format!("cx:outbox:operation:{:x}", hasher.finalize());
+    let idempotency_key = format!("ck:outbox:operation:{:x}", hasher.finalize());
 
     record_outbound_fanout_attempt(
         state,
@@ -2533,7 +2533,7 @@ async fn enqueue_outbound_for(
     hasher.update(resource_kind.as_bytes());
     hasher.update(b"|");
     hasher.update(resource_id.as_bytes());
-    let idempotency_key = format!("cx:outbox:{:x}", hasher.finalize());
+    let idempotency_key = format!("ck:outbox:{:x}", hasher.finalize());
     if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
         state,
         peer.url.as_str(),
@@ -2737,11 +2737,11 @@ fn http_message_signature_evidence(
     let content_digest = content_digest_header(body_bytes);
     let keyid = format!("{}#federation-fanout-key", state.config.service_did);
     let signature_params = format!(
-        "(\"@method\" \"@path\" \"content-digest\" \"x-contrix-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
+        "(\"@method\" \"@path\" \"content-digest\" \"x-cokret-fanout-digest\");created={created};keyid=\"{keyid}\";alg=\"ed25519\""
     );
     let signature_input_header = format!("sig1={signature_params}");
     let signature_base = format!(
-        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-contrix-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
+        "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-cokret-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
     );
     let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());
     let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
@@ -2757,13 +2757,13 @@ fn http_message_signature_evidence(
             "@method",
             "@path",
             "content-digest",
-            "x-contrix-fanout-digest"
+            "x-cokret-fanout-digest"
         ],
         "headers": {
             "content-digest": content_digest,
             "signature-input": signature_input_header,
             "signature": signature_header,
-            "x-contrix-fanout-digest": payload_digest
+            "x-cokret-fanout-digest": payload_digest
         },
         "signature_base": signature_base,
         "verification_material": {
@@ -3015,7 +3015,7 @@ pub(crate) fn test_app_state_with_peers(
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: false,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms,
@@ -3079,7 +3079,7 @@ mod tests {
 
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -3108,8 +3108,8 @@ mod tests {
 
     fn federation_headers(digest: &str) -> FederationTrustHeaders {
         FederationTrustHeaders {
-            source_trust_domain: trust_domain("cx:trust_domain:peer.example"),
-            destination_trust_domain: trust_domain("cx:trust_domain:soland.local"),
+            source_trust_domain: trust_domain("ck:trust_domain:peer.example"),
+            destination_trust_domain: trust_domain("ck:trust_domain:soland.local"),
             request_canonical_digest: contrix_sdk::Hash::new(digest.to_owned()).unwrap(),
         }
     }
@@ -3131,7 +3131,7 @@ mod tests {
 
         validate_federation_headers(
             &headers,
-            &trust_domain("cx:trust_domain:soland.local"),
+            &trust_domain("ck:trust_domain:soland.local"),
             &digest,
         )
         .expect("matching digest and destination accepted");
@@ -3145,7 +3145,7 @@ mod tests {
 
         let error = validate_federation_headers(
             &headers,
-            &trust_domain("cx:trust_domain:soland.local"),
+            &trust_domain("ck:trust_domain:soland.local"),
             &digest,
         )
         .expect_err("mismatched digest rejected");
@@ -3165,7 +3165,7 @@ mod tests {
 
         let error = validate_federation_headers(
             &headers,
-            &trust_domain("cx:trust_domain:other.example"),
+            &trust_domain("ck:trust_domain:other.example"),
             &digest,
         )
         .expect_err("wrong destination rejected");
@@ -3315,7 +3315,7 @@ mod tests {
     async fn empty_peers_list_is_a_no_op() {
         let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:01").await;
+        let targets = broadcast_anchor_to_peers(&state, "ck:anchor:sha256:01").await;
         assert!(targets.is_empty());
     }
 
@@ -3326,9 +3326,9 @@ mod tests {
             vec!["http://127.0.0.1:9|did:web:peer.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000051").unwrap();
+        let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000051").unwrap();
         let invite = Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000052")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000052")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_MEMBER_STATE,
@@ -3339,26 +3339,26 @@ mod tests {
             }),
         );
         let invite_create = Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000055")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000055")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_INVITE_CREATE,
             json!({
-                "invite_id": "cx:invite:01904100-0000-7000-8000-000000000056",
+                "invite_id": "ck:invite:01904100-0000-7000-8000-000000000056",
                 "invitee": "did:web:carol.example",
                 "sender": "did:web:alice.example",
                 "expires_at": "2030-01-01T00:00:00Z"
             }),
         );
         let message = Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000053")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000053")
                 .unwrap(),
             realm_id,
             kinds::CX_MESSAGE_CREATE,
             json!({
-                "event_id": "cx:event:01904100-0000-7000-8000-000000000054",
+                "event_id": "ck:event:01904100-0000-7000-8000-000000000054",
                 "sender": "did:web:alice.example",
-                "thread_id": "cx:flow:01904100-0000-7000-8000-000000000051",
+                "thread_id": "ck:flow:01904100-0000-7000-8000-000000000051",
                 "content": {"kind": "cx.content.text", "body": "hello federation"}
             }),
         );
@@ -3389,7 +3389,7 @@ mod tests {
                 .iter()
                 .all(|body| body["origin"] == "did:web:test.local"
                     && body["destination"] == "did:web:peer.example"
-                    && body["space_id"] == "cx:realm:01904100-0000-7000-8000-000000000051")
+                    && body["space_id"] == "ck:realm:01904100-0000-7000-8000-000000000051")
         );
         let pushed_ids = payloads
             .iter()
@@ -3403,7 +3403,7 @@ mod tests {
         let projected_invite = state
             .persistence
             .space_invites()
-            .get("cx:invite:01904100-0000-7000-8000-000000000056")
+            .get("ck:invite:01904100-0000-7000-8000-000000000056")
             .await
             .unwrap()
             .unwrap();
@@ -3456,16 +3456,16 @@ mod tests {
     async fn operation_frontier_tracks_persisted_operation_ids() {
         let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
         let state = AppState::new(cfg, Db { pool: None });
-        let realm_id = RealmId::new("cx:realm:01904100-0000-7000-8000-000000000061").unwrap();
+        let realm_id = RealmId::new("ck:realm:01904100-0000-7000-8000-000000000061").unwrap();
         let first = Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000062")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000062")
                 .unwrap(),
             realm_id.clone(),
             kinds::CX_MESSAGE_CREATE,
             json!({"content": {"kind": "cx.content.text", "body": "one"}}),
         );
         let second = Operation::create(
-            contrix_sdk::OperationId::new("cx:operation:01904100-0000-7000-8000-000000000063")
+            contrix_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000063")
                 .unwrap(),
             realm_id,
             kinds::CX_MESSAGE_CREATE,
@@ -3478,7 +3478,7 @@ mod tests {
             .await
             .unwrap();
         let before =
-            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061").await;
+            operation_frontier_value(&state, "ck:realm:01904100-0000-7000-8000-000000000061").await;
         state
             .persistence
             .federation_operations()
@@ -3486,7 +3486,7 @@ mod tests {
             .await
             .unwrap();
         let after =
-            operation_frontier_value(&state, "cx:realm:01904100-0000-7000-8000-000000000061").await;
+            operation_frontier_value(&state, "ck:realm:01904100-0000-7000-8000-000000000061").await;
 
         assert_eq!(before["operation_count"], 1);
         assert_eq!(after["operation_count"], 2);
@@ -3511,11 +3511,11 @@ mod tests {
             vec!["https://peer-anchor.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "cx:anchor:sha256:02").await;
+        let targets = broadcast_anchor_to_peers(&state, "ck:anchor:sha256:02").await;
         assert_eq!(targets, vec!["https://peer-anchor.example".to_owned()]);
 
         let peer_hash = sha256_hex("https://peer-anchor.example".as_bytes());
-        let anchor_hash = sha256_hex("cx:anchor:sha256:02".as_bytes());
+        let anchor_hash = sha256_hex("ck:anchor:sha256:02".as_bytes());
         let txn_id = format!(
             "outbound_anchor:{}:{}",
             &peer_hash[..16],
@@ -3839,7 +3839,7 @@ mod federation_wire_tests {
     fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         let response = delivery_binding_stale_response(
             &Did::new("did:web:bob.example").unwrap(),
-            &[contrix_sdk::EventId::new("cx:event:01904100-0000-7000-8000-000000000001").unwrap()],
+            &[contrix_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap()],
         );
         assert_eq!(
             response.pointer("/error/code").and_then(Value::as_str),

@@ -23,7 +23,7 @@ docker buildx build `
     --load `
     --tag $ImageTag `
     --metadata-file $metadataPath `
-    --build-context contrix-rust-sdk=../contrix-rust-sdk `
+    --build-context cokret-rust-sdk=../cokret-rust-sdk `
     .
 
 syft $ImageTag -o "spdx-json=$sbomPath"

@@ -70,7 +70,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     let realm_id = match req
         .headers()
-        .get("x-contrix-space-id")
+        .get("x-cokret-space-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
     {
@@ -137,7 +137,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "encrypted blob uploads require x-contrix-attachment-envelope",
+            "encrypted blob uploads require x-cokret-attachment-envelope",
         );
         return;
     }
@@ -146,7 +146,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "x-contrix-blob-encrypted=false conflicts with encrypted attachment metadata",
+            "x-cokret-blob-encrypted=false conflicts with encrypted attachment metadata",
         );
         return;
     }
@@ -207,7 +207,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     }
-    let blob_ref = format!("cx:blob:sha256:{sha256}");
+    let blob_ref = format!("ck:blob:sha256:{sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&sha256);
     if let Err(error) = state.object_storage.put(&storage_key, bytes).await {
         render_error(
@@ -402,7 +402,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             );
             res.headers_mut().insert(
                 salvo::http::header::HeaderName::from_static("digest"),
-                format!("sha-256={}", blob_ref.trim_start_matches("cx:blob:sha256:"))
+                format!("sha-256={}", blob_ref.trim_start_matches("ck:blob:sha256:"))
                     .parse()
                     .unwrap(),
             );
@@ -628,12 +628,12 @@ fn blob_content_disposition(blob: &BlobRecord, purpose: &str) -> Option<String> 
 fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'static str> {
     if let Some(value) = req
         .headers()
-        .get("x-contrix-content-digest")
+        .get("x-cokret-content-digest")
         .and_then(|value| value.to_str().ok())
     {
         let digest = value.trim();
         if !is_valid_sha256_digest(digest) {
-            return Err("x-contrix-content-digest must be sha256:<64 lowercase hex>");
+            return Err("x-cokret-content-digest must be sha256:<64 lowercase hex>");
         }
         return Ok(Some(digest.trim_start_matches("sha256:").to_owned()));
     }
@@ -657,7 +657,7 @@ fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Val
     let Some(value) = req
         .headers()
         .get(salvo::http::header::HeaderName::from_static(
-            "x-contrix-attachment-envelope",
+            "x-cokret-attachment-envelope",
         ))
         .and_then(|value| value.to_str().ok())
     else {
@@ -752,7 +752,7 @@ fn is_valid_mime_token(value: &str) -> bool {
 fn sanitized_blob_filename(req: &Request) -> Result<Option<String>, &'static str> {
     let raw = req
         .headers()
-        .get("x-contrix-filename")
+        .get("x-cokret-filename")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .or_else(|| {
@@ -803,7 +803,7 @@ fn sanitize_blob_filename_value(value: &str) -> Result<String, &'static str> {
 fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     let Some(raw) = req
         .headers()
-        .get("x-contrix-blob-encrypted")
+        .get("x-cokret-blob-encrypted")
         .and_then(|value| value.to_str().ok())
     else {
         return Ok(None);
@@ -811,7 +811,7 @@ fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" => Ok(Some(true)),
         "false" | "0" | "no" => Ok(Some(false)),
-        _ => Err("x-contrix-blob-encrypted must be true or false"),
+        _ => Err("x-cokret-blob-encrypted must be true or false"),
     }
 }
 
@@ -1037,7 +1037,7 @@ mod tests {
             storage_key: "sha256/test".to_owned(),
             media_type: media_type.to_owned(),
             filename: filename.map(ToOwned::to_owned),
-            realm_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             encryption: None,
             uploaded_by: "did:web:alice.example".to_owned(),
             created_at: now(),

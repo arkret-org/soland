@@ -84,7 +84,7 @@ async fn recovery_policy_rejects_tampered_signature_body() {
         None,
         POLICY_FIELDS,
     );
-    policy["trust_domain"] = serde_json::json!("cx:trust_domain:tampered.example");
+    policy["trust_domain"] = serde_json::json!("ck:trust_domain:tampered.example");
 
     let body = post_recovery_policy(state, &token, &policy, StatusCode::UNAUTHORIZED).await;
     assert_eq!(body["error"]["code"], "proof_invalid");
@@ -156,7 +156,7 @@ async fn recovery_receipt_rejects_policy_binding_mismatch() {
         &signing,
         &principal_id,
         &verification_method,
-        &new_prefixed_uuid7("cx:policy:"),
+        &new_prefixed_uuid7("ck:policy:"),
         1,
         None,
         RECEIPT_FIELDS,
@@ -210,7 +210,7 @@ async fn recovery_receipt_rejects_unauthorized_device() {
         &principal_id,
         &policy_id,
         1,
-        "cx:device:01904100-0000-7000-8000-00000000aaaa",
+        "ck:device:01904100-0000-7000-8000-00000000aaaa",
         RECEIPT_FIELDS,
     );
     let body = post_recovery_receipt(state, &token, &receipt, StatusCode::CONFLICT).await;
@@ -273,7 +273,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
         &principal_id,
         &verification_method,
         2,
-        Some(&new_prefixed_uuid7("cx:policy:")),
+        Some(&new_prefixed_uuid7("ck:policy:")),
         POLICY_FIELDS,
     );
     let body = post_recovery_policy(
@@ -288,7 +288,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
 
 // ── REC-1 read APIs (C-P1) ─────────────────────────────────────────────────
 
-const RECOVERY_TEST_DEVICE: &str = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_active_and_history() {
@@ -381,7 +381,7 @@ async fn recovery_read_enforces_principal_isolation() {
 
 // ── C-P2 recovery session lifecycle ────────────────────────────────────────
 
-const RECOVERY_TEST_DEVICE_B: &str = "cx:device:01904100-0000-7000-8000-a11ce0000002";
+const RECOVERY_TEST_DEVICE_B: &str = "ck:device:01904100-0000-7000-8000-a11ce0000002";
 
 /// Helper: seed an accepted v1 policy for `principal_id` and open a recovery
 /// session against it. Returns the session JSON body.
@@ -396,8 +396,8 @@ async fn open_recovery_session(
     post_recovery_policy(state.clone(), token, &policy, StatusCode::CREATED).await;
     let create_body = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "cx:trust_domain:soland.local",
-        "requesting_device_id": "cx:device:01904100-0000-7000-8000-000000000099",
+        "trust_domain": "ck:trust_domain:soland.local",
+        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000099",
         "ssk_generation": 1,
     });
     post_recovery(
@@ -425,7 +425,7 @@ async fn recovery_session_create_and_get_roundtrip() {
     let challenge = session["challenge"].as_str().unwrap();
     assert!(!challenge.is_empty(), "challenge must be issued");
     let session_id = session["recovery_session_id"].as_str().unwrap();
-    assert!(session_id.starts_with("cx:recovery_session:"));
+    assert!(session_id.starts_with("ck:recovery_session:"));
 
     let fetched = get_recovery(
         state,
@@ -449,8 +449,8 @@ async fn recovery_session_create_requires_active_policy() {
 
     let create_body = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "cx:trust_domain:soland.local",
-        "requesting_device_id": "cx:device:01904100-0000-7000-8000-000000000099",
+        "trust_domain": "ck:trust_domain:soland.local",
+        "requesting_device_id": "ck:device:01904100-0000-7000-8000-000000000099",
         "ssk_generation": 1,
     });
     let body = post_recovery(
@@ -838,12 +838,12 @@ fn signed_device_recovery_receipt(
 ) -> Value {
     let mut receipt = serde_json::json!({
         "schema": "cx.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("cx:receipt:"),
+        "receipt_id": new_prefixed_uuid7("ck:receipt:"),
         "principal_id": principal_id,
-        "recovery_session_id": new_prefixed_uuid7("cx:recovery_session:"),
+        "recovery_session_id": new_prefixed_uuid7("ck:recovery_session:"),
         "policy_id": policy_id,
         "policy_version": policy_version,
-        "trust_domain": "cx:trust_domain:soland.local",
+        "trust_domain": "ck:trust_domain:soland.local",
         "new_device_id": new_device_id,
         "proof_summary": {
             "kind": "principal_signing",
@@ -920,7 +920,7 @@ fn seed_cross_signing(
 ) {
     let publish = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "cx:trust_domain:soland.local",
+        "trust_domain": "ck:trust_domain:soland.local",
         "principal_signing_key": {
             "kid": vm, "alg": "EdDSA",
             "public_key": test_ed25519_multibase_public(psk), "key_format": "multibase",
@@ -949,8 +949,8 @@ fn seed_cross_signing(
         .expect("seed cross-signing publish");
 }
 
-const AUTH_EVENT_ID: &str = "cx:event:01964137-0000-7000-8000-00000000a111";
-const LIST_EVENT_ID: &str = "cx:event:01964137-0000-7000-8000-00000000a222";
+const AUTH_EVENT_ID: &str = "ck:event:01964137-0000-7000-8000-00000000a111";
+const LIST_EVENT_ID: &str = "ck:event:01964137-0000-7000-8000-00000000a222";
 
 /// Seed a client-submitted control event into the durable event store (mirrors
 /// what `POST /events` persists), so `/complete` can resolve it by id.
@@ -1056,8 +1056,8 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     // Record a cross-signing reset (gen 1 -> 2): drops the accepted publish.
     let reset = serde_json::json!({
         "principal_id": principal_id,
-        "trust_domain": "cx:trust_domain:soland.local",
-        "reset_event_id": "cx:event:01964137-0000-7000-8000-0000000000aa",
+        "trust_domain": "ck:trust_domain:soland.local",
+        "reset_event_id": "ck:event:01964137-0000-7000-8000-0000000000aa",
         "previous_generation": 1,
         "new_generation": 2,
         "reset_reason_code": "test-reset",
@@ -1154,15 +1154,15 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
     let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
     post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
 
-    let backup_id = "cx:backup:01964137-0000-7000-8000-0000000000c5";
-    let wrong_policy = "cx:policy:01964137-0000-7000-8000-0000000000ff";
+    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c5";
+    let wrong_policy = "ck:policy:01964137-0000-7000-8000-0000000000ff";
     let backup = serde_json::json!({
         "backup_id": backup_id,
         "actor_id": principal_id,
         "backup_class": "did_recovery",
         "backup_version": "kb_1",
         "created_at": "2026-05-30T00:00:00Z",
-        "series_id": "cx:backup_series:01964137-0000-7000-8000-0000000000c5",
+        "series_id": "ck:backup_series:01964137-0000-7000-8000-0000000000c5",
         "series_seq": 0,
         "recovery_policy_ref": { "policy_id": wrong_policy, "policy_version": 1 },
         "encryption": {
@@ -1256,7 +1256,7 @@ fn shared_recovery_state_with_config(
 async fn seed_bearer_session(state: &AppState, token: &str) {
     let now = chrono::Utc::now();
     let actor = "did:web:alice.example";
-    let device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     state
         .persistence
         .sessions()
@@ -1313,10 +1313,10 @@ fn signed_recovery_policy(
 ) -> Value {
     let mut policy = serde_json::json!({
         "schema": "cx.schema.recovery_policy.v1",
-        "policy_id": new_prefixed_uuid7("cx:policy:"),
+        "policy_id": new_prefixed_uuid7("ck:policy:"),
         "principal_id": principal_id,
         "version": version,
-        "trust_domain": "cx:trust_domain:soland.local",
+        "trust_domain": "ck:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
         "supersedes": supersedes,
         "issued_at": "2026-05-30T00:00:00Z",
@@ -1348,15 +1348,15 @@ fn signed_recovery_receipt(
 ) -> Value {
     let mut receipt = serde_json::json!({
         "schema": "cx.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("cx:receipt:"),
+        "receipt_id": new_prefixed_uuid7("ck:receipt:"),
         "principal_id": principal_id,
         "recovery_session_id": recovery_session_id
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| new_prefixed_uuid7("cx:recovery_session:")),
+            .unwrap_or_else(|| new_prefixed_uuid7("ck:recovery_session:")),
         "policy_id": policy_id,
         "policy_version": policy_version,
-        "trust_domain": "cx:trust_domain:soland.local",
-        "new_device_id": "cx:device:01904100-0000-7000-8000-000000000042",
+        "trust_domain": "ck:trust_domain:soland.local",
+        "new_device_id": "ck:device:01904100-0000-7000-8000-000000000042",
         "proof_summary": {
             "kind": "principal_signing",
             "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

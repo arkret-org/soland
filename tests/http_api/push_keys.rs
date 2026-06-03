@@ -100,7 +100,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "scope_id": "cx:flow:demo",
+                "scope_id": "ck:flow:demo",
                 "typing": true
             }
         }))
@@ -120,7 +120,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(active_typing.len(), 1);
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
-    assert_eq!(active_typing[0].scope_id.as_deref(), Some("cx:flow:demo"));
+    assert_eq!(active_typing[0].scope_id.as_deref(), Some("ck:flow:demo"));
 
     let stop_sent_at = chrono::Utc::now();
     let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);
@@ -154,7 +154,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let push: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
@@ -183,7 +183,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "enabled": true,
             "actions": ["dont_notify"],
             "conditions": {
-                "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+                "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
                 "type": "blind_wakeup"
             }
         }))
@@ -208,7 +208,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "cx:device:01904100-0000-7000-8000-71551c000004"}]
+                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -219,12 +219,12 @@ async fn push_profile_and_moderation_contracts_work() {
     let rejected = muted_notify["rejected"].as_array().unwrap();
     assert_eq!(rejected.len(), 2);
     assert!(rejected.iter().any(|device| {
-        device["device_id"] == "cx:device:01904100-0000-7000-8000-a11ce0000001"
+        device["device_id"] == "ck:device:01904100-0000-7000-8000-a11ce0000001"
             && device["reason"] == "push_rule"
             && device["rule_id"] == "mute-device"
     }));
     assert!(rejected.iter().any(|device| {
-        device["device_id"] == "cx:device:01904100-0000-7000-8000-71551c000004"
+        device["device_id"] == "ck:device:01904100-0000-7000-8000-71551c000004"
             && device["reason"] == "unknown_device"
     }));
 
@@ -241,7 +241,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}]
+                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -255,7 +255,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
+            "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -291,7 +291,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let unauthenticated_report = TestClient::post("http://server/api/v1/moderation/report")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "cx:event:01904100-0000-7000-8000-4a4116cba4e8",
+            "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
             "reason": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -308,7 +308,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let upload: Value = TestClient::post("http://server/api/v1/keys/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "device_keys": {"alg": "mls-rfc9420", "key": "alice-device-key"},
             "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
             "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
@@ -330,7 +330,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let query: Value = TestClient::post("http://server/api/v1/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["cx:device:01904100-0000-7000-8000-a11ce0000001"]}
+            "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001"]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -339,47 +339,47 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert!(query["device_keys"].is_object());
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["device_keys"]["key"],
         "alice-device-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["device_signature"]["alg"],
         "none"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["mls_key_packages"][0]["package_id"],
         "mls-package-1"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["principal_signing_keys"][0]["key"],
         "principal-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["recovery_keys"][0]["key"],
         "recovery-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["session_keys"][0]["key"],
         "session-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["agent_keys"][0]["key"],
         "agent-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["backup_restore_keys"][0]["key"],
         "backup-key"
     );
@@ -389,7 +389,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "one_time_keys": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
                 }
             }
         }))
@@ -399,7 +399,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(
-        claimed_once["one_time_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        claimed_once["one_time_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["key_id"],
         "otk1"
     );
@@ -408,7 +408,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "one_time_keys": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
                 }
             }
         }))
@@ -418,7 +418,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert!(
-        claimed_replay["one_time_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
+        claimed_replay["one_time_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
         "one-time key claim must be single-use"
     );
 
@@ -428,7 +428,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.welcome",
                         "content": {"ciphertext": "opaque"}
                     }
@@ -445,7 +445,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.welcome",
                         "content": encrypted_envelope("cx.mls.welcome", "opaque")
                     }
@@ -465,7 +465,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.welcome",
                         "content": encrypted_envelope("cx.mls.welcome", "opaque")
                     }
@@ -482,7 +482,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let bad_blob = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
-            "x-contrix-content-digest",
+            "x-cokret-content-digest",
             "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
             true,
         )
@@ -494,7 +494,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let bad_attachment = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
-            "x-contrix-attachment-envelope",
+            "x-cokret-attachment-envelope",
             serde_json::json!({
                 "algorithm": "mls-rfc9420",
                 "nonce": "nonce",
@@ -511,7 +511,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
 
     let missing_envelope = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("x-contrix-blob-encrypted", "true", true)
+        .add_header("x-cokret-blob-encrypted", "true", true)
         .body("encrypted-bytes")
         .send(&app_from_state(state.clone()))
         .await;
@@ -543,7 +543,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let plaintext_private_blob = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
-            "x-contrix-space-id",
+            "x-cokret-space-id",
             locked_space["space_id"].as_str().unwrap(),
             true,
         )
@@ -557,16 +557,16 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let blob: Value = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "Text/Plain; charset=utf-8", true)
-        .add_header("x-contrix-filename", "..\\danger<script>.txt", true)
-        .add_header("x-contrix-blob-encrypted", "true", true)
+        .add_header("x-cokret-filename", "..\\danger<script>.txt", true)
+        .add_header("x-cokret-blob-encrypted", "true", true)
         .add_header(
-            "x-contrix-space-id",
+            "x-cokret-space-id",
             locked_space["space_id"].as_str().unwrap(),
             true,
         )
-        .add_header("x-contrix-content-digest", ciphertext_digest.clone(), true)
+        .add_header("x-cokret-content-digest", ciphertext_digest.clone(), true)
         .add_header(
-            "x-contrix-attachment-envelope",
+            "x-cokret-attachment-envelope",
             serde_json::json!({
                 "algorithm": "mls-rfc9420",
                 "nonce": "nonce",
@@ -592,7 +592,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         blob["blob_ref"]
             .as_str()
             .unwrap()
-            .starts_with("cx:blob:sha256:")
+            .starts_with("ck:blob:sha256:")
     );
     assert_eq!(
         blob["upload_receipt"]["encrypted_attachment"]["algorithm"],
@@ -642,7 +642,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         state.clone(),
         "did:web:blob-bob.example",
         "@blob-bob",
-        "cx:device:01904100-0000-7000-8000-b10bb0000003",
+        "ck:device:01904100-0000-7000-8000-b10bb0000003",
     )
     .await;
     add_test_realm_member(
@@ -670,9 +670,9 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let plaintext_blob: Value = TestClient::post("http://server/api/v1/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "text/plain; charset=utf-8", true)
-        .add_header("x-contrix-filename", "report final.txt", true)
+        .add_header("x-cokret-filename", "report final.txt", true)
         .add_header(
-            "x-contrix-space-id",
+            "x-cokret-space-id",
             shared_plaintext_space["space_id"].as_str().unwrap(),
             true,
         )
@@ -793,7 +793,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         state.clone(),
         "did:web:blob-mallory.example",
         "@blob-mallory",
-        "cx:device:01904100-0000-7000-8000-a11000000004",
+        "ck:device:01904100-0000-7000-8000-a11000000004",
     )
     .await;
     let mut invisible_blob = TestClient::get(format!(
@@ -816,7 +816,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let push_registration: Value = TestClient::post("http://server/api/v1/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
@@ -833,7 +833,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "notification": {
                 "type": "message",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}],
+                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}],
                 "preview": "plaintext should not be sent to push gateway"
             }
         }))
@@ -845,7 +845,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "notification": {
                 "type": "blind_wakeup",
-                "devices": [{"device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "cx:device:01904100-0000-7000-8000-71551c000004"}]
+                "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ck:device:01904100-0000-7000-8000-71551c000004"}]
             }
         }))
         .send(&app_from_state(state))
@@ -861,7 +861,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let device_id = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/api/v1/push/notify";
     let bridge_describe = "https://push.example/api/v1/push/bridge/describe";
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
@@ -1007,14 +1007,14 @@ async fn keys_query_hides_revoked_device() {
     let desktop = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
-        "cx:device:01904100-0000-7000-8000-a11ce0000001",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "Alice Desktop",
     )
     .await;
     let mobile = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
-        "cx:device:01904100-0000-7000-8000-9b04e0000007",
+        "ck:device:01904100-0000-7000-8000-9b04e0000007",
         "Alice Phone",
     )
     .await;
@@ -1022,7 +1022,7 @@ async fn keys_query_hides_revoked_device() {
     let _desktop_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
             "device_keys": {"alg": "mls-rfc9420", "key": "desktop-device-key"},
             "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
             "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
@@ -1043,7 +1043,7 @@ async fn keys_query_hides_revoked_device() {
     let _phone_keys: Value = TestClient::post("http://server/api/v1/keys/upload")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-9b04e0000007",
+            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
             "device_keys": {"alg": "mls-rfc9420", "key": "phone-device-key"},
             "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
             "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
@@ -1064,7 +1064,7 @@ async fn keys_query_hides_revoked_device() {
     let pre_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["cx:device:01904100-0000-7000-8000-a11ce0000001", "cx:device:01904100-0000-7000-8000-9b04e0000007"]}
+            "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001", "ck:device:01904100-0000-7000-8000-9b04e0000007"]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -1072,12 +1072,12 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["device_keys"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-9b04e0000007"]
+        pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"]
             ["device_keys"]["key"],
         "phone-device-key"
     );
@@ -1094,16 +1094,16 @@ async fn keys_query_hides_revoked_device() {
     let post_revoke_query: Value = TestClient::post("http://server/api/v1/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["cx:device:01904100-0000-7000-8000-a11ce0000001", "cx:device:01904100-0000-7000-8000-9b04e0000007"]}
+            "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001", "ck:device:01904100-0000-7000-8000-9b04e0000007"]}
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-9b04e0000007"].is_null());
+    assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"].is_null());
     assert_eq!(
-        post_revoke_query["device_keys"]["did:web:alice.example"]["cx:device:01904100-0000-7000-8000-a11ce0000001"]
+        post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
             ["device_keys"]["key"],
         "desktop-device-key"
     );
@@ -1115,14 +1115,14 @@ async fn revoked_device_blocks_encrypted_writes() {
     let device_token = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
-        "cx:device:01904100-0000-7000-8000-30b11e000005",
+        "ck:device:01904100-0000-7000-8000-30b11e000005",
         "Alice Mobile",
     )
     .await;
     let stale_session = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
-        "cx:device:01904100-0000-7000-8000-30b11e000005",
+        "ck:device:01904100-0000-7000-8000-30b11e000005",
         "Alice Mobile",
     )
     .await;
@@ -1151,7 +1151,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     let blocked_upload = TestClient::post("http://server/api/v1/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
-            "device_id": "cx:device:01904100-0000-7000-8000-30b11e000005",
+            "device_id": "ck:device:01904100-0000-7000-8000-30b11e000005",
             "device_keys": {"alg": "mls-rfc9420", "key": "new-key"},
             "principal_signing_keys": [],
             "recovery_keys": [],
@@ -1180,7 +1180,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.application",
                         "content": encrypted_envelope("cx.mls.application", ciphertext)
                     }
@@ -1214,7 +1214,7 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.application",
                         "content": encrypted_envelope("cx.mls.application", "ack-ciphertext")
                     }
@@ -1268,7 +1268,7 @@ async fn device_messages_evicted_after_session_logout() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "cx:device:01904100-0000-7000-8000-a11ce0000001": {
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
                         "type": "cx.mls.welcome",
                         "content": encrypted_envelope("cx.mls.welcome", "logout-ciphertext")
                     }

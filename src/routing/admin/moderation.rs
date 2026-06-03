@@ -705,7 +705,7 @@ async fn close_appeal(
 // cx.moderation.appeal.* reducer & state machine (spec T06).
 // ────────────────────────────────────────────────────────────────────────
 
-/// Cell state machine for a `cx:appeal:<uuid>` row. Spec T06.
+/// Cell state machine for a `ck:appeal:<uuid>` row. Spec T06.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppealState {
@@ -740,7 +740,7 @@ pub const APPEAL_AUTO_CLOSE_COOL_OFF_DAYS: i64 = 30;
 /// Build the canonical cell id for an appeal. Spec T06.
 #[allow(dead_code)]
 pub fn appeal_cell_id(appeal_id: &str) -> String {
-    format!("cx:cell:cx.component.moderation.appeal.v1:{appeal_id}")
+    format!("ck:cell:cx.component.moderation.appeal.v1:{appeal_id}")
 }
 
 /// Spec T06 — when an appeal `decision` event has `verdict=overturn`, the
@@ -824,7 +824,7 @@ mod appeal_tests {
     fn appeal_decision_overturn_requires_lift_in_batch() {
         let err = appeal_decision_overturn_paired_check(
             "overturn",
-            "cx:event:01904100-0000-7000-8000-000000000aaa",
+            "ck:event:01904100-0000-7000-8000-000000000aaa",
             &[],
         )
         .unwrap_err();
@@ -832,10 +832,10 @@ mod appeal_tests {
         // Lift event present — ok.
         appeal_decision_overturn_paired_check(
             "overturn",
-            "cx:event:01904100-0000-7000-8000-000000000aaa",
+            "ck:event:01904100-0000-7000-8000-000000000aaa",
             &[(
                 "cx.moderation.decision.lift",
-                "cx:event:01904100-0000-7000-8000-000000000aaa",
+                "ck:event:01904100-0000-7000-8000-000000000aaa",
             )],
         )
         .unwrap();

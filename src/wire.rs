@@ -504,14 +504,14 @@ pub struct ResolveOrganizationResponse {
 pub struct HandleClaim {
     pub schema: String,
     /// Canonical handle in the spec form `<localpart>:<domain>(:<port>)?`
-    /// (handle-claim.schema.json#/properties/handle, contrix-spec @ 7157ee8).
-    /// The retired `contrix://<domain>/users/<localpart>` URI form is gone
+    /// (handle-claim.schema.json#/properties/handle, cokret-spec @ 7157ee8).
+    /// The retired `cokret://<domain>/users/<localpart>` URI form is gone
     /// from R3.1 wire — any `acct:<local>@<domain>` interop form is carried
     /// separately in [`Self::handle_aliases`], NEVER in this field.
     pub handle: String,
     /// Interop aliases normalized to the canonical [`Self::handle`] above.
     /// Includes `acct:<local>@<domain>` cross-publication. The retired
-    /// `contrix://` URI form MUST NOT appear here.
+    /// `cokret://` URI form MUST NOT appear here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handle_aliases: Vec<String>,
     pub subject: String,
@@ -985,7 +985,7 @@ pub struct PolicyCheckReqBody {
 /// The four hashes pin the decision to a concrete authz universe so a
 /// client (or auditor) can detect that the decision is stale once any
 /// of the four frontiers move:
-///   - `realm_id` — scope this binding applies to (canonical `cx:realm:<uuid>` form). May be empty
+///   - `realm_id` — scope this binding applies to (canonical `ck:realm:<uuid>` form). May be empty
 ///     string when the request was realm-less (e.g. a global capability check).
 ///   - `auth_state_digest` — sha256 hex over canonical JSON `{actor, action, resource,
 ///     request_canonical_digest}`.
@@ -1529,7 +1529,7 @@ pub struct DeviceMessagesSendResBody {
     pub unknown_devices: Value,
 }
 
-// ── CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+// ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Mirrors `MediaTokenResponse` /
 // `ParticipantBinding` in `contrix_sdk::media`; soland mints the
 // soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
@@ -1578,7 +1578,7 @@ pub struct MediaTokenExchangeResBody {
     pub todos: Vec<String>,
 }
 
-// ── B-C (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — recovery
+// ── B-C (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — recovery
 // policy / receipt endpoint wire shapes. Wire-level scaffold only — the
 // internal proof verifier is TODO(R3.1).
 
@@ -1889,7 +1889,7 @@ pub fn describe(
     // `apply_claim_level_partition` reserialises these via the SDK types
     // below so the JSON wire shape and the typed surface can never drift.
     //
-    // Profile catalogue per `contrix-spec/spec/v1/zh/conformance/conformance-profiles.md`
+    // Profile catalogue per `cokret-spec/spec/v1/zh/conformance/conformance-profiles.md`
     // §1 / §7 / §8: a principal server self-claims the Event Store
     // interop floor AND the Principal Server + Principal Server Events
     // API stable-catalog profiles in addition to whatever interop
@@ -1923,7 +1923,7 @@ pub fn describe(
         service_did: service_did.parse().expect("valid service DID"),
         trust_domain: trust_domain
             .parse()
-            .expect("trust_domain must be cx:trust_domain:<scope>"),
+            .expect("trust_domain must be ck:trust_domain:<scope>"),
         service_type: "principal_server".to_owned(),
         protocol_version: contrix_sdk::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
@@ -1933,7 +1933,7 @@ pub fn describe(
                 "cx.profile.principal_server_events_api.v1".to_owned(),
                 "cx.profile.mimi_interop.v1".to_owned(),
             ];
-            // PROF-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+            // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
             // advertise `cx.profile.media_service_binding.v1` whenever the
             // server exposes the `cx.call.media.token_exchange` handler.
             // soland mounts the handler unconditionally (see
@@ -2020,7 +2020,7 @@ pub fn describe(
                 ]
             },
             "scalability_constraints": {
-                "source": "contrix-spec/spec/v1/zh/conformance/scalability-constraints.md",
+                "source": "cokret-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": 65536,
                 "max_events_batch_submit": 1,
                 "max_federation_transaction_events": 500,
@@ -2051,7 +2051,7 @@ pub fn describe(
                 ],
                 "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
                 "supported_operation_catalog": {
-                    "source": "contrix-spec/spec/v1/artifacts/registry/operation-registry.json",
+                    "source": "cokret-spec/spec/v1/artifacts/registry/operation-registry.json",
                     "derived_surface_groups": SUPPORTED_OPERATION_SURFACES,
                     "standalone_operations": SUPPORTED_STANDALONE_OPERATION_IDS
                 },
@@ -2108,7 +2108,7 @@ pub fn sync_token() -> String {
     });
     let bytes = contrix_sdk::canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("cx:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
+    format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub fn now() -> DateTime<Utc> {
@@ -2214,8 +2214,8 @@ pub struct GetReadMarkersRequest {
 
 // ── Relation DTOs ──
 //
-// Relation DTOs — `cx:relation:` is a registered typed-id in
-// `contrix-spec/v1/artifacts/registry/id-kind-registry.json`.
+// Relation DTOs — `ck:relation:` is a registered typed-id in
+// `cokret-spec/v1/artifacts/registry/id-kind-registry.json`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRelationRequest {
@@ -2323,7 +2323,7 @@ mod tests {
             binding_state: "verified".to_owned(),
             claim_kind: Some("organization_handle".to_owned()),
             visibility: Some("restricted".to_owned()),
-            audience: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            audience: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             challenge: None,
             claim_scope: BTreeMap::new(),
             member_delivery_binding: Some(HandleClaimDeliveryBinding {

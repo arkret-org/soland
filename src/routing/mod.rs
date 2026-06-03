@@ -109,12 +109,12 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
-        // Spec: B.3 — `/.well-known/contrix` server-description stub.
+        // Spec: B.3 — `/.well-known/cokret` server-description stub.
         .push(federation::well_known_contrix_router())
         .push(identity::embedded_webvh_public_router())
         // Admin surface lives at the bare, deployment-local `/admin/*`
         // namespace (NOT under the `/api/v1` protocol prefix), per
-        // contrix-spec `service-http-binding.md` §2.1. Three sibling
+        // cokret-spec `service-http-binding.md` §2.1. Three sibling
         // sub-trees are resolved by salvo fallthrough; ordering matters
         // only where paths overlap:
         //   1. `spec_router`   — canonical `cx.admin.*` (server/status,
@@ -134,23 +134,23 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(federation::admin_anchor_sign_router())
         .push(api_v1_router())
         .push(interop::contrix_router())
-        // `/contrix/v1/*` fallback: per `contrix-spec/spec/v1/zh/sync/
-        // api-conventions.md` §10, any request under `/contrix/v1/...` that
+        // `/cokret/v1/*` fallback: per `cokret-spec/spec/v1/zh/sync/
+        // api-conventions.md` §10, any request under `/cokret/v1/...` that
         // doesn't match a known route MUST return the canonical
         // `unrecognized_endpoint` / `method_not_allowed` JSON envelope
         // (never an HTML salvo 404). Mounted as a sibling to the concrete
-        // `contrix/v1/...` routers above; salvo's child-iteration order
+        // `cokret/v1/...` routers above; salvo's child-iteration order
         // means it only fires when the concrete routes don't claim the
         // path. See `api_not_found` for the 405/Allow disambiguation.
         .push(contrix_v1_fallback_router());
     let doc = cached_contrix_openapi_doc(&router);
     router
         .unshift(
-            Router::with_path(".well-known/contrix/openapi.yaml")
-                .hoop(affix_state::inject(ContrixOpenApiDoc(doc.clone())))
+            Router::with_path(".well-known/cokret/openapi.yaml")
+                .hoop(affix_state::inject(CokretOpenApiDoc(doc.clone())))
                 .get(contrix_openapi_yaml),
         )
-        .unshift(doc.into_router(".well-known/contrix/openapi.json"))
+        .unshift(doc.into_router(".well-known/cokret/openapi.json"))
         .unshift(Router::new().get(home_page))
 }
 
@@ -187,7 +187,7 @@ fn api_v1_router() -> Router {
         // G3.S2: realm policy server
         .push(realm_policy::router())
         // Catch-all so that anything under `/api/v1/...` that the typed
-        // routers above don't match returns the canonical Contrix JSON
+        // routers above don't match returns the canonical Cokret JSON
         // error envelope. `cors_preflight` is registered as an OPTIONS
         // child so CORS preflight stays 204; every other method falls
         // through to `api_not_found`, which itself decides between 404
@@ -205,13 +205,13 @@ fn api_v1_router() -> Router {
         )
 }
 
-/// Fallback router mounted at `/contrix/v1/*`. Mirror of the `/api/v1/*`
+/// Fallback router mounted at `/cokret/v1/*`. Mirror of the `/api/v1/*`
 /// catch-all above — same JSON envelope, same 404/405 disambiguation. The
-/// concrete `contrix/v1/...` endpoints (currently `contrix/v1/ice-config`)
+/// concrete `cokret/v1/...` endpoints (currently `cokret/v1/ice-config`)
 /// are mounted as their own top-level child routers and run *before* this
 /// fallback because salvo iterates the root's children in registration order.
 fn contrix_v1_fallback_router() -> Router {
-    Router::with_path("contrix/v1/{**rest}")
+    Router::with_path("cokret/v1/{**rest}")
         .options(cors_preflight)
         .goal(api_not_found)
 }
@@ -240,10 +240,10 @@ fn contrix_openapi_doc(router: &Router) -> OpenApi {
             }),
         )
         .add_extension(
-            "x-contrix-artifacts",
+            "x-cokret-artifacts",
             json!({
                 "registries": crate::artifacts::registry_summary(),
-                "openapi_source": "contrix-spec/spec/v1/artifacts/openapi/contrix-service-api.openapi.yaml",
+                "openapi_source": "cokret-spec/spec/v1/artifacts/openapi/cokret-service-api.openapi.yaml",
                 // Round-6: the round-4 entity/view scaffold (FacetName /
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
@@ -1027,7 +1027,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "cx.agent.sidecar_thread.ensure",
         "idempotently ensure the controller<->agent sidecar Circle exists",
     ),
-    // CXP-0010 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) — media
+    // CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
     // token exchange. `/rtc/token` is the spec-canonical wire path; the
     // `/api/v1/rtc/token` alias is registered for deployments behind an
     // ingress that strips the deployment-root namespace.
@@ -1039,11 +1039,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "exchange session-focus for backend media token + participant_binding",
     ),
     (
-        "/contrix/v1/rtc/token",
+        "/cokret/v1/rtc/token",
         PathItemType::Post,
         "media",
         "cx.call.media.token_exchange",
-        "exchange session-focus for backend media token (contrix/v1 alias)",
+        "exchange session-focus for backend media token (cokret/v1 alias)",
     ),
     (
         "/api/v1/rtc/token",
@@ -1117,9 +1117,9 @@ async fn cors_preflight(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-/// Catch-all handler under `/api/v1/*` and `/contrix/v1/*`.
+/// Catch-all handler under `/api/v1/*` and `/cokret/v1/*`.
 ///
-/// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10:
+/// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10:
 /// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
 ///   ...}}`.
 /// * Known path, wrong method -> `405 Method Not Allowed` + JSON envelope `{"error":{"code":
@@ -1166,7 +1166,7 @@ async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
 /// `/api/v1/spaces/{space_id}`. Pattern→URI matching is segment-based
 /// (see [`pattern_matches_path`]) so concrete URIs like
-/// `/api/v1/spaces/cx:space:abc` resolve back to their declaring pattern
+/// `/api/v1/spaces/ck:space:abc` resolve back to their declaring pattern
 /// without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
@@ -1176,13 +1176,13 @@ fn populate_known_routes(doc: &OpenApi) {
         for (path, item) in doc.paths.iter() {
             // Only the protocol-bound HTTP surface participates in
             // 404/405 disambiguation. `/api/v1/...` is soland's local
-            // surface and `/contrix/v1/...` is the cross-server federated
+            // surface and `/cokret/v1/...` is the cross-server federated
             // surface; both are spec-mandated to return the canonical
             // error envelope. Other prefixes (e.g. `/health`,
             // `/.well-known/...`, `/admin/...`) are out of scope
             // for the `unrecognized_endpoint` / `method_not_allowed`
             // contract.
-            if !(path.starts_with("/api/v1/") || path.starts_with("/contrix/v1/")) {
+            if !(path.starts_with("/api/v1/") || path.starts_with("/cokret/v1/")) {
                 continue;
             }
             let methods: Vec<Method> = item
@@ -1208,7 +1208,7 @@ fn path_item_type_to_method(ty: &PathItemType) -> Option<Method> {
         PathItemType::Patch => Method::PATCH,
         PathItemType::Head => Method::HEAD,
         PathItemType::Options => Method::OPTIONS,
-        // TRACE / CONNECT are not part of the Contrix HTTP binding;
+        // TRACE / CONNECT are not part of the Cokret HTTP binding;
         // exclude them so they don't pollute the `Allow` header.
         PathItemType::Trace | PathItemType::Connect => return None,
     })
@@ -1296,7 +1296,7 @@ fn pattern_matches_path(pattern: &str, path: &str) -> bool {
 
 /// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
 ///
-/// Per `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
+/// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
 /// posture for browser-facing services is `Access-Control-Allow-Origin: *`,
 /// and §10 explicitly says browser-accessible private endpoints "不得依赖
 /// cookie 作为唯一认证方式" — meaning credentials need not be reflected to
@@ -1331,9 +1331,9 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "authorization",
             "content-type",
             "idempotency-key",
-            "x-contrix-request-id",
-            "x-contrix-wait-for",
-            "x-contrix-content-digest",
+            "x-cokret-request-id",
+            "x-cokret-wait-for",
+            "x-cokret-content-digest",
             "range",
         ]);
 
@@ -1350,7 +1350,7 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 
     cors.expose_headers(vec![
         "retry-after",
-        "x-contrix-wait-for-satisfied",
+        "x-cokret-wait-for-satisfied",
         "content-range",
         "accept-ranges",
     ])
@@ -1359,7 +1359,7 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 }
 
 #[derive(Clone)]
-pub struct ContrixOpenApiDoc(pub OpenApi);
+pub struct CokretOpenApiDoc(pub OpenApi);
 
 /// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_digest` /
 /// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
@@ -1444,7 +1444,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
     let state_digest = format!("sha256:{}", sha256_hex(&chunk_bytes));
     let snapshot_ref = format!(
-        "cx:snapshot:{}:{}",
+        "ck:snapshot:{}:{}",
         space_id,
         state_digest.trim_start_matches("sha256:")
     );
@@ -1529,7 +1529,7 @@ pub(crate) async fn snapshot_bundle_for_space(
 }
 
 fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
-    let rest = snapshot_ref.strip_prefix("cx:snapshot:")?;
+    let rest = snapshot_ref.strip_prefix("ck:snapshot:")?;
     let (space_id, digest) = rest.rsplit_once(':')?;
     if RealmId::new(space_id.to_owned()).is_err() || !is_valid_sha256_hex(digest) {
         return None;
@@ -1636,7 +1636,7 @@ mod operation_conformance_tests {
 
                 compaction_prune_walk_per_space_limit: 50,
                 seed_demo_data: true,
-                trust_domain: "cx:trust_domain:soland.local".to_owned(),
+                trust_domain: "ck:trust_domain:soland.local".to_owned(),
                 sovereign_enclave_enabled: false,
                 sovereign_enclave_allowed_outbound_hosts: Vec::new(),
                 erasure_propagation_window_ms: 604_800_000,
@@ -1649,8 +1649,8 @@ mod operation_conformance_tests {
     fn operation(index: usize, kind: &str, payload: Value) -> Operation {
         // Build a deterministic UUIDv7 from the index (last 12 hex pad as hex of the index).
         let payload_part = format!("{:012x}", index);
-        let op_id = format!("cx:operation:01904100-0000-7000-8000-{payload_part}");
-        let realm_id = "cx:realm:01904100-0000-7000-8000-000000000001".to_owned();
+        let op_id = format!("ck:operation:01904100-0000-7000-8000-{payload_part}");
+        let realm_id = "ck:realm:01904100-0000-7000-8000-000000000001".to_owned();
         Operation::create(
             OperationId::new(op_id).unwrap(),
             contrix_sdk::RealmId::new(realm_id).unwrap(),
@@ -1667,8 +1667,8 @@ mod operation_conformance_tests {
                 name: "message create",
                 kind: kinds::CX_MESSAGE_CREATE,
                 payload: json!({
-                    "message_id": "cx:message:01904100-0000-7000-8000-79a90338768b",
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-6c663fa0205f",
+                    "message_id": "ck:message:01904100-0000-7000-8000-79a90338768b",
+                    "flow_id": "ck:flow:01904100-0000-7000-8000-6c663fa0205f",
                     "track_name": "discussion",
                     "sender": "did:web:alice.example",
                     "content": {"kind": "cx.content.text", "body": "hello"}
@@ -1678,49 +1678,49 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "message revise",
                 kind: kinds::CX_MESSAGE_REVISE,
-                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "cx.content.text", "body": "edited"}}),
+                payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "cx.content.text", "body": "edited"}}),
                 valid: true,
             },
             OperationVector {
                 name: "message redact",
                 kind: kinds::CX_MESSAGE_REDACT,
-                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
+                payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "generic redaction",
                 kind: kinds::CX_REDACTION,
-                payload: json!({"redacts": "cx:event:01904100-0000-7000-8000-79a90338768b"}),
+                payload: json!({"redacts": "ck:event:01904100-0000-7000-8000-79a90338768b"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction add",
                 kind: kinds::CX_REACTION_ADD,
-                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example", "key": "+1"}),
+                payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example", "key": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "reaction remove",
                 kind: kinds::CX_REACTION_REMOVE,
-                payload: json!({"target_event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "reaction": "+1"}),
+                payload: json!({"target_event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "sender": "did:web:alice.example", "reaction": "+1"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation create",
                 kind: kinds::CX_RELATION_CREATE,
-                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "to_ref": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "relation update",
                 kind: kinds::CX_RELATION_UPDATE,
-                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b", "fields": {"weight": 1}}),
+                payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "fields": {"weight": 1}}),
                 valid: true,
             },
             OperationVector {
                 name: "relation delete",
                 kind: kinds::CX_RELATION_DELETE,
-                payload: json!({"relation_id": "cx:relation:01904100-0000-7000-8000-71604d58ec0b"}),
+                payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b"}),
                 valid: true,
             },
             OperationVector {
@@ -1764,7 +1764,7 @@ mod operation_conformance_tests {
                     "actor_id": "did:web:alice.example",
                     "read_scope": {"kind": "realm"},
                     "position": {
-                        "event_id": "cx:event:01904100-0000-7000-8000-79a90338768b",
+                        "event_id": "ck:event:01904100-0000-7000-8000-79a90338768b",
                         "hlc": "019041000000-0000-00000001"
                     }
                 }),
@@ -1774,10 +1774,10 @@ mod operation_conformance_tests {
                 name: "space create",
                 kind: kinds::CX_REALM_CREATE,
                 payload: json!({"object": {
-                    "id": "cx:realm:0196419b-0000-7000-8000-000000000000",
+                    "id": "ck:realm:0196419b-0000-7000-8000-000000000000",
                     "schema": "cx.schema.realm.v1",
                     "title": "Launch",
-                    "trust_domain": "cx:trust_domain:local",
+                    "trust_domain": "ck:trust_domain:local",
                     "created_by": "did:web:alice.example",
                     "schema_refs": ["cx.schema.realm.v1"],
                     "default_discoverability": "invite",
@@ -1803,7 +1803,7 @@ mod operation_conformance_tests {
                 name: "space update",
                 kind: kinds::CX_REALM_UPDATE,
                 payload: json!({
-                    "target_ref": "cx:realm:01904100-0000-7000-8000-000000000001",
+                    "target_ref": "ck:realm:01904100-0000-7000-8000-000000000001",
                     "patch": {
                         "title": "Launch 2"
                     }
@@ -1819,19 +1819,19 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "space container archive",
                 kind: kinds::CX_SPACE_CONTAINER_ARCHIVE,
-                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
+                payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container restore",
                 kind: kinds::CX_SPACE_CONTAINER_RESTORE,
-                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
+                payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
                 name: "space container tombstone",
                 kind: kinds::CX_SPACE_CONTAINER_TOMBSTONE,
-                payload: json!({"space_id": "cx:space:01904100-0000-7000-8000-1fb50799ad42"}),
+                payload: json!({"space_id": "ck:space:01904100-0000-7000-8000-1fb50799ad42"}),
                 valid: true,
             },
             OperationVector {
@@ -1844,25 +1844,25 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "flow create",
                 kind: kinds::CX_FLOW_CREATE,
-                payload: json!({"object": {"id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
+                payload: json!({"object": {"id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
                 valid: true,
             },
             OperationVector {
                 name: "flow update",
                 kind: kinds::CX_FLOW_UPDATE,
-                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
+                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
                 valid: true,
             },
             OperationVector {
                 name: "flow archive",
                 kind: kinds::CX_FLOW_ARCHIVE,
-                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
                 name: "flow restore",
                 kind: kinds::CX_FLOW_RESTORE,
-                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
@@ -1876,9 +1876,9 @@ mod operation_conformance_tests {
                 name: "flow move",
                 kind: kinds::CX_FLOW_MOVE,
                 payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
-                    "target_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
+                    "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
                 }),
                 valid: true,
@@ -1887,9 +1887,9 @@ mod operation_conformance_tests {
                 name: "flow reorder",
                 kind: kinds::CX_FLOW_REORDER,
                 payload: json!({
-                    "flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb",
-                    "board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001",
-                    "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002",
+                    "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
+                    "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
                 }),
                 valid: true,
@@ -1897,37 +1897,37 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "flow move missing board_space_id",
                 kind: kinds::CX_FLOW_MOVE,
-                payload: json!({"flow_id": "cx:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: false,
             },
             OperationVector {
                 name: "flow reorder missing flow_id",
                 kind: kinds::CX_FLOW_REORDER,
-                payload: json!({"board_space_id": "cx:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "cx:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
+                payload: json!({"board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
                 valid: false,
             },
             OperationVector {
                 name: "morph create",
                 kind: kinds::CX_MORPH_CREATE,
-                payload: json!({"object": {"id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["cx.schema.morph.v1"]}}),
+                payload: json!({"object": {"id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "morph_type": "task", "metadata": {"title": "Backfill"}, "schema_refs": ["cx.schema.morph.v1"]}}),
                 valid: true,
             },
             OperationVector {
                 name: "morph update",
                 kind: kinds::CX_MORPH_UPDATE,
-                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
+                payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
                 valid: true,
             },
             OperationVector {
                 name: "morph archive",
                 kind: kinds::CX_MORPH_ARCHIVE,
-                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
                 name: "morph restore",
                 kind: kinds::CX_MORPH_RESTORE,
-                payload: json!({"morph_id": "cx:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                payload: json!({"morph_id": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
@@ -1966,8 +1966,8 @@ mod operation_conformance_tests {
                 name: "applet session start",
                 kind: kinds::CX_APPLET_PROTOCOL_SESSION_START,
                 payload: json!({
-                    "applet_id": "cx:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "applet_id": "ck:applet:01904100-0000-7000-8000-aa55aa55aa55",
+                    "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "params": {},
                 }),
                 valid: true,
@@ -1976,7 +1976,7 @@ mod operation_conformance_tests {
                 name: "applet session status",
                 kind: kinds::CX_APPLET_PROTOCOL_SESSION_STATUS,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "status": "running",
                     "detail": {},
                 }),
@@ -1986,7 +1986,7 @@ mod operation_conformance_tests {
                 name: "applet bridge error",
                 kind: kinds::CX_APPLET_BRIDGE_ERROR,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-aa55aa55aa55",
+                    "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "errcode": "bridge_unavailable",
                     "message": "no upstream",
                 }),
@@ -2012,10 +2012,10 @@ mod operation_conformance_tests {
                 name: "agent session start",
                 kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
                     "protocol": "http_custom",
-                    "capability_grant": "cx:grant:01904100-0000-7000-8000-000000000099",
+                    "capability_grant": "ck:grant:01904100-0000-7000-8000-000000000099",
                 }),
                 valid: true,
             },
@@ -2023,7 +2023,7 @@ mod operation_conformance_tests {
                 name: "agent session start missing capability_grant",
                 kind: kinds::CX_AGENT_PROTOCOL_SESSION_START,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
                     "protocol": "http_custom",
                 }),
@@ -2033,7 +2033,7 @@ mod operation_conformance_tests {
                 name: "agent session status",
                 kind: kinds::CX_AGENT_PROTOCOL_SESSION_STATUS,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "status": "working",
                     "detail": {},
                 }),
@@ -2043,7 +2043,7 @@ mod operation_conformance_tests {
                 name: "agent session result",
                 kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},
                     "audit_binding": {"merkle_root": "sha256:abc"},
                 }),
@@ -2053,7 +2053,7 @@ mod operation_conformance_tests {
                 name: "agent session result missing audit_binding",
                 kind: kinds::CX_AGENT_PROTOCOL_SESSION_RESULT,
                 payload: json!({
-                    "session_id": "cx:session:01904100-0000-7000-8000-bb66bb66bb66",
+                    "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},
                 }),
                 valid: false,
@@ -2067,7 +2067,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "reaction missing key",
                 kind: kinds::CX_REACTION_ADD,
-                payload: json!({"event_id": "cx:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example"}),
+                payload: json!({"event_id": "ck:event:01904100-0000-7000-8000-79a90338768b", "actor": "did:web:alice.example"}),
                 valid: false,
             },
         ];
@@ -2326,12 +2326,12 @@ mod framework_error_routing_tests {
     fn pattern_matches_param_segment() {
         assert!(pattern_matches_path(
             "/api/v1/spaces/{space_id}",
-            "/api/v1/spaces/cx:space:01"
+            "/api/v1/spaces/ck:space:01"
         ));
         // Different segment count → no match.
         assert!(!pattern_matches_path(
             "/api/v1/spaces/{space_id}",
-            "/api/v1/spaces/cx:space:01/policy"
+            "/api/v1/spaces/ck:space:01/policy"
         ));
         // Param must be non-empty.
         assert!(!pattern_matches_path(
@@ -2344,7 +2344,7 @@ mod framework_error_routing_tests {
     fn pattern_matches_multi_param_segments() {
         assert!(pattern_matches_path(
             "/api/v1/events/{event_id}/refs/{ref_id}",
-            "/api/v1/events/cx:event:01/refs/cx:event:02"
+            "/api/v1/events/ck:event:01/refs/ck:event:02"
         ));
     }
 
@@ -2372,17 +2372,17 @@ mod framework_error_routing_tests {
             .expect("/api/v1/events is registered with at least one method");
         assert_eq!(methods, vec![Method::GET, Method::POST]);
 
-        let methods = allow_methods_for_path("/api/v1/spaces/cx:space:abc")
+        let methods = allow_methods_for_path("/api/v1/spaces/ck:space:abc")
             .expect("/api/v1/spaces/{id} resolves with a concrete id");
         assert_eq!(methods, vec![Method::GET]);
 
         // Unknown path → `None`, which is the cue for `api_not_found`
         // to emit `unrecognized_endpoint` instead of `method_not_allowed`.
         assert!(allow_methods_for_path("/api/v1/does-not-exist").is_none());
-        assert!(allow_methods_for_path("/contrix/v1/does-not-exist").is_none());
+        assert!(allow_methods_for_path("/cokret/v1/does-not-exist").is_none());
     }
 
-    /// End-to-end check that `/contrix/v1/*` unrecognized paths return
+    /// End-to-end check that `/cokret/v1/*` unrecognized paths return
     /// the canonical 404 + `unrecognized_endpoint` JSON envelope —
     /// matching the existing `/api/v1/*` contract (see
     /// `tests/http_api.rs::framework_errors_use_contrix_error_envelope`).
@@ -2396,7 +2396,7 @@ mod framework_error_routing_tests {
         let state = AppState::new(test_state_config(), Db { pool: None });
         let svc = crate::service(state);
 
-        let mut response = TestClient::get("http://server/contrix/v1/does-not-exist")
+        let mut response = TestClient::get("http://server/cokret/v1/does-not-exist")
             .send(&svc)
             .await;
         let status = response.status_code.unwrap();
@@ -2409,7 +2409,7 @@ mod framework_error_routing_tests {
     /// End-to-end check that hitting a known `/api/v1/*` path with the
     /// wrong method returns 405 + the `method_not_allowed` JSON envelope
     /// AND populates the `Allow` response header per
-    /// `contrix-spec/spec/v1/zh/sync/api-conventions.md` §10.
+    /// `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10.
     #[tokio::test]
     async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() {
         use salvo::test::{ResponseExt, TestClient};
@@ -2486,7 +2486,7 @@ mod framework_error_routing_tests {
             compaction_prune_walk_interval_seconds: 0,
             compaction_prune_walk_per_space_limit: 50,
             seed_demo_data: true,
-            trust_domain: "cx:trust_domain:soland.local".to_owned(),
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             erasure_propagation_window_ms: 604_800_000,
@@ -2499,7 +2499,7 @@ mod framework_error_routing_tests {
 #[tracing::instrument(skip_all, fields(op = "contrix_openapi_yaml"))]
 async fn contrix_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
-        .obtain::<ContrixOpenApiDoc>()
+        .obtain::<CokretOpenApiDoc>()
         .expect("openapi doc injected");
     let spec = doc.0.to_yaml().unwrap_or_else(|error| {
         tracing::error!(%error, "failed to render openapi yaml");
@@ -2547,7 +2547,7 @@ async fn wait_for_sync_token(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let header_name = salvo::http::header::HeaderName::from_static("x-contrix-wait-for");
+    let header_name = salvo::http::header::HeaderName::from_static("x-cokret-wait-for");
     let Some(header_value) = req.headers().get(&header_name) else {
         ctrl.call_next(req, depot, res).await;
         return;
@@ -2557,7 +2557,7 @@ async fn wait_for_sync_token(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_header",
-            "X-Contrix-Wait-For must be ASCII",
+            "X-Cokret-Wait-For must be ASCII",
         );
         return;
     };
@@ -2572,7 +2572,7 @@ async fn wait_for_sync_token(
                 res,
                 StatusCode::BAD_REQUEST,
                 "invalid_header",
-                "X-Contrix-Wait-For must contain cx:cursor sync tokens",
+                "X-Cokret-Wait-For must contain ck:cursor sync tokens",
             );
             return;
         }
@@ -2582,12 +2582,12 @@ async fn wait_for_sync_token(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_header",
-            "X-Contrix-Wait-For must contain at least one sync token",
+            "X-Cokret-Wait-For must contain at least one sync token",
         );
         return;
     }
     res.headers_mut().insert(
-        salvo::http::header::HeaderName::from_static("x-contrix-wait-for-satisfied"),
+        salvo::http::header::HeaderName::from_static("x-cokret-wait-for-satisfied"),
         "true".parse().unwrap(),
     );
     ctrl.call_next(req, depot, res).await;
@@ -2595,7 +2595,7 @@ async fn wait_for_sync_token(
 
 fn generate_invite_token(invite_id: &str, space_id: &str, invitee: &str) -> String {
     format!(
-        "cx:invite-token:{}",
+        "ck:invite-token:{}",
         sha256_hex(format!("{invite_id}:{space_id}:{invitee}").as_bytes())
     )
 }

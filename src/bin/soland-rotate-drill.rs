@@ -17,7 +17,7 @@
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
 //! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted anchorer
-//!    seed (`contrix:signer:soland-anchorer:<service_did>`) and writes a single-key JSON snapshot
+//!    seed (`cokret:signer:soland-anchorer:<service_did>`) and writes a single-key JSON snapshot
 //!    to `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
@@ -216,7 +216,7 @@ enum DrillError {
 
 fn keystore_id(service_did: &str) -> (String, String) {
     let app_id = format!("soland.{service_did}");
-    let key_id = format!("contrix:signer:soland-anchorer:{service_did}");
+    let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
     (app_id, key_id)
 }
 

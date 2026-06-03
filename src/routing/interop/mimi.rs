@@ -2,10 +2,10 @@
 //!
 //! Surfaces under `/api/v1/mimi/*` plus the well-known
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
-//! canonical Contrix reducer chain:
+//! canonical Cokret reducer chain:
 //!
 //!   * `POST /mimi/flows/{flow_id}/messages` -> emits a `MessageRecord` + a `cx.message.create`
-//!     projection event so the MIMI ingress shows up on the canonical Contrix timeline.
+//!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
 //!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a `cx.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic `cx.mimi.notify` projection
@@ -15,7 +15,7 @@
 //!
 //! Each canonical event carries `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so
-//! the receiving Contrix consumer can prove the message arrived
+//! the receiving Cokret consumer can prove the message arrived
 //! through the MIMI facade rather than as a native signed Move.
 
 use chrono::Duration;
@@ -117,7 +117,7 @@ async fn mimi_room_update(
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     // If the update carries a `room_binding` block, persist it as a
-    // `cx.mimi.room_binding` projection event so the Contrix
+    // `cx.mimi.room_binding` projection event so the Cokret
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
@@ -176,7 +176,7 @@ async fn mimi_room_notify(
     // spec's wire_scope taxonomy - we broadcast but don't persist
     // into projection_events so it doesn't pollute durable history.
     let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Contrix Space")
+        AppError::not_found("MIMI room is not bound to any Cokret Space")
             .with_wire_code("mimi_room_unbound")
     })?;
     let event_id = ids::generate_event_id();
@@ -254,7 +254,7 @@ async fn mimi_room_message(
         .unwrap_or_else(|| {
             format!(
                 "mimi-msg-{}",
-                operation_id.trim_start_matches("cx:operation:")
+                operation_id.trim_start_matches("ck:operation:")
             )
         });
     let original_hash = body
@@ -263,14 +263,14 @@ async fn mimi_room_message(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
 
-    // Map the MIMI message into the canonical Contrix timeline.
+    // Map the MIMI message into the canonical Cokret timeline.
     // Append a MessageRecord + a `cx.message.create` projection event so
     // the message shows up in `GET /api/v1/events?realm_id=...`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
     let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Contrix Space")
+        AppError::not_found("MIMI room is not bound to any Cokret Space")
             .with_wire_code("mimi_room_unbound")
     })?;
     let sender = body
@@ -407,7 +407,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
     let realm_id = mimi_bound_space_id(state, &room_id).await.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Contrix Space")
+        AppError::not_found("MIMI room is not bound to any Cokret Space")
             .with_wire_code("mimi_room_unbound")
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
@@ -482,7 +482,7 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
 #[endpoint(
     operation_id = "cx.mimi.identifier_query",
     tags("mimi"),
-    summary = "Resolve a MIMI / DID identifier to a reachable Contrix actor"
+    summary = "Resolve a MIMI / DID identifier to a reachable Cokret actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.mimi.identifier_query"))]
 async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
@@ -554,7 +554,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
 
     // Also emit a `cx.moderation.report` projection event so the
     // audit timeline observes the report in the same shape native
-    // Contrix reports use. The MIMI provenance is preserved under
+    // Cokret reports use. The MIMI provenance is preserved under
     // `payload.mimi_provenance`.
     // Extract room_id segment from MIMI URI
     // `mimi://provider/rooms/<id>` so we can look up a bound space if any.
@@ -573,7 +573,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         bound
     } else {
         return Err(AppError::invalid_param(
-            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Contrix Space",
+            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Cokret Space",
         )
         .with_wire_code("missing_space_binding"));
     };
@@ -700,7 +700,7 @@ fn mimi_provider_directory_value(state: &AppState) -> Value {
                 "application/mimi-content",
                 "text/plain;charset=utf-8",
                 "text/markdown;variant=GFM-MIMI",
-                "application/vnd.contrix.content+json"
+                "application/vnd.cokret.content+json"
             ],
             "room_policy_components": [
                 "roles",
@@ -997,7 +997,7 @@ fn mimi_plaintext_detected(value: &Value) -> bool {
     }
 }
 
-/// Look up which Contrix `realm_id` (if any) the MIMI `room_id` is
+/// Look up which Cokret `realm_id` (if any) the MIMI `room_id` is
 /// bound to. Scans the persistence projection event log for the
 /// most recent `cx.mimi.room_binding` event whose
 /// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
@@ -1052,7 +1052,7 @@ async fn mimi_bound_space_id(state: &AppState, room_id: &str) -> Option<String> 
 /// the top level so [`mimi_bound_space_id`] can dispatch lookups
 /// efficiently.
 ///
-/// Returns `None` when the binding payload declares no Contrix
+/// Returns `None` when the binding payload declares no Cokret
 /// `realm_id` (neither under `binding_scope.realm_id` nor at the top
 /// level). The caller is expected to surface that to the client as a
 /// 400 rather than implicitly bind the room to some default Space.
@@ -1203,6 +1203,6 @@ fn valid_mimi_content_type(value: &str) -> bool {
         "application/mimi-content"
             | "text/plain;charset=utf-8"
             | "text/markdown;variant=GFM-MIMI"
-            | "application/vnd.contrix.content+json"
+            | "application/vnd.cokret.content+json"
     )
 }

@@ -64,7 +64,7 @@ pub struct AppConfig {
     /// `now - replay_window_seconds` OR newer than `now +
     /// replay_window_seconds` are rejected.
     ///
-    /// Default 300s = 5 min — matches the Contrix spec recommendation in
+    /// Default 300s = 5 min — matches the Cokret spec recommendation in
     /// `signatures-and-replay.md`. Set to `0` to disable (dev / tests
     /// using fixed-time fixtures rely on this; production deployments
     /// MUST keep this > 0).
@@ -113,7 +113,7 @@ pub struct AppConfig {
     /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
     /// false (default), only `anchorer_signing_key_seed` (env-loaded) is
-    /// honored. The KeyStore key id is `contrix:signer:soland-anchorer:<service_did>`.
+    /// honored. The KeyStore key id is `cokret:signer:soland-anchorer:<service_did>`.
     ///
     /// Behavior when `use_keystore=true`:
     /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
@@ -209,12 +209,12 @@ pub struct AppConfig {
     /// Round R2/R3 (T08) — deployment trust domain id, used to bind
     /// `cx.cross_signing.reset` events to this Principal Server so the
     /// same proof bytes cannot be replayed cross-domain. Loaded from
-    /// `SOLAND_TRUST_DOMAIN` (must match `cx:trust_domain:<scope>`,
+    /// `SOLAND_TRUST_DOMAIN` (must match `ck:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
-    /// Defaults to `cx:trust_domain:<host_of_service_did>`.
+    /// Defaults to `ck:trust_domain:<host_of_service_did>`.
     pub trust_domain: String,
     /// When true, `AppState::new` seeds a deterministic demo Space
-    /// (`cx:space:0196419b-...`), demo account (`did:web:alice.example`),
+    /// (`ck:space:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
     /// production deployments don't ship a globally-shared "demo" Space
     /// that collides across federated peers. Test harnesses opt in via
@@ -911,15 +911,15 @@ fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
 /// Round R2/R3 (T08) — derive a deployment-bound trust domain id.
 ///
 /// Order of resolution:
-/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `cx:trust_domain:<scope>` per SDK
+/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ck:trust_domain:<scope>` per SDK
 ///    [`contrix_sdk::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_did` — strip the DID method prefix and lowercase the
-///    remainder, then prefix with `cx:trust_domain:`.
+///    remainder, then prefix with `ck:trust_domain:`.
 fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.
         contrix_sdk::TypedTrustDomainId::new(value.clone()).map_err(|e| {
-            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be cx:trust_domain:<scope>: {e}")
+            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ck:trust_domain:<scope>: {e}")
         })?;
         return Ok(value);
     }
@@ -940,7 +940,7 @@ fn derive_trust_domain(service_did: &str) -> anyhow::Result<String> {
     } else {
         scope
     };
-    let candidate = format!("cx:trust_domain:{scope}");
+    let candidate = format!("ck:trust_domain:{scope}");
     // Final safety check.
     contrix_sdk::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
         anyhow::anyhow!(

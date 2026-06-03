@@ -24,18 +24,18 @@ jobs:
         with:
           path: soland
 
-      - name: Checkout Contrix Rust SDK
+      - name: Checkout Cokret Rust SDK
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/contrix-rust-sdk
-          path: contrix-rust-sdk
+          repository: ${{ github.repository_owner }}/cokret-rust-sdk
+          path: cokret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Contrix Spec
+      - name: Checkout Cokret Spec
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.repository_owner }}/contrix-spec
-          path: contrix-spec
+          repository: ${{ github.repository_owner }}/cokret-spec
+          path: cokret-spec
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Set up QEMU
@@ -62,8 +62,8 @@ jobs:
           context: soland
           file: soland/Dockerfile
           build-contexts: |
-            contrix-rust-sdk=contrix-rust-sdk
-            contrix-spec=contrix-spec
+            cokret-rust-sdk=cokret-rust-sdk
+            cokret-spec=cokret-spec
           load: true
           tags: ${{ env.IMAGE_NAME }}
           labels: ${{ steps.meta.outputs.labels }}

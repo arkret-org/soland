@@ -391,7 +391,7 @@ fn trust_domain_from_service_did(service_did: &str) -> String {
         .or_else(|| service_did.strip_prefix("did:webvh:"))
         .unwrap_or(service_did)
         .replace(':', ".");
-    format!("cx:trust_domain:{scope}")
+    format!("ck:trust_domain:{scope}")
 }
 
 fn env_bool(name: &str) -> Option<bool> {
@@ -521,7 +521,7 @@ mod tests {
         unsafe {
             std::env::set_var(
                 SOLAND_FEDERATION_DENYLIST,
-                "did:web:blocked.example, domain:evil.example, cx:trust_domain:bad.example",
+                "did:web:blocked.example, domain:evil.example, ck:trust_domain:bad.example",
             );
         }
         assert!(federation_origin_denied("did:web:blocked.example"));

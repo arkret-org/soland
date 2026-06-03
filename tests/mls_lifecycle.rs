@@ -72,7 +72,7 @@ fn test_config() -> AppConfig {
         compaction_prune_walk_interval_seconds: 0,
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: false,
-        trust_domain: "cx:trust_domain:soland-mls-test.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland-mls-test.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -160,11 +160,11 @@ async fn mls_lifecycle_end_to_end() {
     let state = AppState::new(test_config(), Db { pool: None });
 
     let alice_did = "did:web:alice.example";
-    let alice_device = "cx:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
 
     // ── 1. upload a KeyPackage (W1C: cx.keys.keypackages.upload) ──
-    let keypackage_id = "cx:mls_keypackage:t-01";
+    let keypackage_id = "ck:mls_keypackage:t-01";
     let publish_body = json!({
         "keypackage_id": keypackage_id,
         "actor_did": alice_did,
@@ -200,21 +200,21 @@ async fn mls_lifecycle_end_to_end() {
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
             "keypackage_id": keypackage_id,
-            "group_id": "cx:mls_group:abc"
+            "group_id": "ck:mls_group:abc"
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(claim_resp.status_code, Some(StatusCode::OK));
     let mut claim_resp = claim_resp;
     let claim_json: Value = claim_resp.take_json().await.unwrap();
-    assert_eq!(claim_json["group_id"], json!("cx:mls_group:abc"));
+    assert_eq!(claim_json["group_id"], json!("ck:mls_group:abc"));
 
     // ── 2b. second claim must collide with 409 ───────────────────
     let collide_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
             "keypackage_id": keypackage_id,
-            "group_id": "cx:mls_group:second"
+            "group_id": "ck:mls_group:second"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -232,14 +232,14 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     let bob_did = "did:web:bob.example";
-    let bob_device = "cx:device:01904100-0000-7000-8000-b0b0e0000001";
-    let realm_id = "cx:realm:01904100-0000-7000-8000-00000000e2ee";
-    let group_id = "cx:mls_group:abc";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b0e0000001";
+    let realm_id = "ck:realm:01904100-0000-7000-8000-00000000e2ee";
+    let group_id = "ck:mls_group:abc";
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
-    let frontier_ref = "cx:event:01904100-0000-7000-8000-00000000f00d";
+    let frontier_ref = "ck:event:01904100-0000-7000-8000-00000000f00d";
     let keypackage_ref = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
     let welcome_ref =
-        "cx:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
+        "ck:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
     let governance_binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -254,7 +254,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
     let realm_create = signed_event(
-        "cx:event:01904100-0000-7000-8000-00000000e2e0",
+        "ck:event:01904100-0000-7000-8000-00000000e2e0",
         1,
         alice_did,
         alice_device,
@@ -266,7 +266,7 @@ async fn mls_lifecycle_end_to_end() {
                 "schema": "cx.schema.realm.v1",
                 "title": "MLS lifecycle",
                 "created_by": alice_did,
-                "trust_domain": "cx:trust_domain:soland-mls-test.local",
+                "trust_domain": "ck:trust_domain:soland-mls-test.local",
                 "schema_refs": ["cx.schema.realm.v1"],
                 "default_discoverability": "listed",
                 "default_join_rule": "invite",
@@ -295,7 +295,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(create_resp.status_code, Some(StatusCode::OK));
 
     let genesis = signed_event(
-        "cx:event:01904100-0000-7000-8000-00000000e2e1",
+        "ck:event:01904100-0000-7000-8000-00000000e2e1",
         2,
         alice_did,
         alice_device,
@@ -334,7 +334,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 3b. Welcome is a durable event and mirrors into the pending queue ─
     let welcome = signed_event(
-        "cx:event:01904100-0000-7000-8000-00000000e2e2",
+        "ck:event:01904100-0000-7000-8000-00000000e2e2",
         3,
         alice_did,
         alice_device,
@@ -358,7 +358,7 @@ async fn mls_lifecycle_end_to_end() {
             "welcome_ref": welcome_ref,
             "ciphertext": "opaque-mls-welcome",
             "expires_at": "2026-05-25T01:00:00Z",
-            "commit_ref": "cx:event:01904100-0000-7000-8000-00000000e2e3",
+            "commit_ref": "ck:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
     );
@@ -392,7 +392,7 @@ async fn mls_lifecycle_end_to_end() {
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     });
     let commit = signed_event(
-        "cx:event:01904100-0000-7000-8000-00000000e2e3",
+        "ck:event:01904100-0000-7000-8000-00000000e2e3",
         4,
         alice_did,
         alice_device,
@@ -401,7 +401,7 @@ async fn mls_lifecycle_end_to_end() {
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
-            "base_epoch_ref": "cx:event:01904100-0000-7000-8000-00000000e2e1",
+            "base_epoch_ref": "ck:event:01904100-0000-7000-8000-00000000e2e1",
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
@@ -438,7 +438,7 @@ async fn mls_lifecycle_end_to_end() {
     let welcomes = drain_json["welcomes"].as_array().expect("welcomes array");
     assert_eq!(welcomes.len(), 1);
     assert_eq!(welcomes[0]["welcome_id"], json!(welcome_ref));
-    assert_eq!(welcomes[0]["group_id"], json!("cx:mls_group:abc"));
+    assert_eq!(welcomes[0]["group_id"], json!("ck:mls_group:abc"));
     assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_ref));
     assert!(
         welcomes[0]["delivered_at"].is_i64(),

@@ -1,6 +1,6 @@
 //! CXP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
 //!
-//! Mounts the two spec endpoints introduced in contrix-spec b47ff6ec:
+//! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
 //!
 //! - `POST /api/v1/identity/recovery-policy`  — persist + advance a recovery policy.
 //! - `POST /api/v1/identity/recovery-receipt` — record a recovery receipt for a witnessed session.
@@ -294,7 +294,7 @@ async fn recovery_receipts_get(
 // binding (device_id / principal_id / recovery_session_id / ssk_generation +
 // cross_signing_binding + device_signature shape), then EMITS the authorize plus
 // a `cx.device.list_update` onto the principal's control realm (a deterministic
-// per-principal `cx:realm:` auto-materialized by the projector) via
+// per-principal `ck:realm:` auto-materialized by the projector) via
 // `accept_local_operations` — real schema validation + reducer apply. The
 // session transitions to `completed` and the response is the schema's
 // complete_response (authorization_event_id / device_list_update_event_id).
@@ -421,15 +421,15 @@ async fn recovery_session_create(
         .with_wire_code("recovery_principal_isolation"));
     }
     let requesting_device_id = require_string(&payload, "requesting_device_id")?;
-    if !requesting_device_id.starts_with("cx:device:") {
+    if !requesting_device_id.starts_with("ck:device:") {
         return Err(AppError::invalid_param(format!(
-            "requesting_device_id `{requesting_device_id}` must start with cx:device:",
+            "requesting_device_id `{requesting_device_id}` must start with ck:device:",
         )));
     }
     let trust_domain = require_string(&payload, "trust_domain")?;
-    if !trust_domain.starts_with("cx:trust_domain:") {
+    if !trust_domain.starts_with("ck:trust_domain:") {
         return Err(AppError::invalid_param(format!(
-            "trust_domain `{trust_domain}` must start with cx:trust_domain:",
+            "trust_domain `{trust_domain}` must start with ck:trust_domain:",
         )));
     }
     // Accepted cross-signing generation the requester believes is current. The
@@ -943,13 +943,13 @@ async fn recovery_session_complete(
 }
 
 /// Deterministic principal control realm id for a principal DID
-/// (`cx:realm:<uuidv7>`). Mirrors `account::principal_space_for_did` but in the
+/// (`ck:realm:<uuidv7>`). Mirrors `account::principal_space_for_did` but in the
 /// realm namespace: device-control events (`cx.device.authorize`,
 /// `cx.device.list_update`, future `cx.cross_signing.publish`) land here. The
 /// realm is auto-materialized by the projector on the first accepted op.
 pub fn principal_control_realm_for_did(principal_did: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"cx:realm:principal-control:v1:");
+    hasher.update(b"ck:realm:principal-control:v1:");
     hasher.update(principal_did.as_bytes());
     let digest = hasher.finalize();
     let mut bytes = [0u8; 16];
@@ -961,7 +961,7 @@ pub fn principal_control_realm_for_did(principal_did: &str) -> String {
         slice.iter().map(|b| format!("{b:02x}")).collect::<String>()
     };
     format!(
-        "cx:realm:{}-{}-{}-{}-{}",
+        "ck:realm:{}-{}-{}-{}-{}",
         group(&bytes[0..4]),
         group(&bytes[4..6]),
         group(&bytes[6..8]),
@@ -1288,9 +1288,9 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
     let principal_id = require_did(payload, "principal_id")?;
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = require_string(payload, "trust_domain")?;
-    if !trust_domain.starts_with("cx:trust_domain:") {
+    if !trust_domain.starts_with("ck:trust_domain:") {
         return Err(AppError::invalid_param(format!(
-            "trust_domain `{trust_domain}` must start with cx:trust_domain:",
+            "trust_domain `{trust_domain}` must start with ck:trust_domain:",
         )));
     }
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
@@ -1310,7 +1310,7 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
         }
         _ => {
             return Err(AppError::invalid_param(
-                "supersedes must be null or a cx:policy:<uuidv7> string",
+                "supersedes must be null or a ck:policy:<uuidv7> string",
             ));
         }
     };
@@ -1394,24 +1394,24 @@ fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, App
 fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, AppError> {
     require_const_string(payload, "schema", "cx.schema.recovery_receipt.v1")?;
     let receipt_id = require_string(payload, "receipt_id")?;
-    if !receipt_id.starts_with("cx:receipt:") {
+    if !receipt_id.starts_with("ck:receipt:") {
         return Err(AppError::invalid_param(format!(
-            "receipt_id `{receipt_id}` must start with cx:receipt:",
+            "receipt_id `{receipt_id}` must start with ck:receipt:",
         )));
     }
     let principal_id = require_did(payload, "principal_id")?;
     let recovery_session_id = require_string(payload, "recovery_session_id")?;
-    if !recovery_session_id.starts_with("cx:recovery_session:") {
+    if !recovery_session_id.starts_with("ck:recovery_session:") {
         return Err(AppError::invalid_param(format!(
-            "recovery_session_id `{recovery_session_id}` must start with cx:recovery_session:",
+            "recovery_session_id `{recovery_session_id}` must start with ck:recovery_session:",
         )));
     }
     // UUIDv7 pattern (final 36 chars after the prefix).
     let session_uuid = recovery_session_id
-        .strip_prefix("cx:recovery_session:")
+        .strip_prefix("ck:recovery_session:")
         .unwrap_or("");
     let parsed = uuid::Uuid::parse_str(session_uuid).map_err(|_| {
-        AppError::invalid_param("recovery_session_id MUST be cx:recovery_session:<uuidv7> per spec")
+        AppError::invalid_param("recovery_session_id MUST be ck:recovery_session:<uuidv7> per spec")
             .with_wire_code(crate::error::reasons::CURSOR_INTEGRITY_INVALID)
     })?;
     if parsed.get_version_num() != 7 {
@@ -1424,9 +1424,9 @@ fn validate_recovery_receipt(payload: &Value) -> Result<RecoveryReceiptRecord, A
     let policy_version = require_u32_min(payload, "policy_version", 1)?;
     let trust_domain = require_string(payload, "trust_domain")?;
     let new_device_id = require_string(payload, "new_device_id")?;
-    if !new_device_id.starts_with("cx:device:") {
+    if !new_device_id.starts_with("ck:device:") {
         return Err(AppError::invalid_param(format!(
-            "new_device_id `{new_device_id}` must start with cx:device:",
+            "new_device_id `{new_device_id}` must start with ck:device:",
         )));
     }
     let proof_summary = payload
@@ -1893,14 +1893,14 @@ fn require_rfc3339(payload: &Value, key: &str) -> Result<chrono::DateTime<chrono
 }
 
 fn require_policy_id_pattern(value: &str) -> Result<(), AppError> {
-    if !value.starts_with("cx:policy:") {
+    if !value.starts_with("ck:policy:") {
         return Err(AppError::invalid_param(format!(
-            "policy_id `{value}` must start with cx:policy:",
+            "policy_id `{value}` must start with ck:policy:",
         )));
     }
-    let uuid_part = value.trim_start_matches("cx:policy:");
+    let uuid_part = value.trim_start_matches("ck:policy:");
     let parsed = uuid::Uuid::parse_str(uuid_part)
-        .map_err(|_| AppError::invalid_param("policy_id MUST be cx:policy:<uuidv7>"))?;
+        .map_err(|_| AppError::invalid_param("policy_id MUST be ck:policy:<uuidv7>"))?;
     if parsed.get_version_num() != 7 {
         return Err(AppError::invalid_param(
             "policy_id MUST be uuidv7 (version 7)",

@@ -56,7 +56,7 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "pending_welcome",
     "private_account_state",
 ];
-const DELETE_PROOF_HEADER: &str = "x-contrix-key-backup-delete-proof";
+const DELETE_PROOF_HEADER: &str = "x-cokret-key-backup-delete-proof";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -317,9 +317,9 @@ fn validate_key_backup_body(
         )
         .with_wire_code("legacy_secret_storage_wire_form"));
     }
-    // Also reject the embedded `cx:secret_storage:` typed-id form that
+    // Also reject the embedded `ck:secret_storage:` typed-id form that
     // marked the pre-series wire envelopes.
-    if backup_id.starts_with("cx:secret_storage:") {
+    if backup_id.starts_with("ck:secret_storage:") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "legacy_secret_storage_wire_form: senders MUST use the chained key-backup envelope",
@@ -346,10 +346,10 @@ fn validate_key_backup_body(
         .get("series_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !series_id.starts_with("cx:backup_series:") {
+    if !series_id.starts_with("ck:backup_series:") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "series_id must be a cx:backup_series:<uuidv7> typed id",
+            "series_id must be a ck:backup_series:<uuidv7> typed id",
         ));
     }
     let series_seq = object.get("series_seq").and_then(Value::as_u64);
@@ -496,9 +496,9 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
         .get("policy_id")
         .and_then(Value::as_str)
         .ok_or_else(|| schema_error("recovery_policy_ref.policy_id is required"))?;
-    if !policy_id.starts_with("cx:policy:") {
+    if !policy_id.starts_with("ck:policy:") {
         return Err(schema_error(format!(
-            "recovery_policy_ref.policy_id `{policy_id}` must start with cx:policy:"
+            "recovery_policy_ref.policy_id `{policy_id}` must start with ck:policy:"
         )));
     }
     let version = obj
@@ -838,7 +838,7 @@ async fn put_key_backup(
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
-        ("series_id" = Option<String>, Query, description = "Filter by cx:backup_series:<uuidv7>"),
+        ("series_id" = Option<String>, Query, description = "Filter by ck:backup_series:<uuidv7>"),
         ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history / external)"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
@@ -978,8 +978,8 @@ mod tests {
     use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
-    const BACKUP_ID: &str = "cx:backup:01964137-0000-7000-8000-000000000001";
-    const DEVICE_ID: &str = "cx:device:01964137-0000-7000-8000-000000000001";
+    const BACKUP_ID: &str = "ck:backup:01964137-0000-7000-8000-000000000001";
+    const DEVICE_ID: &str = "ck:device:01964137-0000-7000-8000-000000000001";
 
     fn key_backup_body(backup_class: &str, item_type: &str, encryption: Value) -> Value {
         json!({
@@ -988,7 +988,7 @@ mod tests {
             "backup_class": backup_class,
             "backup_version": "kb_1",
             "created_at": "2026-05-30T00:00:00Z",
-            "series_id": "cx:backup_series:01964137-0000-7000-8000-000000000001",
+            "series_id": "ck:backup_series:01964137-0000-7000-8000-000000000001",
             "series_seq": 0,
             "encryption": encryption,
             "contents": [{
@@ -1108,7 +1108,7 @@ mod tests {
 
     // ── C-P5: recovery_policy_ref binding (structural) ──────────────────────
 
-    const POLICY_REF: &str = "cx:policy:01964137-0000-7000-8000-0000000000aa";
+    const POLICY_REF: &str = "ck:policy:01964137-0000-7000-8000-0000000000aa";
 
     fn did_recovery_signed_fields() -> Value {
         json!([
@@ -1276,7 +1276,7 @@ mod tests {
         ));
         assert!(!is_development_delete_proof(
             &proof,
-            "cx:backup:01964137-0000-7000-8000-000000000099",
+            "ck:backup:01964137-0000-7000-8000-000000000099",
             ACTOR
         ));
     }

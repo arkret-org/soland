@@ -192,7 +192,7 @@ pub struct FlowProjectionRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CXP-0007 — the Circle (`cx:circle:…`) this Flow is scoped to, if any.
+    /// CXP-0007 — the Circle (`ck:circle:…`) this Flow is scoped to, if any.
     /// Durable so circle-scoped message visibility survives restart.
     pub scope_circle_id: Option<String>,
 }
@@ -8433,7 +8433,7 @@ mod tests {
             origin: "did:web:remote.example".to_owned(),
             txn_id: "txn1".to_owned(),
             destination: "did:web:soland.local".to_owned(),
-            realm_id: Some("cx:space:01904100-0000-7000-8000-cfc039892036".to_owned()),
+            realm_id: Some("ck:space:01904100-0000-7000-8000-cfc039892036".to_owned()),
             content_digest: "sha256:first".to_owned(),
             status: "accepted".to_owned(),
             response: serde_json::json!({"ok": true}),
@@ -8475,7 +8475,7 @@ mod tests {
             contract_digest: "sha256:abc".to_owned(),
             fetched_at: now,
             remote_contract: serde_json::json!({
-                "contract": "contrix.push.bridge",
+                "contract": "cokret.push.bridge",
                 "version": "v1.0",
                 "provider_capabilities_version": "2026-05-07",
             }),
@@ -8701,7 +8701,7 @@ mod tests {
     async fn memory_push_device_store_register_unregister_and_snapshot() {
         let store = MemoryPushDeviceStore::new();
         let dev1 = serde_json::json!({
-            "registration_id": "cx:push:dev-1",
+            "registration_id": "ck:push:dev-1",
             "actor": "did:web:alice.example",
             "device_id": "dev-1",
             "push_gateway": "https://floria.example",
@@ -8709,7 +8709,7 @@ mod tests {
             "app_id": "yougen"
         });
         let dev2 = serde_json::json!({
-            "registration_id": "cx:push:dev-2",
+            "registration_id": "ck:push:dev-2",
             "actor": "did:web:bob.example",
             "device_id": "dev-2",
             "push_gateway": "https://floria.example",
@@ -8745,7 +8745,7 @@ mod tests {
             event_id: event_id.to_owned(),
             actor_id: actor.to_owned(),
             actor_seq: seq,
-            realm_id: Some("cx:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             kind: "cx.message.create".to_owned(),
             schema_id: "cx.schema.event.message.v1".to_owned(),
             canonical_digest: "sha256:abc".to_owned(),
@@ -8776,7 +8776,7 @@ mod tests {
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(realm_id.to_owned()).unwrap(),
             "cx.message.create",
-            serde_json::json!({"sender": "did:web:alice", "thread_id": "cx:flow:1"}),
+            serde_json::json!({"sender": "did:web:alice", "thread_id": "ck:flow:1"}),
         );
         op.created_at = Utc::now();
         op
@@ -8785,18 +8785,18 @@ mod tests {
     #[tokio::test]
     async fn memory_federation_operations_store_dedups_and_filters_by_space() {
         let store = MemoryFederationOperationsStore::new();
-        let space_a = "cx:realm:0196419b-0000-7000-8000-00000000aaaa";
-        let space_b = "cx:realm:0196419b-0000-7000-8000-00000000bbbb";
-        let op1 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000001", space_a);
-        let op2 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000002", space_a);
-        let op3 = make_test_operation("cx:operation:0196419b-0000-7000-8000-000000000003", space_b);
+        let space_a = "ck:realm:0196419b-0000-7000-8000-00000000aaaa";
+        let space_b = "ck:realm:0196419b-0000-7000-8000-00000000bbbb";
+        let op1 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000001", space_a);
+        let op2 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000002", space_a);
+        let op3 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000003", space_b);
 
         store.append(op1.clone()).await.unwrap();
         store.append(op2.clone()).await.unwrap();
         store.append(op3.clone()).await.unwrap();
 
         assert!(store.contains(op1.operation_id.as_str()).await.unwrap());
-        assert!(!store.contains("cx:operation:missing").await.unwrap());
+        assert!(!store.contains("ck:operation:missing").await.unwrap());
         assert_eq!(store.list_for_space(space_a).await.unwrap().len(), 2);
         assert_eq!(store.list_for_space(space_b).await.unwrap().len(), 1);
         assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
@@ -8807,8 +8807,8 @@ mod tests {
         let store = MemoryMultisigPendingStore::new();
         let now = Utc::now();
         let record = MultisigPendingRecord {
-            anchor_id: "cx:anchor:sha256:lease".to_owned(),
-            realm_id: "cx:space:0196419b-0000-7000-8000-00000000abcd".to_owned(),
+            anchor_id: "ck:anchor:sha256:lease".to_owned(),
+            realm_id: "ck:space:0196419b-0000-7000-8000-00000000abcd".to_owned(),
             threshold_k: 2,
             threshold_n: 3,
             members: vec![
@@ -8829,14 +8829,14 @@ mod tests {
         let lease_until = now + chrono::Duration::seconds(60);
         // First node successfully claims.
         let (won_a, seq_a) = store
-            .try_claim("cx:anchor:sha256:lease", "node-A", now, lease_until)
+            .try_claim("ck:anchor:sha256:lease", "node-A", now, lease_until)
             .await
             .unwrap();
         assert!(won_a);
         assert_eq!(seq_a, 1);
         // Second node bounces while lease is live.
         let (won_b, seq_b) = store
-            .try_claim("cx:anchor:sha256:lease", "node-B", now, lease_until)
+            .try_claim("ck:anchor:sha256:lease", "node-B", now, lease_until)
             .await
             .unwrap();
         assert!(!won_b);
@@ -8845,7 +8845,7 @@ mod tests {
         let later = lease_until + chrono::Duration::seconds(1);
         let (won_b2, seq_b2) = store
             .try_claim(
-                "cx:anchor:sha256:lease",
+                "ck:anchor:sha256:lease",
                 "node-B",
                 later,
                 later + chrono::Duration::seconds(60),
@@ -8856,10 +8856,10 @@ mod tests {
         assert_eq!(seq_b2, 2, "claim_seq must bump on every successful claim");
         // Release by node-B clears the lease so anyone can re-claim.
         store
-            .release_claim("cx:anchor:sha256:lease", "node-B")
+            .release_claim("ck:anchor:sha256:lease", "node-B")
             .await
             .unwrap();
-        let row = store.get("cx:anchor:sha256:lease").await.unwrap().unwrap();
+        let row = store.get("ck:anchor:sha256:lease").await.unwrap().unwrap();
         assert!(row.claimed_by_node_id.is_none());
         assert_eq!(
             row.claim_seq, 2,
@@ -8879,13 +8879,13 @@ mod tests {
     async fn memory_moderation_store_append_and_list_matches_trait() {
         let store = MemoryModerationStore::new();
         let report = serde_json::json!({
-            "report_id": "cx:report:01",
+            "report_id": "ck:report:01",
             "reporter": "did:web:alice.example",
             "target_actor": "did:web:bob.example",
             "reason": "spam"
         });
         let action = serde_json::json!({
-            "action_id": "cx:moderation_queue_item:01",
+            "action_id": "ck:moderation_queue_item:01",
             "moderator": "did:web:mod.example",
             "target_actor": "did:web:bob.example",
             "action_kind": "warn"
@@ -8896,7 +8896,7 @@ mod tests {
 
         let reports = store.list_reports().await.unwrap();
         assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0]["report_id"], "cx:report:01");
+        assert_eq!(reports[0]["report_id"], "ck:report:01");
 
         let actions = store.list_actions().await.unwrap();
         assert_eq!(actions.len(), 1);
@@ -9006,8 +9006,8 @@ mod tests {
         let store = MemorySpaceInviteStore::new();
         let now = Utc::now();
         let record = SpaceInviteRecord {
-            invite_id: "cx:invite:01".to_owned(),
-            realm_id: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            invite_id: "ck:invite:01".to_owned(),
+            realm_id: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
             inviter: "did:web:alice.example".to_owned(),
             invitee: Some("did:web:bob.example".to_owned()),
             invite_token: "tok-abc".to_owned(),
@@ -9017,7 +9017,7 @@ mod tests {
         };
         store.put(record.clone()).await.unwrap();
 
-        let fetched = store.get("cx:invite:01").await.unwrap().unwrap();
+        let fetched = store.get("ck:invite:01").await.unwrap().unwrap();
         assert_eq!(fetched.invite_token, "tok-abc");
         assert_eq!(fetched.status, "pending");
         assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
@@ -9028,12 +9028,12 @@ mod tests {
             ..record
         };
         store.put(updated).await.unwrap();
-        let after = store.get("cx:invite:01").await.unwrap().unwrap();
+        let after = store.get("ck:invite:01").await.unwrap().unwrap();
         assert_eq!(after.status, "accepted");
 
         let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
-        assert!(store.get("cx:invite:missing").await.unwrap().is_none());
+        assert!(store.get("ck:invite:missing").await.unwrap().is_none());
     }
 
     // ── Memory parity tests for the recovery / realtime sub-stores
@@ -9045,7 +9045,7 @@ mod tests {
     async fn memory_key_backup_store_put_get_snapshot_matches_trait() {
         let store = MemoryKeyBackupStore::new();
         let envelope = serde_json::json!({
-            "backup_id": "cx:backup:01",
+            "backup_id": "ck:backup:01",
             "account_id": "did:web:alice.example",
             "device_id": "device-1",
             "scheme": "x25519-aead-ratchet",
@@ -9053,20 +9053,20 @@ mod tests {
             "key_material_encrypted_b64": "AAAA"
         });
         store
-            .put("cx:backup:01".to_owned(), envelope.clone())
+            .put("ck:backup:01".to_owned(), envelope.clone())
             .await
             .unwrap();
 
-        let fetched = store.get("cx:backup:01").await.unwrap().unwrap();
-        assert_eq!(fetched["backup_id"], "cx:backup:01");
+        let fetched = store.get("ck:backup:01").await.unwrap().unwrap();
+        assert_eq!(fetched["backup_id"], "ck:backup:01");
         assert_eq!(fetched["scheme"], "x25519-aead-ratchet");
 
         let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
 
-        assert!(store.delete("cx:backup:01").await.unwrap());
-        assert!(!store.delete("cx:backup:01").await.unwrap());
-        assert!(store.get("cx:backup:01").await.unwrap().is_none());
+        assert!(store.delete("ck:backup:01").await.unwrap());
+        assert!(!store.delete("ck:backup:01").await.unwrap());
+        assert!(store.get("ck:backup:01").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -9077,8 +9077,8 @@ mod tests {
         participants.insert("did:web:alice.example".to_owned());
         participants.insert("did:web:bob.example".to_owned());
         let record = WebrtcSessionRecord {
-            session_id: "cx:call:01".to_owned(),
-            realm_id: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            session_id: "ck:call:01".to_owned(),
+            realm_id: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
             created_by: "did:web:alice.example".to_owned(),
             participants,
             mode: "p2p".to_owned(),
@@ -9092,15 +9092,15 @@ mod tests {
         };
         store.put(record).await.unwrap();
 
-        let fetched = store.get("cx:call:01").await.unwrap().unwrap();
-        assert_eq!(fetched.session_id, "cx:call:01");
+        let fetched = store.get("ck:call:01").await.unwrap().unwrap();
+        assert_eq!(fetched.session_id, "ck:call:01");
         assert_eq!(fetched.participants.len(), 2);
         assert_eq!(fetched.next_seq, 0);
 
         // Participant appends a signal — seq is assigned by the store.
         let appended = store
             .append_signal(
-                "cx:call:01",
+                "ck:call:01",
                 "did:web:alice.example",
                 Box::new(move |seq| WebrtcSignalRecord {
                     seq,
@@ -9115,7 +9115,7 @@ mod tests {
             .unwrap();
         assert_eq!(appended.seq, 0);
 
-        let after = store.get("cx:call:01").await.unwrap().unwrap();
+        let after = store.get("ck:call:01").await.unwrap().unwrap();
         assert_eq!(after.next_seq, 1);
         assert_eq!(after.signals.len(), 1);
         assert_eq!(after.signals[0].message_type, "offer");
@@ -9124,7 +9124,7 @@ mod tests {
         assert!(
             store
                 .append_signal(
-                    "cx:call:01",
+                    "ck:call:01",
                     "did:web:carol.example",
                     Box::new(move |seq| WebrtcSignalRecord {
                         seq,
@@ -9140,8 +9140,8 @@ mod tests {
         );
 
         // Delete clears the row.
-        assert!(store.delete("cx:call:01").await.unwrap());
-        assert!(store.get("cx:call:01").await.unwrap().is_none());
+        assert!(store.delete("ck:call:01").await.unwrap());
+        assert!(store.get("ck:call:01").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -9149,10 +9149,10 @@ mod tests {
         let store = MemoryPolicyDocumentStore::new();
         let now = Utc::now();
         let alice_doc = PolicyDocumentRecord {
-            policy_id: "cx:policy:01".to_owned(),
+            policy_id: "ck:policy:01".to_owned(),
             owner: "did:web:alice.example".to_owned(),
             scope: "space".to_owned(),
-            subject_ref: "cx:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            subject_ref: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
             policy_type: "rbac".to_owned(),
             payload: serde_json::json!({
                 "version": 5,
@@ -9163,10 +9163,10 @@ mod tests {
             updated_at: now,
         };
         let bob_doc = PolicyDocumentRecord {
-            policy_id: "cx:policy:02".to_owned(),
+            policy_id: "ck:policy:02".to_owned(),
             owner: "did:web:bob.example".to_owned(),
             scope: "space".to_owned(),
-            subject_ref: "cx:space:0196419b-0000-7000-8000-000000000002".to_owned(),
+            subject_ref: "ck:space:0196419b-0000-7000-8000-000000000002".to_owned(),
             policy_type: "rbac".to_owned(),
             payload: serde_json::json!({"version": 1, "verification_method": "did:web:bob.example"}),
             active: true,
@@ -9175,13 +9175,13 @@ mod tests {
         store.put(alice_doc.clone()).await.unwrap();
         store.put(bob_doc.clone()).await.unwrap();
 
-        let fetched = store.get("cx:policy:01").await.unwrap().unwrap();
+        let fetched = store.get("ck:policy:01").await.unwrap().unwrap();
         assert_eq!(fetched.owner, "did:web:alice.example");
         assert_eq!(fetched.payload["version"], 5);
 
         let alice_only = store.list_for_owner("did:web:alice.example").await.unwrap();
         assert_eq!(alice_only.len(), 1);
-        assert_eq!(alice_only[0].policy_id, "cx:policy:01");
+        assert_eq!(alice_only[0].policy_id, "ck:policy:01");
 
         let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 2);
@@ -9195,10 +9195,10 @@ mod tests {
             .into_iter()
             .find(|record| record.subject_ref.ends_with("000000000002"))
             .unwrap();
-        assert_eq!(found.policy_id, "cx:policy:02");
+        assert_eq!(found.policy_id, "ck:policy:02");
 
-        assert!(store.delete("cx:policy:01").await.unwrap());
-        assert!(store.get("cx:policy:01").await.unwrap().is_none());
+        assert!(store.delete("ck:policy:01").await.unwrap());
+        assert!(store.get("ck:policy:01").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -9209,46 +9209,46 @@ mod tests {
         // backend they are parallel BTreeMaps on the same struct.
         let store = MemoryKeyBackupStore::new();
         let ticket = serde_json::json!({
-            "ticket_id": "cx:restore:01",
+            "ticket_id": "ck:restore:01",
             "account_id": "did:web:alice.example",
             "status": "issued"
         });
         let executor = serde_json::json!({
-            "ticket_id": "cx:restore:01",
+            "ticket_id": "ck:restore:01",
             "stage": "ExecutorRunning",
             "started_at": "2026-05-10T00:00:00Z"
         });
         let approval = serde_json::json!({
-            "ticket_id": "cx:restore:01",
+            "ticket_id": "ck:restore:01",
             "stage": "Approving",
             "approver": "did:web:carol.example"
         });
 
         store
-            .put_ticket("cx:restore:01".to_owned(), ticket.clone())
+            .put_ticket("ck:restore:01".to_owned(), ticket.clone())
             .await
             .unwrap();
         store
-            .put_executor_run("cx:restore:01".to_owned(), executor.clone())
+            .put_executor_run("ck:restore:01".to_owned(), executor.clone())
             .await
             .unwrap();
         store
-            .put_approval_run("cx:restore:01".to_owned(), approval.clone())
+            .put_approval_run("ck:restore:01".to_owned(), approval.clone())
             .await
             .unwrap();
 
-        let fetched_ticket = store.get_ticket("cx:restore:01").await.unwrap().unwrap();
+        let fetched_ticket = store.get_ticket("ck:restore:01").await.unwrap().unwrap();
         assert_eq!(fetched_ticket["account_id"], "did:web:alice.example");
 
         let fetched_executor = store
-            .get_executor_run("cx:restore:01")
+            .get_executor_run("ck:restore:01")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(fetched_executor["stage"], "ExecutorRunning");
 
         let fetched_approval = store
-            .get_approval_run("cx:restore:01")
+            .get_approval_run("ck:restore:01")
             .await
             .unwrap()
             .unwrap();
@@ -9257,21 +9257,21 @@ mod tests {
         // Missing keys → None.
         assert!(
             store
-                .get_ticket("cx:restore:missing")
+                .get_ticket("ck:restore:missing")
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             store
-                .get_executor_run("cx:restore:missing")
+                .get_executor_run("ck:restore:missing")
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             store
-                .get_approval_run("cx:restore:missing")
+                .get_approval_run("ck:restore:missing")
                 .await
                 .unwrap()
                 .is_none()
@@ -9282,7 +9282,7 @@ mod tests {
         // export and the ticket-collection listing.
         let tickets = store.snapshot_tickets().await.unwrap();
         assert_eq!(tickets.len(), 1);
-        assert_eq!(tickets[0].0, "cx:restore:01");
+        assert_eq!(tickets[0].0, "ck:restore:01");
         let executors = store.snapshot_executor_runs().await.unwrap();
         assert_eq!(executors.len(), 1);
         assert_eq!(executors[0].1["stage"], "ExecutorRunning");
@@ -9291,21 +9291,21 @@ mod tests {
 
         // delete_executor_run / delete_approval_run clear the side-band
         // sub-envelopes without dropping the ticket envelope itself.
-        assert!(store.delete_executor_run("cx:restore:01").await.unwrap());
-        assert!(!store.delete_executor_run("cx:restore:01").await.unwrap());
+        assert!(store.delete_executor_run("ck:restore:01").await.unwrap());
+        assert!(!store.delete_executor_run("ck:restore:01").await.unwrap());
         assert!(
             store
-                .get_executor_run("cx:restore:01")
+                .get_executor_run("ck:restore:01")
                 .await
                 .unwrap()
                 .is_none()
         );
-        assert!(store.get_ticket("cx:restore:01").await.unwrap().is_some());
-        assert!(store.delete_approval_run("cx:restore:01").await.unwrap());
+        assert!(store.get_ticket("ck:restore:01").await.unwrap().is_some());
+        assert!(store.delete_approval_run("ck:restore:01").await.unwrap());
 
         // delete_ticket evicts the whole row.
-        assert!(store.delete_ticket("cx:restore:01").await.unwrap());
-        assert!(!store.delete_ticket("cx:restore:01").await.unwrap());
+        assert!(store.delete_ticket("ck:restore:01").await.unwrap());
+        assert!(!store.delete_ticket("ck:restore:01").await.unwrap());
         assert!(store.snapshot_tickets().await.unwrap().is_empty());
     }
 
@@ -9322,30 +9322,30 @@ mod tests {
         // Brand-new ticket: fence starts at 0; first transition seeds the
         // row at fence=1.
         assert_eq!(
-            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            store.ticket_fence_token("ck:restore:fence").await.unwrap(),
             0
         );
         let new_fence = store
-            .cas_ticket_status("cx:restore:fence", 0, "pending")
+            .cas_ticket_status("ck:restore:fence", 0, "pending")
             .await
             .unwrap()
             .expect("seed transition must land");
         assert_eq!(new_fence, 1);
         assert_eq!(
-            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            store.ticket_fence_token("ck:restore:fence").await.unwrap(),
             1
         );
 
         // Two concurrent writers both snapshot fence=1; only one can land
         // a fence=1→2 bump.
-        let snapshot_a = store.ticket_fence_token("cx:restore:fence").await.unwrap();
+        let snapshot_a = store.ticket_fence_token("ck:restore:fence").await.unwrap();
         let snapshot_b = snapshot_a;
         let landed_a = store
-            .cas_ticket_status("cx:restore:fence", snapshot_a, "approved")
+            .cas_ticket_status("ck:restore:fence", snapshot_a, "approved")
             .await
             .unwrap();
         let landed_b = store
-            .cas_ticket_status("cx:restore:fence", snapshot_b, "approved")
+            .cas_ticket_status("ck:restore:fence", snapshot_b, "approved")
             .await
             .unwrap();
         assert_eq!(landed_a, Some(2), "first writer must observe fence=2");
@@ -9354,20 +9354,20 @@ mod tests {
         // Subsequent transitions continue to bump.
         assert_eq!(
             store
-                .cas_ticket_status("cx:restore:fence", 2, "executed")
+                .cas_ticket_status("ck:restore:fence", 2, "executed")
                 .await
                 .unwrap(),
             Some(3)
         );
         assert_eq!(
             store
-                .cas_ticket_status("cx:restore:fence", 3, "revoked")
+                .cas_ticket_status("ck:restore:fence", 3, "revoked")
                 .await
                 .unwrap(),
             Some(4)
         );
         assert_eq!(
-            store.ticket_fence_token("cx:restore:fence").await.unwrap(),
+            store.ticket_fence_token("ck:restore:fence").await.unwrap(),
             4
         );
     }

@@ -58,7 +58,7 @@ fn test_config() -> AppConfig {
 
         compaction_prune_walk_per_space_limit: 50,
         seed_demo_data: true,
-        trust_domain: "cx:trust_domain:soland.local".to_owned(),
+        trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
         sovereign_enclave_allowed_outbound_hosts: Vec::new(),
         erasure_propagation_window_ms: 604_800_000,
@@ -69,7 +69,7 @@ fn test_config() -> AppConfig {
 #[tokio::test]
 async fn typed_describe_handlers_publish_response_schemas() {
     let app = service(AppState::new(test_config(), Db { pool: None }));
-    let mut response = TestClient::get("http://server/.well-known/contrix/openapi.yaml")
+    let mut response = TestClient::get("http://server/.well-known/cokret/openapi.yaml")
         .send(&app)
         .await;
     let body = response.take_string().await.unwrap();

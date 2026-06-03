@@ -2,7 +2,7 @@
 //!
 //! Executes the `obligations[]` array returned by a policy server
 //! `/policy/check` response. The subset implemented here mirrors the
-//! kinds explicitly listed in `contrix-spec/spec/v1/zh/authz/policy-server.md`
+//! kinds explicitly listed in `cokret-spec/spec/v1/zh/authz/policy-server.md`
 //! §4 `obligations`:
 //!
 //! - `require_mfa` — flag the [`RequestContext`] as needing MFA before the request may mutate
@@ -163,7 +163,7 @@ mod tests {
 
     fn ctx() -> RequestContext {
         RequestContext {
-            realm_id: "cx:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
             actor_did: "did:web:alice.example".to_owned(),
             action: "cx.message.create".to_owned(),
             mfa_completed: false,

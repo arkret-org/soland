@@ -73,7 +73,7 @@ async fn mimi_provider_facade_contracts_work() {
             "room_binding": {
                 "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
                 "binding_scope": {
-                    "space_id": "cx:space:0196419b-0000-7000-8000-000000000000"
+                    "space_id": "ck:space:0196419b-0000-7000-8000-000000000000"
                 }
             }
         }))
@@ -135,7 +135,7 @@ async fn mimi_provider_facade_contracts_work() {
 
     let proxy: Value = TestClient::post("http://server/api/v1/mimi/proxy-download")
         .json(&serde_json::json!({
-            "blob_ref": "cx:blob:sha256:e2e",
+            "blob_ref": "ck:blob:sha256:e2e",
             "asset_privacy_policy": "provider_proxy"
         }))
         .send(&service)
@@ -176,7 +176,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_space = DEMO_REALM_ID;
-    let custom_space = "cx:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    let custom_space = "ck:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
     let room_id = "01JSMIMI-P4-E2E";
 
     // Step 1: post a room_update carrying a room_binding block.
@@ -213,7 +213,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     let binding_event_id = update_resp["binding_event_id"]
         .as_str()
         .expect("binding_event_id missing from response");
-    assert!(binding_event_id.starts_with("cx:event:"));
+    assert!(binding_event_id.starts_with("ck:event:"));
 
     // Step 2: submit_message into the same room.
     let msg_resp: Value = TestClient::post(format!(

@@ -4,9 +4,9 @@
 //! `cotest/src/conformance/mod.rs` — canonical JSON, sha256-prefixed digest,
 //! opaque cursor encoding. We fork rather than depend on `cotest` directly so
 //! soland avoids pulling in the cotest crate's heavy test-only dependency
-//! graph (`reqwest`, `jsonschema`, the contrix-http-client, ...).
+//! graph (`reqwest`, `jsonschema`, the cokret-http-client, ...).
 //!
-//! The Contrix spec — not either implementation — is the source of truth, so
+//! The Cokret spec — not either implementation — is the source of truth, so
 //! the two copies must stay byte-for-byte equivalent. Drift is caught by the
 //! HTTP conformance suite under `cotest/e2e/tests/conformance/`, which runs
 //! the same vectors against the in-process cotest suite and the HTTP surface
@@ -85,11 +85,11 @@ pub struct CursorShape {
 }
 
 /// Encode a `CursorShape` into the spec-defined opaque token
-/// `cx:cursor:<base64url-no-pad(canonical_json)>`.
+/// `ck:cursor:<base64url-no-pad(canonical_json)>`.
 pub fn encode_cursor_shape(shape: &CursorShape) -> Result<String> {
     let canonical = canonical_json(&serde_json::to_value(shape)?)?;
     Ok(format!(
-        "cx:cursor:{}",
+        "ck:cursor:{}",
         URL_SAFE_NO_PAD.encode(canonical.as_bytes())
     ))
 }
@@ -98,8 +98,8 @@ pub fn encode_cursor_shape(shape: &CursorShape) -> Result<String> {
 #[cfg(test)]
 pub fn decode_cursor_shape(encoded: &str) -> Result<CursorShape> {
     let payload = encoded
-        .strip_prefix("cx:cursor:")
-        .ok_or_else(|| anyhow!("cursor must start with cx:cursor:"))?;
+        .strip_prefix("ck:cursor:")
+        .ok_or_else(|| anyhow!("cursor must start with ck:cursor:"))?;
     let bytes = URL_SAFE_NO_PAD.decode(payload)?;
     serde_json::from_slice(&bytes).map_err(Into::into)
 }
@@ -165,7 +165,7 @@ mod tests {
             x: 42,
         };
         let encoded = encode_cursor_shape(&shape).unwrap();
-        assert!(encoded.starts_with("cx:cursor:"));
+        assert!(encoded.starts_with("ck:cursor:"));
         let decoded = decode_cursor_shape(&encoded).unwrap();
         assert_eq!(decoded, shape);
     }

@@ -423,12 +423,12 @@ impl Default for AuthzEngine {
 
 /// Check if a grant resource pattern matches the requested resource.
 ///
-/// CXP-0007 / SEL-1 (R3 spec-sync 2026-05-27, contrix-spec b47ff6ec) —
+/// CXP-0007 / SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `flow`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
-/// `cx:circle:<uuid>` typed-id form alongside the existing space /
+/// `ck:circle:<uuid>` typed-id form alongside the existing space /
 /// realm forms, plus a `circle` keyword selector that resolves to
-/// "any cx:circle:<uuid>" so policy-authoring tools can express
+/// "any ck:circle:<uuid>" so policy-authoring tools can express
 /// circle-wide grants without enumerating each circle.
 fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
@@ -439,30 +439,30 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
         return true;
     }
     // SEL-1 — selector-kind keyword form. `circle` matches any
-    // `cx:circle:<uuid>` resource (mirrors `realm` / `space` semantics
+    // `ck:circle:<uuid>` resource (mirrors `realm` / `space` semantics
     // expected by the resource selector enum). Also support the
-    // namespaced `circle:cx:circle:<uuid>` form for symmetry with the
-    // pre-existing `space:cx:space:<uuid>` pattern.
+    // namespaced `circle:ck:circle:<uuid>` form for symmetry with the
+    // pre-existing `space:ck:space:<uuid>` pattern.
     if pattern == "circle" {
-        return resource.starts_with("cx:circle:");
+        return resource.starts_with("ck:circle:");
     }
     if pattern == "realm" {
-        return resource.starts_with("cx:realm:");
+        return resource.starts_with("ck:realm:");
     }
     if pattern == "space" {
-        return resource.starts_with("cx:space:");
+        return resource.starts_with("ck:space:");
     }
     if pattern == "flow" {
-        return resource.starts_with("cx:flow:");
+        return resource.starts_with("ck:flow:");
     }
     if pattern == "morph" {
-        return resource.starts_with("cx:morph:");
+        return resource.starts_with("ck:morph:");
     }
     if pattern == "actor" {
-        return resource.starts_with("did:") || resource.starts_with("cx:actor:");
+        return resource.starts_with("did:") || resource.starts_with("ck:actor:");
     }
-    // Prefix match with wildcard: "space:cx:space:123:*" or
-    // "cx:circle:<uuid>:*".
+    // Prefix match with wildcard: "space:ck:space:123:*" or
+    // "ck:circle:<uuid>:*".
     if let Some(prefix) = pattern.strip_suffix('*') {
         return resource.starts_with(prefix);
     }
@@ -471,7 +471,7 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
 
 /// Pick the resulting decision over a set of satisfied grants.
 ///
-/// Per Contrix v1 (spec optimization round, _todos B3/B5): the three non-allow
+/// Per Cokret v1 (spec optimization round, _todos B3/B5): the three non-allow
 /// decisions — `deny`, `quarantine`, `require_review` — are each *any-hit-wins*
 /// in that priority order. `allow` is only the diagnostic fallback when no
 /// non-allow decision was raised, so it ranks lowest. This avoids the previous
@@ -561,8 +561,8 @@ fn evaluate_constraint(
             // time).
             //
             // Evaluation contract: the resource selector for a Circle
-            // capability is of the form `cx:circle:<uuid>` (mirrors the
-            // `cx:space:<uuid>` pattern used by `realm.*` / `space.*`
+            // capability is of the form `ck:circle:<uuid>` (mirrors the
+            // `ck:space:<uuid>` pattern used by `realm.*` / `space.*`
             // grants). If the resource looks like a Circle id, it MUST
             // be a member of the allowed set; otherwise the constraint
             // does not apply and silently passes (caller-policy: any
@@ -572,7 +572,7 @@ fn evaluate_constraint(
                     "allowed_circle_ids constraint requires a non-empty allow list".to_owned(),
                 );
             }
-            if !resource.starts_with("cx:circle:") {
+            if !resource.starts_with("ck:circle:") {
                 // Constraint is Circle-scoped — non-Circle resources are
                 // out of scope; pass through.
                 return None;
@@ -592,8 +592,8 @@ fn evaluate_constraint(
             // facet-bound and an unfaceted target falls outside its scope.
             //
             // The check works on any spec-typed object resource that
-            // carries a `facets` field; `cx:flow:` / `cx:space:` /
-            // `cx:morph:` projections all surface facets through the
+            // carries a `facets` field; `ck:flow:` / `ck:space:` /
+            // `ck:morph:` projections all surface facets through the
             // same cell-family registry.
             if allowed.is_empty() {
                 return None;
@@ -775,8 +775,8 @@ mod tests {
         let result = engine.check(
             "did:web:alice",
             "manage_space",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -792,8 +792,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "read",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &members,
             &[],
@@ -804,8 +804,8 @@ mod tests {
         let denied = engine.check(
             "did:web:bob",
             "manage_space",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &members,
             &[],
@@ -817,7 +817,7 @@ mod tests {
     fn explicit_grant_overrides_default() {
         let engine = AuthzEngine::new();
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -827,8 +827,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "manage_space",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -841,7 +841,7 @@ mod tests {
     fn explicit_deny_overrides_allow() {
         let engine = AuthzEngine::new();
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -851,7 +851,7 @@ mod tests {
             }],
         );
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -863,8 +863,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "send",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -879,7 +879,7 @@ mod tests {
         // any-hit-wins; allow is the diagnostic fallback only.
         let engine = AuthzEngine::new();
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -889,7 +889,7 @@ mod tests {
             }],
         );
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -901,8 +901,8 @@ mod tests {
         let reviewed = engine.check(
             "did:web:bob",
             "send",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -911,7 +911,7 @@ mod tests {
         assert_eq!(reviewed.reason, "require_review");
 
         engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -923,8 +923,8 @@ mod tests {
         let quarantined = engine.check(
             "did:web:bob",
             "send",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -937,7 +937,7 @@ mod tests {
     fn revoked_grant_denied() {
         let engine = AuthzEngine::new();
         let grant = engine.create_grant(
-            "cx:space:1".to_owned(),
+            "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
             "*".to_owned(),
@@ -948,8 +948,8 @@ mod tests {
         let result = engine.check(
             "did:web:bob",
             "manage_space",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],
@@ -963,8 +963,8 @@ mod tests {
         let result = engine.check(
             "did:web:eve",
             "read",
-            "space:cx:space:1",
-            "cx:space:1",
+            "space:ck:space:1",
+            "ck:space:1",
             Some("did:web:alice"),
             &[],
             &[],

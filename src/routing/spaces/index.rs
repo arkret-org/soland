@@ -40,7 +40,7 @@ const QUERY_FEATURES: &[&str] = &[
     "space_hierarchy",
     "debug_reducer_snapshot",
 ];
-const DEMO_REALM_ID: &str = "cx:realm:0196419b-0000-7000-8000-000000000000";
+const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["cx.account.blocklist", "cx.account.blocklist.v1"];
 
 pub(super) fn router() -> Router {
@@ -61,7 +61,7 @@ pub(super) fn router() -> Router {
 async fn index_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     res.render(Json(json!({
-        "contract": "contrix.rest.index_describe.v1",
+        "contract": "cokret.rest.index_describe.v1",
         "version": "2026-05-17-limited-projection",
         "stability": "limited_projection",
         "profile_claim": "not_claimed",
@@ -80,21 +80,21 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
     })));
 }
 
-/// Map a `cx:<kind>:...` typed id to the spec id-kind it belongs to. Used by
+/// Map a `ck:<kind>:...` typed id to the spec id-kind it belongs to. Used by
 /// `/api/v1/index/object` to surface a polymorphic typed-id describe; this
 /// is just a tiny lookup over the spec-registered prefixes.
 fn object_kind_for(object_id: &str) -> Option<&'static str> {
-    if object_id.starts_with("cx:space:") {
+    if object_id.starts_with("ck:space:") {
         Some("space")
-    } else if object_id.starts_with("cx:flow:") {
+    } else if object_id.starts_with("ck:flow:") {
         Some("flow")
-    } else if object_id.starts_with("cx:morph:") {
+    } else if object_id.starts_with("ck:morph:") {
         Some("morph")
-    } else if object_id.starts_with("cx:actor_profile:") {
+    } else if object_id.starts_with("ck:actor_profile:") {
         Some("actor_profile")
-    } else if object_id.starts_with("cx:view:") {
+    } else if object_id.starts_with("ck:view:") {
         Some("view")
-    } else if object_id.starts_with("cx:relation:") {
+    } else if object_id.starts_with("ck:relation:") {
         Some("relation")
     } else if object_id.starts_with("did:") {
         Some("did")
@@ -106,7 +106,7 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
 #[endpoint(
     operation_id = "cx.extension.soland.index.object",
     tags("index"),
-    summary = "Describe a typed object by its `cx:<kind>:...` id"
+    summary = "Describe a typed object by its `ck:<kind>:...` id"
 )]
 #[tracing::instrument(skip_all, fields(op = "cx.extension.soland.index.object"))]
 async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> {
@@ -642,12 +642,12 @@ fn index_query_fingerprint(
 }
 
 fn encode_index_cursor(offset: usize, fingerprint: &str) -> String {
-    format!("cx:index:{fingerprint}:{offset}")
+    format!("ck:index:{fingerprint}:{offset}")
 }
 
 fn parse_index_cursor(token: &str, expected_fingerprint: &str) -> Result<usize, &'static str> {
-    let Some(rest) = token.strip_prefix("cx:index:") else {
-        return Err("cursor must be a cx:index: token");
+    let Some(rest) = token.strip_prefix("ck:index:") else {
+        return Err("cursor must be a ck:index: token");
     };
     let mut parts = rest.splitn(2, ':');
     let fingerprint = parts.next().ok_or("cursor missing fingerprint")?;

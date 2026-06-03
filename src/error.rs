@@ -1,11 +1,11 @@
-//! Soland error integration for canonical Contrix SDK error codes.
+//! Soland error integration for canonical Cokret SDK error codes.
 //!
 //! Wire-form error codes are owned by `contrix_sdk::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
 /// Round C44 (2026-05-18; spec dc01ad7 Tier-0) — registered
 /// `failed_precondition` reason codes new in this round. These are
-/// re-exported from contrix-sdk so soland call sites can use
+/// re-exported from cokret-sdk so soland call sites can use
 /// `crate::error::reasons::INCEPTION_UPGRADE_FINGERPRINT_MISMATCH` directly.
 pub mod reasons {
     use contrix_sdk::error as core_error;
@@ -183,7 +183,7 @@ pub mod reasons {
     // session-grant + media-binding (CXP-0010) + recovery / handle reason
     // codes. Exposed here so future R3.1 handler work can reference them
     // through the `crate::error::reasons` namespace without depending on
-    // a parallel SDK PR landing first. Once contrix-rust-sdk adopts the
+    // a parallel SDK PR landing first. Once cokret-rust-sdk adopts the
     // canonical `REASON_*` constants, swap these `pub const` literals for
     // re-exports the same way the C44/C45 block above does.
     //
@@ -217,7 +217,7 @@ pub mod reasons {
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
     pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = "handle_homograph_forbidden";
 
-    // ── R3.1 (2026-05-27, contrix-spec @ 7157ee8) — MemberIdentity append-
+    // ── R3.1 (2026-05-27, cokret-spec @ 7157ee8) — MemberIdentity append-
     // only replacement event error codes. Re-exported from the SDK's
     // `ERROR_CODE_MEMBER_IDENTITY_*` constants so soland callsites have a
     // stable namespace match for the spec wire codes.
@@ -239,7 +239,7 @@ pub mod reasons {
         MEMBER_IDENTITY_UNKNOWN_SEGMENT,
     ];
 
-    // ── R3.2 (2026-05-28, contrix-spec @ b56cab1) — wire-breaking
+    // ── R3.2 (2026-05-28, cokret-spec @ b56cab1) — wire-breaking
     // member-identity / handle-claim / mention reason codes. Defined as
     // soland-local `pub const` literals (canonical wire form) until the SDK
     // ships the matching `REASON_*` registry entries; once it does, swap to
@@ -255,7 +255,7 @@ pub mod reasons {
     /// HC-SOL-1 — handle claim used the removed `claim_type=service_handle`.
     pub const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
     /// HC-SOL-2 — handle claim `subject` was not a holder/principal DID
-    /// (e.g. `cx:actor:` / `cx:account:` / non-DID).
+    /// (e.g. `ck:actor:` / `ck:account:` / non-DID).
     pub const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
         "handle_claim_subject_not_principal_did";
     /// HC-SOL-3 — a mention reference carried the legacy pre-R3.2 shape
