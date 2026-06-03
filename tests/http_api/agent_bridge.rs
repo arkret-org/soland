@@ -96,7 +96,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     assert_eq!(resp["status"], "accepted");
 
     // `admin/applets` now reports the registered applet with the manifest.
-    let applets_body: Value = TestClient::get("http://server/api/v1/admin/applets?limit=10")
+    let applets_body: Value = TestClient::get("http://server/admin/applets?limit=10")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -117,7 +117,7 @@ async fn admin_applets_agents_endpoints_reflect_submitted_registry_events() {
     );
 
     // `admin/agents` reports the registered agent.
-    let agents_body: Value = TestClient::get("http://server/api/v1/admin/agents?limit=10")
+    let agents_body: Value = TestClient::get("http://server/admin/agents?limit=10")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -636,7 +636,7 @@ async fn agent_bridge_plumbs_endpoint_url_through_session_envelopes() {
 
     // The admin agents collection should also surface endpoint_url so
     // sodmin operators see it.
-    let admin_agents: Value = TestClient::get("http://server/api/v1/admin/agents")
+    let admin_agents: Value = TestClient::get("http://server/admin/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await

@@ -7,7 +7,7 @@
 //! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full `rotate-signing-key`
 //!    flow end-to-end against a running soland instance:
 //!      - mints a fresh ed25519 seed,
-//!      - calls `POST /api/admin/v1/spaces/{space_id}/anchorer/rotate-signing-key` on the live
+//!      - calls `POST /admin/spaces/{space_id}/anchorer/rotate-signing-key` on the live
 //!        server (via `--target` URL),
 //!      - verifies the keystore-persisted seed (when `SERVERX_USE_KEYSTORE=true`),
 //!      - signs a probe Move with the new key,
@@ -339,7 +339,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
 
     // ── 2. POST the rotate-signing-key endpoint ────────────────────────
     let url = format!(
-        "{}/api/admin/v1/spaces/{}/anchorer/rotate-signing-key",
+        "{}/admin/spaces/{}/anchorer/rotate-signing-key",
         target.trim_end_matches('/'),
         space_id
     );

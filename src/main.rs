@@ -136,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
 
     // MAL-11 compaction prune walk worker. No-op when
     // `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0` (the default) — the
-    // explicit `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune`
+    // explicit `POST /admin/spaces/{space_id}/anchor-dag/prune`
     // endpoint stays operator-driven. Set the env var to enable periodic
     // walking; see `compactor.rs` for the policy and "when to enable"
     // rationale.

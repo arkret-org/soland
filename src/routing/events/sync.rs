@@ -119,7 +119,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
             "max_timeline_events": 100,
             "offline_flush_endpoint": "/api/v1/events",
             "backfill_endpoint": "/api/v1/sync/backfill/gap",
-            "bottom_repair_endpoint": "/api/admin/v1/spaces/{realm_id}/bottom/{cell_id}/repair"
+            "bottom_repair_endpoint": "/admin/spaces/{realm_id}/bottom/{cell_id}/repair"
         }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
     }));

@@ -98,7 +98,7 @@ async fn moderation_report(
     // `ModerationQueueItem` cell so admins can prioritise / route /
     // assign reviewers. We default to `status=submitted`,
     // `visibility=metadata_only`, `priority=normal` — sodmin can update
-    // via `POST /api/admin/v1/moderation/queue/{id}/{assign,prioritise}`.
+    // via `POST /admin/moderation/queue/{id}/{assign,prioritise}`.
     let queue_item_ref = ids::generate("modq");
     let queue_item = json!({
         "id": queue_item_ref,

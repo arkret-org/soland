@@ -1,9 +1,10 @@
 //! Admin-facing moderation endpoints powering the sodmin triage UI.
 //!
-//! Mounted under `/api/admin/v1/moderation/...`:
+//! Mounted under `/admin/moderation/...`:
 //!
 //! ### Queue
-//! - `GET /queue` — list current queue items.
+//! - `GET /queue` — canonical queue read (`cx.admin.get_moderation_queue`)
+//!   is served by [`super::spec`]; this suite does NOT re-bind it.
 //! - `POST /queue/{id}/assign` — assign reviewer DIDs.
 //! - `POST /queue/{id}/priority` — set priority.
 //!
@@ -46,7 +47,9 @@ use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
-        .push(Router::with_path("queue").get(list_queue))
+        // `GET queue` (canonical `cx.admin.get_moderation_queue`) is owned
+        // by `super::spec` to keep the single `/admin/moderation/queue` URL
+        // bound to exactly one handler; only the sub-paths live here.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
         .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))
         .push(Router::with_path("decision").post(issue_decision))
@@ -59,28 +62,10 @@ pub(super) fn router() -> Router {
 }
 
 // ── Queue ────────────────────────────────────────────────────────────
-
-#[endpoint(
-    operation_id = "cx.extension.soland.admin.moderation.queue.list",
-    tags("admin", "moderation"),
-    summary = "List moderation queue items"
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "cx.extension.soland.admin.moderation.queue.list")
-)]
-async fn list_queue(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let _ = require_admin_principal(state, session)?;
-    let items = state
-        .persistence
-        .moderation()
-        .list_queue_items()
-        .await
-        .unwrap_or_default();
-    json_ok(json!({ "items": items, "total": items.len() }))
-}
+//
+// The canonical `GET /admin/moderation/queue` read
+// (`cx.admin.get_moderation_queue`) lives in `super::spec`; the queue
+// sub-actions (assign / priority) are below.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AssignReviewerReq {

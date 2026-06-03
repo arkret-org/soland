@@ -4,8 +4,8 @@
 //! state without re-implementing the Move/Anchor pipeline.
 //!
 //! Endpoints:
-//! - `GET /api/v1/admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /api/v1/admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
+//! - `GET /admin/cells/{cell_id}` — return one cell's resolved state.
+//! - `GET /admin/cells?space_id=...&prefix=cx.component.consent.` — list matching cells
 //!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
@@ -45,7 +45,7 @@ pub(super) fn router() -> Router {
 /// per-Space lookup hook (currently inert for the in-memory backend).
 const SENTINEL_SPACE_SCOPE: &str = "cx:space:00000000-0000-7000-8000-000000000000";
 
-/// Response body for `GET /api/v1/admin/cells/{cell_id}`.
+/// Response body for `GET /admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellStateResponse {
     /// Canonical wire form of the cell id (`cx:cell:<family>:<subject>`).
@@ -69,7 +69,7 @@ pub struct AdminCellStateResponse {
     pub bottom_policy: String,
 }
 
-/// Response body for `GET /api/v1/admin/cells?...` (list).
+/// Response body for `GET /admin/cells?...` (list).
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AdminCellListResponse {
     pub cells: Vec<AdminCellStateResponse>,
@@ -136,7 +136,7 @@ fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<S
     })
 }
 
-/// `GET /api/v1/admin/cells/{cell_id}` — fetch one cell's state.
+/// `GET /admin/cells/{cell_id}` — fetch one cell's state.
 ///
 /// `cell_id` is the URL-encoded canonical wire form
 /// (`cx:cell:<family>:<subject>`). Salvo decodes path segments before
@@ -228,7 +228,7 @@ async fn admin_get_cell(
     ))
 }
 
-/// `GET /api/v1/admin/cells?space_id=...&prefix=...&limit=...&offset=...`
+/// `GET /admin/cells?space_id=...&prefix=...&limit=...&offset=...`
 /// — list cells matching the filter.
 ///
 /// Filters:

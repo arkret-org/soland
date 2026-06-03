@@ -87,15 +87,27 @@ pub(super) fn require_admin_principal(
     }
 }
 
+/// Audit endpoints (`/api/v1/audit/*`). These live on the protocol
+/// surface under `/api/v1`, not the deployment-local `/admin/*`
+/// namespace, and carry their own per-handler auth rather than the
+/// shared `RequireAdmin` hoop — so they are mounted separately from the
+/// admin branch below.
+pub fn audit_router() -> Router {
+    audit::router()
+}
+
+/// Deployment-local admin branch served at the bare `/admin/*`
+/// namespace (collection snapshot, cell inspection, control-frame
+/// triggers, retention), per contrix-spec `service-http-binding.md`
+/// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
+/// `/api/v1` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
-    Router::new().push(audit::router()).push(
-        Router::new()
-            .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
-            .push(cells::router())
-            .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
-            .push(control::router())
-            .push(retention::router()),
-    )
+    Router::new()
+        .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
+        .push(cells::router())
+        .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
+        .push(control::router())
+        .push(retention::router())
 }
 
 pub fn spec_router() -> Router {
@@ -103,7 +115,14 @@ pub fn spec_router() -> Router {
 }
 
 pub fn admin_router() -> Router {
-    Router::with_path("api/admin/v1")
+    // Deployment-local operator surface served at the bare `/admin/*`
+    // namespace (anchorer / anchor-DAG / bottom repair / multisig /
+    // gc-candidates / delivery-binding / moderation). Per contrix-spec
+    // `service-http-binding.md` §2.1 the `/admin/*` namespace is
+    // deployment-local and MUST NOT carry the `/api/v1` protocol prefix.
+    // Registered ahead of `router()` (the `{resource}` collection
+    // wildcard) at the root so the concrete `bottom` segment wins.
+    Router::with_path("admin")
         .oapi_tag("admin")
         .hoop(RequireAdmin::scope(contrix_sdk::admin_scopes::ADMIN_READ))
         .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor::admin_get_anchorer))

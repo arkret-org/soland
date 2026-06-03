@@ -147,7 +147,7 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
-    /// Default page size for `GET /api/v1/admin/cells` and the rest of
+    /// Default page size for `GET /admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
     pub admin_default_page_limit: usize,
@@ -156,7 +156,7 @@ pub struct AppConfig {
     /// against a misbehaving client exhausting in-memory projection state.
     /// Env: `SOLAND_ADMIN_MAX_PAGE_LIMIT` (default `1000`).
     pub admin_max_page_limit: usize,
-    /// Principal DIDs allowed to call `GET /api/v1/admin/{resource}` and the
+    /// Principal DIDs allowed to call `GET /admin/{resource}` and the
     /// other production-gated admin read surfaces when `development_mode` is
     /// false. Empty (default) keeps the previous "dev-mode only" posture for
     /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
@@ -194,7 +194,7 @@ pub struct AppConfig {
     /// MAL-11 compaction prune walk: interval between background prune
     /// passes, in seconds. Zero (or unset) disables the worker entirely —
     /// MAL-11 prune then runs only via the explicit
-    /// `POST /api/admin/v1/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+    /// `POST /admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
     /// endpoint. When enabled, the worker walks every live Space's
     /// anchor DAG, evaluates each candidate against
     /// [`compaction_policy`], and prunes eligible Anchors up to

@@ -1,7 +1,7 @@
 //! Dev-only admin collection surfaces.
 //!
 //! Surfaces:
-//! - `GET /api/v1/admin/{resource}` — paginated dev snapshot of one of the builtin admin
+//! - `GET /admin/{resource}` — paginated dev snapshot of one of the builtin admin
 //!   collections (`actors`, `spaces`, `devices`, `capabilities`, `federation`, `applets`, `agents`,
 //!   `reports`, `invite-tokens`, `audit`, `policy`, `media`).
 //!

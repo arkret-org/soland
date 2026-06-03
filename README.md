@@ -359,7 +359,7 @@ soland exposes the canonical Contrix v1 routes (~180 routes total). Highlights:
 - `GET /api/v1/sync`, `GET /api/v1/identity/*`, `GET /api/v1/directory/*`
 - `POST /api/v1/auth/dev-login` (development_mode only)
 
-A complete list lives in the OpenAPI document above; `/api/v1/admin/{resource}`
+A complete list lives in the OpenAPI document above; `/admin/{resource}`
 and `/api/v1/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Development

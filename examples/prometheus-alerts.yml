@@ -55,7 +55,7 @@ groups:
           description: |
             soland_federation_outbox_dead_letter_total has advanced over the
             last 5 minutes. Inspect the dead-letter rows via
-            GET /api/v1/admin/federation/dead-letters and confirm the peer
+            GET /admin/federation/dead-letters and confirm the peer
             is reachable. See docs/federation-s2s.md and
             docs/runbook.md "Fault-injection examples".
           runbook: "docs/federation-s2s.md"

@@ -33,6 +33,11 @@ pub struct ConsentCellResponse {
     pub cell_id: String,
     pub holder_did: String,
     pub peer_did: String,
+    // Spec `consent-model.md` §3 names this `consent_scope` (domain-prefixed,
+    // per the "no bare scope" naming rule); the reducer Move payload already
+    // carries `consent_scope`. This admin/holder REST surface now emits the
+    // same name instead of the legacy bare `scope`.
+    #[serde(rename = "consent_scope")]
     pub scope: String,
     pub state: String,
     pub expires_at: Option<DateTime<Utc>>,
@@ -54,14 +59,14 @@ pub struct ConsentRequestBody {
     pub holder_did: String,
     #[serde(default)]
     pub peer_did: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "consent_scope")]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ConsentUpdateBody {
     pub peer_did: String,
-    #[serde(default)]
+    #[serde(default, rename = "consent_scope")]
     pub scope: Option<String>,
     #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
@@ -191,7 +196,7 @@ async fn get_consent_cell(
         return Err(AppError::invalid_param("invalid peer DID"));
     }
     authorize_reader(&session.actor, &holder, &peer)?;
-    let scope = normalize_scope(query_param(req, "scope").as_deref())?;
+    let scope = normalize_scope(query_param(req, "consent_scope").as_deref())?;
     let key = ConsentCellKey {
         holder,
         peer,
@@ -248,7 +253,7 @@ async fn grant_consent_cell(
         json!({
             "holder_did": holder,
             "peer_did": body.peer_did,
-            "scope": scope,
+            "consent_scope": scope,
             "expires_at": body.expires_at,
         }),
         "accepted",
@@ -286,7 +291,7 @@ async fn revoke_consent_cell(
         json!({
             "holder_did": holder,
             "peer_did": body.peer_did,
-            "scope": scope,
+            "consent_scope": scope,
             "observed_dots": updated.revoked_dots.iter().cloned().collect::<Vec<_>>(),
         }),
         "accepted",

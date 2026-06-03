@@ -17,7 +17,7 @@ operator-relevant ones:
 | `forbidden_wire_field` | `routing::events::event_log` | Producer sent a payload key listed in `spec/v1/artifacts/registry/forbidden-wire-fields.json`. Update the client SDK. |
 | `cursor_expired` | account / events subscribe | Client cursor older than the configured window. Client must re-subscribe with `from=null`. |
 | `handle_in_grace_period` | identity handle claim | Handle was released too recently. Wait out `HANDLE_GRACE_PERIOD_SECONDS` or pick a different handle. |
-| `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` retries. Inspect the row in the dead-letter ledger via `GET /api/v1/admin/federation/dead-letters`. |
+| `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` retries. Inspect the row in the dead-letter ledger via `GET /admin/federation/dead-letters`. |
 
 ## Log search recipes
 

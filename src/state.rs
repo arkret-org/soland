@@ -965,7 +965,7 @@ pub struct AppState {
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
     /// Swapped lock-free via [`ArcSwap`] so
-    /// the `POST /api/admin/v1/spaces/{id}/anchorer/rotate-signing-key`
+    /// the `POST /admin/spaces/{id}/anchorer/rotate-signing-key`
     /// endpoint can publish a fresh ed25519 seed without tearing concurrent
     /// signing passes. Readers acquire the current key via `load_full()`
     /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.

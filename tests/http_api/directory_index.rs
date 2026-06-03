@@ -481,7 +481,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::get("http://server/api/v1/admin/actors")
+    let unauthenticated = TestClient::get("http://server/admin/actors")
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
@@ -501,7 +501,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         ("media", "media"),
     ];
     for (resource, field) in collections {
-        let body: Value = TestClient::get(format!("http://server/api/v1/admin/{resource}?limit=5"))
+        let body: Value = TestClient::get(format!("http://server/admin/{resource}?limit=5"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -520,7 +520,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         );
     }
 
-    let actors: Value = TestClient::get("http://server/api/v1/admin/actors")
+    let actors: Value = TestClient::get("http://server/admin/actors")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -535,7 +535,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
             .any(|actor| { actor["did"] == "did:web:alice.example" && actor["kind"] == "actor" })
     );
 
-    let devices: Value = TestClient::get("http://server/api/v1/admin/devices")
+    let devices: Value = TestClient::get("http://server/admin/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -547,7 +547,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
             && device["device_id"] == "cx:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 
-    let unknown = TestClient::get("http://server/api/v1/admin/not-real")
+    let unknown = TestClient::get("http://server/admin/not-real")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state))
         .await;

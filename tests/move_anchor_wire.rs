@@ -542,7 +542,7 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
     // 2. Trigger the anchorer worker via the admin endpoint. This runs one signing pass: collect
     //    pending Moves → deterministic_order → verify each → predict state_root → build & sign
     //    Anchor → apply_anchor (which re-verifies).
-    let sign_resp: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let sign_resp: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "space_id": space_id().as_str(),
@@ -1070,7 +1070,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             .take_json()
             .await
             .unwrap_or_default();
-        let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+        let _: Value = TestClient::post("http://server/admin/anchors/sign")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&json!({"space_id": space_id().as_str()}))
             .send(&app_writer)
@@ -1201,7 +1201,7 @@ async fn anchorer_pass_populates_projection_cells_map() {
         .await
         .unwrap();
 
-    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str()}))
         .send(&app)
@@ -1246,7 +1246,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     // escalation primitive and should be rejected by the endpoint —
     // but we want a successful reconfigure here, so pick external DIDs).
     let url = format!(
-        "http://server/api/admin/v1/spaces/{}/anchorer/reconfigure",
+        "http://server/admin/spaces/{}/anchorer/reconfigure",
         space_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
@@ -1288,7 +1288,7 @@ async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
     let app = service(state.clone());
 
     let url = format!(
-        "http://server/api/admin/v1/spaces/{}/anchorer/reconfigure",
+        "http://server/admin/spaces/{}/anchorer/reconfigure",
         space_id().as_str()
     );
     let response = TestClient::post(&url)
@@ -1327,7 +1327,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
         .unwrap();
 
     // First pass: publishes.
-    let first: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let first: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str()}))
         .send(&app)
@@ -1338,7 +1338,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     assert_eq!(first["published"], true);
 
     // Second pass: no pending Moves, no Anchor.
-    let second: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let second: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str()}))
         .send(&app)
@@ -1358,9 +1358,9 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
 // grants on holder principal servers) and sodmin (admin-UI bottom-state
 // inspection) can introspect canonical cell state. Tests below exercise:
 //
-// - GET /api/v1/admin/cells/{cell_id} on an unknown cell → 404 envelope
+// - GET /admin/cells/{cell_id} on an unknown cell → 404 envelope
 // - Same on a cell after a Move → Anchor → cells reload → state="value"
-// - GET /api/v1/admin/cells with prefix filter → only matching cells
+// - GET /admin/cells with prefix filter → only matching cells
 // - Auth-required: omit Bearer token → 401 / canonical envelope
 
 /// Submit a Move + trigger anchorer signing pass so the member cell
@@ -1379,7 +1379,7 @@ async fn seed_member_cell_join(state: AppState, token: &str) -> String {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1400,7 +1400,7 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
     // registry) but no Move ever wrote to this subject — so the cell is
     // "absent" and the endpoint returns 404 with the canonical envelope.
     let unknown = "cx:cell:cx.component.member.state.v1:did.web.nobody.example";
-    let mut resp = TestClient::get(format!("http://server/api/v1/admin/cells/{unknown}"))
+    let mut resp = TestClient::get(format!("http://server/admin/cells/{unknown}"))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1431,7 +1431,7 @@ async fn admin_get_cell_returns_value_after_anchored_move() {
     // and lands in ProjectionState::cells.
     let cell_id = seed_member_cell_join(state.clone(), &token).await;
 
-    let mut resp = TestClient::get(format!("http://server/api/v1/admin/cells/{cell_id}"))
+    let mut resp = TestClient::get(format!("http://server/admin/cells/{cell_id}"))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1470,7 +1470,7 @@ async fn admin_list_cells_filters_by_prefix() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1481,7 +1481,7 @@ async fn admin_list_cells_filters_by_prefix() {
 
     // List with prefix=cx.component.consent. → only the consent.grant cell.
     let mut resp = TestClient::get(format!(
-        "http://server/api/v1/admin/cells?space_id={}&prefix=cx.component.consent.",
+        "http://server/admin/cells?space_id={}&prefix=cx.component.consent.",
         space_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1521,7 +1521,7 @@ async fn admin_get_cell_requires_bearer_token() {
 
     // No Authorization header — endpoint MUST 401 with canonical envelope.
     let mut resp = TestClient::get(format!(
-        "http://server/api/v1/admin/cells/{}",
+        "http://server/admin/cells/{}",
         member_cell().as_str()
     ))
     .send(&app)
@@ -1546,7 +1546,7 @@ async fn admin_list_cells_requires_space_id_query_param() {
     let app = service(state.clone());
 
     // Missing space_id → 400 missing_param.
-    let mut resp = TestClient::get("http://server/api/v1/admin/cells?prefix=cx.")
+    let mut resp = TestClient::get("http://server/admin/cells?prefix=cx.")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1577,7 +1577,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/api/v1/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1588,7 +1588,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
 
     // limit=1 → exactly one cell page.
     let mut resp = TestClient::get(format!(
-        "http://server/api/v1/admin/cells?space_id={}&limit=1",
+        "http://server/admin/cells?space_id={}&limit=1",
         space_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1620,7 +1620,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     let pre = state.anchorer_signing_key().to_bytes();
 
     let url = format!(
-        "http://server/api/admin/v1/spaces/{}/anchorer/rotate-signing-key",
+        "http://server/admin/spaces/{}/anchorer/rotate-signing-key",
         space_id().as_str()
     );
     let resp: Value = TestClient::post(&url)

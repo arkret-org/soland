@@ -407,7 +407,7 @@ async fn submit_anchor(
     })
 }
 
-/// Request body for `POST /api/v1/admin/anchors/sign`.
+/// Request body for `POST /admin/anchors/sign`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SignAnchorRequest {
     /// Space whose pending Moves should be batch-anchored.

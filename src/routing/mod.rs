@@ -112,10 +112,28 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // Spec: B.3 — `/.well-known/contrix` server-description stub.
         .push(federation::well_known_contrix_router())
         .push(identity::embedded_webvh_public_router())
+        // Admin surface lives at the bare, deployment-local `/admin/*`
+        // namespace (NOT under the `/api/v1` protocol prefix), per
+        // contrix-spec `service-http-binding.md` §2.1. Three sibling
+        // sub-trees are resolved by salvo fallthrough; ordering matters
+        // only where paths overlap:
+        //   1. `spec_router`   — canonical `cx.admin.*` (server/status,
+        //      accounts, devices, moderation/queue).
+        //   2. `admin_router`  — operator surface (anchorer / multisig /
+        //      bottom / anchor-dag / gc-candidates / delivery-binding /
+        //      moderation sub-actions). Registered BEFORE the collection
+        //      so the concrete `/admin/bottom` wins over `{resource}`.
+        //   3. `router`        — collection (`/admin/{resource}`), cells,
+        //      control-frames, retention.
         .push(admin::spec_router())
+        .push(admin::admin_router())
+        .push(admin::router())
+        // `POST /admin/anchors/sign` — operator anchor-signing trigger,
+        // detached from the `/api/v1` federation router so it sits in the
+        // bare `/admin/*` namespace with the rest of the admin surface.
+        .push(federation::admin_anchor_sign_router())
         .push(api_v1_router())
         .push(interop::contrix_router())
-        .push(admin::admin_router())
         // `/contrix/v1/*` fallback: per `contrix-spec/spec/v1/zh/sync/
         // api-conventions.md` §10, any request under `/contrix/v1/...` that
         // doesn't match a known route MUST return the canonical
@@ -150,8 +168,12 @@ fn api_v1_router() -> Router {
         .push(federation::router())
         .push(events::router())
         .push(access::router())
-        .push(admin::spec_router())
-        .push(admin::router())
+        // Audit endpoints stay on the protocol surface at `/api/v1/audit/*`
+        // (they are not part of the deployment-local `/admin/*` namespace).
+        // The canonical admin ops and the admin collection/operator
+        // surfaces are mounted at the bare `/admin/*` namespace on the root
+        // router instead — see `router()` above.
+        .push(admin::audit_router())
         .push(interop::router())
         .push(conformance::router())
         // G3.S1: MLS / keys lifecycle — spec-canonical path is
@@ -596,84 +618,84 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "resolve realm",
     ),
     (
-        "/api/v1/admin/actors",
+        "/admin/actors",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.actors",
         "admin actor snapshot",
     ),
     (
-        "/api/v1/admin/spaces",
+        "/admin/spaces",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.spaces",
         "admin space snapshot",
     ),
     (
-        "/api/v1/admin/devices",
+        "/admin/devices",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.devices",
         "admin device snapshot",
     ),
     (
-        "/api/v1/admin/capabilities",
+        "/admin/capabilities",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.capabilities",
         "admin capability snapshot",
     ),
     (
-        "/api/v1/admin/federation",
+        "/admin/federation",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.federation",
         "admin federation snapshot",
     ),
     (
-        "/api/v1/admin/applets",
+        "/admin/applets",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.applets",
         "admin applet snapshot",
     ),
     (
-        "/api/v1/admin/agents",
+        "/admin/agents",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.agents",
         "admin agent snapshot",
     ),
     (
-        "/api/v1/admin/reports",
+        "/admin/reports",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.reports",
         "admin report snapshot",
     ),
     (
-        "/api/v1/admin/invite-tokens",
+        "/admin/invite-tokens",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.invite_tokens",
         "admin invite token snapshot",
     ),
     (
-        "/api/v1/admin/audit",
+        "/admin/audit",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.audit",
         "admin audit snapshot",
     ),
     (
-        "/api/v1/admin/policy",
+        "/admin/policy",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.policy",
         "admin policy snapshot",
     ),
     (
-        "/api/v1/admin/media",
+        "/admin/media",
         PathItemType::Get,
         "admin",
         "cx.extension.soland.admin.media",
@@ -1157,7 +1179,7 @@ fn populate_known_routes(doc: &OpenApi) {
             // surface and `/contrix/v1/...` is the cross-server federated
             // surface; both are spec-mandated to return the canonical
             // error envelope. Other prefixes (e.g. `/health`,
-            // `/.well-known/...`, `/api/admin/v1/...`) are out of scope
+            // `/.well-known/...`, `/admin/...`) are out of scope
             // for the `unrecognized_endpoint` / `method_not_allowed`
             // contract.
             if !(path.starts_with("/api/v1/") || path.starts_with("/contrix/v1/")) {

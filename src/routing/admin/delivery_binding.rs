@@ -3,11 +3,11 @@
 //!
 //! Endpoints:
 //!
-//! - `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` — projected
+//! - `GET /admin/realms/{realm_id}/delivery-binding-policy` — projected
 //!   `cx.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
 //!   boundary). Mirrors the wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
 //!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
-//! - `GET /api/admin/v1/spaces/{space_id}/delivery-binding-policy` — 410 Gone shim. Realm/Space
+//! - `GET /admin/spaces/{space_id}/delivery-binding-policy` — 410 Gone shim. Realm/Space
 //!   reversal (R1.2) moved the policy onto the Realm boundary; the old `/spaces/{id}/...` path is
 //!   retired in the aggressive-mode v1 cutover (no back-compat).
 //!
@@ -30,7 +30,7 @@ use crate::routing::system::util::{render_error, validate_space_id};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
-/// `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` response.
+/// `GET /admin/realms/{realm_id}/delivery-binding-policy` response.
 ///
 /// Mirrors sodmin's `RealmDeliveryBindingPolicy` DTO in
 /// `sodmin/src/types/api.rs`. `realm_id` is the security boundary id
@@ -99,7 +99,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
     }
 }
 
-/// `GET /api/admin/v1/realms/{realm_id}/delivery-binding-policy` —
+/// `GET /admin/realms/{realm_id}/delivery-binding-policy` —
 /// read the projected delivery_binding_policy cell for a Realm.
 ///
 /// Authn: any authenticated session in development_mode, otherwise the
@@ -143,7 +143,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     json_ok(response_from_cell(&realm_id, value.as_ref()))
 }
 
-/// `GET /api/admin/v1/spaces/{space_id}/delivery-binding-policy` — 410
+/// `GET /admin/spaces/{space_id}/delivery-binding-policy` — 410
 /// Gone. The pre-reversal path is retired in aggressive-mode v1.
 /// Callers MUST migrate to the `/realms/{realm_id}/...` route.
 #[handler]
@@ -157,6 +157,6 @@ pub(super) async fn admin_legacy_space_delivery_binding_policy_gone(
         "realm_kind_renamed_in_v1",
         "delivery-binding-policy moved off the `/spaces/{id}/...` path \
          in v1 (Realm/Space reversal). Use \
-         `/api/admin/v1/realms/{realm_id}/delivery-binding-policy`.",
+         `/admin/realms/{realm_id}/delivery-binding-policy`.",
     );
 }

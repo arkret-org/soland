@@ -93,7 +93,7 @@ async fn get_cell(
     scope: &str,
 ) -> Value {
     TestClient::get(format!(
-        "http://server/api/v1/consent/cells/{holder}?peer={peer}&scope={scope}"
+        "http://server/api/v1/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(app)
@@ -115,7 +115,7 @@ async fn grant_cell(
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "peer_did": peer,
-            "scope": scope,
+            "consent_scope": scope,
             "valid_until": valid_until,
         }))
         .send(app)
@@ -136,7 +136,7 @@ async fn revoke_cell(
         "http://server/api/v1/consent/cells/{holder}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({ "peer_did": peer, "scope": scope }))
+    .json(&serde_json::json!({ "peer_did": peer, "consent_scope": scope }))
     .send(app)
     .await
     .take_json()

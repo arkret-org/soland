@@ -28,7 +28,7 @@
 //!   `SOLAND_ANCHORER_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
 //!   `routing/move_anchor.rs`) still accepts both real and shape-only JWSes for local fixtures.
-//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /api/admin/v1/anchors/sign`.
+//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /admin/anchors/sign`.
 //!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
 //!   shutdown handling under tokio).
 

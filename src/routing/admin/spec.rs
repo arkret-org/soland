@@ -1,7 +1,12 @@
-//! Canonical `/api/v1/admin/*` endpoints from the public service spec.
+//! Canonical `cx.admin.*` endpoints from the public service spec.
 //!
-//! These are distinct from `/api/admin/v1/*`, which remains soland operator
-//! infrastructure for anchor DAG, bottom-cell repair, and multisig internals.
+//! Per contrix-spec `service-http-binding.md` §2.1 the admin surface is a
+//! deployment-local namespace served at the bare `/admin/*` path (NOT under
+//! the `/api/v1` protocol prefix). These canonical operations share that
+//! `/admin/*` namespace with the soland operator infrastructure (anchor DAG,
+//! bottom-cell repair, multisig — see [`super::anchor`]) and the admin
+//! collection snapshot (see [`super::collection`]); salvo router fallthrough
+//! keeps the three sub-trees from colliding.
 
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -26,6 +31,12 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
         .push(Router::with_path("devices/{device_id}/revoke").post(revoke_device))
+        // `GET /admin/moderation/queue` (`cx.admin.get_moderation_queue`)
+        // is the canonical queue read. The operator moderation suite in
+        // `moderation.rs` owns the remaining `/admin/moderation/*`
+        // sub-paths (queue/{id}/assign, decision, appeals) and
+        // deliberately does NOT re-bind the bare `queue` GET to avoid
+        // double-binding the single canonical URL.
         .push(Router::with_path("moderation/queue").get(get_moderation_queue))
 }
 

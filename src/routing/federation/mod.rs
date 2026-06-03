@@ -15,10 +15,16 @@ use super::{
     redaction_targets_from_operations, sha256_hex, sync_token, validate_did, validate_space_id,
 };
 
+/// Operator anchor-signing endpoint (`POST /admin/anchors/sign`). Mounted
+/// at the bare deployment-local `/admin/*` namespace on the root router
+/// (NOT under `/api/v1`), alongside the rest of the admin surface.
+pub fn admin_anchor_sign_router() -> Router {
+    move_anchor::api_admin_router()
+}
+
 pub fn router() -> Router {
     Router::new()
         .push(move_anchor::router())
-        .push(move_anchor::api_admin_router())
         .push(
             Router::with_path("federation/transactions/{txn_id}")
                 .put(federation::federation_transaction),

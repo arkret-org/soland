@@ -146,7 +146,7 @@ pub struct ProjectionState {
     /// `extensions/applet-integration.md`). Populated by
     /// `cx.applet.registration` (initial registration / re-registration)
     /// and updated by `cx.applet.discovery` (manifest refresh). Used by
-    /// `GET /api/v1/admin/applets` admin snapshot. Protocol-session
+    /// `GET /admin/applets` admin snapshot. Protocol-session
     /// events (`cx.applet.protocol_session.{start,status}`,
     /// `cx.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
