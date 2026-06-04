@@ -2093,6 +2093,51 @@ mod operation_conformance_tests {
             );
         }
     }
+
+    // --- SEC-09: PSI / contact-discovery timing side-channel defenses ---
+
+    #[test]
+    fn psi_bucket_timestamp_floors_to_bucket_boundary() {
+        use crate::state::{AppState, PSI_HIT_BUCKET_SECS};
+        // A timestamp mid-bucket floors down to the bucket start; two times in
+        // the same bucket map to the same value (hides intra-bucket flip time).
+        // Align `base` to a bucket boundary so mid/late share one bucket.
+        let base_secs = 1_900_000_000 - 1_900_000_000_i64.rem_euclid(PSI_HIT_BUCKET_SECS);
+        let base = chrono::DateTime::<chrono::Utc>::from_timestamp(base_secs, 0).unwrap();
+        let mid = base + chrono::Duration::seconds(PSI_HIT_BUCKET_SECS / 2);
+        let late = base + chrono::Duration::seconds(PSI_HIT_BUCKET_SECS - 1);
+        let bucketed_mid = AppState::psi_bucket_timestamp(mid);
+        let bucketed_late = AppState::psi_bucket_timestamp(late);
+        assert_eq!(bucketed_mid, bucketed_late, "same bucket → same exposed ts");
+        assert_eq!(
+            bucketed_mid.timestamp() % PSI_HIT_BUCKET_SECS,
+            0,
+            "bucketed ts sits on a bucket boundary"
+        );
+        // Crossing into the next bucket changes the exposed value.
+        let next = base + chrono::Duration::seconds(PSI_HIT_BUCKET_SECS);
+        assert_ne!(AppState::psi_bucket_timestamp(next), bucketed_mid);
+    }
+
+    #[test]
+    fn psi_probe_rate_limits_high_frequency_pair() {
+        use crate::state::PSI_PROBE_MAX_PER_WINDOW;
+        let state = test_state();
+        let requester = "did:web:probe.example";
+        let holder = "did:web:holder.example";
+        // Probes up to the window cap are allowed.
+        for _ in 0..PSI_PROBE_MAX_PER_WINDOW {
+            let outcome = state.record_psi_probe(requester, holder);
+            assert!(!outcome.rate_limited, "within-window probe must pass");
+        }
+        // The next probe over the cap is rate-limited with a backoff.
+        let over = state.record_psi_probe(requester, holder);
+        assert!(over.rate_limited, "probe over window cap must be rate-limited");
+        assert!(over.retry_after_ms > 0, "rate-limited probe must surface backoff");
+        // A different (requester, holder) pair is tracked independently.
+        let other = state.record_psi_probe("did:web:other.example", holder);
+        assert!(!other.rate_limited, "distinct pair has its own window");
+    }
 }
 
 #[cfg(test)]

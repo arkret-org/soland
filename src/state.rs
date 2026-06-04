@@ -875,6 +875,10 @@ pub struct AppState {
     /// A successful login clears the row. Durable storage lands with
     /// the account-state projection.
     pub failed_login_attempts: Arc<Mutex<BTreeMap<String, FailedLoginRecord>>>,
+    /// SEC-09 — per-`(requester_did, holder_did)` PSI / contact-discovery
+    /// probe counters; backs the timing-side-channel rate limit in
+    /// `directory::private_contact_discovery`.
+    pub psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
@@ -1154,6 +1158,50 @@ pub const ACCOUNT_LOCKOUT_DURATION: chrono::Duration = chrono::Duration::minutes
 /// Rolling window over which failed attempts accumulate. Failures older
 /// than this reset the counter rather than escalating to a lockout.
 pub const ACCOUNT_LOCKOUT_WINDOW: chrono::Duration = chrono::Duration::minutes(15);
+
+// --- SEC-09: PSI / contact-discovery timing side-channel defenses ---
+// (consent-model.md §6.2: per-(requester, holder) rate limit + coarse hit
+// bucket + holder-auditable probe record.)
+
+/// Coarse time-bucket granularity (seconds) applied to PSI / contact-discovery
+/// hit visibility. The `as_of` timestamp a requester observes for a match is
+/// floored to this bucket so the precise moment a holder's reachability bit
+/// flipped (grant/revoke) is not directly readable — mirrors presence
+/// `last_active_at` bucketing. SEC-09.
+pub const PSI_HIT_BUCKET_SECS: i64 = 900; // 15 minutes
+
+/// Rolling window over which a single `(requester, holder)` pair's PSI probes
+/// accumulate before the pair is rate-limited. SEC-09.
+pub const PSI_PROBE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
+
+/// Max PSI probes a single `(requester, holder)` pair MAY make within
+/// [`PSI_PROBE_WINDOW`] before further probes are rate-limited. SEC-09.
+pub const PSI_PROBE_MAX_PER_WINDOW: u32 = 20;
+
+/// Per-`(requester, holder)` PSI probe counter (SEC-09). Drives the rolling
+/// rate-limit window that blunts high-frequency hit-bit timing probes.
+#[derive(Clone, Debug)]
+pub struct PsiProbeRecord {
+    /// Probes observed in the current window.
+    pub count: u32,
+    /// Start of the current rolling window.
+    pub window_started_at: chrono::DateTime<chrono::Utc>,
+    /// Timestamp of the most recent probe.
+    pub last_probe_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Result of recording a PSI probe against the `(requester, holder)` limiter.
+#[derive(Clone, Debug)]
+pub struct PsiProbeOutcome {
+    /// `true` once this pair exceeds [`PSI_PROBE_MAX_PER_WINDOW`] in the
+    /// current window; callers MUST then withhold a fresh match result and
+    /// surface `retry_after_ms`.
+    pub rate_limited: bool,
+    /// Probe count in the current window (post-increment).
+    pub count: u32,
+    /// Suggested client backoff when `rate_limited` is set.
+    pub retry_after_ms: i64,
+}
 
 #[derive(Clone, Debug)]
 pub struct WebvhDocumentRecord {
@@ -1922,6 +1970,7 @@ impl AppState {
             account_lifecycle: Arc::new(Mutex::new(BTreeMap::new())),
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
+            psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
@@ -2166,6 +2215,58 @@ impl AppState {
             .lock()
             .expect("failed_login_attempts lock")
             .remove(did);
+    }
+
+    /// SEC-09 — record a PSI / contact-discovery probe for the
+    /// `(requester, holder)` pair and report whether it is rate-limited.
+    /// A rolling [`PSI_PROBE_WINDOW`] caps probes at
+    /// [`PSI_PROBE_MAX_PER_WINDOW`]; once exceeded the caller MUST withhold a
+    /// fresh match result and surface `retry_after_ms`, so a requester cannot
+    /// poll the holder's hit bit at high frequency to read grant/revoke timing.
+    pub fn record_psi_probe(&self, requester: &str, holder: &str) -> PsiProbeOutcome {
+        let mut map = self
+            .psi_probe_tracker
+            .lock()
+            .expect("psi_probe_tracker lock");
+        let now = chrono::Utc::now();
+        let entry = map
+            .entry((requester.to_owned(), holder.to_owned()))
+            .or_insert(PsiProbeRecord {
+                count: 0,
+                window_started_at: now,
+                last_probe_at: now,
+            });
+        // Roll the window if the current one has elapsed.
+        if now - entry.window_started_at > PSI_PROBE_WINDOW {
+            entry.count = 0;
+            entry.window_started_at = now;
+        }
+        entry.count = entry.count.saturating_add(1);
+        entry.last_probe_at = now;
+        let rate_limited = entry.count > PSI_PROBE_MAX_PER_WINDOW;
+        let retry_after_ms = if rate_limited {
+            (entry.window_started_at + PSI_PROBE_WINDOW - now)
+                .num_milliseconds()
+                .max(0)
+        } else {
+            0
+        };
+        PsiProbeOutcome {
+            rate_limited,
+            count: entry.count,
+            retry_after_ms,
+        }
+    }
+
+    /// SEC-09 — floor a timestamp to [`PSI_HIT_BUCKET_SECS`] so PSI hit
+    /// visibility only changes at coarse bucket boundaries, hiding the precise
+    /// moment a holder's reachability bit flipped.
+    pub fn psi_bucket_timestamp(
+        ts: chrono::DateTime<chrono::Utc>,
+    ) -> chrono::DateTime<chrono::Utc> {
+        let secs = ts.timestamp();
+        let bucketed = secs - secs.rem_euclid(PSI_HIT_BUCKET_SECS);
+        chrono::DateTime::<chrono::Utc>::from_timestamp(bucketed, 0).unwrap_or(ts)
     }
 }
 
