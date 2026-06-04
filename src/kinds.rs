@@ -191,7 +191,6 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // `ck.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
-pub use cokret_sdk::events::kinds::MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE;
 // Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
 // `.v1` suffix from these audit event kinds. Wire schema versioning now
 // flows through `requirements.features` (e.g. `ck.feature.audit_destruction_v1`).
@@ -259,7 +258,7 @@ pub use cokret_sdk::events::kinds::{
     AGENT_RESUME as CK_AGENT_RESUME, CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED,
     DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE, MLS_COMMIT as CK_MLS_COMMIT,
     MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
-    MLS_WELCOME as CK_MLS_WELCOME,
+    MLS_WELCOME as CK_MLS_WELCOME, MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {

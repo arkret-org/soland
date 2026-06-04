@@ -1253,7 +1253,11 @@ async fn private_contact_discovery(
                     "probe_count": outcome.count,
                     "rate_limited": outcome.rate_limited,
                 }),
-                if outcome.rate_limited { "rate_limited" } else { "ok" },
+                if outcome.rate_limited {
+                    "rate_limited"
+                } else {
+                    "ok"
+                },
             )
             .await;
             // SEC-09 — once a pair exceeds the window cap, withhold the fresh

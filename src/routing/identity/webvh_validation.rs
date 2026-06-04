@@ -921,8 +921,7 @@ mod tests {
             ResolverHealthVerdict::FailClosed(ResolverHealthFailReason::Stale)
         );
         // Verified + fresh but reports degraded → fail closed.
-        let degraded =
-            sample_health_signal("webvh_cache_only_degraded", "2026-06-04T00:00:00Z");
+        let degraded = sample_health_signal("webvh_cache_only_degraded", "2026-06-04T00:00:00Z");
         assert_eq!(
             resolver_health_verdict(Some(&degraded), &authorized, td, now),
             ResolverHealthVerdict::FailClosed(ResolverHealthFailReason::Degraded)

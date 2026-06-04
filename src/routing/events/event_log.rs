@@ -1256,6 +1256,18 @@ async fn submit_event_value(
         }
     }
 
+    // SEC-04 — receiver-side independent 24h inception-key online-window cap
+    // (`identity/key-management.md` §5.0.1 step 5). When an inception-bootstrap
+    // self-authorization (`ck.device.authorize` / `ck.session.grant` carrying a
+    // `refs[role=did_inception]` evidence ref) is signed by the inception key,
+    // the receiver MUST anchor on the verifiable bootstrap timestamp
+    // (`did:webvh` entry-0 `versionTime`) and reject the event when the
+    // inception key age exceeds the 24h protocol hard cap — regardless of any
+    // longer window the deployment self-reports. Runs against the full envelope
+    // because the `did_inception` evidence ref lives on the envelope `refs[]`,
+    // not on the projection operation payload.
+    enforce_inception_key_online_window(state, &parsed, &envelope).await?;
+
     // CXP-0007: a message's effective circle-scope is derived from its Flow
     // (spec: `scope_circle_id` is a Flow field, never carried on the message).
     // Stamp the authoritative top-level `effective_scope` onto the stored
@@ -1852,7 +1864,7 @@ fn projected_mls_governance_binding_covers_policy_root(
 /// SEC-03 — project the `discussion_metadata_digest` the realm's current MLS
 /// epoch governance binding covers, so [`realm_policy_components_check`] can
 /// recompute the `media_service_decrypts` fact and reject a stale / forged
-/// binding (`webrtc-signaling.md` §10.5.1 rule 5). Mirrors the cell-selection
+/// binding (`media-service-binding.md` §8.2 rule 5). Mirrors the cell-selection
 /// logic of [`projected_mls_governance_binding_covers_policy_root`]; returns the
 /// digest from the first realm-targeting MLS cell that carries one, or `None`
 /// when no projected binding advertises a digest (in which case the digest gate
@@ -3478,6 +3490,155 @@ fn event_ref_list(
         .collect()
 }
 
+/// SEC-04 — `did_inception` evidence ref roles. Inception-bootstrap
+/// self-authorizations (`identity/key-management.md` §5.0.1 step 4) attach a
+/// `refs[]` entry with `role="did_inception"` (`critical=true`) pointing at the
+/// `did:webvh` entry-0 versionId. Its presence is what distinguishes an
+/// inception-key-signed control event from the post-bootstrap §5.1 path (step 7
+/// / §5.0.3: subsequent `ck.device.authorize` MUST be `authorized_by` an
+/// already-anchored device and therefore carry no `did_inception` ref).
+const DID_INCEPTION_REF_ROLE: &str = "did_inception";
+
+/// SEC-04 — receiver-side independent enforcement of the 24h inception-key
+/// online-window hard cap (`identity/key-management.md` §5.0.1 step 5,
+/// "接收端独立 enforce").
+///
+/// Only inception-key-signed control events are gated: a
+/// `ck.device.authorize` / `ck.session.grant` whose envelope `refs[]` carries a
+/// `role="did_inception"` evidence ref. For those, the receiver anchors on the
+/// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
+/// computes the inception-key age against its own local clock via the SDK
+/// [`cokret_sdk::model::inception_key_age_exceeded`]; an age past the 24h hard
+/// cap is rejected with reason `inception_key_window_exceeded`, regardless of
+/// any longer deployment-self-reported window.
+///
+/// **Conservative fail-closed (mirrors `webvh_validation` `versionTime`
+/// handling):** when the gate applies but the entry-0 `versionTime` anchor is
+/// missing / unparseable / the local webvh log is absent, the event is rejected
+/// rather than admitted. We never substitute `now` to "pass" the check.
+///
+/// **Honest scope boundary:** the anchor is read from this server's *locally
+/// hosted / cached* `did:webvh` log (`persistence.webvh().list_log_events`).
+/// When this soland is the principal's webvh host (the v1-core
+/// inception-bootstrap topology, since the genesis `ck.device.authorize` is
+/// submitted to the same principal server that wrote entry-0) the anchor is
+/// available and the gate runs at submit time. When the principal's webvh log
+/// is hosted elsewhere and not cached here, the gate fails closed (rejects the
+/// inception-key-signed event), which is the conservative SEC-04 default — it
+/// never silently admits.
+async fn enforce_inception_key_online_window(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Result<(), SubmitOneError> {
+    // Only inception-key-signed control events are subject to the 24h cap.
+    if parsed.kind != "ck.device.authorize" && parsed.kind != "ck.session.grant" {
+        return Ok(());
+    }
+    let Some(object) = envelope.as_object() else {
+        return Ok(());
+    };
+    // Post-bootstrap §5.1 device authorizations carry no `did_inception` ref
+    // (they are `authorized_by` an anchored device), so they are not gated.
+    if !envelope_has_did_inception_ref(object) {
+        return Ok(());
+    }
+
+    // Resolve the principal DID whose entry-0 anchors the inception key. For an
+    // inception-bootstrap self-authorization the `actor_id` IS the principal;
+    // we also accept an explicit `payload.principal_id` / `payload.subject` for
+    // session grants. Fail closed when no `did:webvh` principal can be derived.
+    let principal_did = inception_principal_did(object, &parsed.actor_id);
+    let Some(principal_did) = principal_did else {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
+            "inception-key-signed control event lacks a resolvable did:webvh principal for the \
+             entry-0 online-window anchor",
+        ));
+    };
+
+    // Anchor on the locally hosted/cached entry-0 `versionTime`. Missing log,
+    // missing entry-0, or an unparseable timestamp all fail closed.
+    let anchor = inception_bootstrap_anchor(state, &principal_did).await;
+    let Some(bootstrap_ts) = anchor else {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
+            "inception-bootstrap entry-0 versionTime anchor is missing or unparseable; refusing to \
+             admit an inception-key-signed control event without a verifiable online-window anchor",
+        ));
+    };
+
+    if cokret_sdk::model::inception_key_age_exceeded(bootstrap_ts, now()) {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
+            "inception key online window exceeded the 24h protocol hard cap",
+        ));
+    }
+    Ok(())
+}
+
+/// SEC-04 — `true` when the envelope `refs[]` carries a `role="did_inception"`
+/// evidence ref (the inception-bootstrap self-authorization marker).
+fn envelope_has_did_inception_ref(object: &serde_json::Map<String, Value>) -> bool {
+    object
+        .get("refs")
+        .and_then(Value::as_array)
+        .is_some_and(|refs| {
+            refs.iter().any(|reference| {
+                reference
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .is_some_and(|role| role == DID_INCEPTION_REF_ROLE)
+            })
+        })
+}
+
+/// SEC-04 — derive the principal DID whose `did:webvh` entry-0 anchors the
+/// inception key, preferring an explicit `payload.principal_id` / `subject`,
+/// falling back to the envelope `actor_id` (the self-authorization case). Only
+/// `did:webvh` principals carry an entry-0 anchor in this gate; other methods
+/// return `None` (handled as fail-closed by the caller).
+fn inception_principal_did(
+    object: &serde_json::Map<String, Value>,
+    actor_id: &str,
+) -> Option<String> {
+    let payload = object.get("payload").and_then(Value::as_object);
+    let candidate = payload
+        .and_then(|payload| {
+            payload
+                .get("principal_id")
+                .or_else(|| payload.get("subject"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(actor_id);
+    candidate
+        .starts_with("did:webvh:")
+        .then(|| candidate.to_owned())
+}
+
+/// SEC-04 — read the verifiable inception-bootstrap timestamp: the `versionTime`
+/// of the lowest-`seq` (entry-0 / genesis) record in this server's locally
+/// hosted/cached `did:webvh` log for `did`. Returns `None` (fail-closed for the
+/// caller) when the log is absent, has no genesis entry, or the genesis
+/// `versionTime` is missing / not RFC3339.
+async fn inception_bootstrap_anchor(
+    state: &AppState,
+    did: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let events = state.persistence.webvh().list_log_events(did).await.ok()?;
+    let genesis = events.iter().min_by_key(|record| record.seq)?;
+    let version_time = genesis
+        .operation
+        .get("versionTime")
+        .and_then(Value::as_str)?;
+    chrono::DateTime::parse_from_rfc3339(version_time)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&chrono::Utc))
+}
+
 fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     _state: &AppState,
@@ -4266,7 +4427,7 @@ pub fn cross_signing_reset_replay_check(
 ///    `discussion_metadata_digest` from the §10.5.1 rule 1–3 policy cell value
 ///    (`media_service_decrypts` + the authorised `plaintext_visible_services`) and fail closed with
 ///    `mls_governance_binding_stale` when it disagrees with the digest the projected governance
-///    binding covers. This is the server-side mirror of `webrtc-signaling.md` §10.5.1 rule 5 /
+///    binding covers. This is the server-side mirror of `media-service-binding.md` §8.2 rule 5 /
 ///    negative vector `ck.vector.webrtc.media_plaintext_downgrade.v1` case (d): the fact that media
 ///    is service-decryptable MUST be derivable from member-visible metadata, not asserted out of
 ///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
@@ -4367,7 +4528,7 @@ pub fn realm_policy_components_check(
                     ErrorCode::MlsGovernanceBindingStale,
                     "media_service_decrypts=true fact recomputed from the policy \
                      cell value does not match the governance binding's \
-                     discussion_metadata_digest (webrtc-signaling.md §10.5.1 rule 5)"
+                     discussion_metadata_digest (media-service-binding.md §8.2 rule 5)"
                         .to_owned(),
                 ));
             }
@@ -4567,7 +4728,7 @@ mod admission_tests {
         // SEC-03 — `media_service_decrypts=true` with an authorised plaintext
         // service: the digest the governance binding covers MUST equal the
         // digest recomputed from the policy cell value, else fail closed with
-        // `mls_governance_binding_stale` (webrtc-signaling.md §10.5.1 rule 5).
+        // `mls_governance_binding_stale` (media-service-binding.md §8.2 rule 5).
         use cokret_sdk::model::{
             MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
         };
@@ -4647,7 +4808,7 @@ mod proof_strictness_tests {
     use crate::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
     use crate::db::Db;
 
-    fn make_state(development_mode: bool) -> AppState {
+    pub(super) fn make_state(development_mode: bool) -> AppState {
         let config = AppConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             metrics_bind: "127.0.0.1:0".parse().unwrap(),
@@ -5531,5 +5692,206 @@ mod proof_strictness_tests {
         verifier
             .assert_production_proof(&prod)
             .expect("SDK ProductionVerifier must accept detached_jws kind");
+    }
+}
+
+#[cfg(test)]
+mod inception_key_window_tests {
+    //! SEC-04 — receiver-side independent 24h inception-key online-window cap
+    //! (`identity/key-management.md` §5.0.1 step 5). These tests exercise the
+    //! gate directly against the locally hosted `did:webvh` entry-0
+    //! `versionTime` anchor.
+    use super::proof_strictness_tests::make_state;
+    use super::*;
+    use crate::state::WebvhLogRecord;
+
+    const PRINCIPAL_DID: &str =
+        "did:webvh:zScidExample0000000000000000000000:test.example:webvh:alice";
+
+    fn parsed(kind: &str) -> ValidatedEventEnvelope {
+        ValidatedEventEnvelope {
+            event_id: "ck:event:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            actor_id: PRINCIPAL_DID.to_owned(),
+            actor_seq: 1,
+            realm_id: "ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            kind: kind.to_owned(),
+            schema_id: "ck.schema.event.v1".to_owned(),
+            prev_refs: Vec::new(),
+            authorized_refs: Vec::new(),
+            canonical_digest: format!("sha256:{}", "0".repeat(64)),
+            canonical_bytes: Vec::new(),
+        }
+    }
+
+    /// Inception-bootstrap self-authorization: a `ck.device.authorize` whose
+    /// envelope `refs[]` carries the `role="did_inception"` evidence ref.
+    fn inception_bootstrap_envelope() -> Value {
+        json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000001",
+            "kind": "ck.device.authorize",
+            "actor_id": PRINCIPAL_DID,
+            "refs": [
+                {"id": "1-zEntryZeroVersionId", "role": "did_inception", "critical": true}
+            ],
+            "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ck:device:x"}
+        })
+    }
+
+    /// Post-bootstrap §5.1 device authorization: `authorized_by` an anchored
+    /// device, with NO `did_inception` ref.
+    fn anchored_device_envelope() -> Value {
+        json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000002",
+            "kind": "ck.device.authorize",
+            "actor_id": PRINCIPAL_DID,
+            "refs": [
+                {"id": "ck:event:01904100-0000-7000-8000-a11ce0000001", "role": "authorized_by"}
+            ],
+            "payload": {"principal_id": PRINCIPAL_DID, "device_id": "ck:device:y"}
+        })
+    }
+
+    async fn seed_entry_zero(state: &AppState, version_time: &str) {
+        state
+            .persistence
+            .webvh()
+            .append_log_event(WebvhLogRecord {
+                event_digest: format!("sha256:{}", "1".repeat(64)),
+                did: PRINCIPAL_DID.to_owned(),
+                // did.rs writes the genesis entry with seq=1 (versionId "1-..");
+                // the gate anchors on the lowest-seq record regardless.
+                seq: 1,
+                operation: json!({
+                    "versionId": "1-zEntryZeroVersionId",
+                    "versionTime": version_time,
+                    "parameters": {"method": "did:webvh:1.0"},
+                    "state": {"id": PRINCIPAL_DID},
+                }),
+                created_at: now(),
+            })
+            .await
+            .expect("seed entry-0");
+    }
+
+    #[tokio::test]
+    async fn rejects_when_self_reported_window_is_long_but_age_exceeds_24h() {
+        // Anchor entry-0 ~48h before "now"; the deployment may self-report a
+        // longer window, but the receiver's independent 24h cap MUST reject.
+        let state = make_state(true);
+        let bootstrap = now() - chrono::Duration::hours(48);
+        seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
+        let err = enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.device.authorize"),
+            &inception_bootstrap_envelope(),
+        )
+        .await
+        .expect_err("inception key older than 24h must be rejected");
+        assert_eq!(
+            err.code,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED
+        );
+        assert_eq!(err.status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admits_when_inception_key_age_under_24h() {
+        let state = make_state(true);
+        let bootstrap = now() - chrono::Duration::hours(1);
+        seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
+        enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.device.authorize"),
+            &inception_bootstrap_envelope(),
+        )
+        .await
+        .expect("inception key under 24h must be admitted");
+    }
+
+    #[tokio::test]
+    async fn fails_closed_when_entry_zero_version_time_missing() {
+        // Inception-bootstrap event but NO local entry-0 anchor → conservative
+        // reject, never silently admit.
+        let state = make_state(true);
+        let err = enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.device.authorize"),
+            &inception_bootstrap_envelope(),
+        )
+        .await
+        .expect_err("missing entry-0 anchor must fail closed");
+        assert_eq!(
+            err.code,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED
+        );
+    }
+
+    #[tokio::test]
+    async fn fails_closed_when_version_time_unparseable() {
+        let state = make_state(true);
+        seed_entry_zero(&state, "not-a-timestamp").await;
+        let err = enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.device.authorize"),
+            &inception_bootstrap_envelope(),
+        )
+        .await
+        .expect_err("unparseable versionTime must fail closed");
+        assert_eq!(
+            err.code,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED
+        );
+    }
+
+    #[tokio::test]
+    async fn anchored_device_authorize_is_not_gated() {
+        // A post-bootstrap device.authorize (no did_inception ref) is NOT
+        // subject to the inception-key window even when an old entry-0 exists.
+        let state = make_state(true);
+        let bootstrap = now() - chrono::Duration::hours(72);
+        seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
+        enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.device.authorize"),
+            &anchored_device_envelope(),
+        )
+        .await
+        .expect("anchored-device authorize must not be gated by the inception window");
+    }
+
+    #[tokio::test]
+    async fn session_grant_signed_by_inception_key_is_gated() {
+        let state = make_state(true);
+        let bootstrap = now() - chrono::Duration::hours(48);
+        seed_entry_zero(&state, &bootstrap.to_rfc3339()).await;
+        let envelope = json!({
+            "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000003",
+            "kind": "ck.session.grant",
+            "actor_id": PRINCIPAL_DID,
+            "refs": [
+                {"id": "1-zEntryZeroVersionId", "role": "did_inception", "critical": true}
+            ],
+            "payload": {"subject": PRINCIPAL_DID}
+        });
+        let err =
+            enforce_inception_key_online_window(&state, &parsed("ck.session.grant"), &envelope)
+                .await
+                .expect_err("inception-key-signed session.grant past 24h must be rejected");
+        assert_eq!(
+            err.code,
+            crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_kind_is_ignored() {
+        let state = make_state(true);
+        enforce_inception_key_online_window(
+            &state,
+            &parsed("ck.message.create"),
+            &inception_bootstrap_envelope(),
+        )
+        .await
+        .expect("non-control kinds are never gated");
     }
 }

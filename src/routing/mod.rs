@@ -2132,8 +2132,14 @@ mod operation_conformance_tests {
         }
         // The next probe over the cap is rate-limited with a backoff.
         let over = state.record_psi_probe(requester, holder);
-        assert!(over.rate_limited, "probe over window cap must be rate-limited");
-        assert!(over.retry_after_ms > 0, "rate-limited probe must surface backoff");
+        assert!(
+            over.rate_limited,
+            "probe over window cap must be rate-limited"
+        );
+        assert!(
+            over.retry_after_ms > 0,
+            "rate-limited probe must surface backoff"
+        );
         // A different (requester, holder) pair is tracked independently.
         let other = state.record_psi_probe("did:web:other.example", holder);
         assert!(!other.rate_limited, "distinct pair has its own window");
