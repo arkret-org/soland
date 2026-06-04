@@ -1268,7 +1268,7 @@ async fn submit_event_value(
     // not on the projection operation payload.
     enforce_inception_key_online_window(state, &parsed, &envelope).await?;
 
-    // CXP-0007: a message's effective circle-scope is derived from its Flow
+    // CKP-0007: a message's effective circle-scope is derived from its Flow
     // (spec: `scope_circle_id` is a Flow field, never carried on the message).
     // Stamp the authoritative top-level `effective_scope` onto the stored
     // envelope so read-path visibility gating hides circle-scoped messages
@@ -1553,7 +1553,7 @@ async fn validate_event_envelope(
         ));
     }
 
-    // REDU-7 / CXP-0008 / CXP-0009 (R3 spec-sync 2026-05-27,
+    // REDU-7 / CKP-0008 / CKP-0009 (R3 spec-sync 2026-05-27,
     // cokret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
     // reject any client-supplied value with the spec-canonical
     // `actor_kind_reducer_managed` reason code. The reducer derives the
@@ -1569,7 +1569,7 @@ async fn validate_event_envelope(
         ));
     }
 
-    // CXP-0008 / CXP-0009 — when `executed_by` is present the reducer MUST
+    // CKP-0008 / CKP-0009 — when `executed_by` is present the reducer MUST
     // verify the DID resolved from `proof.verification_method` matches
     // `executed_by` (signs-as-X-on-behalf-of-Y attribution proof). This
     // check uses the FIRST proof's verification_method as the proxy for
@@ -1662,7 +1662,7 @@ async fn validate_event_envelope(
         ));
     }
     require_object_field(object, "payload")?;
-    // CXP-0007 (spec b7d35be) — hard-reject any wire payload that carries a
+    // CKP-0007 (spec b7d35be) — hard-reject any wire payload that carries a
     // field listed in `forbidden-wire-fields.json` (sourced from the SDK's
     // `is_forbidden_wire_field`). Receivers MUST refuse the legacy field
     // names outright; no compat path. Spec floor 2b0d70d.
@@ -3387,7 +3387,7 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
     Some(canonical::sha256_digest(bytes))
 }
 
-/// CXP-0007 — recursively scan `value` for the first key listed in the SDK's
+/// CKP-0007 — recursively scan `value` for the first key listed in the SDK's
 /// [`cokret_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
 /// set. Receivers MUST refuse the legacy field names outright. Returns the
 /// offending field name when one is present, otherwise `None`.
@@ -3941,7 +3941,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 
 pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
     let realm_id = canonical_realm_id_for_record(record);
-    // CXP-0007 (spec b7d35be) — surface `effective_scope` on read so
+    // CKP-0007 (spec b7d35be) — surface `effective_scope` on read so
     // clients can branch on Circle vs Realm-default scope without
     // re-deriving from the envelope. The field is sourced from either
     // the envelope's top-level `effective_scope` or the payload-side
@@ -3972,7 +3972,7 @@ pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadRes
     EventReadResponse { event, metadata }
 }
 
-/// CXP-0007 — resolve the canonical `effective_scope` for an Event
+/// CKP-0007 — resolve the canonical `effective_scope` for an Event
 /// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
 /// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
 /// scope is the Realm default, or `None` when neither can be derived.

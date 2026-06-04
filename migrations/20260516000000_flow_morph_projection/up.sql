@@ -16,7 +16,7 @@
 CREATE TABLE projection_flows (
     flow_id           TEXT PRIMARY KEY,
     realm_id          TEXT NOT NULL,
-    -- CXP-0007: the Circle this Flow is scoped to (`ck:circle:…`), if any.
+    -- CKP-0007: the Circle this Flow is scoped to (`ck:circle:…`), if any.
     -- A message's effective circle-scope is derived from its Flow's
     -- scope_circle_id (spec: scope_circle_id is a Flow field, not a message
     -- field), so it MUST survive restart to keep circle-scoped messages

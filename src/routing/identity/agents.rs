@@ -1,4 +1,4 @@
-//! CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle surface.
+//! CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle surface.
 //!
 //! Implements the 11 personal-agent HTTP operations gap-reported as missing
 //! in soland. The handlers below stand up the cross-project HTTP contract
@@ -117,7 +117,7 @@ async fn agent_key_pair(
     // ERR-1 — PROOF_INVALID +
     // VERIFICATION_METHOD_PRINCIPAL_MISMATCH +
     // APPROVAL_ALREADY_CONSUMED reason codes anchor here. The pairing
-    // pipeline (CXP-0008 §4.2) emits PROOF_INVALID when the
+    // pipeline (CKP-0008 §4.2) emits PROOF_INVALID when the
     // runtime_attestation signature fails crypto verification,
     // VERIFICATION_METHOD_PRINCIPAL_MISMATCH when the DID resolved from
     // `verification_method` doesn't match the agent_principal's

@@ -45,7 +45,7 @@ pub(super) fn router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
         .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
-        // CXP-0010 — media token exchange (`/_cokret/self/rtc/token`).
+        // CKP-0010 — media token exchange (`/_cokret/self/rtc/token`).
         .push(Router::with_path("rtc/token").post(cokret_rtc_token))
         // soland-local call lifecycle helpers.
         .push(Router::with_path("calls/ice-config").post(api_ice_config))
@@ -660,7 +660,7 @@ async fn start_recording(
     }))
 }
 
-// ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+// ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
 // caller that already has a committed `ck.call.state.session_focus`.
 //
@@ -853,7 +853,7 @@ async fn handle_rtc_token(
                 .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED),
         );
     }
-    // ERR-1 — additional CXP-0010 reason codes surface from this token
+    // ERR-1 — additional CKP-0010 reason codes surface from this token
     // exchange path. The constants are referenced so they stay
     // grep-discoverable from the handler that emits them; deep
     // emission paths land with the ck.realm.media_service epoch
@@ -1373,7 +1373,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 #[endpoint(
     operation_id = "ck.call.media.token_exchange",
     tags("media", "calls"),
-    summary = "Exchange a session-focus for a backend media token + participant_binding (CXP-0010)",
+    summary = "Exchange a session-focus for a backend media token + participant_binding (CKP-0010)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.call.media.token_exchange"))]

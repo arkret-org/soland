@@ -35,7 +35,7 @@ const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
     "ciphertext_digest",
 ];
 
-// CXP-0008 / CXP-0009 (B-C, spec head 37ce729) — series-chain fields are
+// CKP-0008 / CKP-0009 (B-C, spec head 37ce729) — series-chain fields are
 // required on every key-backup envelope: `series_id` + `series_seq`. Genesis
 // envelopes use `series_seq == 0` (no `supersedes`); successors carry
 // `supersedes` pointing at the prior backup_id + `supersedes_digest` over
@@ -305,7 +305,7 @@ fn validate_key_backup_body(
             "key backup payload must be a JSON object",
         ));
     };
-    // CXP-0008 / CXP-0009 — reject the legacy `ck.secret_storage.v1` wire
+    // CKP-0008 / CKP-0009 — reject the legacy `ck.secret_storage.v1` wire
     // envelope shape. Senders MUST switch to the chained
     // `ck.schema.key_backup.v1` form with `series_id` / `series_seq`.
     if let Some(schema) = object.get("schema").and_then(Value::as_str)
@@ -359,7 +359,7 @@ fn validate_key_backup_body(
             "series_seq must be a non-negative integer",
         ));
     }
-    // CXP-0008 / CXP-0009 — recovery policy / receipt schemas are first-
+    // CKP-0008 / CKP-0009 — recovery policy / receipt schemas are first-
     // class payloads on this surface; accept them when present without
     // forcing the rest of the chained-envelope shape onto policy-only
     // documents. TODO(P2-impl): wire to the SDK schema validator.
@@ -577,7 +577,7 @@ async fn enforce_recovery_policy_ref(
     Ok(())
 }
 
-/// CXP-0008 / CXP-0009 (spec head 37ce729) — series monotonicity check
+/// CKP-0008 / CKP-0009 (spec head 37ce729) — series monotonicity check
 /// for `PUT /_cokret/self/keys/backups/{backup_id}`. Returns one of the three
 /// canonical 409 reasons:
 /// - `series_chain_broken`     — supersedes_digest is missing/empty when `series_seq > 0`

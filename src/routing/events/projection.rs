@@ -2425,7 +2425,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }
-    // CXP-0007: derive the message's circle scope from its Flow, never from
+    // CKP-0007: derive the message's circle scope from its Flow, never from
     // the message payload (spec: scope_circle_id is a Flow field).
     let flow_scope = operation
         .payload

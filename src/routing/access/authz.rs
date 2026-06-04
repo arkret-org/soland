@@ -273,7 +273,7 @@ async fn create_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    // CXP-0007 P1.3.4: parse the typed `GrantConstraint` enum from each
+    // CKP-0007 P1.3.4: parse the typed `GrantConstraint` enum from each
     // raw JSON object on the wire. The SDK's typed enum uses
     // `constraint_type` as its tag; unknown variants are hard-rejected.
     let constraints: Vec<crate::authz::Constraint> = body

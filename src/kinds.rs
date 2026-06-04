@@ -1,5 +1,5 @@
 use cokret_sdk::Operation;
-// CXP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
+// CKP-0007 (spec b7d35be) — Circle lifecycle / membership events. Seven
 // active durable kinds registered in
 // `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
 // dispatch is wired in `src/reducer.rs`; the wire-layer admission check
@@ -62,7 +62,7 @@ use serde_json::Value;
 
 use crate::artifacts;
 
-// CXP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
+// CKP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
 // Realm-default scope) to a "narrow discussion" Flow bound to a
 // `scope_circle_id` Circle. Stored on `ck.relation.create` /
 // `ck.relation.update` payloads as `relation_kind`. Spec
@@ -237,7 +237,7 @@ pub use cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY as CK_REALM_INHERITA
 // `ck.realm.link` (realm / reducer_input): typed link between Realm
 // boundaries. Canonical `link_kind` parsing + cycle/self-reference
 // rejection runs in `reducer::realm_links::check_realm_link_admissible`
-// (R3.1). The CXP-0007 P2A.4 pass lifts the previous TODO(realm-rework)
+// (R3.1). The CKP-0007 P2A.4 pass lifts the previous TODO(realm-rework)
 // marker: the canonical link kinds (`governed_by`, `inherits_policy_from`,
 // `mirror_of`, `references`, `audited_by`) all evaluate, and the
 // `/_cokret/self/realms/{realm_id}/effective-policy` surface walks the

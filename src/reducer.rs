@@ -131,7 +131,7 @@ pub struct ProjectionState {
     /// is reached via `ck.redaction`. Mirror table is `projection_flows`
     /// (durable).
     pub flows: BTreeMap<String, FlowProjection>,
-    /// CXP-0007 — server-side Circle projection. Mirrors the canonical
+    /// CKP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `ck.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
     /// (`ck:circle:<uuid>`); membership and parent-Realm binding live in
@@ -560,14 +560,14 @@ pub struct FlowProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CXP-0007 — the Circle this Flow is scoped to, if any (`ck:circle:…`).
+    /// CKP-0007 — the Circle this Flow is scoped to, if any (`ck:circle:…`).
     /// A message's effective circle-scope is derived from its Flow's
     /// `scope_circle_id` (spec: `scope_circle_id` is a Flow field, not a
     /// message field); messages never carry their own scope.
     pub scope_circle_id: Option<String>,
 }
 
-/// CXP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
+/// CKP-0007 — server-side Circle state cache. Mirrors `projection_circles` +
 /// `projection_circle_members` (see migration
 /// `20260526010000_add_circles`).
 ///
@@ -607,7 +607,7 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
-/// CXP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
+/// CKP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
 /// `state` enum (active / archived / tombstoned). Distinct from
 /// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used
 /// by Flow / Morph); Circle has no redaction path because the canonical
@@ -1165,7 +1165,7 @@ pub enum ProjectionEffect {
         morph_id: String,
         new_state: ObjectLifecycleState,
     },
-    /// CXP-0007 — Circle lifecycle transition accepted. Reflects
+    /// CKP-0007 — Circle lifecycle transition accepted. Reflects
     /// `ck.circle.create` / `update` / `archive` / `restore` / `tombstone`
     /// projection writes; new state is reflected in
     /// `ProjectionState::circles` (and the durable `projection_circles`
@@ -1174,7 +1174,7 @@ pub enum ProjectionEffect {
         circle_id: String,
         new_state: CircleLifecycleState,
     },
-    /// CXP-0007 — Circle membership transition. `target_state` is the
+    /// CKP-0007 — Circle membership transition. `target_state` is the
     /// `ck.circle.member.state` payload's `state` value (active / removed /
     /// banned / left / invited). The reducer applies the membership write
     /// only after the strict-subset invariant
@@ -1648,7 +1648,7 @@ fn apply_morph_restore_dispatch(
     s.apply_morph_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
 }
 
-// CXP-0007 — Circle dispatch wrappers.
+// CKP-0007 — Circle dispatch wrappers.
 fn apply_circle_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2604,7 +2604,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_MORPH_UPDATE, apply_morph_update_dispatch);
     m.insert(CK_MORPH_ARCHIVE, apply_morph_archive_dispatch);
     m.insert(CK_MORPH_RESTORE, apply_morph_restore_dispatch);
-    // CXP-0007 — Circle lifecycle / membership dispatch. The seventh
+    // CKP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ck.circle.anchor_commit`, is reducer-derived (sub-
     // anchor on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
@@ -3708,7 +3708,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        // CXP-0007: derive the message's circle scope from its Flow, never
+        // CKP-0007: derive the message's circle scope from its Flow, never
         // from the message payload (spec: scope_circle_id is a Flow field).
         let flow_scope = operation
             .payload
@@ -5704,7 +5704,7 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    /// CXP-0007: the legacy `Flow.discussion_realm_ref` cross-Realm edge
+    /// CKP-0007: the legacy `Flow.discussion_realm_ref` cross-Realm edge
     /// has been removed; intra-Realm discussion boundaries now live on a
     /// Circle (`scope_circle_id`) and never cross the Realm frontier, so
     /// no cross-Realm discussion cascade is required here.
@@ -5771,7 +5771,7 @@ impl ProjectionState {
             }
         }
 
-        // CXP-0007: no cross-Realm discussion edges to sever — Circles
+        // CKP-0007: no cross-Realm discussion edges to sever — Circles
         // are intra-Realm and `ck.realm.destroy` already tombstones their
         // parent Realm; further Circle writes fall under the terminal
         // admission check in `event_log::validate_event_envelope`.
@@ -6004,7 +6004,7 @@ impl ProjectionState {
                 reason: "place_create_missing_id".to_owned(),
             };
         };
-        // CXP-0007 — validate optional `scope_circle_id` /
+        // CKP-0007 — validate optional `scope_circle_id` /
         // `default_scope_circle_id` against the Realm + Circle state.
         // Either field MUST reference an active Circle in this Realm.
         for field in ["scope_circle_id", "default_scope_circle_id"] {
@@ -6027,7 +6027,7 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        // CXP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
+        // CKP-0007 rename batch 2026-05-25: wire field is `parent_space_id`.
         // The reducer keeps a transitional fallback to `parent_ref` so
         // soland's own internal reducer tests (which build payloads
         // directly without going through the wire validator) keep
@@ -6567,7 +6567,7 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // CKP-0007: `discussion_realm_ref` is now a forbidden wire field
         // hard-rejected at the envelope validator. Intra-Realm discussion
         // boundaries are expressed via `scope_circle_id` (Circle); when
         // present, validate the Circle is in this Realm and active.
@@ -6644,7 +6644,7 @@ impl ProjectionState {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
         };
-        // CXP-0007: `discussion_realm_ref` is now a forbidden wire field
+        // CKP-0007: `discussion_realm_ref` is now a forbidden wire field
         // hard-rejected at the envelope validator before reaching the
         // reducer; the patch handler below intentionally drops any legacy
         // path.
@@ -6944,7 +6944,7 @@ impl ProjectionState {
                 reason: "morph_create_missing_id".to_owned(),
             };
         };
-        // CXP-0007 — when the Morph carries a `scope_circle_id`, the
+        // CKP-0007 — when the Morph carries a `scope_circle_id`, the
         // Circle MUST belong to this Realm and be active. Mirrors the
         // Flow.scope_circle_id validation.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
@@ -7118,7 +7118,7 @@ impl ProjectionState {
         }
     }
 
-    // ── CXP-0007 Circle reducer ─────────────────────────────────────────
+    // ── CKP-0007 Circle reducer ─────────────────────────────────────────
     //
     // Spec source: `cokret-spec/spec/v1/zh/models/circle.md` +
     // `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
@@ -7150,7 +7150,7 @@ impl ProjectionState {
         // Spec invariant: Circle.realm_id MUST match the surrounding
         // operation's realm scope; the wire validator already binds
         // `operation.realm_id` to the envelope `realm_id`, so a mismatch
-        // surfaces as the registered CXP-0007 schema_violation reason
+        // surfaces as the registered CKP-0007 schema_violation reason
         // (`circle_realm_mismatch`).
         let realm_id = operation.realm_id.to_string();
         if let Some(payload_realm) = object.get("realm_id").and_then(Value::as_str)
@@ -7324,7 +7324,7 @@ impl ProjectionState {
         let Some(circle) = self.circles.get_mut(&circle_id) else {
             return ProjectionEffect::Ignored;
         };
-        // CXP-0007 transition matrix:
+        // CKP-0007 transition matrix:
         //   active -> archived   (ck.circle.archive)
         //   archived -> active   (ck.circle.restore)
         //   active | archived -> tombstoned   (ck.circle.tombstone)
@@ -7402,7 +7402,7 @@ impl ProjectionState {
             None => return ProjectionEffect::Ignored,
         };
         if target_state == "active" {
-            // CXP-0007 strict subset invariant: Circle.members ⊆
+            // CKP-0007 strict subset invariant: Circle.members ⊆
             // Realm.members. Reducer reason
             // `circle_member_must_be_realm_member`.
             let parent_joined = self
@@ -7458,9 +7458,9 @@ impl ProjectionState {
         }
     }
 
-    /// CXP-0007 — validate that `scope_circle_id` references an active
+    /// CKP-0007 — validate that `scope_circle_id` references an active
     /// Circle whose `realm_id` matches the writer's surrounding Realm
-    /// scope. Returns the canonical CXP-0007 reason code on failure:
+    /// scope. Returns the canonical CKP-0007 reason code on failure:
     ///
     /// - `circle_realm_mismatch`     — Circle belongs to a different Realm
     /// - `circle_not_active`         — Circle is archived
@@ -7488,7 +7488,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// CXP-0007 read helper — return the Circle projection for `circle_id`,
+    /// CKP-0007 read helper — return the Circle projection for `circle_id`,
     /// or `None` when the Circle is unknown or already tombstoned. Used by
     /// `/_cokret/self/circles/*` route handlers and by `scope_circle_id`
     /// validators that need to confirm the Circle is alive before allowing
@@ -7498,7 +7498,7 @@ impl ProjectionState {
         (circle.state != CircleLifecycleState::Tombstoned).then_some(circle)
     }
 
-    /// CXP-0007 — list all live Circles bound to `realm_id`. Excludes
+    /// CKP-0007 — list all live Circles bound to `realm_id`. Excludes
     /// tombstoned entries; archived Circles are included so the admin UI
     /// can offer a restore path. Stable iteration order
     /// (BTreeMap key ordering).
@@ -7515,7 +7515,7 @@ impl ProjectionState {
         })
     }
 
-    /// CXP-0007 — resolve the Circle (`ck:circle:…`) a Flow is scoped to, if
+    /// CKP-0007 — resolve the Circle (`ck:circle:…`) a Flow is scoped to, if
     /// any. A message's effective circle-scope is derived from its Flow via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
     /// is a Flow field). Returns `None` for unknown Flows or Realm-default
@@ -7874,7 +7874,7 @@ impl ProjectionState {
             .collect()
     }
 
-    /// CXP-0007 — list the Flows that point AT `flow_id` via a
+    /// CKP-0007 — list the Flows that point AT `flow_id` via a
     /// `confidential_discussion_of` Relation. Useful for the discovery
     /// surface that resolves the "narrow discussion" companion of a
     /// "wide synthesis" Flow. Returns the `from_ref` side of each live

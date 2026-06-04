@@ -1382,7 +1382,7 @@ pub struct DeviceMessagesSendReqBody {
     pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
 }
 
-// CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent 11 operations.
+// CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent 11 operations.
 //
 // The shapes below carry the cross-project HTTP contract for sodmin /
 // yougen / cotest; reducer-side semantics are P2-impl TODO stubs in
@@ -1529,7 +1529,7 @@ pub struct DeviceMessagesSendResBody {
     pub unknown_devices: Value,
 }
 
-// ── CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+// ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Mirrors `MediaTokenResponse` /
 // `ParticipantBinding` in `cokret_sdk::media`; soland mints the
 // soland-side ToSchema-friendly copies so salvo-oapi can pick them up.

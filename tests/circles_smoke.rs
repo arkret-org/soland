@@ -1,4 +1,4 @@
-//! CXP-0007 (P2A.6) — soland reducer-level smoke test for the Circle
+//! CKP-0007 (P2A.6) — soland reducer-level smoke test for the Circle
 //! primitive lifecycle and membership invariants.
 //!
 //! The full HTTP integration round-trip
@@ -9,7 +9,7 @@
 //!
 //! 1. `ck.circle.create` writes a live Circle into the projection;
 //! 2. `ck.circle.member.state -> active` for a non-Realm member is rejected with the canonical
-//!    CXP-0007 reason `circle_member_must_be_realm_member`;
+//!    CKP-0007 reason `circle_member_must_be_realm_member`;
 //! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
 //!    members set is updated;
 //! 4. A Flow create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
@@ -75,7 +75,7 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
     );
 }
 
-/// CXP-0007 smoke helper — write a `(realm_id, actor)` membership entry
+/// CKP-0007 smoke helper — write a `(realm_id, actor)` membership entry
 /// directly into the projection's `members` cache so the test can focus
 /// on the Circle strict-subset invariant without booting the full
 /// `ck.member.state` join pipeline (delivery_binding_policy
@@ -375,7 +375,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         );
     }
 
-    // CXP-0007: a Message's Circle scope is derived from its Flow, never from
+    // CKP-0007: a Message's Circle scope is derived from its Flow, never from
     // the message payload (spec: scope_circle_id is a Flow field). Bind a Flow
     // to the Circle, then post a message to that Flow WITHOUT any scope field.
     let flow_created = state.apply(
@@ -454,7 +454,7 @@ fn flow_scope_circle_id_rejects_cross_realm() {
     );
 
     // Flow in Realm A pointing at a Circle in Realm B MUST be rejected
-    // with the canonical CXP-0007 schema-violation reason
+    // with the canonical CKP-0007 schema-violation reason
     // `circle_realm_mismatch`.
     let rejected = state.apply(
         &op(

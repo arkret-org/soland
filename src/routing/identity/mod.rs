@@ -70,7 +70,7 @@ pub fn router() -> Router {
                 .push(key_backup::router())
                 .push(device_messages::router())
                 .push(profile::router())
-                // CXP-0008 / CXP-0009 — Personal Agent provisioning + lifecycle.
+                // CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle.
                 .push(agents::router()),
         )
 }

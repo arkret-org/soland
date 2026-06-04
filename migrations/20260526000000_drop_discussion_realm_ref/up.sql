@@ -1,4 +1,4 @@
--- CXP-0007 (spec b7d35be / floor 2b0d70d) — drop the legacy
+-- CKP-0007 (spec b7d35be / floor 2b0d70d) — drop the legacy
 -- `discussion_realm_ref` cross-Realm discussion routing column from any
 -- projection table that may have carried it on prior deployments. The
 -- column was never landed in soland's main-line migration set (Flow

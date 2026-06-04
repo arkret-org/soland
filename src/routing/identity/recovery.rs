@@ -1,4 +1,4 @@
-//! CXP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
+//! CKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
 //!
 //! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
 //!

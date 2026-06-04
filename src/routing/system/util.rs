@@ -225,7 +225,7 @@ pub fn validate_space_id(value: &str) -> Result<RealmId, ()> {
 
 /// `@`-prefixed, lowercase, alphanumeric + `-_.` only.
 ///
-/// CXP R3 spec-sync (2026-05-27, cokret-spec b47ff6ec): the wire-level
+/// CKP R3 spec-sync (2026-05-27, cokret-spec b47ff6ec): the wire-level
 /// canonical comparison MUST run through NFC + UTS#39 confusable folding +
 /// script-mix rejection. We delegate that to the SDK helper
 /// (`cokret_core::model::handle::normalize_handle_localpart`) so any
@@ -321,7 +321,7 @@ pub fn is_json_integer(value: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
 
-    /// CXP-0008 / CXP-0009 (B-D, P2-G) — soland's inbound DID validator
+    /// CKP-0008 / CKP-0009 (B-D, P2-G) — soland's inbound DID validator
     /// MUST route through the SDK `Did::new` parser. Regression guard so
     /// the wire ingress points (event_log envelope, agents.rs handlers,
     /// account.register, etc.) stay aligned with the spec DID format.

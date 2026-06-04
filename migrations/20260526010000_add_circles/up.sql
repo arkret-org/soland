@@ -1,4 +1,4 @@
--- CXP-0007 (spec b7d35be / floor 2b0d70d) — durable mirror tables for the
+-- CKP-0007 (spec b7d35be / floor 2b0d70d) — durable mirror tables for the
 -- Circle projection (`ProjectionState::circles`). Mirrors the
 -- `ck.schema.circle.v1` shape from
 -- `cokret-spec/spec/v1/artifacts/schemas/circle.schema.json` plus the

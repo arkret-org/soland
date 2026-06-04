@@ -18,7 +18,7 @@ use crate::wire::now;
 
 mod access;
 mod admin;
-// CXP-0007 (P2A.3) — `/_cokret/self/circles/*` admin surface.
+// CKP-0007 (P2A.3) — `/_cokret/self/circles/*` admin surface.
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
@@ -182,7 +182,7 @@ fn api_v1_router() -> Router {
                 .push(spaces::router())
                 // self/realms/*.
                 .push(realms::router())
-                // CXP-0007 — Circle administration (`/_cokret/self/circles/*`).
+                // CKP-0007 — Circle administration (`/_cokret/self/circles/*`).
                 .push(circles::router())
                 .push(organizations::router())
                 // self/events/*.
@@ -379,7 +379,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.server.describe",
         "server feature description",
     ),
-    // CXP-0007 (P2A.3) — Circle admin surface. Operation ids align with
+    // CKP-0007 (P2A.3) — Circle admin surface. Operation ids align with
     // `ck.circles.*` (sibling of `ck.realms.*` / `ck.spaces.*`).
     (
         "/_cokret/self/circles",
@@ -962,7 +962,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.mimi.proxy_download",
         "MIMI proxy download",
     ),
-    // CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent + Sidecar
+    // CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent + Sidecar
     // operations. Implementation lives at
     // `routing::identity::agents`; the table here makes the operations
     // visible to the OpenAPI snapshot + the 404/405 disambiguator.
@@ -1043,7 +1043,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.agent.sidecar_thread.ensure",
         "idempotently ensure the controller<->agent sidecar Circle exists",
     ),
-    // CXP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
+    // CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
     // token exchange + signed ICE config. Canonical wire paths now live on
     // the `self` trust segment (`/_cokret/self/rtc/...`); the historical
     // `/cokret/v1/...` and `/api/v1/...` aliases are gone.

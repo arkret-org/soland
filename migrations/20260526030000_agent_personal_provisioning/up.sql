@@ -1,4 +1,4 @@
--- CXP-0008 / CXP-0009 (spec head 37ce729) — Personal Agent + Sidecar
+-- CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent + Sidecar
 -- provisioning durable bookkeeping. Mirrors the canonical id-kind-registry
 -- shapes for `agent_session`, `agent_key`,
 -- `accountability_grant`, `backup_series`, `recovery_session`. The reducer

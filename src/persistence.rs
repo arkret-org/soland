@@ -191,7 +191,7 @@ pub struct FlowProjectionRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CXP-0007 — the Circle (`ck:circle:…`) this Flow is scoped to, if any.
+    /// CKP-0007 — the Circle (`ck:circle:…`) this Flow is scoped to, if any.
     /// Durable so circle-scoped message visibility survives restart.
     pub scope_circle_id: Option<String>,
 }

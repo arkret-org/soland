@@ -29,7 +29,7 @@ use crate::{JsonResult, json_ok};
 const MAX_DATA_TYPE_LEN: usize = 256;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
-/// CXP-0008 / CXP-0009 (spec head 37ce729) — controller-private account-data
+/// CKP-0008 / CKP-0009 (spec head 37ce729) — controller-private account-data
 /// types. Writers MUST be the controller principal (not their own agent
 /// runtime, not an applet-bound ghost).
 struct AccountDataTypeSpec {
@@ -149,7 +149,7 @@ async fn put_account_data(
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
 
-    // CXP-0008 / CXP-0009 — enforce controller-only writes on the
+    // CKP-0008 / CKP-0009 — enforce controller-only writes on the
     // registered personal-agent account-data types.
     // TODO(P2-impl): replace the `did:web:agent.` heuristic with a proper
     // controller-vs-agent classifier sourced from the agent_principal

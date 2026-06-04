@@ -289,7 +289,7 @@ fn install_projected_circle_scope(
         );
 }
 
-/// CXP-0007 — bind a Flow to a Circle scope in the projection. A message
+/// CKP-0007 — bind a Flow to a Circle scope in the projection. A message
 /// posted to this Flow inherits the Circle scope server-side (spec:
 /// `scope_circle_id` is a Flow field, never carried on the message).
 fn install_projected_flow_scope(

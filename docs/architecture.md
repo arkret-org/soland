@@ -38,10 +38,10 @@ A successful `POST /_cokret/self/events` walks the following stages:
 
 3. **Reducer dispatch** (`src/reducer.rs`). The reducer maps each
    `event_kind` to an `apply_*_dispatch` arm and updates the in-memory
-   `ProjectionState`. CXP-0007 adds the Circle FSM, the
+   `ProjectionState`. CKP-0007 adds the Circle FSM, the
    `ck.realm.link` / `ck.realm.inheritance_policy` edges, and the
    `scope_circle_id` projection columns; the conformance gate
-   (`tests/conformance_gates.rs::cxp_0007_circle_event_kinds_are_dispatched`)
+   (`tests/conformance_gates.rs::ckp_0007_circle_event_kinds_are_dispatched`)
    keeps the dispatch table in lock-step with the spec registry.
 
 4. **Persistence write** (`src/persistence.rs`). Each reducer mutation is

@@ -423,7 +423,7 @@ impl Default for AuthzEngine {
 
 /// Check if a grant resource pattern matches the requested resource.
 ///
-/// CXP-0007 / SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
+/// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `flow`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
 /// `ck:circle:<uuid>` typed-id form alongside the existing space /
@@ -550,7 +550,7 @@ fn evaluate_constraint(
             None
         }
         Constraint::AllowedCircleIds { allowed_circle_ids } => {
-            // CXP-0007 (spec b7d35be) — narrow a Circle-management
+            // CKP-0007 (spec b7d35be) — narrow a Circle-management
             // capability (`ck.circle.manage`, `ck.circle.member.manage`,
             // `ck.circle.member.add.others`, `ck.circle.audit`) to a
             // specific Circle id set. The spec

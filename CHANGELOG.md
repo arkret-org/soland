@@ -12,7 +12,7 @@ and the project tracks Cokret v1 spec revisions.
 
 ## R3.3 — Spec sync 2026-05-28 (cokret-spec @ cced4b8)
 
-- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CXP-0011 shareable object addressing / `ck.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CKP-0011 shareable object addressing / `ck.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3.2 — Spec sync 2026-05-28 (cokret-spec @ b56cab1)
@@ -35,7 +35,7 @@ and the project tracks Cokret v1 spec revisions.
 
 ## [Unreleased]
 
-### CXP-0007 — Circle primitive rollout (P2A; cokret-spec floor `2b0d70d`)
+### CKP-0007 — Circle primitive rollout (P2A; cokret-spec floor `2b0d70d`)
 
 Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
 (`circle-rollout` branch) and consumes the seven `ck.circle.*` durable event
@@ -43,7 +43,7 @@ kinds, six `ck.circle.*` capability actions, and six new failed-precondition
 reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 
 - **BREAKING** `Flow.discussion_realm_ref` is no longer accepted on the wire.
-  The legacy cross-Realm discussion routing has been removed (CXP-0007 hard
+  The legacy cross-Realm discussion routing has been removed (CKP-0007 hard
   delete; intra-Realm discussion boundaries now live on a Circle via
   `scope_circle_id`). The reducer's `flow_discussion_realms` projection
   field, the `discussion_realm_patch` dispatch, and the `ck.realm.destroy`
@@ -61,7 +61,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 - New `/api/v1/circles/*` admin surface
   (`POST/GET/DELETE` Circle CRUD + members + scope-rotate / archive /
   tombstone). Reducer enforces the strict-subset invariant
-  `Circle.members ⊆ Realm.members` and the four canonical CXP-0007
+  `Circle.members ⊆ Realm.members` and the four canonical CKP-0007
   reasons (`circle_realm_mismatch`, `circle_not_active`,
   `circle_already_terminal`, `circle_member_must_be_realm_member`).
 - 7 active `ck.circle.*` event kinds (`create` / `update` / `archive` /
@@ -79,7 +79,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 - Authz: `allowed_circle_ids` constraint type added to the local
   evaluator. Required by the six `ck.circle.*` capability actions per
   the spec's `required_constraints` declaration.
-- 6 CXP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
+- 6 CKP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
   (`circle_realm_mismatch`, `circle_not_active`,
   `circle_member_must_be_realm_member`, `scope_rebind_forbidden`,
   `metadata_encryption_floor_violation`; the 6th, top-level

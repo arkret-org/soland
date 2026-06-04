@@ -1,4 +1,4 @@
-//! CXP-0007 — Circle administration HTTP surface.
+//! CKP-0007 — Circle administration HTTP surface.
 //!
 //! Hosts the canonical `/_cokret/self/circles/*` admin/CRUD layer. Each handler
 //! builds a `ck.circle.*` Operation and routes it through the standard
@@ -324,7 +324,7 @@ async fn delete_circle_member(
 #[endpoint(
     operation_id = "ck.circles.scope_rotate",
     tags("circles"),
-    summary = "Rotate the Circle's bound MLS group (CXP-0007)"
+    summary = "Rotate the Circle's bound MLS group (CKP-0007)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.circles.scope_rotate"))]
 async fn post_scope_rotate(
@@ -427,7 +427,7 @@ fn circle_realm_scope(state: &AppState, circle_id: &str) -> Result<RealmId, AppE
 }
 
 /// Map a reducer rejection reason string to an `AppError` whose wire
-/// `code` is the canonical CXP-0007 reason (e.g. `circle_realm_mismatch`,
+/// `code` is the canonical CKP-0007 reason (e.g. `circle_realm_mismatch`,
 /// `circle_member_must_be_realm_member`). Returned as 422
 /// `failed_precondition` so clients can branch on the reason directly.
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {

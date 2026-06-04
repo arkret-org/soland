@@ -51,7 +51,7 @@ pub fn generate_relation_id() -> String {
     generate("relation")
 }
 
-/// CXP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
+/// CKP-0007 (spec b7d35be) — generate a new `ck:circle:<uuid7>` identifier
 /// for the Circle primitive. Used by `POST /_cokret/self/circles` to mint the new
 /// Circle's typed wire id before submitting `ck.circle.create`.
 pub fn generate_circle_id() -> String {

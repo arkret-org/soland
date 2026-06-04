@@ -1,4 +1,4 @@
--- CXP-0007 (spec b7d35be / floor 2b0d70d) — add `scope_circle_id` to the
+-- CKP-0007 (spec b7d35be / floor 2b0d70d) — add `scope_circle_id` to the
 -- Flow / Space / Morph projection mirrors. When non-null, the row's
 -- visibility / encryption boundary is bound to the named Circle's MLS
 -- group instead of the parent Realm's. The wire layer enforces

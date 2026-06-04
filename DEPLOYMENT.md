@@ -431,7 +431,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   front soland with nginx/Caddy/Traefik `limit_req` or an API gateway that
   shares state across replicas.
 
-### CXP-0007 (Circle primitive) — migration & sizing notes
+### CKP-0007 (Circle primitive) — migration & sizing notes
 
 - **Migrations**: the Circle rollout adds three new diesel migrations that
   run automatically on startup —
@@ -445,7 +445,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   `effective_scope` columns on the Flow / Morph / Space / Events mirrors.
   All three are forward-only in spirit — the down migrations are provided
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
-  CXP-0007 cutover would violate the forbidden-wire-fields contract.
+  CKP-0007 cutover would violate the forbidden-wire-fields contract.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
   projected Event. For a typical `ck:circle:<uuid>` value the on-wire form
   is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50

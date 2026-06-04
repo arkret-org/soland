@@ -146,7 +146,7 @@ pub mod reasons {
     pub const RANGE_COMPLETENESS_ACTOR_SEQ_GAP: &str =
         core_error::REASON_RANGE_COMPLETENESS_ACTOR_SEQ_GAP;
 
-    // ── CXP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
+    // ── CKP-0007 (spec b7d35be / floor 2b0d70d) — Circle reason codes.
     //
     // The six new sub-reasons registered against `failed_precondition`
     // / `schema_violation` for the Circle invariants in
@@ -172,10 +172,10 @@ pub mod reasons {
     pub const REACTION_TARGET_UNSUPPORTED: &str = core_error::REASON_REACTION_TARGET_UNSUPPORTED;
     pub const REACTION_SCOPE_MISMATCH: &str = core_error::REASON_REACTION_SCOPE_MISMATCH;
 
-    /// CXP-0007 reason codes registered in this round. Test scaffolding
+    /// CKP-0007 reason codes registered in this round. Test scaffolding
     /// uses this slice to assert the full set is surfaced through
     /// `crate::error::reasons`.
-    pub const CXP_0007: &[&str] = &[
+    pub const CKP_0007: &[&str] = &[
         CIRCLE_REALM_MISMATCH,
         CIRCLE_NOT_ACTIVE,
         CIRCLE_MEMBER_MUST_BE_REALM_MEMBER,
@@ -186,7 +186,7 @@ pub mod reasons {
     ];
 
     // ── R3 (spec b47ff6ec, _before_todos.md §0.7) — Agent / pairing /
-    // session-grant + media-binding (CXP-0010) + recovery / handle reason
+    // session-grant + media-binding (CKP-0010) + recovery / handle reason
     // codes. Exposed here so future R3.1 handler work can reference them
     // through the `crate::error::reasons` namespace without depending on
     // a parallel SDK PR landing first. Once cokret-rust-sdk adopts the
@@ -207,7 +207,7 @@ pub mod reasons {
     pub const SIDECAR_CREATE_DENIED: &str = "sidecar_create_denied";
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = "actor_kind_reducer_managed";
 
-    // Media binding / CXP-0010 (10 codes).
+    // Media binding / CKP-0010 (10 codes).
     pub const FOCUS_MISMATCH: &str = "focus_mismatch";
     pub const UNKNOWN_FOCUS_TYPE: &str = "unknown_focus_type";
     pub const TOKEN_ISSUER_UNAUTHORISED: &str = "token_issuer_unauthorised";

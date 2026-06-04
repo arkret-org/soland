@@ -240,15 +240,15 @@ fn operation_ids_are_registered_or_namespaced() {
     );
 }
 
-// ── CXP-0007 (P2A.6) conformance gates ─────────────────────────────────
+// ── CKP-0007 (P2A.6) conformance gates ─────────────────────────────────
 //
 // These gates anchor the P2A circle-rollout work to the spec's
 // `event-kind-registry.json`, `forbidden-wire-fields.json`, and the
-// `_ref` / `_id` naming alignment introduced in CXP-0007. They are
+// `_ref` / `_id` naming alignment introduced in CKP-0007. They are
 // pure file-system / fixture scans — no soland code is linked — so
 // they stay green during dev workflows.
 
-/// CXP-0007 — every active `ck.circle.*` event kind in the spec
+/// CKP-0007 — every active `ck.circle.*` event kind in the spec
 /// registry MUST be wired into soland's reducer dispatch table
 /// (`src/reducer.rs`). The reducer's dispatch helper for each kind
 /// follows the convention `apply_<verb>_dispatch`; this gate checks
@@ -256,7 +256,7 @@ fn operation_ids_are_registered_or_namespaced() {
 /// registration so a new spec-registered kind cannot be silently
 /// ignored.
 #[test]
-fn cxp_0007_circle_event_kinds_are_dispatched() {
+fn ckp_0007_circle_event_kinds_are_dispatched() {
     let registry_path = spec_artifact("registry/event-kind-registry.json");
     let raw = fs::read_to_string(&registry_path)
         .unwrap_or_else(|err| panic!("read {}: {err}", registry_path.display()));
@@ -317,20 +317,20 @@ fn cxp_0007_circle_event_kinds_are_dispatched() {
     }
 }
 
-/// CXP-0007 — Event Envelopes MUST surface an `effective_scope` on read
+/// CKP-0007 — Event Envelopes MUST surface an `effective_scope` on read
 /// when the underlying envelope or payload pins a `scope_circle_id`.
 /// This gate confirms the read-side projector
 /// (`effective_scope_for_envelope` in
 /// `src/routing/events/event_log.rs`) still exists and is invoked from
 /// the canonical `event_read_response`.
 #[test]
-fn cxp_0007_event_envelope_surfaces_effective_scope() {
+fn ckp_0007_event_envelope_surfaces_effective_scope() {
     let event_log_src = fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
         .expect("read routing/events/event_log.rs");
     assert!(
         event_log_src.contains("fn effective_scope_for_envelope"),
         "effective_scope_for_envelope helper has been removed; the \
-         CXP-0007 envelope projection contract requires the read path to \
+         CKP-0007 envelope projection contract requires the read path to \
          expose this field"
     );
     assert!(
@@ -346,14 +346,14 @@ fn cxp_0007_event_envelope_surfaces_effective_scope() {
     );
 }
 
-/// CXP-0007 — the soland envelope validator MUST hard-reject any wire
+/// CKP-0007 — the soland envelope validator MUST hard-reject any wire
 /// payload that carries a key listed in
 /// `spec/v1/artifacts/registry/forbidden-wire-fields.json`. The gate
 /// scans `src/routing/events/event_log.rs` for both the SDK predicate
 /// (`is_forbidden_wire_field`) and the canonical error code
 /// (`forbidden_wire_field`) the wire surface returns on a hit.
 #[test]
-fn cxp_0007_forbidden_wire_fields_hard_rejected() {
+fn ckp_0007_forbidden_wire_fields_hard_rejected() {
     let event_log_src = fs::read_to_string(soland_src_root().join("routing/events/event_log.rs"))
         .expect("read routing/events/event_log.rs");
     assert!(
