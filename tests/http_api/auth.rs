@@ -13,7 +13,7 @@ async fn oauth_bearer_introspection_authenticates_directly() {
     config.oauth_introspection_bearer = Some("shared-secret".to_owned());
     let state = AppState::new(config, Db { pool: None });
 
-    let me: Value = TestClient::get("http://server/_cokret/self/account/me")
+    let me: Value = TestClient::get("http://server/_soland/self/account/me")
         .add_header("authorization", "Bearer coauth_access_token", true)
         .send(&app_from_state(state.clone()))
         .await
@@ -46,7 +46,7 @@ async fn dev_login_is_unavailable_in_production_mode() {
     config.development_mode = false;
     let state = AppState::new(config, Db { pool: None });
 
-    let response = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let response = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
             "device_id": "ck:device:01904100-0000-7000-8000-0a4a40000006"
@@ -142,7 +142,7 @@ async fn protected_endpoints_reject_query_auth_material() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/account/me?access_token={token}"
+        "http://server/_soland/self/account/me?access_token={token}"
     ))
     .send(&app_from_state(state))
     .await;

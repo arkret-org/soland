@@ -2,7 +2,7 @@
 //! actor support, TSP transport + route + audit, sovereign enclave
 //! profile guards).
 //!
-//! Legacy sub-routers are mounted under `/_soland/compat/...` and are
+//! Legacy sub-routers are mounted under `/_soland/...` and are
 //! intentionally *runnable stubs*: they accept and return the
 //! spec-shaped wire envelopes the cotest scenarios expect
 //! (`cotest/e2e/scenarios/extensions/applet-bridge.md`,
@@ -33,7 +33,7 @@ pub mod sovereign;
 pub mod tsp;
 
 /// Compose the soland extension sub-routers under trust segments.
-/// Mounted into the `_soland/compat` router by `routing::mod.rs`.
+/// Mounted into the `_soland` router by `routing::mod.rs`.
 ///
 /// Trust segments: the applet bridge + manifest verifier are the
 /// push/bridge gateway surface (`edge`); the bot/ghost actor + TSP
@@ -44,13 +44,13 @@ pub fn router() -> Router {
 }
 
 pub fn protocol_router() -> Router {
-    Router::new()
+    applet_bridge::protocol_router()
 }
 
 pub fn legacy_router() -> Router {
     Router::new()
         // `edge` — applet bridge + manifest verifier
-        // (`/_soland/compat/edge/applets/...`).
+        // (`/_soland/edge/applets/...`).
         .push(
             Router::with_path("edge")
                 .push(applet_bridge::router())

@@ -368,6 +368,27 @@ pub struct ClientSyncRequest {
     pub set_presence: Option<String>,
 }
 
+/// `POST /_cokret/self/account/cursor/revoke` request body
+/// (`ck.account.cursor_revoke`).
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct CursorRevokeRequest {
+    /// The cursor authority to revoke (`ck:cursor:<...>`).
+    pub cursor: String,
+    /// Machine-readable revocation reason (audited).
+    pub reason_code: String,
+    /// Revocation breadth. Defaults to `this_cursor`.
+    #[serde(default)]
+    pub revoke_scope: Option<String>,
+}
+
+/// `POST /_cokret/self/account/cursor/revoke` response body.
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct CursorRevokeResponse {
+    pub revoked: bool,
+    /// When the revocation record expires (the revoked cursor's maximum TTL).
+    pub expires_at: String,
+}
+
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SearchRealmsRequest {
     pub query: Option<String>,

@@ -60,7 +60,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn dev_token(app: &salvo::Service, actor: &str) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
             "device_id": format!("ck:device:test-{}", actor.replace(':', "-")),
@@ -75,7 +75,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 }
 
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
-    TestClient::post("http://server/_cokret/self/contacts/request")
+    TestClient::post("http://server/_soland/self/contacts/request")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "target": target, "scope": scope }))
         .send(app)
@@ -93,7 +93,7 @@ async fn get_cell(
     scope: &str,
 ) -> Value {
     TestClient::get(format!(
-        "http://server/_cokret/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
+        "http://server/_soland/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(app)
@@ -109,16 +109,16 @@ async fn grant_cell(
     holder: &str,
     peer: &str,
     scope: &str,
-    valid_until: Option<String>,
+    expires_at: Option<String>,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_cokret/self/consent/cells/{holder}/grant"
+        "http://server/_soland/self/consent/cells/{holder}/grant"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
         "peer_did": peer,
         "consent_scope": scope,
-        "valid_until": valid_until,
+        "expires_at": expires_at,
     }))
     .send(app)
     .await
@@ -135,7 +135,7 @@ async fn revoke_cell(
     scope: &str,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_cokret/self/consent/cells/{holder}/revoke"
+        "http://server/_soland/self/consent/cells/{holder}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "peer_did": peer, "consent_scope": scope }))

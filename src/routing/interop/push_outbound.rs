@@ -1,15 +1,13 @@
 //! Outbound push gateway bridge — describe / resolve / fetch / cache.
 //!
 //! Surfaces:
-//! - `GET  /_soland/compat/edge/push/outbound/bridge/describe`        — manifest
-//! - `POST /_soland/compat/edge/push/outbound/bridge/resolve`         — resolve gateway URL →
-//!   contract
-//! - `POST /_soland/compat/edge/push/outbound/bridge/fetch`           — pull remote contract +
-//!   cache
-//! - `GET  /_soland/compat/edge/push/outbound/bridge/cache/status`    — current cache age
-//! - `GET  /_soland/compat/edge/push/outbound/bridge/cache/export`    — dump cache snapshots
-//! - `POST /_soland/compat/edge/push/outbound/bridge/cache/import`    — restore snapshots
-//! - `POST /_soland/compat/edge/push/outbound/bridge/cache/invalidate`— invalidate one entry
+//! - `GET  /_soland/edge/push/outbound/bridge/describe`        — manifest
+//! - `POST /_soland/edge/push/outbound/bridge/resolve`         — resolve gateway URL → contract
+//! - `POST /_soland/edge/push/outbound/bridge/fetch`           — pull remote contract + cache
+//! - `GET  /_soland/edge/push/outbound/bridge/cache/status`    — current cache age
+//! - `GET  /_soland/edge/push/outbound/bridge/cache/export`    — dump cache snapshots
+//! - `POST /_soland/edge/push/outbound/bridge/cache/import`    — restore snapshots
+//! - `POST /_soland/edge/push/outbound/bridge/cache/invalidate`— invalidate one entry
 //!
 //! Implemented: live remote `bridge/describe` fetch with `Etag`/freshness
 //! metadata stamped per entry; durable cache via
@@ -83,16 +81,16 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     res.render(Json(OutboundPushBridgeDescribeResponse {
         contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
-        api_base_path: "/_soland/compat/edge/push".to_owned(),
+        api_base_path: "/_soland/edge/push".to_owned(),
         gateway_contract: OutboundPushGatewayContractDescriptor {
-            resolve_path: "/_soland/compat/edge/push/outbound/bridge/resolve".to_owned(),
-            fetch_path: "/_soland/compat/edge/push/outbound/bridge/fetch".to_owned(),
-            cache_status_path: "/_soland/compat/edge/push/outbound/bridge/cache/status".to_owned(),
-            cache_invalidate_path: "/_soland/compat/edge/push/outbound/bridge/cache/invalidate"
+            resolve_path: "/_soland/edge/push/outbound/bridge/resolve".to_owned(),
+            fetch_path: "/_soland/edge/push/outbound/bridge/fetch".to_owned(),
+            cache_status_path: "/_soland/edge/push/outbound/bridge/cache/status".to_owned(),
+            cache_invalidate_path: "/_soland/edge/push/outbound/bridge/cache/invalidate"
                 .to_owned(),
-            cache_export_path: "/_soland/compat/edge/push/outbound/bridge/cache/export"
+            cache_export_path: "/_soland/edge/push/outbound/bridge/cache/export"
                 .to_owned(),
-            cache_import_path: "/_soland/compat/edge/push/outbound/bridge/cache/import"
+            cache_import_path: "/_soland/edge/push/outbound/bridge/cache/import"
                 .to_owned(),
             bridge_describe_path: "/_cokret/edge/push/bridge/describe".to_owned(),
             notify_path: "/_cokret/edge/push/notify".to_owned(),

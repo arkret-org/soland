@@ -141,7 +141,7 @@ fn signed_event(
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": actor,
             "device_id": device_id,

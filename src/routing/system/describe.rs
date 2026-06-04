@@ -9,12 +9,12 @@
 //! - `GET /health` — liveness + database/events health
 //! - `GET /readyz` — readiness gate for deploy orchestrators
 //! - `GET /_cokret/describe`
-//! - `GET /_soland/compat/gate/auth/bridge/describe`
-//! - `GET /_soland/compat/self/authz/describe`
-//! - `GET /_soland/compat/self/policies/describe`
-//! - `GET /_soland/compat/self/device_messages/describe`
-//! - `GET /_soland/compat/self/keys/backups/describe`
-//! - `GET /_soland/compat/self/integration/describe`
+//! - `GET /_soland/gate/auth/bridge/describe`
+//! - `GET /_soland/self/authz/describe`
+//! - `GET /_soland/self/policies/describe`
+//! - `GET /_soland/self/device_messages/describe`
+//! - `GET /_soland/self/keys/backups/describe`
+//! - `GET /_soland/self/integration/describe`
 //!
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
@@ -48,7 +48,7 @@ pub(super) fn protocol_router() -> Router {
 
 pub(super) fn legacy_router() -> Router {
     Router::new()
-        // `/_soland/compat/describe` — compatibility copy of root meta.
+        // `/_soland/describe` — compatibility copy of root meta.
         .push(Router::with_path("describe").get(server_describe))
         // soland-local integration describe → self-scoped.
         .push(Router::with_path("self/integration/describe").get(integration_describe))
@@ -229,7 +229,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // so verifiers can query the issuing server's current view (incl.
     // per-peer fanout_status and the timeout-triggered `incomplete`
     // flip).
-    value["erasure_receipts_endpoint"] = json!("/_soland/compat/self/audit/erasure-receipts");
+    value["erasure_receipts_endpoint"] = json!("/_soland/self/audit/erasure-receipts");
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
     value["hardening"] =
@@ -405,8 +405,8 @@ pub(crate) fn apply_claim_level_partition(
 
     value["compat_surfaces"] = json!([
         {
-            "base_path": "/_soland/compat",
-            "status": "soland_private_compat",
+            "base_path": "/_soland",
+            "status": "soland_private_local",
             "reason": "non-registry REST routes were moved out of /_cokret; clients should prefer operation-registry canonical paths"
         }
     ]);
@@ -422,9 +422,9 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
     json_ok(AuthBridgeDescribeResponse {
         contract: "cokret.rest.principal_bridge.v1".to_owned(),
         version: "2026-05-12-oauth-introspection".to_owned(),
-        api_base_path: "/_soland/compat".to_owned(),
+        api_base_path: "/_soland".to_owned(),
         auth: AuthBridgeAuthDescriptor {
-            dev_login_path: "/_soland/compat/gate/auth/dev-login".to_owned(),
+            dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
             session_grant_exchange_path: "/_cokret/gate/account/session-grants".to_owned(),
             bearer_auth_scheme:
                 "Authorization: Bearer <coauth OAuth access token>; soland introspects it server-side"
@@ -488,9 +488,9 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_path": "/_cokret/self/authz/check",
         "effective_grants_path": "/_cokret/self/authz/effective-grants",
-        "grants_path": "/_soland/compat/self/authz/grants",
-        "grant_item_path": "/_soland/compat/self/authz/grants/{grant_id}",
-        "policy_describe_path": "/_soland/compat/self/policies/describe",
+        "grants_path": "/_soland/self/authz/grants",
+        "grant_item_path": "/_soland/self/authz/grants/{grant_id}",
+        "policy_describe_path": "/_soland/self/policies/describe",
         "resource_selector_examples": [
             {
                 "kind": "event",
@@ -567,9 +567,9 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
             "describe JSON is not generated from a normative policy-profile artifact",
             "obligation execution and distributed policy lifecycle are not implemented"
         ],
-        "collection_path": "/_soland/compat/self/policies",
-        "item_path": "/_soland/compat/self/policies/{policy_id}",
-        "authz_describe_path": "/_soland/compat/self/authz/describe",
+        "collection_path": "/_soland/self/policies",
+        "item_path": "/_soland/self/policies/{policy_id}",
+        "authz_describe_path": "/_soland/self/authz/describe",
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
@@ -595,8 +595,8 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
                 ]
             }
         },
-        "get_path_example": "/_soland/compat/self/policies/policy-key-backup-read-01",
-        "delete_path_example": "/_soland/compat/self/policies/policy-key-backup-read-01",
+        "get_path_example": "/_soland/self/policies/policy-key-backup-read-01",
+        "delete_path_example": "/_soland/self/policies/policy-key-backup-read-01",
     }))
 }
 
@@ -675,7 +675,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
         service: "soland".to_owned(),
         service_kind: "principal_server".to_owned(),
         api_base_path: "/_cokret".to_owned(),
-        describe_path: "/_soland/compat/self/integration/describe".to_owned(),
+        describe_path: "/_soland/self/integration/describe".to_owned(),
         dependencies: vec![
             IntegrationDependencyDescriptor {
                 service: "coauth".to_owned(),
@@ -696,7 +696,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "auth_bridge".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/gate/auth/bridge/describe".to_owned(),
+                path: "/_soland/gate/auth/bridge/describe".to_owned(),
                 contract: "cokret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
@@ -712,7 +712,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "outbound_push_bridge".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/edge/push/outbound/bridge/describe".to_owned(),
+                path: "/_soland/edge/push/outbound/bridge/describe".to_owned(),
                 contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
                 stability: "limited".to_owned(),
                 todo: "snapshots are durable and participate in notify drift checks; signed delivery binding to the gateway contract is still not claimed.".to_owned(),
@@ -728,7 +728,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/self/device_messages/describe".to_owned(),
+                path: "/_soland/self/device_messages/describe".to_owned(),
                 contract: "cokret.rest.device_messages_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
@@ -736,7 +736,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "key_backups_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/self/keys/backups/describe".to_owned(),
+                path: "/_soland/self/keys/backups/describe".to_owned(),
                 contract: "cokret.rest.key_backups_describe.v1".to_owned(),
                 stability: "scaffold".to_owned(),
                 todo: "replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
@@ -744,7 +744,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "authz_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/self/authz/describe".to_owned(),
+                path: "/_soland/self/authz/describe".to_owned(),
                 contract: "cokret.rest.authz_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "inline examples only; server/describe limitations explicitly mark this as not a full authz profile surface.".to_owned(),
@@ -752,7 +752,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "policies_describe".to_owned(),
                 method: "GET".to_owned(),
-                path: "/_soland/compat/self/policies/describe".to_owned(),
+                path: "/_soland/self/policies/describe".to_owned(),
                 contract: "cokret.rest.policies_describe.v1".to_owned(),
                 stability: "scaffold_contract".to_owned(),
                 todo: "policy document CRUD is implemented locally; describe is not a generated full-profile artifact.".to_owned(),
@@ -768,7 +768,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "index_query".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_soland/compat/self/index/query".to_owned(),
+                path: "/_soland/self/index/query".to_owned(),
                 contract: "cokret.rest.index_query.v1".to_owned(),
                 stability: "limited_projection".to_owned(),
                 todo: "backed by local projection state and demo fallback, not a full index-node profile.".to_owned(),
@@ -792,7 +792,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_tsp".to_owned(),
                 method: "POST/GET".to_owned(),
-                path: "/_soland/compat/self/extensions/tsp/*".to_owned(),
+                path: "/_soland/self/extensions/tsp/*".to_owned(),
                 contract: "ck.extension.soland.extensions.tsp.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local TSP transport/route/audit scaffold only; no real TSP envelope verify/decrypt or persistent signed audit chain.".to_owned(),
@@ -800,7 +800,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_bot_actor".to_owned(),
                 method: "POST/GET/DELETE".to_owned(),
-                path: "/_soland/compat/self/extensions/bots*".to_owned(),
+                path: "/_soland/self/extensions/bots*".to_owned(),
                 contract: "ck.extension.soland.extensions.bots.*".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "process-local bot/ghost registry only; durable provisioning and accountability grant emission are not wired.".to_owned(),
@@ -808,7 +808,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "extensions_sovereign".to_owned(),
                 method: "POST/GET".to_owned(),
-                path: "/_soland/compat/self/deployment/*".to_owned(),
+                path: "/_soland/self/deployment/*".to_owned(),
                 contract: "ck.profile.sovereign_enclave.v1".to_owned(),
                 stability: "stub_contract".to_owned(),
                 todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
@@ -826,7 +826,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             "compose_flow": {
                 "step_1": {"service": "coauth", "path": "/oauth/token", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
-                "step_3": {"service": "soland", "path": "/_soland/compat/edge/push/outbound/bridge/fetch", "method": "POST"},
+                "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},
                 "step_4": {"service": "soland", "path": "/_cokret/edge/push/register-device", "method": "POST"}
             }
         }),

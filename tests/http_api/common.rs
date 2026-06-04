@@ -247,7 +247,7 @@ pub(crate) async fn dev_token_for_device(
     device_id: &str,
     display_name: &str,
 ) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": actor,
             "device_id": device_id,
@@ -484,7 +484,7 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         "domain": "did:web:soland.local",
         "prev_refs": prev_refs,
         "auth_refs": [],
-        "payload": payload,
+        "payload": payload.clone(),
         "proofs": [{
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#01904100-0000-7000-8000-a11ce0000001",
@@ -599,6 +599,59 @@ pub(crate) fn signed_message_event_envelope(
     event
 }
 
+pub(crate) fn signed_actor_private_event_envelope(
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let mut event = serde_json::json!({
+        "event_id": new_prefixed_uuid7("ck:event:"),
+        "kind": kind,
+        "schema_id": "ck.schema.event.v1",
+        "actor_id": actor,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+pub(crate) async fn submit_actor_private_event(
+    state: AppState,
+    token: &str,
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
+    TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
 pub(crate) async fn post_message_event(
     state: AppState,
     token: &str,
@@ -658,7 +711,7 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
-    let registered: Value = TestClient::post("http://server/_cokret/self/account/register")
+    let registered: Value = TestClient::post("http://server/_soland/self/account/register")
         .json(&serde_json::json!({
             "did": did,
             "handle": handle,
@@ -670,9 +723,9 @@ pub(crate) async fn register_account(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["did"], did);
+    assert_eq!(registered["did"], did, "register response: {registered}");
 
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": did,
             "device_id": device_id,

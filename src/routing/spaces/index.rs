@@ -1,15 +1,15 @@
 //! Index / projection-query surface.
 //!
 //! Surfaces:
-//! - `GET  /_cokret/self/index/describe`
-//! - `GET  /_cokret/self/index/object`
-//! - `GET  /_cokret/self/index/thread`
-//! - `GET  /_cokret/self/index/notifications`
-//! - `GET  /_cokret/self/index/inbox`
-//! - `POST /_cokret/self/index/search`
-//! - `GET  /_cokret/self/index/space-hierarchy`
-//! - `POST /_cokret/self/index/query`
-//! - `GET  /_cokret/self/index/debug/reducer`
+//! - `GET  /_soland/self/index/describe`
+//! - `GET  /_soland/self/index/object`
+//! - `GET  /_soland/self/index/thread`
+//! - `GET  /_soland/self/index/notifications`
+//! - `GET  /_soland/self/index/inbox`
+//! - `POST /_soland/self/index/search`
+//! - `GET  /_soland/self/index/space-hierarchy`
+//! - `POST /_soland/self/index/query`
+//! - `GET  /_soland/self/index/debug/reducer`
 //!
 //! Today the index is a thin scaffold over the in-memory projection — it
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
@@ -81,7 +81,7 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 /// Map a `ck:<kind>:...` typed id to the spec id-kind it belongs to. Used by
-/// `/_cokret/self/index/object` to surface a polymorphic typed-id describe; this
+/// `/_soland/self/index/object` to surface a polymorphic typed-id describe; this
 /// is just a tiny lookup over the spec-registered prefixes.
 fn object_kind_for(object_id: &str) -> Option<&'static str> {
     if object_id.starts_with("ck:space:") {

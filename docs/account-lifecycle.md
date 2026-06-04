@@ -12,8 +12,8 @@ contract, and the GDPR erasure cascade.
 | `active`       | default                                 | normal session issuance       |
 | `locked`       | `set_account_lifecycle_record`           | 403 `account_locked`          |
 | `suspended`    | `set_account_lifecycle_record`           | 403 `account_suspended`       |
-| `deactivated`  | `POST /_cokret/self/account/deactivate`       | 403 `account_deactivated`     |
-| `erased`       | `POST /_cokret/self/account/erase`            | 401 `account_erased`          |
+| `deactivated`  | `POST /_soland/self/account/deactivate`       | 403 `account_deactivated`     |
+| `erased`       | `POST /_soland/self/account/erase`            | 401 `account_erased`          |
 
 The state projection is in-memory today (`AppState::account_lifecycle`)
 and persists across the process lifetime only — a durable ledger lands
@@ -21,7 +21,7 @@ with the projection rewrite worker.
 
 ## Failed-login lockout
 
-`POST /_cokret/gate/auth/dev-login` and `POST /_cokret/gate/auth/session-grant/exchange`
+`POST /_soland/gate/auth/dev-login` and `POST /_cokret/gate/account/session-grants`
 participate in the in-memory failed-login counter
 (`AppState::failed_login_attempts`).
 
@@ -43,7 +43,7 @@ spikes without inspecting raw tracing output.
 
 ## GDPR erasure cascade
 
-`POST /_cokret/self/account/erase` is the spec exit-point for an erased
+`POST /_soland/self/account/erase` is the spec exit-point for an erased
 principal. Soland performs the following actions atomically per
 request (best-effort under in-memory state; durable persistence lands
 with the projection rewrite worker):
@@ -123,7 +123,7 @@ body with `[redacted]` while preserving `audit_id`, `created_at`, and
 
 ## v1 export scope
 
-The `POST /_cokret/self/account/export` bundle in v1 is authoritative only
+The `POST /_soland/self/account/export` bundle in v1 is authoritative only
 for `{ account, devices, audit_log }` (plus the already-empty
 `messages` and `spaces` collections). The following fields are
 reserved on the response envelope so downstream consumers can compile

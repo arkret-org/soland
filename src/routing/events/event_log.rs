@@ -30,10 +30,10 @@ use serde_json::{Value, json};
 
 use super::projection::{retention_tombstone_for_event, retention_tombstone_payload_value};
 use super::{
-    append_audit_log, auth_or_render, is_valid_sha256_digest, now, project_accepted_operations,
-    query_param, query_param_all, realm_allows_plaintext_service, realm_event_visible_to_session,
-    realm_has_member, render_error, sha256_hex, validate_content_encryption_floor, validate_did,
-    validate_operation_policy, validate_operation_semantics, validate_space_id,
+    append_audit_log, auth_or_render, is_valid_sha256_digest, now, query_param, query_param_all,
+    realm_allows_plaintext_service, realm_event_visible_to_session, realm_has_member, render_error,
+    sha256_hex, validate_content_encryption_floor, validate_did, validate_operation_policy,
+    validate_operation_semantics, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
 use crate::result::{JsonResult, json_ok};
@@ -72,7 +72,7 @@ const MAX_EVENT_SUBMIT_BATCH: usize = 100;
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
 async fn events_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let event_kinds = artifacts::active_durable_event_kinds()
+    let event_kinds = artifacts::active_local_operation_event_kinds()
         .iter()
         .cloned()
         .collect::<Vec<_>>();
@@ -715,6 +715,7 @@ async fn events_frontier(
 struct ValidatedEventEnvelope {
     event_id: String,
     actor_id: String,
+    device_id: String,
     actor_seq: u64,
     realm_id: String,
     kind: String,
@@ -1317,7 +1318,13 @@ async fn submit_event_value(
         ));
     }
     if let Some(operation) = projection_operation {
-        project_accepted_operations(state, &parsed.actor_id, &[operation]).await;
+        super::projection::project_accepted_operations_from_device(
+            state,
+            &parsed.actor_id,
+            &parsed.device_id,
+            &[operation],
+        )
+        .await;
     }
     if let Some(payload) = flow_status_audit_payload {
         append_audit_log(
@@ -1520,7 +1527,8 @@ async fn validate_event_envelope(
             reason,
         ));
     }
-    if !artifacts::active_durable_event_kinds().contains(&kind) && kind != kinds::CK_CONFLICT_REPAIR
+    if !artifacts::active_local_operation_event_kinds().contains(&kind)
+        && kind != kinds::CK_CONFLICT_REPAIR
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -1783,10 +1791,13 @@ async fn validate_event_envelope(
     )
     .await?;
     validate_event_proofs(object, state, session, &actor_id, &canonical_digest)?;
+    let device_id =
+        event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
 
     Ok(ValidatedEventEnvelope {
         event_id,
         actor_id,
+        device_id,
         actor_seq,
         realm_id,
         kind,
@@ -5714,6 +5725,7 @@ mod inception_key_window_tests {
             actor_id: PRINCIPAL_DID.to_owned(),
             actor_seq: 1,
             realm_id: "ck:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+            device_id: "ck:device:x".to_owned(),
             kind: kind.to_owned(),
             schema_id: "ck.schema.event.v1".to_owned(),
             prev_refs: Vec::new(),

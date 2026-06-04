@@ -146,7 +146,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let invites = bob_invites["invites"].as_array().unwrap();
     assert!(
         invites.iter().any(|invite| {
-            invite["space_id"].as_str() == Some(space_id.as_str())
+            invite["realm_id"].as_str() == Some(space_id.as_str())
                 && invite["invitee"].as_str() == Some(bob_did)
                 && invite["status"].as_str() == Some("pending")
         }),
@@ -303,7 +303,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         serde_json::json!(["ck.events.submit"])
     );
 
-    let index: Value = TestClient::get("http://server/_cokret/self/index/describe")
+    let index: Value = TestClient::get("http://server/_soland/self/index/describe")
         .send(&service)
         .await
         .take_json()

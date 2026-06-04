@@ -217,6 +217,12 @@ async fn get_device_messages(
             Err(SyncCursorError::Integrity(message)) => {
                 return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
             }
+            Err(SyncCursorError::Revoked) => {
+                return Err(AppError::new(
+                    ErrorCode::CursorRevoked,
+                    "cursor authority has been revoked",
+                ));
+            }
         },
         None => 0,
     };

@@ -1,11 +1,12 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `GET    /_cokret/self/policy/documents`           — list owner-scoped policies
-//! - `GET    /_cokret/self/policy/documents/{id}`      — read one policy document
-//! - `PUT    /_cokret/self/policy/documents/{id}`      — upsert (idempotent)
-//! - `DELETE /_cokret/self/policy/documents/{id}`      — remove a policy document
 //! - `POST   /_cokret/self/policy/check`               — evaluate a `PolicyCheckReqBody`
+//! - `GET    /_soland/self/policies`            — list owner-scoped policies
+//! - `POST   /_soland/self/policies`            — upsert compatibility route
+//! - `GET    /_soland/self/policies/{id}`       — read one policy document
+//! - `PATCH  /_soland/self/policies/{id}`       — update one policy document
+//! - `DELETE /_soland/self/policies/{id}`       — remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -199,7 +200,7 @@ async fn upsert_policy_document(
     json_ok(policy_document_to_response(&record))
 }
 
-/// Body for `PATCH /_cokret/self/policies/{policy_id}` — applies a
+/// Body for `PATCH /_soland/self/policies/{policy_id}` — applies a
 /// `ck.schema.patch.v1` field-patch to the existing policy document's
 /// payload (effect / actions / resource / obligations). Behaves as a
 /// shallow set/unset over the payload object: each key in `patch` is

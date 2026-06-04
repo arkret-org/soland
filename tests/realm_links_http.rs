@@ -71,7 +71,7 @@ fn app() -> salvo::Service {
 }
 
 async fn dev_token(svc: &salvo::Service) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",

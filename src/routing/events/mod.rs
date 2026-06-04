@@ -21,9 +21,8 @@ use operations::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use projection::{
-    augment_timeline_message_json, backfill_gap_events, project_accepted_operations,
-    projected_event_page, projection_event_json, sync_timeline_message_json_with_projection,
-    truncate_gap_events,
+    augment_timeline_message_json, backfill_gap_events, projected_event_page,
+    projection_event_json, sync_timeline_message_json_with_projection, truncate_gap_events,
 };
 
 use super::{

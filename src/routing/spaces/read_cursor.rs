@@ -1,10 +1,8 @@
-//! Read cursor + read receipt handlers.
+//! Legacy read cursor compatibility handlers.
 //!
-//! Surfaces:
-//! - `POST /_cokret/self/read-cursors` — set the actor's read marker (durable persistent state
-//!   per-actor; spec discovery/read-receipts.md §6).
-//! - `GET  /_cokret/self/read-cursors` — list the actor's read markers, optionally filtered by
-//!   `?space_id=...`.
+//! Protocol writes use `ck.read_cursor.advance` actor-private events; the
+//! resulting account-private state is consumed through projection/account sync.
+//! This module is mounted only under `/_soland/self/read-cursors*`.
 
 use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;

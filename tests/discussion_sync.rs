@@ -84,7 +84,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": actor,
             "device_id": format!("ck:device:01904100-0000-7000-8000-{device_suffix}"),
@@ -99,7 +99,7 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 }
 
 /// Seed a Realm directly via AppState (the Realm REST mutation surface
-/// `POST /_cokret/self/spaces` was removed in W2A; tests now set up Realm
+/// `POST /_soland/self/spaces` was removed in W2A; tests now set up Realm
 /// fixtures internally and exercise downstream behaviour via the canonical
 /// `POST /_cokret/self/events` path).
 async fn seed_realm(

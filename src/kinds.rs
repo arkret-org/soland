@@ -3,7 +3,7 @@ use cokret_sdk::Operation;
 // active durable kinds registered in
 // `spec/v1/artifacts/registry/event-kind-registry.json`. The reducer
 // dispatch is wired in `src/reducer.rs`; the wire-layer admission check
-// runs through the generic `active_durable_event_kinds` registry.
+// runs through the generic local-operation event registry.
 //
 // `ck.circle.anchor_commit` is reducer-DERIVED (sub-anchor emitted on
 // the Circle's profile cadence) and MUST NOT be submitted directly via
@@ -105,6 +105,7 @@ pub use cokret_sdk::events::kinds::{
     REALM_UPDATE as CK_REALM_UPDATE,
 };
 pub const CK_CONFLICT_REPAIR: &str = "ck.conflict.repair";
+pub const CK_ACCOUNT_DATA_SET: &str = "ck.account_data.set";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
@@ -226,7 +227,6 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // Reducer maintains a `ck.component.realm.inheritance_policy.v1`
 // cas-register cell; capability derivation runs against the projected
 // chain alongside `ck.capability.derived`.
-pub use cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY;
 // Realm graph + capability derivation event kinds. Reducer dispatch
 // (`apply_realm_link` / `apply_realm_inheritance_policy` /
 // `apply_capability_derived`) is fully wired in `src/reducer.rs`;
@@ -241,12 +241,10 @@ pub use cokret_sdk::events::kinds::REALM_INHERITANCE_POLICY as CK_REALM_INHERITA
 // `/_cokret/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
-pub use cokret_sdk::events::kinds::REALM_LINK as CK_REALM_LINK;
 // G3.S2 — `ck.realm.policy_server` (realm / reducer_input): declares the
 // pluggable policy-decision service for a Realm. cell_family
 // `ck.component.realm.policy_server.v1` (cas-register per SDK lattice
 // registry). Spec `cokret-spec/spec/v1/zh/authz/policy-server.md` §2.
-pub use cokret_sdk::events::kinds::REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER;
 pub use cokret_sdk::events::kinds::{
     AGENT_ACTION_APPROVE as CK_AGENT_ACTION_APPROVE, AGENT_ACTION_REJECT as CK_AGENT_ACTION_REJECT,
     AGENT_ACTION_REQUEST as CK_AGENT_ACTION_REQUEST, AGENT_DEACTIVATE as CK_AGENT_DEACTIVATE,
@@ -259,6 +257,8 @@ pub use cokret_sdk::events::kinds::{
     MLS_WELCOME as CK_MLS_WELCOME, MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
     REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDIT_POLICY_DOWNGRADE,
     REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
+    REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY, REALM_LINK as CK_REALM_LINK,
+    REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
@@ -516,7 +516,9 @@ pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
 pub fn is_actor_private_event_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CK_AGENT_DRAFT_PROPOSE
+        CK_ACCOUNT_DATA_SET
+            | CK_READ_MARKER
+            | CK_AGENT_DRAFT_PROPOSE
             | CK_AGENT_ACTION_REQUEST
             | CK_AGENT_ACTION_APPROVE
             | CK_AGENT_ACTION_REJECT

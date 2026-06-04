@@ -52,7 +52,7 @@ async fn sync_directory_and_index_share_demo_space() {
         .unwrap();
     assert_eq!(directory["results"].as_array().unwrap().len(), 1);
 
-    let index: Value = TestClient::post("http://server/_cokret/self/index/query")
+    let index: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({"realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"]}))
         .send(&app())
         .await
@@ -341,11 +341,11 @@ fn preview_token_for_address(
 
 #[tokio::test]
 async fn index_product_endpoints_return_demo_projection_shapes() {
-    // `/_cokret/self/index/object` is the polymorphic typed-id describe (renamed
+    // `/_soland/self/index/object` is the polymorphic typed-id describe (renamed
     // from `/index/entity` in round 6); it returns `{object: {object_id,
     // kind, schema}}` for any spec-registered `ck:<kind>:` prefix.
     let object: Value = TestClient::get(
-        "http://server/_cokret/self/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_soland/self/index/object?object_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -355,7 +355,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(object["object"]["kind"], "space");
 
     let thread: Value =
-        TestClient::get("http://server/_cokret/self/index/thread?thread_id=ck:flow:demo")
+        TestClient::get("http://server/_soland/self/index/thread?thread_id=ck:flow:demo")
             .send(&app())
             .await
             .take_json()
@@ -365,7 +365,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert!(thread["events"].as_array().unwrap().is_empty());
 
     let notifications: Value = TestClient::get(
-        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
     )
     .send(&app())
     .await
@@ -374,7 +374,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     .unwrap();
     assert_eq!(notifications["unread_count"], 0);
 
-    let inbox: Value = TestClient::get("http://server/_cokret/self/index/inbox")
+    let inbox: Value = TestClient::get("http://server/_soland/self/index/inbox")
         .send(&app())
         .await
         .take_json()
@@ -383,7 +383,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(inbox["flows"].as_array().unwrap().len(), 1);
     assert_eq!(inbox["flows"][0]["flow"]["schema"], "ck.schema.flow.v1");
 
-    let search: Value = TestClient::post("http://server/_cokret/self/index/search")
+    let search: Value = TestClient::post("http://server/_soland/self/index/search")
         .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))
         .send(&app())
         .await
@@ -393,7 +393,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
     let hierarchy: Value = TestClient::get(
-        "http://server/_cokret/self/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
+        "http://server/_soland/self/index/space-hierarchy?root_space_id=ck:space:0196419b-0000-7000-8000-000000000000",
     )
     .send(&app())
     .await
@@ -405,7 +405,7 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
         "ck:space:0196419b-0000-7000-8000-000000000000"
     );
 
-    let invalid = TestClient::post("http://server/_cokret/self/index/search")
+    let invalid = TestClient::post("http://server/_soland/self/index/search")
         .json(&serde_json::json!({"query": ""}))
         .send(&app())
         .await;

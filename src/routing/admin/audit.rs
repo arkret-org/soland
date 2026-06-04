@@ -1,6 +1,6 @@
 //! Audit-log surface.
 //!
-//! - `GET /_cokret/self/audit/events` — actor-scoped audit query (cursor-paginated).
+//! - `GET /_soland/self/audit/events` — actor-scoped audit query (cursor-paginated).
 //!   Auth-restricted to the authenticated actor (no cross-actor reads).
 //! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
 //!   space lifecycle, message send, federation, etc.).
@@ -130,7 +130,7 @@ async fn audit_erasure_receipts(
 
 /// Client-side telemetry sink.
 ///
-/// `POST /_cokret/self/audit/user-action` accepts a batched user-action audit
+/// `POST /_soland/self/audit/user-action` accepts a batched user-action audit
 /// envelope shape (`actor`, `action`, `outcome`, `note?`, `recorded_at`)
 /// — the same shape that sodmin emits internally and that yougen posts
 /// via `CokretApi::post_audit_user_action`.

@@ -70,18 +70,44 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: &str) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let mut response = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": actor,
             "device_id": device_id,
             "display_name": display_name,
         }))
         .send(&app_from_state(state))
-        .await
+        .await;
+    let status = response.status_code;
+    let login: Value = response
         .take_json()
         .await
+        .unwrap_or_else(|error| panic!("dev-login did not return JSON: {error:?}"));
+    assert_eq!(
+        status,
+        Some(StatusCode::OK),
+        "dev-login failed for {actor} / {device_id}: {login}"
+    );
+    login["access_token"]
+        .as_str()
+        .unwrap_or_else(|| panic!("dev-login response missing access_token: {login}"))
+        .to_owned()
+}
+
+async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {
+    let url = if query.is_empty() {
+        "http://server/_cokret/self/account/subscribe".to_owned()
+    } else {
+        format!("http://server/_cokret/self/account/subscribe?{query}")
+    };
+    let body = TestClient::get(url)
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state))
+        .await
+        .take_string()
+        .await
         .unwrap();
-    login["access_token"].as_str().unwrap().to_owned()
+    serde_json::from_str(body.lines().next().unwrap()).unwrap()
 }
 
 async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> String {
@@ -186,6 +212,114 @@ async fn send_plaintext_message(
     response
 }
 
+fn signed_actor_private_event_envelope(
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let mut event = json!({
+        "event_id": cokret_sdk::new_prefixed_uuid7("ck:event:"),
+        "kind": kind,
+        "schema_id": "ck.schema.event.v1",
+        "actor_id": actor,
+        "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        "realm_id": realm_id,
+        "device_id": device_id,
+        "audience": "did:web:soland.local",
+        "domain": "did:web:soland.local",
+        "prev_refs": [],
+        "auth_refs": [],
+        "payload": payload,
+        "proofs": [{
+            "type": "dev-proof",
+            "verification_method": format!("{actor}#{device_id}"),
+            "device_id": device_id,
+            "audience": "did:web:soland.local",
+            "domain": "did:web:soland.local",
+            "payload_digest": sha256_json(&payload)
+        }]
+    });
+    event["canonical_digest"] = Value::String(event_canonical_digest(&event));
+    event
+}
+
+async fn submit_actor_private_event(
+    state: AppState,
+    token: &str,
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    kind: &str,
+    payload: Value,
+) -> Value {
+    let event = signed_actor_private_event_envelope(actor, device_id, realm_id, kind, payload);
+    TestClient::post("http://server/_cokret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&event)
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
+fn account_data_entry<'a>(sync: &'a Value, key: &str) -> Option<&'a Value> {
+    sync["account_data"]["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["data_type"] == key)
+}
+
+fn read_cursor_payload(
+    actor: &str,
+    device_id: &str,
+    realm_id: &str,
+    event_id: &str,
+    hlc: &str,
+) -> Value {
+    json!({
+        "id": cokret_sdk::new_prefixed_uuid7("ck:read_cursor:"),
+        "schema": "ck.schema.read_cursor.v1",
+        "actor_id": actor,
+        "device_id": device_id,
+        "realm_id": realm_id,
+        "read_scope": {
+            "kind": "flow",
+            "ref": flow_id_for_realm(realm_id),
+            "track_name": "discussion"
+        },
+        "position": {
+            "event_id": event_id,
+            "hlc": hlc
+        },
+        "updated_at": "2026-05-21T00:00:00Z",
+    })
+}
+
+fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>) -> Vec<Value> {
+    let projection = state.projection.lock().expect("projection lock");
+    projection
+        .read_cursors
+        .values()
+        .filter(|marker| {
+            marker.actor_id == actor && realm_id.is_none_or(|realm_id| marker.realm_id == realm_id)
+        })
+        .map(|marker| {
+            json!({
+                "realm_id": marker.realm_id.clone(),
+                "actor_id": marker.actor_id.clone(),
+                "device_id": marker.device_id.clone(),
+                "read_scope": marker.read_scope.clone(),
+                "position": marker.position.clone(),
+                "updated_at": marker.updated_at.to_rfc3339(),
+            })
+        })
+        .collect()
+}
+
 fn sha256_json(value: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
@@ -256,24 +390,43 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
             "created_at": "2026-05-21T00:00:00Z"
         }]
     });
-    let mut put =
-        TestClient::put("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
-            .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-            .json(&json!({"content": blocklist.clone()}))
-            .send(&app_from_state(state.clone()))
-            .await;
-    assert_eq!(put.status_code.unwrap().as_u16(), 201);
-    let put_body: Value = put.take_json().await.unwrap();
-    assert_eq!(put_body["content"], blocklist);
+    let put = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        &space_id,
+        "ck.account_data.set",
+        json!({
+            "key": "ck.account.blocklist.v1",
+            "owner": "did:web:alice.example",
+            "body": blocklist.clone(),
+            "updated_at": "2026-05-21T00:00:00Z",
+        }),
+    )
+    .await;
+    assert_eq!(put["status"], "accepted", "account_data event: {put}");
+    let stored_account_data = state
+        .persistence
+        .account_data()
+        .list_for_actor("did:web:alice.example")
+        .await
+        .unwrap();
+    assert!(
+        stored_account_data
+            .iter()
+            .any(|record| record.data_type == "ck.account.blocklist.v1"),
+        "account_data projection must persist blocklist after accepted event: {stored_account_data:?}"
+    );
 
-    let phone_account_data: Value =
-        TestClient::get("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
-            .add_header("authorization", format!("Bearer {alice_phone}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let phone_sync = account_subscribe_frame(
+        state.clone(),
+        &alice_phone,
+        "catchup=true&set_presence=online",
+    )
+    .await;
+    let phone_account_data = account_data_entry(&phone_sync, "ck.account.blocklist.v1")
+        .expect("blocklist account_data visible to Alice's sibling device");
     assert_eq!(phone_account_data["content"], blocklist);
 
     let phone_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
@@ -315,7 +468,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     )
     .await;
     let notifications: Value = TestClient::get(
-        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -330,13 +483,22 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
             .all(|notification| notification["event_ref"] != blocked_message["event_id"])
     );
 
-    let unblock =
-        TestClient::put("http://server/_cokret/self/account_data/ck.account.blocklist.v1")
-            .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-            .json(&json!({"content": {"version": 1, "entries": []}}))
-            .send(&app_from_state(state.clone()))
-            .await;
-    assert_eq!(unblock.status_code.unwrap().as_u16(), 200);
+    let unblock = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        &space_id,
+        "ck.account_data.set",
+        json!({
+            "key": "ck.account.blocklist.v1",
+            "owner": "did:web:alice.example",
+            "body": {"version": 1, "entries": []},
+            "updated_at": "2026-05-21T00:01:00Z",
+        }),
+    )
+    .await;
+    assert_eq!(unblock["status"], "accepted", "unblock event: {unblock}");
 
     let visible_message = send_plaintext_message(
         state.clone(),
@@ -347,7 +509,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
     )
     .await;
     let notifications_after: Value = TestClient::get(
-        "http://server/_cokret/self/index/notifications?actor=did:web:alice.example",
+        "http://server/_soland/self/index/notifications?actor=did:web:alice.example",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -392,82 +554,55 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let event_a = "ck:event:01904100-0000-7000-8000-0000000000aa";
     let event_b = "ck:event:01904100-0000-7000-8000-0000000000bb";
 
-    let marker_a: Value = TestClient::post("http://server/_cokret/self/read-cursors")
-        .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-        .json(&json!({
-            "realm_id": realm_a,
-            "read_scope": {
-                "kind": "flow",
-                "ref": format!("ck:flow:{}", realm_a.trim_start_matches("ck:realm:")),
-                "track_name": "discussion"
-            },
-            "position": {
-                "event_id": event_a,
-                "hlc": "019041000000-0001-a11ce001"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let marker_a = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        &realm_a,
+        "ck.read_cursor.advance",
+        read_cursor_payload(
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            &realm_a,
+            event_a,
+            "019041000000-0001-a11ce001",
+        ),
+    )
+    .await;
     assert_eq!(
-        marker_a["realm_id"], realm_a,
-        "marker_a response: {marker_a}"
-    );
-    assert_eq!(
-        marker_a["read_scope"]["track_name"], "discussion",
+        marker_a["status"], "accepted",
         "marker_a response: {marker_a}"
     );
 
-    let marker_b: Value = TestClient::post("http://server/_cokret/self/read-cursors")
-        .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-        .json(&json!({
-            "realm_id": realm_b,
-            "read_scope": {
-                "kind": "flow",
-                "ref": format!("ck:flow:{}", realm_b.trim_start_matches("ck:realm:")),
-                "track_name": "discussion"
-            },
-            "position": {
-                "event_id": event_b,
-                "hlc": "019041000000-0001-a11ce002"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let marker_b = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        &realm_b,
+        "ck.read_cursor.advance",
+        read_cursor_payload(
+            "did:web:alice.example",
+            "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            &realm_b,
+            event_b,
+            "019041000000-0001-a11ce002",
+        ),
+    )
+    .await;
     assert_eq!(
-        marker_b["realm_id"], realm_b,
+        marker_b["status"], "accepted",
         "marker_b response: {marker_b}"
     );
 
-    let only_a: Value = TestClient::get(format!(
-        "http://server/_cokret/self/read-cursors?realm_id={realm_a}"
-    ))
-    .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    let markers_a = only_a["markers"].as_array().unwrap();
+    let markers_a = projected_read_markers(&state, "did:web:alice.example", Some(&realm_a));
     assert_eq!(markers_a.len(), 1);
     assert_eq!(markers_a[0]["position"]["event_id"], event_a);
     assert_eq!(markers_a[0]["realm_id"], realm_a);
+    assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");
 
-    let only_b: Value = TestClient::get(format!(
-        "http://server/_cokret/self/read-cursors?realm_id={realm_b}"
-    ))
-    .add_header("authorization", format!("Bearer {alice_desktop}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    let markers_b = only_b["markers"].as_array().unwrap();
+    let markers_b = projected_read_markers(&state, "did:web:alice.example", Some(&realm_b));
     assert_eq!(markers_b.len(), 1);
     assert_eq!(markers_b[0]["position"]["event_id"], event_b);
     assert_eq!(markers_b[0]["realm_id"], realm_b);
@@ -495,14 +630,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
             && event["content"]["content"]["position"]["event_id"] == event_b
     }));
 
-    let bob_markers: Value = TestClient::get("http://server/_cokret/self/read-cursors")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(bob_markers["markers"].as_array().unwrap().is_empty());
+    let bob_markers = projected_read_markers(&state, "did:web:bob.example", None);
+    assert!(bob_markers.is_empty());
     let bob_messages: Value = TestClient::get("http://server/_cokret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))

@@ -593,7 +593,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
 
     let audit_events: Value = TestClient::get(
-        "http://server/_cokret/self/audit/events?actor=did:web:alice.example&limit=50",
+        "http://server/_soland/self/audit/events?actor=did:web:alice.example&limit=50",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

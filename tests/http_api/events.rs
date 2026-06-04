@@ -320,7 +320,7 @@ async fn events_describe_and_single_event_submit_work() {
 #[tokio::test]
 async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     let service = app();
-    let authz: Value = TestClient::get("http://server/_cokret/self/authz/describe")
+    let authz: Value = TestClient::get("http://server/_soland/self/authz/describe")
         .send(&service)
         .await
         .take_json()
@@ -336,7 +336,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
             .any(|item| item.as_str().unwrap().contains("not complete profile"))
     );
 
-    let policies: Value = TestClient::get("http://server/_cokret/self/policies/describe")
+    let policies: Value = TestClient::get("http://server/_soland/self/policies/describe")
         .send(&service)
         .await
         .take_json()
@@ -345,7 +345,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     assert_eq!(policies["stability"], "scaffold_contract");
     assert_eq!(policies["profile_claim"], "not_claimed");
 
-    let index: Value = TestClient::get("http://server/_cokret/self/index/describe")
+    let index: Value = TestClient::get("http://server/_soland/self/index/describe")
         .send(&service)
         .await
         .take_json()
@@ -354,7 +354,7 @@ async fn scaffold_describe_surfaces_are_marked_limited_not_profile_claims() {
     assert_eq!(index["stability"], "limited_projection");
     assert_eq!(index["profile_claim"], "not_claimed");
 
-    let integration: Value = TestClient::get("http://server/_cokret/self/integration/describe")
+    let integration: Value = TestClient::get("http://server/_soland/self/integration/describe")
         .send(&service)
         .await
         .take_json()
@@ -451,7 +451,6 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.extension.soland.devices.pairing_challenge",
         "ck.extension.soland.devices.authorize_pairing",
         "ck.push.unregister_device",
-        "ck.extension.soland.push.rules",
         "ck.push.notify",
         "ck.blob.upload",
         "ck.blob.presign",
@@ -465,7 +464,7 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.mimi.provider_directory",
         "ck.mimi.key_material",
         "ck.mimi.room_update",
-        "ck.mimi.notify",
+        "ck.mimi.room_notify",
         "ck.mimi.submit_message",
         "ck.mimi.group_info",
         "ck.mimi.request_consent",
@@ -504,7 +503,7 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
 
 #[tokio::test]
 async fn index_query_supports_facet_projection_binding() {
-    let query: Value = TestClient::post("http://server/_cokret/self/index/query")
+    let query: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
             "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
@@ -516,7 +515,7 @@ async fn index_query_supports_facet_projection_binding() {
         .take_json()
         .await
         .unwrap();
-    let unsupported: Value = TestClient::post("http://server/_cokret/self/index/query")
+    let unsupported: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
             "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
@@ -557,7 +556,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
     .await;
 
     let debug: Value = TestClient::get(format!(
-        "http://server/_cokret/self/index/debug/reducer?realm_id={space_id}&limit=5"
+        "http://server/_soland/self/index/debug/reducer?realm_id={space_id}&limit=5"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -580,7 +579,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         "durable_reducer_replay_and_conflict_records"
     );
 
-    let invalid = TestClient::get("http://server/_cokret/self/index/debug/reducer?realm_id=bad")
+    let invalid = TestClient::get("http://server/_soland/self/index/debug/reducer?realm_id=bad")
         .send(&app_from_state(state))
         .await;
     assert_eq!(invalid.status_code.unwrap().as_u16(), 400);
@@ -603,7 +602,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
         assert!(created["space_id"].as_str().is_some());
     }
 
-    let first_page: Value = TestClient::post("http://server/_cokret/self/index/query")
+    let first_page: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Query Space"},
             "sort": [{"field": "title", "direction": "asc"}],
@@ -619,7 +618,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
     assert_eq!(first_page["frontier"]["limited"], true);
     let cursor = first_page["next_cursor"].as_str().unwrap().to_owned();
 
-    let second_page: Value = TestClient::post("http://server/_cokret/self/index/query")
+    let second_page: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Query Space"},
             "sort": [{"field": "title", "direction": "asc"}],
@@ -635,7 +634,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
     assert_eq!(second_page["results"][0]["title"], "Zulu Query Space");
     assert!(second_page["next_cursor"].is_null());
 
-    let mismatch = TestClient::post("http://server/_cokret/self/index/query")
+    let mismatch = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
             "filters": {"text": "Alpha"},
             "sort": [{"field": "title", "direction": "asc"}],

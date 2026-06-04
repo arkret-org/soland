@@ -1,11 +1,11 @@
 //! Account + contact handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/account/register` — create the account record
-//! - `GET  /_cokret/self/account/me` — return the authenticated principal's account
-//! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
-//! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
-//! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
+//! - `POST /_soland/self/account/register` — create the account record
+//! - `GET  /_soland/self/account/me` — return the authenticated principal's account
+//! - `POST /_soland/self/contacts/request` — open a pending contact relationship
+//! - `POST /_soland/self/contacts/respond` — accept or reject a pending request
+//! - `GET  /_soland/self/contacts` — list contacts visible to the actor
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -1893,7 +1893,7 @@ async fn list_contacts(
     json_ok(ContactsResponse { contacts: result })
 }
 
-/// `GET /_cokret/self/account/{did}/principal-space` response.
+/// `GET /_soland/self/account/{did}/principal-space` response.
 ///
 /// **Wire shape (locked for coauth integration)**:
 /// ```json
@@ -1923,7 +1923,7 @@ pub struct PrincipalSpaceResponse {
     pub stashed: bool,
 }
 
-/// `GET /_cokret/self/account/{did}/principal-space`.
+/// `GET /_soland/self/account/{did}/principal-space`.
 ///
 /// Returns the deterministic principal-control Space id for `did`,
 /// matching the `sha256(did) → UUIDv7` convention coauth currently mirrors

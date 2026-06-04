@@ -137,7 +137,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(admin::admin_router())
                 .push(admin::router())
                 .push(federation::admin_anchor_sign_router())
-                .push(soland_compat_router()),
+                .push(soland_local_router()),
         )
         .push(api_v1_router());
     let doc = cached_cokret_openapi_doc(&router);
@@ -167,9 +167,8 @@ fn api_v1_router() -> Router {
     Router::with_path("_cokret")
         .oapi_tag("api")
         .hoop(wait_for_sync_token)
-        // `/_cokret/describe` (root meta) + `/_cokret/self/integration/describe`.
-        // (`system::router()` declares both the root-meta and the self-scoped
-        // path itself, so it is mounted directly at the `_cokret` root.)
+        // `/_cokret/describe` (root meta). Integration describe is mounted
+        // under `/_soland/self/integration/describe`.
         .push(system::router())
         // root/identity/*, self/account*, self/keys*, gate/account/*, etc.
         // (`identity::router()` declares its own trust segments.)
@@ -193,6 +192,8 @@ fn api_v1_router() -> Router {
         // self/moderation/*, open/mimi/* — `interop::router()` declares its
         // own trust segments.
         .push(interop::router())
+        // Applet install/package and applet-service interop operations.
+        .push(extensions::protocol_router())
         // Catch-all so that anything under `/_cokret/...` that the typed
         // routers above don't match returns the canonical Cokret JSON
         // error envelope. `cors_preflight` is registered as an OPTIONS
@@ -212,9 +213,9 @@ fn api_v1_router() -> Router {
         )
 }
 
-fn soland_compat_router() -> Router {
-    Router::with_path("compat")
-        .oapi_tag("soland-compat")
+fn soland_local_router() -> Router {
+    Router::new()
+        .oapi_tag("soland-local")
         .push(system::legacy_router())
         .push(identity::legacy_router())
         .push(
@@ -326,49 +327,49 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "health and liveness",
     ),
     (
-        "/_cokret/self/account/register",
+        "/_soland/self/account/register",
         PathItemType::Post,
         "account",
         "ck.extension.soland.account.register",
         "register account",
     ),
     (
-        "/_cokret/self/account/me",
+        "/_soland/self/account/me",
         PathItemType::Get,
         "account",
         "ck.extension.soland.account.me",
         "get current account",
     ),
     (
-        "/_cokret/gate/auth/session-grant/exchange",
+        "/_cokret/gate/account/session-grants",
         PathItemType::Post,
         "auth",
         "ck.extension.soland.auth.exchange_session_grant",
         "exchange coauth session grant for principal bearer session",
     ),
     (
-        "/_cokret/gate/auth/logout",
+        "/_soland/gate/auth/logout",
         PathItemType::Post,
         "auth",
         "ck.extension.soland.auth.logout",
         "logout active session",
     ),
     (
-        "/_cokret/self/contacts/request",
+        "/_soland/self/contacts/request",
         PathItemType::Post,
         "contacts",
         "ck.extension.soland.contacts.request",
         "request contact",
     ),
     (
-        "/_cokret/self/contacts/respond",
+        "/_soland/self/contacts/respond",
         PathItemType::Post,
         "contacts",
         "ck.extension.soland.contacts.respond",
         "respond to contact request",
     ),
     (
-        "/_cokret/self/contacts",
+        "/_soland/self/contacts",
         PathItemType::Get,
         "contacts",
         "ck.extension.soland.contacts.list",
@@ -510,21 +511,21 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "Morph lifecycle projection query",
     ),
     (
-        "/_cokret/self/index/describe",
+        "/_soland/self/index/describe",
         PathItemType::Get,
         "index",
         "ck.extension.soland.index.describe",
         "describe index profile",
     ),
     (
-        "/_cokret/self/index/query",
+        "/_soland/self/index/query",
         PathItemType::Post,
         "index",
         "ck.extension.soland.index.query",
         "query the projection index",
     ),
     (
-        "/_cokret/self/index/debug/reducer",
+        "/_soland/self/index/debug/reducer",
         PathItemType::Get,
         "index",
         "ck.extension.soland.index.debug_reducer",
@@ -608,10 +609,10 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "snapshot head",
     ),
     (
-        "/_cokret/self/sync/snapshot-chunk",
+        "/_soland/self/sync/snapshot-chunk",
         PathItemType::Get,
         "sync",
-        "ck.extension.soland.sync.get_snapshot_chunk",
+        "ck.extension.soland.sync.snapshot_chunk",
         "snapshot chunk",
     ),
     (
@@ -727,28 +728,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "check authorization",
     ),
     (
-        "/_cokret/self/policies",
+        "/_soland/self/policies",
         PathItemType::Get,
         "policy",
         "ck.extension.soland.policies.list",
         "list policies",
     ),
     (
-        "/_cokret/self/policies/{policy_id}",
+        "/_soland/self/policies/{policy_id}",
         PathItemType::Get,
         "policy",
         "ck.extension.soland.policies.get",
         "get policy",
     ),
     (
-        "/_cokret/self/policies",
+        "/_soland/self/policies",
         PathItemType::Post,
         "policy",
         "ck.extension.soland.policies.upsert",
         "upsert policy",
     ),
     (
-        "/_cokret/self/policies/{policy_id}",
+        "/_soland/self/policies/{policy_id}",
         PathItemType::Delete,
         "policy",
         "ck.extension.soland.policies.delete",
@@ -762,14 +763,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "register push device",
     ),
     (
-        "/_cokret/edge/push/outbound/bridge/cache/export",
+        "/_soland/edge/push/outbound/bridge/cache/export",
         PathItemType::Get,
         "push",
         "ck.extension.soland.push.outbound_bridge_cache_export",
         "export outbound push bridge cache snapshots",
     ),
     (
-        "/_cokret/edge/push/outbound/bridge/cache/import",
+        "/_soland/edge/push/outbound/bridge/cache/import",
         PathItemType::Post,
         "push",
         "ck.extension.soland.push.outbound_bridge_cache_import",
@@ -823,13 +824,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "push",
         "ck.push.unregister_device",
         "unregister push device",
-    ),
-    (
-        "/_cokret/edge/push/rules",
-        PathItemType::Get,
-        "push",
-        "ck.extension.soland.push.rules",
-        "list push rules",
     ),
     (
         "/_cokret/edge/push/notify",
@@ -912,7 +906,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/open/mimi/flows/{room_id}/notify",
         PathItemType::Post,
         "mimi",
-        "ck.mimi.notify",
+        "ck.mimi.room_notify",
         "MIMI external room interop notify",
     ),
     (
@@ -1175,9 +1169,9 @@ async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// (`method_not_allowed` + `Allow` header) for a given request path.
 ///
 /// Keys are OpenAPI-style patterns with `{param}` segments, e.g.
-/// `/_cokret/self/spaces/{space_id}`. Pattern→URI matching is segment-based
+/// `/_soland/self/spaces/{space_id}`. Pattern→URI matching is segment-based
 /// (see [`pattern_matches_path`]) so concrete URIs like
-/// `/_cokret/self/spaces/ck:space:abc` resolve back to their declaring
+/// `/_soland/self/spaces/ck:space:abc` resolve back to their declaring
 /// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
@@ -2493,18 +2487,18 @@ mod framework_error_routing_tests {
     #[test]
     fn pattern_matches_param_segment() {
         assert!(pattern_matches_path(
-            "/_cokret/self/spaces/{space_id}",
-            "/_cokret/self/spaces/ck:space:01"
+            "/_soland/self/spaces/{space_id}",
+            "/_soland/self/spaces/ck:space:01"
         ));
         // Different segment count → no match.
         assert!(!pattern_matches_path(
-            "/_cokret/self/spaces/{space_id}",
-            "/_cokret/self/spaces/ck:space:01/policy"
+            "/_soland/self/spaces/{space_id}",
+            "/_soland/self/spaces/ck:space:01/policy"
         ));
         // Param must be non-empty.
         assert!(!pattern_matches_path(
-            "/_cokret/self/spaces/{space_id}",
-            "/_cokret/self/spaces/"
+            "/_soland/self/spaces/{space_id}",
+            "/_soland/self/spaces/"
         ));
     }
 
@@ -2535,7 +2529,7 @@ mod framework_error_routing_tests {
                 vec![Method::GET, Method::POST],
             ),
             (
-                "/_cokret/self/spaces/{space_id}".to_owned(),
+                "/_soland/self/spaces/{space_id}".to_owned(),
                 vec![Method::GET],
             ),
         ]);
@@ -2546,8 +2540,8 @@ mod framework_error_routing_tests {
             .expect("/_cokret/self/events is registered with at least one method");
         assert_eq!(methods, vec![Method::GET, Method::POST]);
 
-        let methods = allow_methods_for_path("/_cokret/self/spaces/ck:space:abc")
-            .expect("/_cokret/self/spaces/{id} resolves with a concrete id");
+        let methods = allow_methods_for_path("/_soland/self/spaces/ck:space:abc")
+            .expect("/_soland/self/spaces/{id} resolves with a concrete id");
         assert_eq!(methods, vec![Method::GET]);
 
         // Unknown path → `None`, which is the cue for `api_not_found`

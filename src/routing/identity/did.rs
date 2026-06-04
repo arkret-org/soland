@@ -1237,6 +1237,18 @@ async fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), 
 }
 
 async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
+    if let Some(did_document) =
+        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(did)
+    {
+        return WebvhDocumentRecord {
+            did: did.to_owned(),
+            did_document,
+            key_log_head: None,
+            seq: 0,
+            method_evidence: json!({"mode": "extension_actor_registry"}),
+            updated_at: now(),
+        };
+    }
     state
         .persistence
         .webvh()

@@ -5,6 +5,23 @@
 #![allow(unused_imports)]
 use super::common::*;
 
+fn presence_event<'a>(sync: &'a Value, actor: &str) -> &'a Value {
+    sync["presence"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["actor_id"] == actor || event["user_id"] == actor)
+        .expect("presence event present in account subscribe frame")
+}
+
+fn account_data_entry<'a>(sync: &'a Value, data_type: &str) -> Option<&'a Value> {
+    sync["account_data"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["data_type"] == data_type)
+}
+
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -46,15 +63,10 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(presence["accepted"], true);
     assert_eq!(presence["kind"], "ck.presence");
 
-    let profile: Value =
-        TestClient::get("http://server/_cokret/self/profile/presence?did=did:web:alice.example")
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(profile["actor"], "did:web:alice.example");
-    assert_eq!(profile["presence"]["status"], "unavailable");
+    let presence_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    let profile = presence_event(&presence_sync, "did:web:alice.example");
+    assert_eq!(profile["actor_id"], "did:web:alice.example");
+    assert_eq!(profile["status"], "unavailable");
 
     state
         .persistence
@@ -66,15 +78,10 @@ async fn push_profile_and_moderation_contracts_work() {
         })
         .await
         .unwrap();
-    let stale_profile: Value =
-        TestClient::get("http://server/_cokret/self/profile/presence?did=did:web:alice.example")
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(stale_profile["presence"]["status"], "offline");
-    assert!(stale_profile["presence"]["last_seen"].is_string());
+    let stale_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    let stale_profile = presence_event(&stale_sync, "did:web:alice.example");
+    assert_eq!(stale_profile["status"], "offline");
+    assert!(stale_profile["last_active"].is_string());
 
     let unauth_typing = TestClient::post("http://server/_cokret/self/ephemeral")
         .json(&serde_json::json!({
@@ -167,42 +174,47 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(push["ok"], true);
 
-    let initial_rules: Value = TestClient::get("http://server/_cokret/edge/push/rules")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(initial_rules["rules"].as_array().unwrap().is_empty());
+    let initial_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    assert!(
+        account_data_entry(&initial_rules, "ck.push_rules").is_none(),
+        "initial account_data must not include ck.push_rules: {initial_rules}"
+    );
 
-    let push_rule: Value = TestClient::post("http://server/_cokret/edge/push/rules")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "rule_id": "mute-device",
-            "enabled": true,
-            "actions": ["dont_notify"],
-            "conditions": {
-                "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-                "type": "blind_wakeup"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(push_rule["ok"], true);
-    assert_eq!(push_rule["rule"]["rule_id"], "mute-device");
+    let push_rule = submit_actor_private_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": "ck.push_rules",
+            "owner": "did:web:alice.example",
+            "body": {
+                "rules": [{
+                    "rule_id": "mute-device",
+                    "enabled": true,
+                    "actions": ["dont_notify"],
+                    "conditions": {
+                        "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+                        "type": "blind_wakeup"
+                    }
+                }]
+            },
+            "updated_at": "2026-05-08T10:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(
+        push_rule["status"], "accepted",
+        "ck.push_rules account_data response: {push_rule}"
+    );
 
-    let listed_rules: Value = TestClient::get("http://server/_cokret/edge/push/rules")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(listed_rules["rules"].as_array().unwrap().len(), 1);
+    let listed_rules = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
+    let push_rules = account_data_entry(&listed_rules, "ck.push_rules")
+        .expect("ck.push_rules appears in account subscribe");
+    assert_eq!(push_rules["content"]["rules"].as_array().unwrap().len(), 1);
+    assert_eq!(push_rules["content"]["rules"][0]["rule_id"], "mute-device");
 
     let muted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
@@ -228,15 +240,25 @@ async fn push_profile_and_moderation_contracts_work() {
             && device["reason"] == "unknown_device"
     }));
 
-    let deleted_rule: Value =
-        TestClient::delete("http://server/_cokret/edge/push/rules/mute-device")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(deleted_rule["ok"], true);
+    let deleted_rule = submit_actor_private_event(
+        state.clone(),
+        &token,
+        "did:web:alice.example",
+        "ck:device:01904100-0000-7000-8000-a11ce0000001",
+        DEMO_REALM_ID,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": "ck.push_rules",
+            "owner": "did:web:alice.example",
+            "tombstone": true,
+            "updated_at": "2026-05-08T10:01:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(
+        deleted_rule["status"], "accepted",
+        "ck.push_rules tombstone response: {deleted_rule}"
+    );
 
     let unmuted_notify: Value = TestClient::post("http://server/_cokret/edge/push/notify")
         .json(&serde_json::json!({
@@ -869,7 +891,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
 
     let stale_import: Value = TestClient::post(
-        "http://server/_cokret/edge/push/outbound/bridge/cache/import",
+        "http://server/_soland/edge/push/outbound/bridge/cache/import",
     )
     .json(&serde_json::json!({
         "replace_existing": true,
@@ -931,7 +953,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let now = chrono::Utc::now();
     let fresh_import: Value = TestClient::post(
-        "http://server/_cokret/edge/push/outbound/bridge/cache/import",
+        "http://server/_soland/edge/push/outbound/bridge/cache/import",
     )
     .json(&serde_json::json!({
         "replace_existing": true,
@@ -1084,7 +1106,7 @@ async fn keys_query_hides_revoked_device() {
         "phone-device-key"
     );
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1129,7 +1151,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     )
     .await;
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
         .add_header("authorization", format!("Bearer {device_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1289,7 +1311,7 @@ async fn device_messages_evicted_after_session_logout() {
         .unwrap();
     assert_eq!(pre_logout["events"].as_array().unwrap().len(), 1);
 
-    let logout: Value = TestClient::post("http://server/_cokret/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await

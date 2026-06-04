@@ -3,9 +3,9 @@
 //! Surfaces:
 //! - `POST /_cokret/self/authz/check`             — evaluate one (actor, action, resource)
 //! - `GET  /_cokret/self/authz/effective-grants`  — direct grants visible to a subject
-//! - `POST /_cokret/self/authz/grants`            — owner-issued grant
-//! - `DELETE /_cokret/self/authz/grants/{grant_id}` — revoke
 //! - `GET  /_cokret/self/authz/invites`           — pending invites visible to the actor
+//! - `POST /_soland/self/authz/grants`     — owner-issued grant compatibility route
+//! - `DELETE /_soland/self/authz/grants/{grant_id}` — compatibility revoke
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
 //! `state.authz` field is shared). Still-open work: schema alignment,

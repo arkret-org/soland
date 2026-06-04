@@ -1,17 +1,19 @@
-//! Push notification surfaces (register / unregister / rules / notify).
+//! Push notification surfaces (register / unregister / notify).
 //!
 //! Surfaces:
 //! - `POST /_cokret/edge/push/register-device` — register a device token + push gateway
 //! - `POST /_cokret/edge/push/unregister-device` — remove an authenticated actor's device token
-//! - `GET / POST /_cokret/edge/push/rules` — list / upsert push rules
-//! - `DELETE /_cokret/edge/push/rules/{rule_id}` — drop one
 //! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the
 //!   12-fn helper block at the bottom of this file).
+//!
+//! Push rules are canonical actor-private account data (`ck.push_rules`). The
+//! legacy `/_soland/edge/push/rules*` handlers below map into that same
+//! store so old callers do not create a second rule source.
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Cokret-Session-Grant` header for clients that haven't yet picked up a
 //! bearer session. When coauth introspection is configured, the bridge uses
-//! the same audience/scope/proof validation as `auth/session-grant/exchange`.
+//! the same audience/scope/proof validation as `/_cokret/gate/account/session-grants`.
 //! Spec rule: no DID in push payload / TURN username.
 //!
 //! Push-rule matching uses the helpers at the bottom: `push_rule_matches`
@@ -34,7 +36,7 @@ use crate::error::AppError;
 use crate::persistence::DriftResult;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, PushRuleRecord, SessionRecord};
+use crate::state::{AccountDataRecord, AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
     OkResBody, PushNotifyReqBody, PushNotifyResBody, PushRegisterRequest, PushRegisterResponse,
     PushRulesResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
@@ -47,6 +49,7 @@ use crate::wire::{
 /// fetch worker before fan-out leaks past a stale contract. v1 unreleased,
 /// no operator knob yet — bump here when the refresh worker lands.
 const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
+const PUSH_RULES_ACCOUNT_DATA_TYPE: &str = "ck.push_rules";
 
 #[endpoint(
     operation_id = "ck.push.register_device",
@@ -203,12 +206,8 @@ pub(super) async fn push_rules(
 ) -> JsonResult<PushRulesResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let rules = state
-        .persistence
-        .push_rules()
-        .list_for_actor(&session.actor)
+    let rules = list_push_rule_records(state, &session.actor)
         .await
-        .unwrap_or_default()
         .iter()
         .map(push_rule_to_json)
         .collect::<Vec<_>>();
@@ -260,10 +259,16 @@ pub(super) async fn upsert_push_rule(
         conditions: body.conditions,
         updated_at: now(),
     };
-    state
-        .persistence
-        .push_rules()
-        .put(rule.clone())
+    let mut rules = list_push_rule_records(state, &session.actor).await;
+    if let Some(existing) = rules
+        .iter_mut()
+        .find(|existing| existing.rule_id == rule.rule_id)
+    {
+        *existing = rule.clone();
+    } else {
+        rules.push(rule.clone());
+    }
+    persist_push_rule_records(state, &session.actor, &rules)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(UpsertPushRuleResponse {
@@ -290,11 +295,11 @@ pub(super) async fn delete_push_rule(
     if !is_valid_push_rule_id(&rule_id) {
         return Err(AppError::invalid_param("invalid push rule id"));
     }
-    let _ = state
-        .persistence
-        .push_rules()
-        .delete(&session.actor, &rule_id)
-        .await;
+    let mut rules = list_push_rule_records(state, &session.actor).await;
+    rules.retain(|rule| rule.rule_id != rule_id);
+    persist_push_rule_records(state, &session.actor, &rules)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(OkResBody { ok: true })
 }
 
@@ -601,12 +606,8 @@ async fn push_device_suppressed_by_rule(
     notification: &Value,
     device: &Value,
 ) -> Option<String> {
-    state
-        .persistence
-        .push_rules()
-        .list_for_actor(actor)
+    list_push_rule_records(state, actor)
         .await
-        .ok()?
         .into_iter()
         .filter(|rule| rule.enabled)
         .find(|rule| {
@@ -614,6 +615,111 @@ async fn push_device_suppressed_by_rule(
                 && push_rule_matches(rule, notification, device)
         })
         .map(|rule| rule.rule_id)
+}
+
+async fn list_push_rule_records(state: &AppState, actor: &str) -> Vec<PushRuleRecord> {
+    let Some(record) = state
+        .persistence
+        .account_data()
+        .get(actor, PUSH_RULES_ACCOUNT_DATA_TYPE)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    push_rule_records_from_account_data(actor, &record.payload, record.updated_at)
+}
+
+async fn persist_push_rule_records(
+    state: &AppState,
+    actor: &str,
+    rules: &[PushRuleRecord],
+) -> Result<(), String> {
+    if rules.is_empty() {
+        return state
+            .persistence
+            .account_data()
+            .delete(actor, PUSH_RULES_ACCOUNT_DATA_TYPE)
+            .await
+            .map_err(|error| error.to_string());
+    }
+    state
+        .persistence
+        .account_data()
+        .put(&AccountDataRecord {
+            actor: actor.to_owned(),
+            data_type: PUSH_RULES_ACCOUNT_DATA_TYPE.to_owned(),
+            payload: json!({
+                "rules": rules.iter().map(push_rule_to_json).collect::<Vec<_>>(),
+            }),
+            updated_at: now(),
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn push_rule_records_from_account_data(
+    actor: &str,
+    payload: &Value,
+    default_updated_at: chrono::DateTime<chrono::Utc>,
+) -> Vec<PushRuleRecord> {
+    let Some(rules) = payload
+        .get("rules")
+        .and_then(Value::as_array)
+        .or_else(|| payload.as_array())
+    else {
+        return Vec::new();
+    };
+    rules
+        .iter()
+        .filter_map(|rule| push_rule_record_from_json(actor, rule, default_updated_at))
+        .collect()
+}
+
+fn push_rule_record_from_json(
+    actor: &str,
+    value: &Value,
+    default_updated_at: chrono::DateTime<chrono::Utc>,
+) -> Option<PushRuleRecord> {
+    let rule_id = value
+        .get("rule_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|rule_id| is_valid_push_rule_id(rule_id))?;
+    let enabled = value
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let actions = match value.get("actions").and_then(Value::as_array) {
+        Some(values) if !values.is_empty() => {
+            let mut actions = Vec::new();
+            for value in values {
+                let action = value.as_str()?.trim();
+                if !is_supported_push_action(action) {
+                    return None;
+                }
+                actions.push(action.to_owned());
+            }
+            actions
+        }
+        _ => vec!["notify".to_owned()],
+    };
+    let conditions = value.get("conditions").cloned().unwrap_or(Value::Null);
+    let updated_at = value
+        .get("updated_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or(default_updated_at);
+    Some(PushRuleRecord {
+        actor: actor.to_owned(),
+        rule_id: rule_id.to_owned(),
+        enabled,
+        actions,
+        conditions,
+        updated_at,
+    })
 }
 
 fn push_rule_matches(rule: &PushRuleRecord, notification: &Value, device: &Value) -> bool {

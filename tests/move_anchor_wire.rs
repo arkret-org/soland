@@ -190,7 +190,7 @@ async fn dev_token(state: AppState) -> String {
     let app = service(state.clone());
     // Register the admin account first; dev-login alone fails on
     // unregistered DIDs in soland's auth path.
-    let _: Value = TestClient::post("http://server/_cokret/self/account/register")
+    let _: Value = TestClient::post("http://server/_soland/self/account/register")
         .json(&json!({
             "did": "did:web:admin.example",
             "handle": "@admin",
@@ -202,7 +202,7 @@ async fn dev_token(state: AppState) -> String {
         .take_json()
         .await
         .unwrap();
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:admin.example",
             "device_id": "ck:device:01904100-0000-7000-8000-ad11d0000008",
@@ -1666,7 +1666,7 @@ async fn account_principal_space_is_deterministic() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let alice_url = "http://server/_cokret/self/account/did:web:alice.example/principal-space";
+    let alice_url = "http://server/_soland/self/account/did:web:alice.example/principal-space";
     let resp_a: Value = TestClient::get(alice_url)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1693,7 +1693,7 @@ async fn account_principal_space_is_deterministic() {
         "space_id has ck:space: prefix (got {space_id_str})"
     );
 
-    let bob_url = "http://server/_cokret/self/account/did:web:bob.example/principal-space";
+    let bob_url = "http://server/_soland/self/account/did:web:bob.example/principal-space";
     let resp_b: Value = TestClient::get(bob_url)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)

@@ -277,18 +277,12 @@ async fn describe_separates_claim_levels() {
         .as_array()
         .expect("compat_surfaces array present");
     for surface in compat {
-        let kind = surface["kind"].as_str().expect("compat surface kind");
-        assert!(
-            matches!(
-                kind,
-                "matrix_passthrough"
-                    | "mimi_passthrough"
-                    | "legacy_alias"
-                    | "external_interop"
-                    | "deprecated_alias"
-            ),
-            "unknown compat_surfaces kind: {kind}"
-        );
+        assert_eq!(surface["base_path"], "/_soland");
+        assert_eq!(surface["status"], "soland_private_local");
+        assert!(surface["reason"].as_str().is_some_and(|reason| {
+            reason.contains("moved out of /_cokret")
+                && reason.contains("operation-registry canonical paths")
+        }));
     }
 }
 

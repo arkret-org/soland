@@ -1,11 +1,11 @@
 //! Auth + session handlers and the session-validation helpers they rely on.
 //!
 //! Surfaces:
-//! - `POST /_cokret/gate/auth/dev-login` — dev-mode bearer issue
+//! - `POST /_soland/gate/auth/dev-login` — dev-mode bearer issue
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
 //!   `/oauth/introspect`
-//! - `POST /_cokret/gate/auth/session-grant/exchange` — legacy coauth session-grant bridge
-//! - `POST /_cokret/gate/auth/logout` — revoke the bearer + the bound device
+//! - `POST /_cokret/gate/account/session-grants` — legacy coauth session-grant bridge
+//! - `POST /_soland/gate/auth/logout` — revoke the bearer + the bound device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every

@@ -1,10 +1,8 @@
-//! Actor-private account data CRUD.
+//! Legacy actor-private account data compatibility handlers.
 //!
-//! Surfaces:
-//! - `PUT /_cokret/self/account_data/{type}` — upsert a per-actor account data entry
-//! - `GET /_cokret/self/account_data/{type}` — fetch one entry
-//! - `GET /_cokret/self/account_data` — list every entry the authenticated actor owns
-//! - `DELETE /_cokret/self/account_data/{type}` — tombstone one entry
+//! Protocol writes use `ck.account_data.set` actor-private events and
+//! `ck.account.subscribe` for sync/read. This module is mounted only under
+//! `/_soland/self/account_data*` for old local clients.
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
 //! sections (§3.1 Space tags, §3.5 blocklist, §3.6 contact remarks, §3.7 Space

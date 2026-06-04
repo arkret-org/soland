@@ -1,11 +1,13 @@
 //! G3.S9 — Bot / ghost actor registry (runnable stub).
 //!
-//! Bot and ghost actors are second-class identities tied to a primary
-//! actor's authority (the applet controller). Per
+//! Bot and ghost actors are second-class identities tied to a primary actor's
+//! authority (the applet controller). Canonical provisioning happens through
+//! `ck.applet.install` / `ck.applet.registration`; this registry is the local
+//! runtime state those flows populate. Per
 //! `extensions/applet-integration.md` §3–§5:
 //!
-//! - A **bot actor** is a stable per-applet DID. Registered once when the applet completes manifest
-//!   verification; lives until revoked.
+//! - A **bot actor** is a stable per-applet DID. Registered once when the applet install completes;
+//!   lives until revoked.
 //! - A **ghost actor** is a per-external-user DID minted by the applet to represent an external
 //!   user inside the portal realm. Same wire shape as bots; the `kind` discriminator differs.
 //!
@@ -14,10 +16,8 @@
 //! `state.persistence` store is a follow-up — see TODO at module
 //! bottom.
 //!
-//! HTTP surface (mounted under `/_cokret/self/extensions/bots`):
-//!   POST   /_cokret/self/extensions/bots         — register a bot/ghost
-//!   DELETE /_cokret/self/extensions/bots/{did}   — revoke a bot/ghost
-//!   GET    /_cokret/self/extensions/bots         — list bots owned by caller
+//! Legacy HTTP compatibility surface is mounted under
+//! `/_soland/self/extensions/bots*`; protocol clients should not call it.
 //!
 //! Reducer dispatch hooks are exposed via
 //! `apply_bot_register` / `apply_bot_revoke` so the central reducer

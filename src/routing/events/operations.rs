@@ -543,6 +543,20 @@ const READ_MARKER_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("read_scope", "read marker operation requires read_scope"),
     PayloadRequirement::Required("position", "read marker operation requires position"),
 ];
+const ACCOUNT_DATA_VALUE_FIELDS: &[&str] = &[
+    "body",
+    "encrypted_payload",
+    "encrypted_content",
+    "tombstone",
+];
+const ACCOUNT_DATA_SET_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("owner", "account_data.set requires owner"),
+    PayloadRequirement::Required("key", "account_data.set requires key"),
+    PayloadRequirement::AnyOf(
+        ACCOUNT_DATA_VALUE_FIELDS,
+        "account_data.set requires body, encrypted_payload, or tombstone",
+    ),
+];
 const CONSENT_GRANT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("consent_id", "consent grant requires consent_id"),
     PayloadRequirement::AnyOf(CONSENT_PEER_FIELDS, "consent grant requires peer"),
@@ -1008,6 +1022,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CK_READ_MARKER => OperationPayloadSchema {
             requirements: READ_MARKER_REQUIREMENTS,
             validate: Some(validate_read_marker_payload),
+        },
+        kinds::CK_ACCOUNT_DATA_SET => OperationPayloadSchema {
+            requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
+            validate: None,
         },
         "ck.consent.grant" => OperationPayloadSchema {
             requirements: CONSENT_GRANT_REQUIREMENTS,

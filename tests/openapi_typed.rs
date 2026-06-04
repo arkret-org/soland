@@ -413,7 +413,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // through their handler tags).
     for typed_now in [
         "ListRelationsResponse",
-        "DeleteRelationResponse",
+        "TombstoneRelationResponse",
         "PushRulesResponse",
         "UpsertPushRuleResponse",
     ] {
@@ -445,7 +445,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.extension.soland.index.query",
         "ck.extension.soland.index.debug_reducer",
         "ck.push.register_device",
-        "ck.extension.soland.push.rules",
+        "ck.push.rules",
         "ck.push.upsert_rule",
         "ck.extension.soland.push.outbound_bridge_resolve",
         "ck.extension.soland.push.outbound_bridge_fetch",
@@ -482,7 +482,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.mimi.provider_directory",
         "ck.mimi.key_material",
         "ck.mimi.room_update",
-        "ck.mimi.notify",
+        "ck.mimi.room_notify",
         "ck.mimi.submit_message",
         "ck.mimi.group_info",
         "ck.mimi.request_consent",
@@ -540,7 +540,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
     // the SOLAND_EXTENSION_OPERATIONS registry (`ck.snapshot.head`
-    // / `ck.extension.soland.sync.get_snapshot_chunk`), not from my handler annotation.
+    // / `ck.extension.soland.sync.snapshot_chunk`), not from my handler annotation.
     for operation_id in [
         "ck.events.get",
         "ck.events.resolve",
@@ -548,7 +548,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.events.query",
         "ck.extension.soland.sync.backfill_gap",
         "ck.snapshot.head",
-        "ck.extension.soland.sync.get_snapshot_chunk",
+        "ck.extension.soland.sync.snapshot_chunk",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),

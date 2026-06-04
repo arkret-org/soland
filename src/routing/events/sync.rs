@@ -13,7 +13,7 @@
 //! - `GET  /_cokret/self/sync/backfill/gap`       — `ck.sync.backfill_gap` (deployment-local; not
 //!   in spec)
 //! - `GET  /_cokret/self/snapshot/head`
-//! - `GET  /_cokret/self/sync/snapshot-chunk`
+//! - `GET  /_soland/self/sync/snapshot-chunk`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -74,6 +74,7 @@ pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
+        .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
         .push(Router::with_path("ephemeral").post(submit_ephemeral))
         .push(Router::with_path("snapshot/head").get(snapshot_head))
 }
@@ -82,6 +83,7 @@ pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
+        .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
         .push(Router::with_path("ephemeral").post(submit_ephemeral))
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
         .push(Router::with_path("snapshot/head").get(snapshot_head))
@@ -144,6 +146,10 @@ const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
 const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
 /// Default reconnect guard advertised on subscribe terminal control frames.
 const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
+/// Maximum lifetime of an issued sync cursor (mirrors the 1h TTL minted by
+/// [`sync_token_for_client_sync`]). A revocation record is retained for at
+/// least this long so a leaked cursor cannot outlive its revocation.
+const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
 
 #[endpoint(
     operation_id = "ck.account.subscribe",
@@ -190,6 +196,14 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                     crate::error::ErrorCode::CursorIntegrityInvalid,
                     res,
                     message,
+                );
+                return;
+            }
+            Err(SyncCursorError::Revoked) => {
+                crate::error::render_error_code(
+                    crate::error::ErrorCode::CursorRevoked,
+                    res,
+                    "cursor authority has been revoked",
                 );
                 return;
             }
@@ -310,6 +324,110 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+/// `POST /_cokret/self/account/cursor/revoke` — `ck.account.cursor_revoke`.
+///
+/// High-assurance optional endpoint: record a previously issued cursor
+/// authority in the revocation set until its maximum TTL would have elapsed.
+/// A revoked cursor thereafter returns `cursor_revoked` from
+/// [`parse_and_validate_sync_cursor`] and never advances to-device ack,
+/// account-subscribe resume position, wait-for barrier state, or dropped
+/// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
+/// `same_device`, `same_session`).
+#[endpoint(
+    operation_id = "ck.account.cursor_revoke",
+    tags("sync"),
+    summary = "Revoke a previously issued cursor authority",
+    status_codes(200, 400, 401, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.account.cursor_revoke"))]
+async fn account_cursor_revoke(
+    aa: crate::routing::system::extract::AuthArgs,
+    body: salvo::oapi::extract::JsonBody<crate::wire::CursorRevokeRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<crate::wire::CursorRevokeResponse> {
+    use crate::error::AppError;
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+
+    let cursor = body.cursor.trim();
+    if !cursor.starts_with("ck:cursor:") || cursor.len() <= "ck:cursor:".len() {
+        return Err(AppError::invalid_param("cursor must be a ck:cursor token"));
+    }
+    let reason_code = body.reason_code.trim();
+    if reason_code.is_empty() {
+        return Err(AppError::invalid_param("reason_code is required"));
+    }
+    let scope = body.revoke_scope.as_deref().unwrap_or("this_cursor");
+    if !matches!(scope, "this_cursor" | "same_device" | "same_session") {
+        return Err(AppError::invalid_param(
+            "revoke_scope must be this_cursor, same_device, or same_session",
+        ));
+    }
+
+    let revoked_at = now();
+    let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
+    let device_id = if scope == "this_cursor" {
+        None
+    } else {
+        Some(session.device_id.clone())
+    };
+    let record = crate::state::CursorRevocation {
+        cursor_digest: sha256_hex(cursor.as_bytes()),
+        principal_id: session.actor.clone(),
+        device_id,
+        scope: scope.to_owned(),
+        reason_code: reason_code.to_owned(),
+        revoked_at,
+        expires_at,
+    };
+    {
+        let now_ms = revoked_at.timestamp_millis();
+        let mut revocations = state
+            .sync_cursor_revocations
+            .lock()
+            .expect("sync cursor revocations lock");
+        revocations.retain(|entry| entry.expires_at.timestamp_millis() > now_ms);
+        revocations.push(record);
+    }
+
+    crate::json_ok(crate::wire::CursorRevokeResponse {
+        revoked: true,
+        expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+
+/// Returns `true` when `token` (or the authenticated session it is bound to)
+/// has an active revocation recorded by [`account_cursor_revoke`]. Prunes
+/// entries past their GC horizon as a side effect.
+fn cursor_authority_revoked(
+    state: &AppState,
+    token: &str,
+    session: Option<&SessionRecord>,
+    now_ms: i64,
+) -> bool {
+    let mut revocations = state
+        .sync_cursor_revocations
+        .lock()
+        .expect("sync cursor revocations lock");
+    revocations.retain(|entry| entry.expires_at.timestamp_millis() > now_ms);
+    if revocations.is_empty() {
+        return false;
+    }
+    let digest = sha256_hex(token.as_bytes());
+    revocations.iter().any(|entry| match entry.scope.as_str() {
+        "this_cursor" => entry.cursor_digest == digest,
+        // soland's stateful cursor binds (principal, device); `same_session`
+        // is enforced at the same granularity as `same_device`.
+        "same_device" | "same_session" => session.is_some_and(|session| {
+            entry.principal_id == session.actor
+                && entry.device_id.as_deref() == Some(session.device_id.as_str())
+        }),
+        _ => false,
+    })
 }
 
 fn parse_max_wait_ms(req: &mut Request) -> u64 {
@@ -1413,6 +1531,11 @@ pub enum SyncCursorError {
     Mismatch(&'static str),
     Integrity(&'static str),
     Expired,
+    /// The cursor authority was revoked via `ck.account.cursor_revoke`.
+    /// Surfaced as `cursor_revoked`; MUST be raised before any server-side
+    /// state advancement (to-device ack, account-subscribe resume, wait-for
+    /// barrier release, dropped/resync recovery).
+    Revoked,
 }
 
 pub fn sync_token_for_client_sync(
@@ -1830,6 +1953,15 @@ pub fn parse_and_validate_sync_cursor(
         return Err(SyncCursorError::Invalid(
             "after must be a v1 account cursor",
         ));
+    }
+    // Revocation is checked before TTL / integrity so a revoked authority
+    // always surfaces `cursor_revoked` and never advances server-side state
+    // (to-device ack, subscribe resume, wait-for barrier, dropped recovery).
+    // `this_cursor` matches the exact token by digest; `same_device` /
+    // `same_session` match the authenticated session's (principal, device),
+    // which the cursor is bound to and re-verified against below.
+    if cursor_authority_revoked(state, token, session, now_ms) {
+        return Err(SyncCursorError::Revoked);
     }
     let Some(expires_at) = value.get("x").and_then(|expires_at| expires_at.as_i64()) else {
         return Err(SyncCursorError::Invalid("after cursor must contain x"));
@@ -3704,6 +3836,75 @@ mod tests {
         .expect_err("unsigned stateless cursor must fail verification");
 
         assert_integrity_error(error);
+    }
+
+    #[test]
+    fn revoked_cursor_returns_revoked_error() {
+        let state = test_state();
+        let token = sync_token_for_client_sync(
+            &state,
+            None,
+            None,
+            BTreeMap::from([("ck:realm:revoke-test".to_owned(), 3)]),
+            5,
+        );
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .expect("freshly issued cursor validates");
+
+        state
+            .sync_cursor_revocations
+            .lock()
+            .unwrap()
+            .push(crate::state::CursorRevocation {
+                cursor_digest: sha256_hex(token.as_bytes()),
+                principal_id: "did:web:alice.example".to_owned(),
+                device_id: None,
+                scope: "this_cursor".to_owned(),
+                reason_code: "compromised".to_owned(),
+                revoked_at: now(),
+                expires_at: now() + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
+            });
+
+        let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .expect_err("revoked cursor must fail validation");
+        assert!(
+            matches!(error, SyncCursorError::Revoked),
+            "expected Revoked, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn expired_revocation_entry_is_pruned_and_does_not_block() {
+        let state = test_state();
+        let token = sync_token_for_client_sync(
+            &state,
+            None,
+            None,
+            BTreeMap::from([("ck:realm:revoke-gc".to_owned(), 1)]),
+            0,
+        );
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        state
+            .sync_cursor_revocations
+            .lock()
+            .unwrap()
+            .push(crate::state::CursorRevocation {
+                cursor_digest: sha256_hex(token.as_bytes()),
+                principal_id: "did:web:alice.example".to_owned(),
+                device_id: None,
+                scope: "this_cursor".to_owned(),
+                reason_code: "stale".to_owned(),
+                revoked_at: now() - ChronoDuration::seconds(2 * CURSOR_MAX_TTL_SECONDS),
+                expires_at: now() - ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
+            });
+
+        parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .expect("expired revocation entry must be pruned, not block a valid cursor");
+        assert!(
+            state.sync_cursor_revocations.lock().unwrap().is_empty(),
+            "expired revocation entry should have been pruned"
+        );
     }
 
     #[test]

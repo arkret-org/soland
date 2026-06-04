@@ -36,9 +36,13 @@ use super::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
+use crate::routing::identity::device_messages::{
+    ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
+    fanout_actor_private_update,
+};
 use crate::state::{
-    AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord,
-    RetentionPolicyRecord, RetentionTombstoneRecord, SpaceInviteRecord,
+    AccountDataRecord, AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry,
+    RealmMetaRecord, RetentionPolicyRecord, RetentionTombstoneRecord, SpaceInviteRecord,
 };
 use crate::{ids, kinds};
 
@@ -1077,6 +1081,15 @@ pub async fn accept_local_operations(
     Ok(())
 }
 
+pub async fn project_accepted_operations_from_device(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operations: &[Operation],
+) {
+    project_accepted_operations_inner(state, origin, source_device_id, operations).await;
+}
+
 fn apply_via_lattice_registry(
     state: &AppState,
     proj: &mut crate::reducer::ProjectionState,
@@ -1461,6 +1474,15 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
+    project_accepted_operations_inner(state, origin, "", operations).await;
+}
+
+async fn project_accepted_operations_inner(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operations: &[Operation],
+) {
     crate::routing::federation::fanout_accepted_operations_to_peers(state, operations).await;
     for operation in operations {
         tracing::debug!(
@@ -1497,6 +1519,9 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
         if kinds::canonical_kind_string(operation) == "ck.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }
+        if kinds::canonical_kind_string(operation) == "ck.account_data.set" {
+            project_account_data_set(state, origin, source_device_id, operation).await;
+        }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Phase 4 — materialize accepted cross-signing publishes into the
         // DeviceManager (CAS bookkeeping). Validation already ran pre-acceptance.
@@ -1513,12 +1538,18 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
             );
         }
         // Also apply to the deterministic reducer.
-        let reducer_effect = state
-            .projection
-            .lock()
-            .ok()
-            .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation));
+        let reducer_effect =
+            if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
+                state
+                    .projection
+                    .lock()
+                    .ok()
+                    .map(|mut proj| apply_via_lattice_registry(state, &mut proj, operation))
+            } else {
+                None
+            };
         if let Some(effect) = reducer_effect {
+            fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, operation, &effect).await;
         }
         // Stream-F (Wave 2C) — `ck.audit.erasure_receipt` federation
@@ -1788,6 +1819,190 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         proj.cells
             .insert(cell_id, cokret_sdk::lattice::CellState::Value(value));
     }
+}
+
+fn account_data_update_type(data_type: &str) -> &'static str {
+    if matches!(
+        data_type,
+        "ck.account.blocklist" | "ck.account.blocklist.v1"
+    ) {
+        BLOCKLIST_UPDATE_TYPE
+    } else {
+        ACCOUNT_DATA_UPDATE_TYPE
+    }
+}
+
+fn actor_private_read_cursor_matches_origin(
+    origin: &str,
+    source_device_id: &str,
+    operation: &Operation,
+) -> bool {
+    if kinds::canonical_kind_string(operation) != kinds::CK_READ_MARKER
+        || source_device_id.is_empty()
+    {
+        return true;
+    }
+    let actor_matches = operation
+        .payload
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .is_some_and(|actor_id| actor_id == origin);
+    let device_matches = operation
+        .payload
+        .get("device_id")
+        .and_then(Value::as_str)
+        .is_none_or(|device_id| device_id == source_device_id);
+    if !actor_matches || !device_matches {
+        tracing::warn!(
+            origin,
+            source_device_id,
+            operation_id = %operation.operation_id,
+            "ck.read_cursor.advance actor/device does not match accepted event origin"
+        );
+        return false;
+    }
+    true
+}
+
+async fn project_account_data_set(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operation: &Operation,
+) {
+    let Some(data_type) = operation
+        .payload
+        .get("key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let owner = operation
+        .payload
+        .get("owner")
+        .and_then(Value::as_str)
+        .unwrap_or(origin);
+    if owner != origin {
+        tracing::warn!(
+            owner,
+            origin,
+            data_type,
+            "ck.account_data.set owner does not match accepted operation origin"
+        );
+        return;
+    }
+    if operation
+        .payload
+        .get("tombstone")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        if let Err(error) = state
+            .persistence
+            .account_data()
+            .delete(owner, data_type)
+            .await
+        {
+            tracing::warn!(%error, owner, data_type, "failed to tombstone account_data from event");
+            return;
+        }
+        if !source_device_id.is_empty() {
+            fanout_actor_private_update(
+                state,
+                owner,
+                source_device_id,
+                account_data_update_type(data_type),
+                json!({
+                    "operation": "delete",
+                    "data_type": data_type,
+                    "deleted_at": operation.created_at,
+                }),
+            )
+            .await;
+        }
+        return;
+    }
+    let Some(content) = operation
+        .payload
+        .get("body")
+        .or_else(|| operation.payload.get("encrypted_payload"))
+        .or_else(|| operation.payload.get("encrypted_content"))
+        .cloned()
+    else {
+        return;
+    };
+    let record = AccountDataRecord {
+        actor: owner.to_owned(),
+        data_type: data_type.to_owned(),
+        payload: content,
+        updated_at: operation.created_at,
+    };
+    if let Err(error) = state.persistence.account_data().put(&record).await {
+        tracing::warn!(%error, owner, data_type, "failed to project account_data from event");
+        return;
+    }
+    if !source_device_id.is_empty() {
+        fanout_actor_private_update(
+            state,
+            owner,
+            source_device_id,
+            account_data_update_type(data_type),
+            json!({
+                "operation": "put",
+                "data_type": data_type,
+                "content": record.payload.clone(),
+                "updated_at": record.updated_at,
+            }),
+        )
+        .await;
+    }
+    if matches!(
+        data_type,
+        "ck.account.blocklist" | "ck.account.blocklist.v1"
+    ) {
+        crate::routing::federation::federation::fanout_blocklist_hints_to_peers(
+            state,
+            owner,
+            &record.payload,
+        );
+    }
+}
+
+async fn fanout_projection_effect_private_update(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    effect: &crate::reducer::ProjectionEffect,
+) {
+    let crate::reducer::ProjectionEffect::ReadMarkerUpdated(marker) = effect else {
+        return;
+    };
+    if source_device_id.is_empty() || marker.actor_id != origin {
+        return;
+    }
+    let origin_device = if marker.device_id.is_empty() {
+        source_device_id
+    } else {
+        marker.device_id.as_str()
+    };
+    fanout_actor_private_update(
+        state,
+        &marker.actor_id,
+        origin_device,
+        READ_MARKER_UPDATE_TYPE,
+        json!({
+            "schema": "ck.schema.read_cursor.v1",
+            "actor_id": marker.actor_id.clone(),
+            "device_id": origin_device,
+            "realm_id": marker.realm_id.clone(),
+            "read_scope": marker.read_scope.clone(),
+            "position": marker.position.clone(),
+            "updated_at": marker.updated_at,
+        }),
+    )
+    .await;
 }
 
 pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {

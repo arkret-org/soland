@@ -8,15 +8,15 @@
 
 use std::net::SocketAddr;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::{Signer, SigningKey};
+use cokret_sdk::{
+    AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash,
+};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
 use soland::db::Db;
+use soland::service;
 use soland::state::AppState;
-use soland::{routing, service};
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -72,7 +72,7 @@ fn test_config() -> AppConfig {
 }
 
 async fn dev_token(state: AppState) -> String {
-    let login: Value = TestClient::post("http://server/_cokret/gate/auth/dev-login")
+    let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": "did:web:alice.example",
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
@@ -87,115 +87,90 @@ async fn dev_token(state: AppState) -> String {
 }
 
 #[tokio::test]
-async fn applet_manifest_verify_smoke() {
-    // Build a freshly-signed manifest and verify it via the HTTP
-    // route. We don't need an authenticated session for this route —
-    // it's intentionally open so applet registries can probe before
-    // committing to a Cokret account.
+async fn applet_protocol_describe_smoke() {
     let state = AppState::new(test_config(), Db { pool: None });
     let app = service(state);
 
-    let signing = SigningKey::from_bytes(&[11u8; 32]);
-    let pubkey = signing.verifying_key();
-    let signer_did = "did:web:registry.example";
-    let signer_public_key = URL_SAFE_NO_PAD.encode(pubkey.as_bytes());
-
-    let mut manifest = json!({
-        "id": "applet:bridge:demo-smoke",
-        "version": "1.0.0",
-        "signer_did": signer_did,
-        "signature": "",
-        "signer_public_key": signer_public_key,
-        "requested_capabilities": ["realm:portal", "message:write"],
-        "schema_hash": routing::extensions::applet_manifest::current_applet_schema_hash(),
-        "metadata": {"namespace": "bridge.smoke"},
-    });
-    // Sign over the canonical body shape `manifest_signing_bytes`
-    // builds. We mirror it here so the test is fully self-contained.
-    let manifest_struct: routing::extensions::applet_manifest::AppletManifest =
-        serde_json::from_value(manifest.clone()).unwrap();
-    let signing_bytes =
-        routing::extensions::applet_manifest::manifest_signing_bytes(&manifest_struct);
-    let sig = signing.sign(&signing_bytes);
-    manifest["signature"] = json!(URL_SAFE_NO_PAD.encode(sig.to_bytes()));
-
-    let resp: Value = TestClient::post("http://server/_cokret/edge/applets/manifest/verify")
-        .json(&json!({
-            "manifest_json": manifest,
-            "trusted_registry_did": signer_did,
-        }))
+    let ping: Value = TestClient::get("http://server/_cokret/edge/applet/ping")
         .send(&app)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["verified"], json!(true), "got: {resp}");
-    assert_eq!(resp["signer_did"], json!(signer_did));
-    assert!(resp["capabilities"].as_array().unwrap().len() >= 2);
+    assert_eq!(ping["ok"], json!(true));
+
+    let describe: Value = TestClient::get("http://server/_cokret/edge/applet/describe")
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(describe["contract"], json!("ck.applet.v1"));
+    assert_eq!(
+        describe["install"]["commit_path"],
+        json!("/_cokret/self/applets/install")
+    );
+    assert_eq!(
+        describe["transaction_path"],
+        json!("/_cokret/edge/applet/transactions")
+    );
 }
 
 #[tokio::test]
-async fn bot_actor_register_then_list_smoke() {
-    // Smoke test uses a unique DID per case (`did:web:bot-smoke`) so
-    // it doesn't collide with parallel test binaries that share the
-    // module-local registry.
+async fn applet_install_package_registers_bot_projection_smoke() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let app = service(state);
+    let app = service(state.clone());
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let applet_id = format!("applet:bridge:install-{suffix}");
+    let namespace = format!("bridge.install.{suffix}");
+    let package = signed_applet_package(&applet_id, &namespace);
 
-    let resp: Value = TestClient::post("http://server/_cokret/self/extensions/bots")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "did": "did:web:bot-smoke",
-            "name": "Smoke Bot",
-            "kind": "bot"
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(resp["did"], json!("did:web:bot-smoke"));
-    assert_eq!(resp["kind"], json!("bot"));
-    assert_eq!(resp["owner_actor_did"], json!("did:web:alice.example"));
+    let install = install_applet_package(
+        &app,
+        &token,
+        &package,
+        &realm_id,
+        &format!("install-{suffix}"),
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("installed"));
+    assert_eq!(install["applet_id"], json!(applet_id));
+    let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
+    assert_eq!(bot_actor_id, package.bot_actor_id.to_string());
 
-    let list: Value = TestClient::get("http://server/_cokret/self/extensions/bots")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let bots = list["bots"].as_array().unwrap();
-    assert!(
-        bots.iter().any(|b| b["did"] == json!("did:web:bot-smoke")),
-        "smoke bot should appear in listing, got: {list}"
-    );
-
-    // Revoke removes it from the listing.
-    let _: Value =
-        TestClient::delete("http://server/_cokret/self/extensions/bots/did:web:bot-smoke")
-            .add_header("Authorization", format!("Bearer {token}"), true)
-            .send(&app)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let list_after: Value = TestClient::get("http://server/_cokret/self/extensions/bots")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await
-        .take_json()
+    let projection_events = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
         .await
         .unwrap();
     assert!(
-        !list_after["bots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|b| b["did"] == json!("did:web:bot-smoke")),
-        "smoke bot should not appear in listing after revoke, got: {list_after}"
+        projection_events.iter().any(|event| {
+            event.event_kind == "ck.applet.registration"
+                && event.payload["applet_id"] == json!(applet_id)
+                && event.payload["bot_actor_id"] == json!(bot_actor_id)
+        }),
+        "install must append ck.applet.registration projection"
     );
+
+    let bot_doc = canonical_did_document(&app, &bot_actor_id).await;
+    assert_eq!(bot_doc["id"], json!(bot_actor_id));
+    assert_eq!(bot_doc["status"], json!("active"));
+    assert_eq!(bot_doc["applet_id"], json!(applet_id));
+}
+
+async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {
+    let body: Value = TestClient::get(format!(
+        "http://server/_cokret/root/identity/document?did={did}"
+    ))
+    .send(app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    body["did_document"].clone()
 }
 
 #[tokio::test]
@@ -204,50 +179,35 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let signer_did = "did:web:registry.example";
     let applet_id = format!("applet:bridge:smoke-{suffix}");
     let namespace = format!("bridge.smoke.{suffix}");
-    let manifest = signed_applet_manifest(&applet_id, &namespace, signer_did);
+    let package = signed_applet_package(&applet_id, &namespace);
+    let space_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let install = install_applet_package(
+        &app,
+        &token,
+        &package,
+        &space_id,
+        &format!("bridge-{suffix}"),
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("installed"));
+    let bot_actor_did = install["bot_actor_id"].as_str().unwrap().to_owned();
 
-    let register: Value = TestClient::post("http://server/_cokret/edge/applets/register")
+    let ghost: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .add_header("Idempotency-Key", format!("idem-{suffix}"), true)
         .json(&json!({
-            "manifest": manifest,
-            "trusted_registry_did": signer_did,
+            "applet_id": applet_id,
+            "realm_id": space_id,
+            "external_user": {"id": "ext-user-x", "display_name": "External X"},
+            "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
         }))
         .send(&app)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(register["applet_id"], json!(applet_id));
-    assert_eq!(register["namespace"], json!(namespace));
-    assert_eq!(register["status"], json!("registered"));
-    let bot_actor_did = register["bot_actor_did"].as_str().unwrap().to_owned();
-    assert!(bot_actor_did.starts_with("did:web:bot-bridge-smoke-"));
-    assert!(
-        register["portal_realm_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ck:realm:portal:bridge-smoke-")
-    );
-
-    let space_id = format!("ck:realm:applet-bridge-smoke-{suffix}");
-    let ghost: Value = TestClient::post(format!(
-        "http://server/_cokret/edge/applets/{applet_id}/ghosts"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "space_id": space_id,
-        "external_user": {"id": "ext-user-x", "display_name": "External X"},
-        "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
-    }))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    assert_eq!(ghost["ok"], json!(true), "transaction response: {ghost}");
     let ghost_actor_did = ghost["ghost_actor_did"].as_str().unwrap().to_owned();
     assert!(ghost_actor_did.starts_with("did:web:ghost-ext-user-x-"));
     assert!(
@@ -276,14 +236,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         json!(bot_actor_did)
     );
 
-    let ghost_doc: Value = TestClient::get(format!(
-        "http://server/_cokret/root/identity/{ghost_actor_did}/did-document"
-    ))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let ghost_doc = canonical_did_document(&app, &ghost_actor_did).await;
     assert_eq!(ghost_doc["id"], json!(ghost_actor_did));
     assert_eq!(ghost_doc["status"], json!("active"));
     assert!(
@@ -291,14 +244,19 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["kind"] == "applet_registry" && entry["did"] == signer_did)
+            .any(|entry| entry["kind"] == "applet_registry"
+                && entry["did"] == package.controller_did.to_string())
     );
 
     let revoke: Value = TestClient::post(format!(
-        "http://server/_cokret/edge/applets/{applet_id}/revoke"
+        "http://server/_cokret/self/applets/{applet_id}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({}))
+    .json(&json!({
+        "effective_scope": {"kind": "realm", "realm_id": space_id},
+        "registration_epoch": package.registration_epoch.clone(),
+        "reason": "smoke-test",
+    }))
     .send(&app)
     .await
     .take_json()
@@ -306,45 +264,36 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .unwrap();
     assert_eq!(revoke["status"], json!("revoked"));
 
-    let rejected: Value = TestClient::post(format!(
-        "http://server/_cokret/edge/applets/{applet_id}/ghosts"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "space_id": space_id,
-        "external_id": "ext-user-x",
-        "payload": {"kind": "message", "text": "after revoke"},
-    }))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let rejected: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "applet_id": applet_id,
+            "realm_id": space_id,
+            "external_id": "ext-user-x",
+            "payload": {"kind": "message", "text": "after revoke"},
+        }))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
 
-    let revoked_doc: Value = TestClient::get(format!(
-        "http://server/_cokret/root/identity/{ghost_actor_did}/did-document"
-    ))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let revoked_doc = canonical_did_document(&app, &ghost_actor_did).await;
     assert_eq!(revoked_doc["status"], json!("revoked"));
 
-    let bot_rejected: Value = TestClient::post(format!(
-        "http://server/_cokret/edge/applets/{applet_id}/bot/messages"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "space_id": space_id,
-        "payload": {"kind": "message", "text": "bot after revoke"},
-    }))
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let bot_rejected: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "applet_id": applet_id,
+            "realm_id": space_id,
+            "payload": {"kind": "message", "text": "bot after revoke"},
+        }))
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert_eq!(bot_rejected["error"]["code"], json!("bot_actor_revoked"));
 }
 
@@ -358,7 +307,7 @@ async fn tsp_transport_route_audit_smoke() {
     let app = service(state);
 
     // 1) declare a transport
-    let transport: Value = TestClient::post("http://server/_cokret/self/extensions/tsp/transports")
+    let transport: Value = TestClient::post("http://server/_soland/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "transport_id": "tspt:alice-smoke",
@@ -374,7 +323,7 @@ async fn tsp_transport_route_audit_smoke() {
     assert_eq!(transport["transport_id"], json!("tspt:alice-smoke"));
 
     // 2) list transports
-    let list: Value = TestClient::get("http://server/_cokret/self/extensions/tsp/transports")
+    let list: Value = TestClient::get("http://server/_soland/self/extensions/tsp/transports")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await
@@ -391,7 +340,7 @@ async fn tsp_transport_route_audit_smoke() {
     );
 
     // 3) establish a route
-    let route: Value = TestClient::post("http://server/_cokret/self/extensions/tsp/routes")
+    let route: Value = TestClient::post("http://server/_soland/self/extensions/tsp/routes")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "route_id": "rt:alice-bob-smoke",
@@ -408,7 +357,7 @@ async fn tsp_transport_route_audit_smoke() {
 
     // 4) fetch the audit chain — establish_route auto-appends one entry
     let audit: Value = TestClient::get(
-        "http://server/_cokret/self/extensions/tsp/routes/rt:alice-bob-smoke/audit",
+        "http://server/_soland/self/extensions/tsp/routes/rt:alice-bob-smoke/audit",
     )
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app)
@@ -424,32 +373,118 @@ async fn tsp_transport_route_audit_smoke() {
     assert_eq!(entries[0]["event_kind"], json!("route_established"));
 }
 
-fn signed_applet_manifest(applet_id: &str, namespace: &str, signer_did: &str) -> Value {
-    let signing = SigningKey::from_bytes(&[13u8; 32]);
-    let pubkey = signing.verifying_key();
-    let signer_public_key = URL_SAFE_NO_PAD.encode(pubkey.as_bytes());
-    let mut manifest = json!({
-        "id": applet_id,
-        "version": "1.0.0",
-        "signer_did": signer_did,
-        "signature": "",
-        "signer_public_key": signer_public_key,
-        "requested_capabilities": [
-            "realm:portal",
-            "message:write",
-            "actor:provision-ghost",
-            "actor:provision-bot"
-        ],
-        "schema_hash": routing::extensions::applet_manifest::current_applet_schema_hash(),
-        "metadata": {
-            "namespace": namespace,
-            "display_name": "Smoke Bridge Applet"
+fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
+    let controller_did = Did::new("did:web:registry.example".to_owned()).unwrap();
+    let service_did = Did::new(format!(
+        "did:web:{}.applet.example",
+        safe_did_token(namespace)
+    ))
+    .unwrap();
+    let bot_actor_id = Did::new(format!(
+        "did:web:bot-{}.soland.local",
+        safe_did_token(namespace)
+    ))
+    .unwrap();
+    let registration_epoch = Hash::new(format!("sha256:{}", "42".repeat(32))).unwrap();
+    let mut package = AppletPackage::new(
+        format!("package:{applet_id}"),
+        applet_id.to_owned(),
+        service_did,
+        controller_did.clone(),
+        format!("https://{}.applet.example", safe_did_token(namespace)),
+        bot_actor_id,
+        vec!["cokret.portal".to_owned()],
+        AppletWireNamespaces {
+            handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
+            ..Default::default()
         },
+        registration_epoch,
+    );
+    package.requested_scopes = vec![
+        "ck.message.create".to_owned(),
+        "ck.applet.ghost.provision".to_owned(),
+    ];
+    package.endpoint_set = json!({
+        "transactions": "/_cokret/edge/applet/transactions",
+        "actors": "/_cokret/edge/applet/actors/{actor_id}",
+        "realms": "/_cokret/edge/applet/realms/{realm_id_or_alias}",
     });
-    let manifest_struct: routing::extensions::applet_manifest::AppletManifest =
-        serde_json::from_value(manifest.clone()).unwrap();
-    let signing_bytes =
-        routing::extensions::applet_manifest::manifest_signing_bytes(&manifest_struct);
-    manifest["signature"] = json!(URL_SAFE_NO_PAD.encode(signing.sign(&signing_bytes).to_bytes()));
-    manifest
+    package.ghost_policy = json!({
+        "allow_ghost_actors": true,
+        "accountability": ["bot_actor", "applet_registry"],
+    });
+    package.receive_events = true;
+    package.receive_ephemeral = true;
+    package.seal().unwrap();
+    let verification_method = format!("{controller_did}#applet-package");
+    let signer =
+        Ed25519MoveSigner::from_did_key_seed([13u8; 32], controller_did, &verification_method);
+    package.sign(&signer, &verification_method).unwrap();
+    package
+}
+
+async fn install_applet_package(
+    app: &salvo::Service,
+    token: &str,
+    package: &AppletPackage,
+    realm_id: &str,
+    idempotency_key: &str,
+) -> Value {
+    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
+    let preview: Value = TestClient::post("http://server/_cokret/self/applets/install/preview")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&json!({
+            "applet_package": package,
+            "effective_scope": effective_scope,
+            "approval_request": {
+                "approve_actions": package.requested_scopes.clone(),
+                "allow_ghost_actors": true,
+            },
+        }))
+        .send(app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        preview["schema"],
+        json!("ck.schema.applet_install_plan.v1"),
+        "install preview: {preview}"
+    );
+
+    let commit: Value = TestClient::post("http://server/_cokret/self/applets/install")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
+        .json(&json!({
+            "plan_digest": preview["plan_digest"].clone(),
+            "applet_package": package,
+            "effective_scope": {"kind": "realm", "realm_id": realm_id},
+            "approved_scopes": preview["approved_scopes"].clone(),
+            "actor_policy": {
+                "bot_membership": "join",
+                "ghost_actor_mode": "policy_declared",
+            },
+            "e2ee_policy": {"allow_mls_join": false},
+            "widget_policy": {"allow_widget": false},
+        }))
+        .send(app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(commit["ok"], json!(true), "install commit: {commit}");
+    commit
+}
+
+fn safe_did_token(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '.' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }

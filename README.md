@@ -318,7 +318,7 @@ soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
 `Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
 token with `urn:cokret:principal-server:session.bind`, then maps
 `org.cokret.principal_did` and `org.cokret.device_id` into the local
-account/device view. The older `/_cokret/gate/auth/session-grant/exchange` bridge is
+account/device view. The older `/_cokret/gate/account/session-grants` bridge is
 kept as a legacy scaffold, not the primary login path.
 
 Account subscribe and Events API cursors are structured `ck:cursor:` tokens
@@ -348,7 +348,8 @@ and reject plaintext blobs in private Spaces unless this service is listed in
 
 ## API surface
 
-soland exposes the canonical Cokret v1 routes (~180 routes total). Highlights:
+soland exposes the canonical Cokret v1 routes from the operation registry; local
+operator/product surfaces live under `/_soland/...`. Highlights:
 
 - `GET  /health` — liveness + DB / persistence probe (used as the Docker healthcheck)
 - `GET  /readyz` — readiness probe for DB, boot migrations, introspection bearer config, and external webvh boot probe state
@@ -357,10 +358,10 @@ soland exposes the canonical Cokret v1 routes (~180 routes total). Highlights:
 - `GET  /.well-known/mimi-protocol-directory`
 - `POST /_cokret/self/events`, `GET /_cokret/self/events/describe`, …
 - `GET /_cokret/sync`, `GET /_cokret/root/identity/*`, `GET /_cokret/find/directory/*`
-- `POST /_cokret/gate/auth/dev-login` (development_mode only)
+- `POST /_soland/gate/auth/dev-login` (development_mode only)
 
 A complete list lives in the OpenAPI document above; `/_soland/admin/{resource}`
-and `/_cokret/gate/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
+and `/_soland/gate/auth/dev-login` are gated behind `SOLAND_DEVELOPMENT_MODE=true`.
 
 ## Development
 

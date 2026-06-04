@@ -62,6 +62,14 @@ pub fn generate_grant_id() -> String {
     generate("grant")
 }
 
+pub fn generate_install_id() -> String {
+    generate("install")
+}
+
+pub fn generate_plan_id() -> String {
+    generate("plan")
+}
+
 pub fn generate_invite_id() -> String {
     generate("invite")
 }

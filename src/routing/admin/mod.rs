@@ -87,7 +87,7 @@ pub(super) fn require_admin_principal(
     }
 }
 
-/// Audit endpoints (`/_cokret/self/audit/*`). These live on the protocol
+/// Audit endpoints (`/_soland/self/audit/*`). These live on the protocol
 /// surface under the `self` trust segment, not the deployment-local
 /// `/_soland/admin/*` namespace, and carry their own per-handler auth
 /// rather than the shared `RequireAdmin` hoop — so they are mounted

@@ -1,8 +1,8 @@
-//! Profile / presence handlers.
+//! Legacy profile / presence compatibility handler.
 //!
-//! Surfaces:
-//! - `GET /_cokret/self/profile/presence?did=…` — render the actor's current presence record
-//!   together with display name and avatar.
+//! Protocol clients use `ck.account.subscribe?set_presence=...` and read
+//! presence from the account aggregate. This module is mounted only under the
+//! `/_soland/self/profile/presence` path.
 //!
 //! Production note: presence is currently in-memory (see
 //! `AppState.presence`). Durable presence + ephemeral/durable channel

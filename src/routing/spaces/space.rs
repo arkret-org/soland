@@ -1,15 +1,15 @@
 //! Space read + visibility surface.
 //!
 //! The lifecycle / membership mutation REST endpoints that previously lived
-//! here (POST/PATCH/PUT/DELETE on `/_cokret/self/spaces/*`) bypassed canonical
+//! here (POST/PATCH/PUT/DELETE on `/_soland/self/spaces/*`) bypassed canonical
 //! Event Envelope construction and maintained Realm-level state outside the
 //! event log. They have been removed (see `_spec_report_claude.md` §2.5 and
 //! `realm-and-space.md:140`); Realm state mutations MUST flow through the
 //! canonical operation pipeline (`POST /_cokret/self/operations`).
 //!
 //! Surfaces that remain:
-//! - `GET    /_cokret/self/spaces/{space_id}` — read a Space's lifecycle response
-//! - `GET    /_cokret/self/spaces/{space_id}/export` — full event log + projection dump
+//! - `GET    /_soland/self/spaces/{space_id}` — read a Space's lifecycle response
+//! - `GET    /_soland/self/spaces/{space_id}/export` — full event log + projection dump
 //!
 //! Everything else in this module is the visibility / membership / typing
 //! query helper surface that every other domain (federation, message, blob,

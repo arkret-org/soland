@@ -7,7 +7,7 @@
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
 //! to events arriving over the wire.
 //!
-//! Routes (mirror of `/_cokret/self/realms` / `/_cokret/self/spaces` style):
+//! Routes (mirror of `/_cokret/self/realms` / `/_soland/self/spaces` style):
 //!
 //! - `POST   /_cokret/self/circles`                              create Circle
 //! - `GET    /_cokret/self/circles`                              list Circles (filtered by

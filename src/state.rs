@@ -868,8 +868,8 @@ pub struct AppState {
     /// account-state projection.
     pub erased_actors: Arc<Mutex<BTreeSet<String>>>,
     /// In-memory failed-auth counter, keyed by actor DID.
-    /// Spec: A.3 — auth handlers (`dev-login`,
-    /// `session-grant/exchange`) bump the counter on failure; once it
+    /// Spec: A.3 — auth handlers (`/_soland/gate/auth/dev-login`,
+    /// `/_cokret/gate/account/session-grants`) bump the counter on failure; once it
     /// crosses `ACCOUNT_LOCKOUT_THRESHOLD` (5) within the active window
     /// the actor is locked out for `ACCOUNT_LOCKOUT_DURATION` (15 min).
     /// A successful login clears the row. Durable storage lands with
@@ -888,13 +888,21 @@ pub struct AppState {
     /// stream positions. Durable storage can replace it without changing the
     /// account subscribe API.
     pub sync_cursor_handles: Arc<Mutex<BTreeMap<String, Value>>>,
+    /// Revoked cursor authorities (`ck.account.cursor_revoke`). High-assurance
+    /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
+    /// advance to-device ack, account-subscribe resume position, wait-for barrier
+    /// state, or dropped-recovery state. Entries are pruned once the revoked
+    /// cursor's maximum TTL has elapsed (`CursorRevocation::expires_at`). In-memory
+    /// today, symmetric with `sync_cursor_handles`; a durable revocation ledger can
+    /// replace the backing vector without changing the wire contract.
+    pub sync_cursor_revocations: Arc<Mutex<Vec<CursorRevocation>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
     /// even when multiple fanout writes land in the same wall-clock microsecond.
     pub to_device_position_counter: Arc<AtomicI64>,
     /// Holder-private consent cell projection keyed by
     /// `(holder_did, peer_did, scope)`. This is the minimal G3.S4
-    /// reducer cache that backs `/_cokret/self/consent/cells/*` and the contact
+    /// reducer cache that backs `/_soland/self/consent/cells/*` and the contact
     /// gate; durable Move/Anchor cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
@@ -1038,7 +1046,7 @@ pub struct AccountRecord {
     pub handle: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_cokret/self/account/profile` (operationId `ck.account.update_profile`);
+    /// `POST /_soland/self/account/profile` (operationId `ck.account.update_profile`);
     /// rendered by `demo_actors` in directory search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
@@ -1177,6 +1185,33 @@ pub const PSI_PROBE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
 /// Max PSI probes a single `(requester, holder)` pair MAY make within
 /// [`PSI_PROBE_WINDOW`] before further probes are rate-limited. SEC-09.
 pub const PSI_PROBE_MAX_PER_WINDOW: u32 = 20;
+
+/// A revoked cursor authority recorded by `ck.account.cursor_revoke`.
+///
+/// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
+/// `cursor_digest`; `same_device` / `same_session` match any cursor that
+/// resolves to the same authenticated `(principal_id, device_id)` binding —
+/// soland's stateful cursor binds principal + device (not a finer session
+/// handle), so `same_session` is enforced at the same `(principal, device)`
+/// granularity as `same_device`. Entries are dropped once `expires_at` passes
+/// (the revoked cursor's maximum possible TTL).
+#[derive(Clone, Debug)]
+pub struct CursorRevocation {
+    /// sha256 hex of the exact revoked `ck:cursor:` token (used by `this_cursor`).
+    pub cursor_digest: String,
+    /// Authenticated principal that requested the revocation.
+    pub principal_id: String,
+    /// Bound device for `same_device` / `same_session` scope (the caller's
+    /// session device); `None` for `this_cursor`.
+    pub device_id: Option<String>,
+    /// `this_cursor` | `same_device` | `same_session`.
+    pub scope: String,
+    /// Client-supplied revocation reason (audited).
+    pub reason_code: String,
+    pub revoked_at: chrono::DateTime<chrono::Utc>,
+    /// GC horizon — the entry may be pruned after this instant.
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
 
 /// Per-`(requester, holder)` PSI probe counter (SEC-09). Drives the rolling
 /// rate-limit window that blunts high-frequency hit-bit timing probes.
@@ -1973,6 +2008,7 @@ impl AppState {
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
+            sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
             sovereign_deployment: Arc::new(Mutex::new(SovereignDeploymentState {

@@ -44,7 +44,7 @@ pub fn protocol_router() -> Router {
 
 pub fn legacy_router() -> Router {
     Router::new()
-        // `edge` — push / bridge gateway (`/_soland/compat/edge/push/*`).
+        // `edge` — push / bridge gateway (`/_soland/edge/push/*`).
         .push(
             Router::with_path("edge").push(
                 Router::new()
