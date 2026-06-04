@@ -2153,6 +2153,92 @@ mod canonical_conformance_vectors {
 
     use super::*;
 
+    // ── Protocol-surface conformance guard ───────────────────────────────
+
+    /// Every route soland serves under `/_cokret/...` MUST correspond to a
+    /// canonical operation in the spec operation-registry. soland-private
+    /// surfaces belong under `/_soland/...`, NOT under the protocol root.
+    /// This guard derives soland's live `/_cokret` surface from its own
+    /// router and diffs it against the registry's `http` bindings; any
+    /// route absent from the spec is a violation.
+    ///
+    /// Currently `#[ignore]`d: the audit (2026-06-04) found 181 `/_cokret`
+    /// routes absent from the spec's 104 canonical operations — a broad
+    /// soland↔spec surface drift, not a localized bug. Un-ignore once the
+    /// remediation epic lands the surface back onto the spec (or relocates
+    /// soland-private routes under `/_soland`). Run on demand with
+    /// `--ignored` to reproduce the violation list.
+    #[test]
+    #[ignore = "soland /_cokret surface drift remediation epic — 181 routes off-spec (2026-06-04)"]
+    fn cokret_surface_has_no_routes_absent_from_spec() {
+        use std::collections::BTreeSet;
+
+        // Normalize an OpenAPI-style path so `{param}` names don't matter.
+        fn norm(path: &str) -> String {
+            path.split('/')
+                .map(|seg| {
+                    if seg.starts_with('{') && seg.ends_with('}') {
+                        "{}"
+                    } else {
+                        seg
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+
+        // (1) soland's actual /_cokret surface, derived from the live router.
+        let router = api_v1_router();
+        let doc = cokret_openapi_doc(&router);
+        let mut served: BTreeSet<(String, String)> = BTreeSet::new();
+        for (path, item) in doc.paths.iter() {
+            if !path.starts_with("/_cokret/") {
+                continue;
+            }
+            for ty in item.operations.keys() {
+                if let Some(method) = path_item_type_to_method(ty) {
+                    served.insert((method.as_str().to_owned(), norm(path)));
+                }
+            }
+        }
+
+        // (2) canonical /_cokret surface from the spec operation-registry
+        //     `http` bindings.
+        let registry = crate::artifacts::operation_registry();
+        let mut canonical: BTreeSet<(String, String)> = BTreeSet::new();
+        for op in registry["operations"]
+            .as_array()
+            .expect("operations[] array")
+        {
+            let Some(http) = op.get("http").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let mut parts = http.split_whitespace();
+            let (Some(method), Some(path)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if !path.starts_with("/_cokret/") {
+                continue;
+            }
+            canonical.insert((method.to_ascii_uppercase(), norm(path)));
+        }
+
+        // (3) Any served route not in the canonical set is a spec violation.
+        let mut violations: Vec<String> = served
+            .iter()
+            .filter(|route| !canonical.contains(*route))
+            .map(|(m, p)| format!("{m} {p}"))
+            .collect();
+        violations.sort();
+
+        assert!(
+            violations.is_empty(),
+            "soland serves {} /_cokret route(s) absent from the spec operation-registry:\n{}",
+            violations.len(),
+            violations.join("\n"),
+        );
+    }
+
     // ── Canonical JSON encoding vectors ──────────────────────────────────
 
     #[test]

@@ -1,14 +1,18 @@
 //! Encrypted key-backup CRUD.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::AppState;
+use crate::state::{AppState, RecoverySessionRecord};
 use crate::wire::{KeysBackupsDeleteResBody, KeysBackupsListResBody, KeysBackupsPutResBody};
 
 pub(super) fn router() -> Router {
@@ -42,7 +46,7 @@ const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
 // the predecessor envelope canonical bytes.
 const REQUIRED_KEY_BACKUP_SERIES_FIELDS: &[&str] = &["series_id", "series_seq"];
 
-const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history", "external"];
+const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",
     "self_signing_key",
@@ -57,6 +61,31 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "private_account_state",
 ];
 const DELETE_PROOF_HEADER: &str = "x-cokret-key-backup-delete-proof";
+const UNLOCK_PROOF_HEADER: &str = "x-cokret-key-backup-unlock-proof";
+const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
+    "backup_id",
+    "actor_id",
+    "backup_class",
+    "backup_version",
+    "series_id",
+    "series_seq",
+    "encryption",
+    "contents",
+    "ciphertext_digest",
+];
+const KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS: &[&str] = &[
+    "schema",
+    "recovery_session_id",
+    "principal_id",
+    "requesting_device_id",
+    "backup_id",
+    "backup_class",
+    "series_id",
+    "ciphertext_digest",
+    "proof_kind",
+    "proof_digest",
+    "issued_at",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -109,7 +138,7 @@ fn validate_key_backup_encryption(
         "passphrase_kdf" => {
             if backup_class == "did_recovery" {
                 return Err(schema_error(
-                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, threshold_recovery, or hardware_wrapped_key",
+                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, or satisfy threshold/hardware factors in the recovery policy proof layer",
                 ));
             }
             if backup_class == "mls_history" {
@@ -404,6 +433,7 @@ fn validate_key_backup_body(
         validate_mls_history_opaque_only(backup)?;
     }
     validate_recovery_policy_ref_shape(backup, backup_class)?;
+    validate_key_backup_auth_data(backup)?;
 
     let contents = backup
         .get("contents")
@@ -529,6 +559,81 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
     Ok(())
 }
 
+fn validate_key_backup_auth_data(backup: &Value) -> Result<(), AppError> {
+    let auth = backup
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| schema_error("key backup auth_data is required"))?;
+    let device_id = auth
+        .get("device_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !device_id.starts_with("ck:device:") {
+        return Err(schema_error(
+            "auth_data.device_id must be a ck:device:<uuidv7> typed id",
+        ));
+    }
+    if auth
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(schema_error("auth_data.verification_method is required"));
+    }
+    if !matches!(
+        auth.get("signature_algorithm").and_then(Value::as_str),
+        Some("EdDSA" | "Ed25519")
+    ) {
+        return Err(schema_error(
+            "auth_data.signature_algorithm must be EdDSA or Ed25519",
+        ));
+    }
+    let signature = auth
+        .get("signature")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !is_base64url_token(signature) {
+        return Err(schema_error(
+            "auth_data.signature must be a non-empty base64url token",
+        ));
+    }
+    let ssk_generation = auth.get("ssk_generation").and_then(Value::as_u64);
+    if !ssk_generation.is_some_and(|generation| generation >= 1) {
+        return Err(schema_error("auth_data.ssk_generation must be >= 1"));
+    }
+    let signed_fields = auth
+        .get("signed_fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema_error("auth_data.signed_fields must be an array"))?;
+    for field in KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS {
+        if !signed_fields
+            .iter()
+            .any(|candidate| candidate.as_str() == Some(*field))
+        {
+            return Err(schema_error(format!(
+                "auth_data.signed_fields must cover `{field}`"
+            )));
+        }
+    }
+    for optional in [
+        "supersedes",
+        "supersedes_digest",
+        "frontier_ref",
+        "recovery_policy_ref",
+    ] {
+        if backup.get(optional).is_some_and(|value| !value.is_null())
+            && !signed_fields
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(optional))
+        {
+            return Err(schema_error(format!(
+                "auth_data.signed_fields must cover `{optional}` when present"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// C-P5 value-level binding: a backup's `recovery_policy_ref` MUST match the
 /// actor's currently accepted recovery policy `(policy_id, version)`.
 ///
@@ -577,6 +682,318 @@ async fn enforce_recovery_policy_ref(
     Ok(())
 }
 
+fn key_backup_canonical_digest_without_signature(backup: &Value) -> Result<String, AppError> {
+    let mut canonical = backup.clone();
+    if let Some(auth_data) = canonical
+        .get_mut("auth_data")
+        .and_then(Value::as_object_mut)
+    {
+        auth_data.remove("signature");
+    }
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&canonical).map_err(|error| {
+        AppError::internal(format!("key backup canonical digest failed: {error}"))
+    })?;
+    Ok(cokret_sdk::canonical::sha256_digest(&bytes))
+}
+
+fn recovery_session_proof_summary(record: &RecoverySessionRecord) -> Option<(String, String)> {
+    let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
+    let kind = proof.get("kind").and_then(Value::as_str)?;
+    let transcript = json!({
+        "type": "ck.identity.recovery_proof.v1",
+        "kind": kind,
+        "principal_id": record.principal_id.as_str(),
+        "requesting_device_id": record.requesting_device_id.as_str(),
+        "trust_domain": record.trust_domain.as_str(),
+        "policy_id": record.policy_id.as_str(),
+        "policy_version": record.policy_version,
+        "recovery_session_id": record.recovery_session_id.as_str(),
+        "ssk_generation": record.ssk_generation,
+        "challenge": record.challenge.as_str(),
+        "created_at": record.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "expires_at": record.expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    let bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
+    Some((
+        kind.to_owned(),
+        cokret_sdk::canonical::sha256_digest(&bytes),
+    ))
+}
+
+fn required_proof_string<'a>(proof: &'a Value, field: &str) -> Result<&'a str, AppError> {
+    proof
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("key backup unlock proof `{field}` is required"),
+            )
+        })
+}
+
+fn validate_key_backup_unlock_proof_shape(
+    proof: &Value,
+    actor_id: &str,
+    session_device_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    if required_proof_string(proof, "schema")? != "ck.schema.key_backup_unlock_proof.v1" {
+        return Err(schema_error(
+            "key backup unlock proof schema must be ck.schema.key_backup_unlock_proof.v1",
+        ));
+    }
+    let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
+    if !recovery_session_id.starts_with("ck:recovery_session:") {
+        return Err(schema_error(
+            "key backup unlock proof recovery_session_id must start with ck:recovery_session:",
+        ));
+    }
+    if required_proof_string(proof, "principal_id")? != actor_id {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof principal_id must match authenticated actor",
+        ));
+    }
+    if required_proof_string(proof, "requesting_device_id")? != session_device_id {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof requesting_device_id must match authenticated session device",
+        ));
+    }
+    for (field, expected) in [
+        (
+            "backup_id",
+            backup
+                .get("backup_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+        (
+            "backup_class",
+            backup
+                .get("backup_class")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+        (
+            "series_id",
+            backup
+                .get("series_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+        (
+            "ciphertext_digest",
+            backup
+                .get("ciphertext_digest")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+    ] {
+        if required_proof_string(proof, field)? != expected {
+            return Err(AppError::capability_denied(format!(
+                "key backup unlock proof `{field}` does not match backup metadata"
+            )));
+        }
+    }
+    let proof_kind = required_proof_string(proof, "proof_kind")?;
+    if !matches!(
+        proof_kind,
+        "principal_signing"
+            | "recovery_unlock"
+            | "device_quorum"
+            | "trusted_recovery_service"
+            | "threshold_recovery"
+    ) {
+        return Err(schema_error(format!(
+            "key backup unlock proof proof_kind `{proof_kind}` is not supported",
+        )));
+    }
+    if !is_sha_digest(required_proof_string(proof, "proof_digest")?) {
+        return Err(schema_error(
+            "key backup unlock proof proof_digest must be a sha digest",
+        ));
+    }
+    if !required_proof_string(proof, "issued_at")?.ends_with('Z') {
+        return Err(schema_error(
+            "key backup unlock proof issued_at must be UTC RFC3339 ending in Z",
+        ));
+    }
+
+    let auth = proof
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| schema_error("key backup unlock proof auth_data is required"))?;
+    if auth.get("device_id").and_then(Value::as_str) != Some(session_device_id) {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof auth_data.device_id must match authenticated session device",
+        ));
+    }
+    if auth
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(schema_error(
+            "key backup unlock proof auth_data.verification_method is required",
+        ));
+    }
+    if !matches!(
+        auth.get("signature_algorithm").and_then(Value::as_str),
+        Some("EdDSA" | "Ed25519")
+    ) {
+        return Err(schema_error(
+            "key backup unlock proof auth_data.signature_algorithm must be EdDSA or Ed25519",
+        ));
+    }
+    let signature = auth
+        .get("signature")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !is_base64url_token(signature) {
+        return Err(schema_error(
+            "key backup unlock proof auth_data.signature must be base64url",
+        ));
+    }
+    let signed_fields = auth
+        .get("signed_fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            schema_error("key backup unlock proof auth_data.signed_fields must be an array")
+        })?;
+    for field in KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS {
+        if !signed_fields
+            .iter()
+            .any(|candidate| candidate.as_str() == Some(*field))
+        {
+            return Err(schema_error(format!(
+                "key backup unlock proof auth_data.signed_fields must cover `{field}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verify_key_backup_unlock_proof_signature(
+    state: &AppState,
+    proof: &Value,
+) -> Result<(), AppError> {
+    let auth = proof
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| schema_error("key backup unlock proof auth_data is required"))?;
+    let verification_method = auth
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let signature_b64 = auth
+        .get("signature")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| {
+            AppError::capability_denied("key backup unlock proof signature is not base64url")
+        })?;
+    let signature = Signature::from_slice(&raw).map_err(|_| {
+        AppError::capability_denied("key backup unlock proof signature must be 64 Ed25519 bytes")
+    })?;
+    let mut unsigned = proof.clone();
+    if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
+        auth_data.remove("signature");
+    }
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+        AppError::internal(format!(
+            "key backup unlock proof canonicalization failed: {error}"
+        ))
+    })?;
+    let public_key = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "key backup unlock proof verification method invalid: {error}"
+            ))
+        })?;
+    public_key.verify(&canonical, &signature).map_err(|_| {
+        AppError::capability_denied("key backup unlock proof signature verification failed")
+    })
+}
+
+async fn enforce_recovery_session_binding_when_present(
+    state: &AppState,
+    proof: &Value,
+    actor_id: &str,
+    session_device_id: &str,
+) -> Result<(), AppError> {
+    let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
+    let Some(record) = state
+        .persistence
+        .recovery_sessions()
+        .get(recovery_session_id)
+        .await
+        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
+    else {
+        // Some deployed clients can only provide a device-signed decrypt proof
+        // until the policy-layer recovery-session driver is available. When a
+        // durable session is present, the checks below make the binding strict.
+        return Ok(());
+    };
+    if record.principal_id != actor_id || record.requesting_device_id != session_device_id {
+        return Err(AppError::capability_denied(
+            "key backup unlock proof recovery session binding does not match caller",
+        ));
+    }
+    if !matches!(record.state.as_str(), "verified" | "completed") {
+        return Err(AppError::conflict(
+            "key backup unlock proof recovery session must be verified or completed",
+        )
+        .with_wire_code("recovery_session_not_verified"));
+    }
+    if let Some((kind, digest)) = recovery_session_proof_summary(&record) {
+        if required_proof_string(proof, "proof_kind")? != kind
+            || required_proof_string(proof, "proof_digest")? != digest
+        {
+            return Err(AppError::capability_denied(
+                "key backup unlock proof proof_digest does not match recovery session",
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn verify_key_backup_unlock_proof(
+    state: &AppState,
+    req: &Request,
+    actor_id: &str,
+    session_device_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let Some(proof_header) = req
+        .headers()
+        .get(salvo::http::header::HeaderName::from_static(
+            UNLOCK_PROOF_HEADER,
+        ))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(AppError::capability_denied(format!(
+            "key backup ciphertext reads require `{UNLOCK_PROOF_HEADER}`"
+        )));
+    };
+    let proof: Value = serde_json::from_str(proof_header).map_err(|error| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("key backup unlock proof header must be JSON: {error}"),
+        )
+    })?;
+    validate_key_backup_unlock_proof_shape(&proof, actor_id, session_device_id, backup)?;
+    enforce_recovery_session_binding_when_present(state, &proof, actor_id, session_device_id)
+        .await?;
+    verify_key_backup_unlock_proof_signature(state, &proof)
+}
+
 /// CKP-0008 / CKP-0009 (spec head 37ce729) — series monotonicity check
 /// for `PUT /_cokret/self/keys/backups/{backup_id}`. Returns one of the three
 /// canonical 409 reasons:
@@ -601,7 +1018,7 @@ async fn enforce_key_backup_series_chain(
 
     let store = state.persistence.key_backups();
     let mut max_existing_seq: Option<u64> = None;
-    let mut predecessor_present = false;
+    let mut predecessor: Option<Value> = None;
     let supersedes = backup
         .get("supersedes")
         .and_then(Value::as_str)
@@ -616,10 +1033,10 @@ async fn enforce_key_backup_series_chain(
         if let Some(seq) = existing.get("series_seq").and_then(Value::as_u64) {
             max_existing_seq = Some(max_existing_seq.map_or(seq, |current| current.max(seq)));
         }
-        if let Some(predecessor) = supersedes.as_deref()
-            && existing.get("backup_id").and_then(Value::as_str) == Some(predecessor)
+        if let Some(predecessor_id) = supersedes.as_deref()
+            && existing.get("backup_id").and_then(Value::as_str) == Some(predecessor_id)
         {
-            predecessor_present = true;
+            predecessor = Some(existing.clone());
         }
     }
 
@@ -676,13 +1093,22 @@ async fn enforce_key_backup_series_chain(
         .with_status(StatusCode::CONFLICT)
         .with_wire_code("series_seq_not_monotonic"));
     }
-    if !predecessor_present {
+    let Some(predecessor) = predecessor else {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "series_predecessor_not_found: `supersedes` references a backup_id that is not persisted",
         )
         .with_status(StatusCode::CONFLICT)
         .with_wire_code("series_predecessor_not_found"));
+    };
+    let expected_digest = key_backup_canonical_digest_without_signature(&predecessor)?;
+    if supersedes_digest != expected_digest {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_chain_broken: supersedes_digest does not match predecessor canonical digest",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_chain_broken"));
     }
     Ok(())
 }
@@ -793,6 +1219,71 @@ fn key_backup_duplicate_for_actor(
     Ok(existing.is_some())
 }
 
+fn key_backup_metadata_for_list(mut backup: Value) -> Value {
+    if let Some(object) = backup.as_object_mut() {
+        object.remove("ciphertext");
+        object.remove("key_commitment");
+        if let Some(auth_data) = object.get_mut("auth_data").and_then(Value::as_object_mut) {
+            auth_data.remove("signature");
+        }
+        if let Some(encryption) = object.get_mut("encryption").and_then(Value::as_object_mut) {
+            let recipient_method = encryption.get("recipient_method").cloned();
+            let recipient_key_ref = encryption.get("recipient_key_ref").cloned();
+            encryption.clear();
+            if let Some(value) = recipient_method {
+                encryption.insert("recipient_method".to_owned(), value);
+            }
+            if let Some(value) = recipient_key_ref {
+                encryption.insert("recipient_key_ref".to_owned(), value);
+            }
+        }
+    }
+    backup
+}
+
+async fn ensure_key_backup_delete_is_series_tail(
+    state: &AppState,
+    actor_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let series_id = backup
+        .get("series_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let series_seq = backup
+        .get("series_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if series_id.is_empty() {
+        return Ok(());
+    }
+    for existing in state
+        .persistence
+        .key_backups()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+    {
+        if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
+            continue;
+        }
+        if existing.get("series_id").and_then(Value::as_str) != Some(series_id) {
+            continue;
+        }
+        if existing
+            .get("series_seq")
+            .and_then(Value::as_u64)
+            .is_some_and(|seq| seq > series_seq)
+        {
+            return Err(AppError::conflict(
+                "key backup series non-tail envelopes cannot be individually deleted",
+            )
+            .with_wire_code("active_series_non_tail_delete_forbidden"));
+        }
+    }
+    Ok(())
+}
+
 #[endpoint(
     operation_id = "ck.keys.backups.put",
     tags("keys"),
@@ -845,7 +1336,7 @@ async fn put_key_backup(
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
         ("series_id" = Option<String>, Query, description = "Filter by ck:backup_series:<uuidv7>"),
-        ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history / external)"),
+        ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history)"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
 )]
@@ -894,6 +1385,10 @@ async fn list_key_backups(
             .and_then(Value::as_u64)
             .unwrap_or(0)
     });
+    let backups = backups
+        .into_iter()
+        .map(key_backup_metadata_for_list)
+        .collect();
     let next_cursor = cursor.into_inner().map(|_| "key-backups-end".to_owned());
     json_ok(KeysBackupsListResBody {
         backups,
@@ -931,6 +1426,7 @@ async fn get_key_backup(
     if backup.get("actor_id").and_then(Value::as_str) != Some(&session.actor) {
         return Err(AppError::not_found("key backup not found"));
     }
+    verify_key_backup_unlock_proof(state, req, &session.actor, &session.device_id, &backup).await?;
     json_ok(backup)
 }
 
@@ -950,14 +1446,11 @@ async fn delete_key_backup(
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let store = state.persistence.key_backups();
-    let owns_backup = store
-        .get(&backup_id)
-        .await
-        .ok()
-        .flatten()
-        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor))
-        .is_some();
-    if !owns_backup {
+    let owned_backup =
+        store.get(&backup_id).await.ok().flatten().filter(|backup| {
+            backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor)
+        });
+    let Some(backup) = owned_backup else {
         return json_ok(KeysBackupsDeleteResBody {
             ok: true,
             backup_id,
@@ -965,9 +1458,25 @@ async fn delete_key_backup(
             state: "missing".to_owned(),
             todos: Vec::new(),
         });
-    }
+    };
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor)?;
+    ensure_key_backup_delete_is_series_tail(state, &session.actor, &backup).await?;
     let deleted = store.delete(&backup_id).await.unwrap_or(false);
+    if deleted {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.key_backup.delete",
+            json!({
+                "backup_id": backup_id.clone(),
+                "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
+                "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
+                "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),
+            }),
+            "deleted",
+        )
+        .await;
+    }
     json_ok(KeysBackupsDeleteResBody {
         ok: true,
         backup_id,
@@ -1003,7 +1512,25 @@ mod tests {
             }],
             "ciphertext": "AAAA",
             "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "key_commitment": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            "key_commitment": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "auth_data": {
+                "device_id": DEVICE_ID,
+                "verification_method": "did:web:alice.example#device",
+                "signature_algorithm": "EdDSA",
+                "signature": "c2lnbmF0dXJl",
+                "ssk_generation": 1,
+                "signed_fields": [
+                    "backup_id",
+                    "actor_id",
+                    "backup_class",
+                    "backup_version",
+                    "series_id",
+                    "series_seq",
+                    "encryption",
+                    "contents",
+                    "ciphertext_digest"
+                ]
+            }
         })
     }
 
@@ -1136,6 +1663,17 @@ mod tests {
         ])
     }
 
+    fn did_recovery_auth_data() -> Value {
+        json!({
+            "device_id": DEVICE_ID,
+            "verification_method": "did:web:alice.example#device",
+            "signature_algorithm": "EdDSA",
+            "signature": "c2lnbmF0dXJl",
+            "ssk_generation": 1,
+            "signed_fields": did_recovery_signed_fields()
+        })
+    }
+
     #[test]
     fn did_recovery_requires_recovery_policy_ref() {
         // Valid HPKE encryption, but no recovery_policy_ref → rejected.
@@ -1159,7 +1697,14 @@ mod tests {
         );
         body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
         // signed_fields present but does NOT cover recovery_policy_ref.
-        body["auth_data"] = json!({ "signed_fields": ["backup_id", "encryption"] });
+        body["auth_data"] = json!({
+            "device_id": DEVICE_ID,
+            "verification_method": "did:web:alice.example#device",
+            "signature_algorithm": "EdDSA",
+            "signature": "c2lnbmF0dXJl",
+            "ssk_generation": 1,
+            "signed_fields": ["backup_id", "encryption"]
+        });
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("recovery_policy_ref not covered by signed_fields must be rejected");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
@@ -1174,7 +1719,7 @@ mod tests {
             recovery_public_key_encryption(),
         );
         body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
-        body["auth_data"] = json!({ "signed_fields": did_recovery_signed_fields() });
+        body["auth_data"] = did_recovery_auth_data();
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("did_recovery with well-formed signed recovery_policy_ref should validate");
     }
@@ -1304,5 +1849,24 @@ mod tests {
             cokret_sdk::canonical::sha256_digest(&canonical),
             "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
         );
+    }
+
+    #[test]
+    fn list_metadata_redacts_ciphertext_and_kdf_material() {
+        let metadata = key_backup_metadata_for_list(key_backup_body(
+            "secret_storage",
+            "recovery_secret",
+            passphrase_encryption(),
+        ));
+
+        assert!(metadata.get("ciphertext").is_none());
+        assert!(metadata.get("key_commitment").is_none());
+        assert_eq!(
+            metadata["encryption"]["recipient_method"],
+            json!("passphrase_kdf")
+        );
+        assert!(metadata.pointer("/encryption/kdf").is_none());
+        assert!(metadata.pointer("/encryption/aead").is_none());
+        assert!(metadata.pointer("/auth_data/signature").is_none());
     }
 }
