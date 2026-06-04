@@ -112,6 +112,7 @@ async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> S
                 plaintext_visible_services: std::collections::BTreeSet::from([
                     "did:web:soland.local".to_owned(),
                 ]),
+                minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
             },

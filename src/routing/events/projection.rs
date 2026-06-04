@@ -1869,6 +1869,9 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                             .collect()
                     })
                     .unwrap_or_default(),
+                minimal_metadata_realm: kinds::payload_declares_minimal_metadata_realm(
+                    &operation.payload,
+                ),
                 created_at: now,
                 updated_at: now,
             };
@@ -1920,6 +1923,15 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                     record.plaintext_visible_services.insert(service);
                     changed = true;
                 }
+            }
+            // SEC-08 — latch the minimal-metadata declaration. A subsequent
+            // `ck.realm.policy_components` that declares the profile flips the
+            // realm into minimal-metadata mode; soland never relaxes it back.
+            if !record.minimal_metadata_realm
+                && kinds::payload_declares_minimal_metadata_realm(&operation.payload)
+            {
+                record.minimal_metadata_realm = true;
+                changed = true;
             }
             if changed {
                 record.updated_at = now;

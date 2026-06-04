@@ -1804,8 +1804,89 @@ pub async fn validate_operation_policy(
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;
+        validate_minimal_metadata_aad_policy(state, operation).await?;
     }
     Ok(())
+}
+
+/// SEC-08 — server-side defence-in-depth for `ck.profile.mls.minimal_metadata_realm.v1`
+/// Realms (`crypto-media/encryption-and-audit.md` §2.9).
+///
+/// For a Realm that has declared the minimal-metadata profile, an encrypted
+/// `ck.message.create` / reaction envelope MUST set
+/// `aad_visibility_event_id="hidden"`; any other value (or an absent
+/// discriminator on an encrypted envelope) is rejected so message-id exposure
+/// cannot widen reaction-frequency correlation from per-`target_ref` to
+/// per-message. The fail-closed decision is delegated to the SDK helper
+/// [`cokret_sdk::mls::enforce_minimal_metadata_aad`] so the wire enum mapping
+/// stays single-sourced.
+///
+/// Scope notes (honest boundary): soland holds no MLS group key and is not the
+/// committer, so the §2.9 `epoch lifetime MUST ≤ 1h` obligation stays a client /
+/// committer duty (SDK `minimal_metadata_epoch_overdue`). This gate only
+/// enforces the aad-visibility half, and only when soland can observe the
+/// profile declaration in projected Realm meta and the discriminator on the
+/// encrypted envelope; plaintext operations are unaffected.
+async fn validate_minimal_metadata_aad_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let kind = kinds::canonical_kind_for_operation(operation);
+    let is_message_or_reaction = matches!(
+        kind,
+        Some(kinds::CK_MESSAGE_CREATE | kinds::CK_REACTION_ADD | kinds::CK_REACTION_REMOVE)
+    );
+    if !is_message_or_reaction {
+        return Ok(());
+    }
+    // Only encrypted envelopes carry an aad-visibility discriminator; plaintext
+    // operations are governed by other policy gates.
+    let Some(envelope) = operation.payload.get("encrypted_content") else {
+        return Ok(());
+    };
+    // Fail closed only for Realms we can positively confirm declared the
+    // minimal-metadata profile; absent meta (target realm unknown) leaves the
+    // obligation to the committer / client.
+    let is_minimal = state
+        .persistence
+        .realm_meta()
+        .get(operation.realm_id.as_str())
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.minimal_metadata_realm);
+    if !is_minimal {
+        return Ok(());
+    }
+    let Some(visibility) = minimal_metadata_aad_visibility(envelope) else {
+        // Minimal-metadata Realm + encrypted envelope with no / unrecognised
+        // discriminator → cannot prove it is `hidden`, so fail closed.
+        return Err(
+            "minimal_metadata_realm encrypted envelope requires aad_visibility_event_id=hidden",
+        );
+    };
+    cokret_sdk::mls::enforce_minimal_metadata_aad(&visibility, true)
+        .map_err(|_| "minimal_metadata_realm requires aad_visibility_event_id=hidden")
+}
+
+/// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
+/// envelope to the SDK [`cokret_sdk::mls::AadVisibility`] enum. Returns `None`
+/// when the field is missing or carries an unknown value, which the caller
+/// treats as fail-closed for a minimal-metadata Realm.
+fn minimal_metadata_aad_visibility(envelope: &Value) -> Option<cokret_sdk::mls::AadVisibility> {
+    use cokret_sdk::mls::AadVisibility;
+    // The discriminator lives at the envelope root; tolerate a nested
+    // `envelope` wrapper as shown in the spec wire example.
+    let raw = envelope
+        .pointer("/aad_visibility_event_id")
+        .or_else(|| envelope.pointer("/envelope/aad_visibility_event_id"))
+        .and_then(Value::as_str)?;
+    match raw {
+        "hidden" => Some(AadVisibility::Hidden),
+        "routing_digest" => Some(AadVisibility::RoutingDigest),
+        "opaque_id" => Some(AadVisibility::OpaqueId),
+        _ => None,
+    }
 }
 
 /// flow-and-message.md §9.8.2 — a reaction MUST target an object inside its
@@ -4308,6 +4389,48 @@ mod wire_payload_tests {
                 serde_json::json!({})
             ))
             .is_ok()
+        );
+    }
+}
+
+#[cfg(test)]
+mod minimal_metadata_aad_tests {
+    use cokret_sdk::mls::AadVisibility;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn aad_visibility_maps_known_wire_values() {
+        // SEC-08 — wire discriminator → SDK enum, root and nested forms.
+        assert!(matches!(
+            minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "hidden"})),
+            Some(AadVisibility::Hidden)
+        ));
+        assert!(matches!(
+            minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "routing_digest"})),
+            Some(AadVisibility::RoutingDigest)
+        ));
+        assert!(matches!(
+            minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "opaque_id"})),
+            Some(AadVisibility::OpaqueId)
+        ));
+        // Spec wire example nests the envelope under `envelope`.
+        assert!(matches!(
+            minimal_metadata_aad_visibility(
+                &json!({"envelope": {"aad_visibility_event_id": "hidden"}})
+            ),
+            Some(AadVisibility::Hidden)
+        ));
+    }
+
+    #[test]
+    fn aad_visibility_missing_or_unknown_is_none() {
+        // Absent or unrecognised discriminator → None, which the caller treats
+        // as fail-closed for a minimal-metadata Realm.
+        assert!(minimal_metadata_aad_visibility(&json!({})).is_none());
+        assert!(
+            minimal_metadata_aad_visibility(&json!({"aad_visibility_event_id": "bogus"})).is_none()
         );
     }
 }

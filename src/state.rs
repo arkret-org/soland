@@ -1264,6 +1264,15 @@ pub struct RealmMetaRecord {
     /// incompatible with `world_readable` (space-and-place.md §3.1.3).
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
+    /// SEC-08 — the Realm declared `ck.profile.mls.minimal_metadata_realm.v1`
+    /// (`crypto-media/encryption-and-audit.md` §2.9). Projected from the
+    /// `profiles[]` / `active_profiles[]` declaration on a `ck.realm.create` /
+    /// `ck.realm.policy_components` operation. Once observed it latches true:
+    /// soland is not the committer and never relaxes a minimal-metadata Realm
+    /// back to a wider profile on its own. Drives the server-side
+    /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id` on
+    /// encrypted `ck.message.create` / reaction envelopes.
+    pub minimal_metadata_realm: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -1993,6 +2002,7 @@ impl AppState {
                 preview_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: BTreeSet::new(),
+                minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
             };
@@ -2430,6 +2440,8 @@ async fn hydrate_realm_create_event(
                 .collect::<BTreeSet<_>>()
         })
         .unwrap_or_default();
+    let minimal_metadata_realm =
+        payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
 
     let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
     entry.description = summary.clone();
@@ -2448,6 +2460,7 @@ async fn hydrate_realm_create_event(
         preview_policy_digest,
         encryption_profile,
         plaintext_visible_services,
+        minimal_metadata_realm,
         created_at: record.received_at,
         updated_at: record.received_at,
     };

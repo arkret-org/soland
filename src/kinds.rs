@@ -137,25 +137,24 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // TODO(circle-rollout-P2A.4): cross-Realm `allowed_circle_ids`
 // derivation under audited-high-risk policies.
 // `ck.device.push_route` is device-scoped.
-pub use cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE;
 // G3.S1 — MLS / E2EE lifecycle event kinds.
 //
 // Canonical kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
-//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at
-//     the HTTP operation_id layer (`ck.keys.keypackages.upload` /
-//     `ck.keys.keypackages.claim`); the event log stores only the canonical kind. The reducer
-//     dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
-//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue
-//     semantics are conveyed via payload shape; no separate `.enqueue` suffix.
+//   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
+//     HTTP operation_id layer (`ck.keys.keypackages.upload` / `ck.keys.keypackages.claim`); the
+//     event log stores only the canonical kind. The reducer dispatches publish-vs-claim on the
+//     `payload.action == "publish" | "claim"` field.
+//   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
+//     are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
-//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the
-//     kind suffix.
+//     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
+//     suffix.
 //   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
 //   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered-frontier
 //     accumulator).
-//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path
-//     (wire-only; no reducer projection yet).
+//   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
+//     no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
@@ -165,7 +164,6 @@ pub use cokret_sdk::events::kinds::DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE;
 // frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
-pub use cokret_sdk::events::kinds::MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE;
 // REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
 // `ck.audit.epoch_destruction_failsafe` event cannot serve as a delayed
 // remediation for a missing same-batch attestation. The spec wording
@@ -259,7 +257,9 @@ pub use cokret_sdk::events::kinds::{
     AGENT_PROTOCOL_SESSION_RESULT as CK_AGENT_PROTOCOL_SESSION_RESULT,
     AGENT_PROTOCOL_SESSION_STATUS as CK_AGENT_PROTOCOL_SESSION_STATUS,
     AGENT_RESUME as CK_AGENT_RESUME, CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED,
-    MLS_COMMIT as CK_MLS_COMMIT, MLS_GENESIS as CK_MLS_GENESIS, MLS_WELCOME as CK_MLS_WELCOME,
+    DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE, MLS_COMMIT as CK_MLS_COMMIT,
+    MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
+    MLS_WELCOME as CK_MLS_WELCOME,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
@@ -641,6 +641,28 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
         .any(|p| p == "ck.profile.attested_audit.e2ee.v1")
 }
 
+/// SEC-08 — does this Realm-lifecycle payload (`ck.realm.create` /
+/// `ck.realm.policy_components`) declare the minimal-metadata profile
+/// [`cokret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE`]
+/// (`crypto-media/encryption-and-audit.md` §2.9)?
+///
+/// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12
+/// path already reads off the same payloads. Used to latch
+/// `RealmMetaRecord::minimal_metadata_realm` so the message-ingest aad gate can
+/// fail closed on non-`hidden` `aad_visibility_event_id`.
+pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> bool {
+    ["profiles", "active_profiles"].iter().any(|field| {
+        payload
+            .get(*field)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|profiles| {
+                profiles.iter().any(|profile| {
+                    profile.as_str() == Some(cokret_sdk::mls::MINIMAL_METADATA_REALM_PROFILE)
+                })
+            })
+    })
+}
+
 #[cfg(test)]
 mod audit_profile_tests {
     use super::*;
@@ -651,6 +673,23 @@ mod audit_profile_tests {
         assert!(ryw_receipt_durable_event_allowed(&[
             "ck.profile.attested_audit.e2ee.v1".to_owned()
         ]));
+    }
+
+    #[test]
+    fn minimal_metadata_realm_detected_from_profiles_arrays() {
+        use serde_json::json;
+        // SEC-08 — declaration is recognised under `profiles[]` and
+        // `active_profiles[]`; absent / other profiles are not minimal.
+        assert!(payload_declares_minimal_metadata_realm(&json!({
+            "profiles": ["ck.profile.mls.minimal_metadata_realm.v1"]
+        })));
+        assert!(payload_declares_minimal_metadata_realm(&json!({
+            "active_profiles": ["ck.profile.core.v1", "ck.profile.mls.minimal_metadata_realm.v1"]
+        })));
+        assert!(!payload_declares_minimal_metadata_realm(&json!({
+            "profiles": ["ck.profile.core.v1"]
+        })));
+        assert!(!payload_declares_minimal_metadata_realm(&json!({})));
     }
 }
 

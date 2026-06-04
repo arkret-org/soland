@@ -135,6 +135,7 @@ async fn seed_realm(
                 preview_policy_digest: None,
                 encryption_profile: None,
                 plaintext_visible_services: std::collections::BTreeSet::new(),
+                minimal_metadata_realm: false,
                 created_at: now,
                 updated_at: now,
             },

@@ -1716,11 +1716,14 @@ async fn validate_event_envelope(
             projected_media_plaintext_service_present(state, &realm_id, &payload).await;
         let mls_governance_binding_covers_policy_root =
             projected_mls_governance_binding_covers_policy_root(state, &realm_id, &payload);
+        let binding_discussion_metadata_digest =
+            projected_mls_governance_binding_metadata_digest(state, &realm_id);
         if let Err((code, reason)) = realm_policy_components_check(
             &payload,
             &active_profiles,
             media_plaintext_service_present,
             mls_governance_binding_covers_policy_root,
+            binding_discussion_metadata_digest.as_deref(),
         ) {
             return Err(event_validation_error(
                 error_http_status(code),
@@ -1844,6 +1847,58 @@ fn projected_mls_governance_binding_covers_policy_root(
         }
     }
     !observed_realm_mls_cell && expected_policy_root.is_some()
+}
+
+/// SEC-03 — project the `discussion_metadata_digest` the realm's current MLS
+/// epoch governance binding covers, so [`realm_policy_components_check`] can
+/// recompute the `media_service_decrypts` fact and reject a stale / forged
+/// binding (`webrtc-signaling.md` §10.5.1 rule 5). Mirrors the cell-selection
+/// logic of [`projected_mls_governance_binding_covers_policy_root`]; returns the
+/// digest from the first realm-targeting MLS cell that carries one, or `None`
+/// when no projected binding advertises a digest (in which case the digest gate
+/// is skipped and only policy_root coverage applies).
+fn projected_mls_governance_binding_metadata_digest(
+    state: &AppState,
+    realm_id: &str,
+) -> Option<String> {
+    let projection = state.projection.lock().ok()?;
+    for (cell, cell_state) in &projection.cells {
+        let cell_id = cell.as_str();
+        let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
+            || cell_id.contains("ck.component.mls_epoch.v1")
+            || cell_id.contains("ck.component.mls.covered_frontier.v1");
+        if !is_mls_cell {
+            continue;
+        }
+        let cokret_sdk::lattice::CellState::Value(value) = cell_state else {
+            continue;
+        };
+        if !value_targets_realm(value, realm_id) {
+            continue;
+        }
+        if let Some(digest) = mls_governance_value_discussion_metadata_digest(value) {
+            return Some(digest.to_owned());
+        }
+    }
+    None
+}
+
+/// SEC-03 — read the `discussion_metadata_digest` from a projected MLS cell
+/// value, checking the same binding sub-objects that
+/// [`mls_governance_value_covers_policy_root`] inspects for `policy_root`.
+fn mls_governance_value_discussion_metadata_digest(value: &Value) -> Option<&str> {
+    [
+        value.pointer("/governance_binding/discussion_metadata_digest"),
+        value.pointer("/mls_governance_binding/discussion_metadata_digest"),
+        value.pointer("/discussion_metadata_digest"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|candidate| {
+        candidate
+            .as_str()
+            .filter(|digest| !digest.trim().is_empty())
+    })
 }
 
 fn payload_mls_governance_policy_root(payload: &Value) -> Option<&str> {
@@ -3286,6 +3341,8 @@ async fn bootstrap_realm_member_index(
                 .collect()
         })
         .unwrap_or_default();
+    let minimal_metadata_realm =
+        payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(space_id_typed.clone(), title);
     entry.description = summary.clone();
     entry.public = discoverability == "public";
@@ -3304,6 +3361,7 @@ async fn bootstrap_realm_member_index(
         preview_policy_digest,
         encryption_profile,
         plaintext_visible_services,
+        minimal_metadata_realm,
         created_at: super::now(),
         updated_at: super::now(),
     };
@@ -4198,17 +4256,28 @@ pub fn cross_signing_reset_replay_check(
     Ok(())
 }
 
-/// Validate a `ck.realm.policy_components` payload. Spec T09 + T12.
+/// Validate a `ck.realm.policy_components` payload. Spec T09 + T12 + SEC-03.
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
 /// 2. `ck.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
 /// 3. When `media_service_decrypts=true`, all governance bindings are present (T12).
+/// 4. SEC-03 — when `media_service_decrypts=true`, independently recompute the
+///    `discussion_metadata_digest` from the §10.5.1 rule 1–3 policy cell value
+///    (`media_service_decrypts` + the authorised `plaintext_visible_services`) and fail closed with
+///    `mls_governance_binding_stale` when it disagrees with the digest the projected governance
+///    binding covers. This is the server-side mirror of `webrtc-signaling.md` §10.5.1 rule 5 /
+///    negative vector `ck.vector.webrtc.media_plaintext_downgrade.v1` case (d): the fact that media
+///    is service-decryptable MUST be derivable from member-visible metadata, not asserted out of
+///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
+///    covers, as projected from the realm's MLS cell; `None` means the binding carried no digest,
+///    in which case only the legacy policy_root coverage gate (check 3) applies.
 pub fn realm_policy_components_check(
     payload: &Value,
     active_profiles: &[String],
     media_plaintext_service_present: bool,
     mls_governance_binding_covers_policy_root: bool,
+    binding_discussion_metadata_digest: Option<&str>,
 ) -> Result<(), (ErrorCode, String)> {
     // (1) T09 — relaxed_window_max_ms ceiling.
     if let Some(window) = payload
@@ -4273,8 +4342,101 @@ pub fn realm_policy_components_check(
                     .to_owned(),
             ));
         }
+        // (4) SEC-03 — independently recompute the discussion_metadata_digest
+        // from the §10.5.1 rule 1–3 policy cell value and reject when it
+        // disagrees with what the governance binding covers. We only have a
+        // digest to compare against when the projected binding actually carried
+        // one; absent it, check (3) above is the strongest server-side gate.
+        if let Some(covered_digest) = binding_discussion_metadata_digest {
+            let recomputed = recompute_media_decrypt_metadata_digest(payload).ok_or((
+                ErrorCode::MlsGovernanceBindingStale,
+                "media_service_decrypts=true policy cell could not be canonicalised \
+                 for discussion_metadata_digest recomputation"
+                    .to_owned(),
+            ))?;
+            let covered = cokret_sdk::Hash::new(covered_digest.to_owned()).map_err(|_| {
+                (
+                    ErrorCode::MlsGovernanceBindingStale,
+                    "governance binding discussion_metadata_digest is not a valid \
+                     sha256 hash"
+                        .to_owned(),
+                )
+            })?;
+            if cokret_sdk::model::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
+                return Err((
+                    ErrorCode::MlsGovernanceBindingStale,
+                    "media_service_decrypts=true fact recomputed from the policy \
+                     cell value does not match the governance binding's \
+                     discussion_metadata_digest (webrtc-signaling.md §10.5.1 rule 5)"
+                        .to_owned(),
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+/// SEC-03 — build a `cokret_sdk::model::MediaDecryptPolicyValue`
+/// from a `ck.realm.policy_components` payload and derive its canonical
+/// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
+/// digest derivation fails (it never does for well-formed input), so callers
+/// treat that as a fail-closed mismatch.
+///
+/// The recomputed value mirrors §10.5.1 rule 1 (`media_service_decrypts`) and
+/// rule 2 (the `purpose=media_plaintext` service DIDs in
+/// `plaintext_visible_services[]`). Service-DID extraction matches the shapes
+/// [`payload_declares_media_plaintext_service`] already accepts (bare string,
+/// `media_plaintext` sentinel, or `{purpose, service_did|did}` object) so the
+/// digest input is consistent with the rule-2 presence gate; non-DID / sentinel
+/// entries that carry no concrete DID are skipped because the SDK digest is
+/// defined over concrete service DIDs.
+fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<cokret_sdk::Hash> {
+    use cokret_sdk::model::{
+        MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
+    };
+
+    let media_service_decrypts = payload
+        .get("media_service_decrypts")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let mut plaintext_visible_services = Vec::new();
+    if let Some(services) = payload
+        .pointer("/plaintext_visible_services")
+        .and_then(Value::as_array)
+    {
+        for service in services {
+            let did_str = match service {
+                // A bare string entry is the service DID itself; the
+                // `media_plaintext` sentinel carries no concrete DID.
+                Value::String(value) if value != "media_plaintext" => Some(value.as_str()),
+                Value::Object(object) => {
+                    let purpose_ok =
+                        object.get("purpose").and_then(Value::as_str) == Some("media_plaintext");
+                    if purpose_ok {
+                        object
+                            .get("service_did")
+                            .or_else(|| object.get("did"))
+                            .and_then(Value::as_str)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(did_str) = did_str
+                && let Ok(service_did) = cokret_sdk::Did::new(did_str.to_owned())
+            {
+                plaintext_visible_services.push(MediaPlaintextService { service_did });
+            }
+        }
+    }
+
+    let value = MediaDecryptPolicyValue {
+        media_service_decrypts,
+        plaintext_visible_services,
+    };
+    derive_media_decrypt_metadata_digest(&value).ok()
 }
 
 #[cfg(test)]
@@ -4371,7 +4533,7 @@ mod admission_tests {
     #[test]
     fn realm_policy_components_relaxed_window_ceiling() {
         let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
-        let err = realm_policy_components_check(&payload, &[], false, false).unwrap_err();
+        let err = realm_policy_components_check(&payload, &[], false, false, None).unwrap_err();
         assert_eq!(err.0, ErrorCode::RelaxedWindowExceedsCeiling);
     }
 
@@ -4383,6 +4545,7 @@ mod admission_tests {
             &["ck.profile.attested_audit.e2ee.v1".to_owned()],
             false,
             false,
+            None,
         )
         .unwrap_err();
         assert_eq!(err.0, ErrorCode::E2eeRelaxedDisallowedInComplianceProfile);
@@ -4391,11 +4554,55 @@ mod admission_tests {
     #[test]
     fn realm_policy_components_media_plaintext_triple_binding() {
         let payload = json!({"media_service_decrypts": true});
-        let err = realm_policy_components_check(&payload, &[], false, true).unwrap_err();
+        let err = realm_policy_components_check(&payload, &[], false, true, None).unwrap_err();
         assert_eq!(err.0, ErrorCode::MediaPlaintextServiceNotAuthorised);
-        let err2 = realm_policy_components_check(&payload, &[], true, false).unwrap_err();
+        let err2 = realm_policy_components_check(&payload, &[], true, false, None).unwrap_err();
         assert_eq!(err2.0, ErrorCode::MlsGovernanceBindingStale);
-        realm_policy_components_check(&payload, &[], true, true).unwrap();
+        // No binding digest projected → only the policy_root coverage gate runs.
+        realm_policy_components_check(&payload, &[], true, true, None).unwrap();
+    }
+
+    #[test]
+    fn realm_policy_components_media_decrypt_digest_recompute_gate() {
+        // SEC-03 — `media_service_decrypts=true` with an authorised plaintext
+        // service: the digest the governance binding covers MUST equal the
+        // digest recomputed from the policy cell value, else fail closed with
+        // `mls_governance_binding_stale` (webrtc-signaling.md §10.5.1 rule 5).
+        use cokret_sdk::model::{
+            MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
+        };
+
+        let service_did = "did:web:sfu.example";
+        let payload = json!({
+            "media_service_decrypts": true,
+            "plaintext_visible_services": [
+                {"purpose": "media_plaintext", "service_did": service_did}
+            ]
+        });
+
+        // Honest digest derived from the same policy cell value the server sees.
+        let honest = derive_media_decrypt_metadata_digest(&MediaDecryptPolicyValue {
+            media_service_decrypts: true,
+            plaintext_visible_services: vec![MediaPlaintextService {
+                service_did: cokret_sdk::Did::new(service_did.to_owned()).unwrap(),
+            }],
+        })
+        .unwrap();
+
+        // Matching digest → accepted.
+        realm_policy_components_check(&payload, &[], true, true, Some(honest.as_str())).unwrap();
+
+        // Mismatching digest (attacker asserts decrypt fact not covered by the
+        // member-visible metadata) → rejected, fail closed.
+        let stale = format!("sha256:{}", "c".repeat(64));
+        let err =
+            realm_policy_components_check(&payload, &[], true, true, Some(&stale)).unwrap_err();
+        assert_eq!(err.0, ErrorCode::MlsGovernanceBindingStale);
+
+        // A malformed covered digest is also rejected (cannot be trusted).
+        let err = realm_policy_components_check(&payload, &[], true, true, Some("not-a-hash"))
+            .unwrap_err();
+        assert_eq!(err.0, ErrorCode::MlsGovernanceBindingStale);
     }
 
     #[test]
@@ -4672,6 +4879,7 @@ mod proof_strictness_tests {
                         .config
                         .service_did
                         .clone()]),
+                    minimal_metadata_realm: false,
                     created_at: now,
                     updated_at: now,
                 },
@@ -4682,6 +4890,149 @@ mod proof_strictness_tests {
         let payload = json!({ "media_service_decrypts": true });
 
         assert!(projected_media_plaintext_service_present(&state, realm_id, &payload).await);
+    }
+
+    #[tokio::test]
+    async fn minimal_metadata_realm_rejects_non_hidden_aad() {
+        // SEC-08 — a minimal-metadata Realm rejects an encrypted message whose
+        // aad_visibility_event_id is not `hidden`, and accepts `hidden`.
+        let state = make_state(true);
+        let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000002";
+        let now = chrono::Utc::now();
+        state
+            .persistence
+            .realm_meta()
+            .put(
+                realm_id,
+                &crate::state::RealmMetaRecord {
+                    owner: "did:web:alice.example".to_owned(),
+                    deleted: false,
+                    discoverability: "restricted".to_owned(),
+                    history_visibility: "joined".to_owned(),
+                    history_sharing_policy: None,
+                    history_sharing_policy_digest: None,
+                    preview_policy: None,
+                    preview_policy_digest: None,
+                    encryption_profile: Some("mls_rfc9420".to_owned()),
+                    plaintext_visible_services: std::collections::BTreeSet::new(),
+                    minimal_metadata_realm: true,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .unwrap();
+
+        let encrypted_envelope = |visibility: &str| {
+            json!({
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
+                "track_name": "main",
+                "encrypted_content": {
+                    "scheme": "mls-rfc9420",
+                    "version": "1.0",
+                    "group_id": "base64url",
+                    "epoch": 12,
+                    "content_type": "application/json",
+                    "ciphertext": "base64url",
+                    "aad_visibility_event_id": visibility,
+                    "aad": {
+                        "realm_id": realm_id,
+                        "event_kind": "ck.message.create"
+                    }
+                }
+            })
+        };
+        let message_op = |payload: serde_json::Value| {
+            cokret_sdk::Operation::create(
+                cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c5")
+                    .unwrap(),
+                cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+                kinds::CK_MESSAGE_CREATE,
+                payload,
+            )
+        };
+
+        // Non-hidden aad → rejected.
+        let routing = message_op(encrypted_envelope("routing_digest"));
+        let err = validate_operation_policy(&state, std::slice::from_ref(&routing))
+            .await
+            .unwrap_err();
+        assert!(err.contains("aad_visibility_event_id=hidden"));
+
+        // Encrypted envelope with no discriminator → fail closed.
+        let mut no_disc = encrypted_envelope("hidden");
+        no_disc["encrypted_content"]
+            .as_object_mut()
+            .unwrap()
+            .remove("aad_visibility_event_id");
+        let missing = message_op(no_disc);
+        assert!(
+            validate_operation_policy(&state, std::slice::from_ref(&missing))
+                .await
+                .is_err()
+        );
+
+        // hidden aad → accepted (other policy gates are satisfied here).
+        let hidden = message_op(encrypted_envelope("hidden"));
+        validate_operation_policy(&state, std::slice::from_ref(&hidden))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_minimal_metadata_realm_allows_any_aad() {
+        // SEC-08 — a Realm that did not declare the profile is unaffected: a
+        // non-hidden aad encrypted message passes this gate.
+        let state = make_state(true);
+        let realm_id = "ck:realm:01904100-0000-7000-8000-a11ce0000003";
+        let now = chrono::Utc::now();
+        state
+            .persistence
+            .realm_meta()
+            .put(
+                realm_id,
+                &crate::state::RealmMetaRecord {
+                    owner: "did:web:alice.example".to_owned(),
+                    deleted: false,
+                    discoverability: "restricted".to_owned(),
+                    history_visibility: "joined".to_owned(),
+                    history_sharing_policy: None,
+                    history_sharing_policy_digest: None,
+                    preview_policy: None,
+                    preview_policy_digest: None,
+                    encryption_profile: Some("mls_rfc9420".to_owned()),
+                    plaintext_visible_services: std::collections::BTreeSet::new(),
+                    minimal_metadata_realm: false,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .unwrap();
+
+        let op = cokret_sdk::Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-57d7d85564c6")
+                .unwrap(),
+            cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
+            kinds::CK_MESSAGE_CREATE,
+            json!({
+                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
+                "track_name": "main",
+                "encrypted_content": {
+                    "scheme": "mls-rfc9420",
+                    "version": "1.0",
+                    "group_id": "base64url",
+                    "epoch": 12,
+                    "content_type": "application/json",
+                    "ciphertext": "base64url",
+                    "aad_visibility_event_id": "routing_digest",
+                    "aad": {"realm_id": realm_id, "event_kind": "ck.message.create"}
+                }
+            }),
+        );
+        validate_operation_policy(&state, std::slice::from_ref(&op))
+            .await
+            .unwrap();
     }
 
     #[test]
