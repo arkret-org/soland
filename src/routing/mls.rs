@@ -57,6 +57,20 @@ use crate::wire::now;
 ///   - `POST /_cokret/self/keys/keypackages/claim`
 ///   - `GET  /_cokret/self/keys/keypackages/welcomes/pending` (soland extension)
 pub fn router() -> Router {
+    protocol_router()
+}
+
+pub fn protocol_router() -> Router {
+    Router::with_path("keys").push(
+        Router::with_path("keypackages")
+            .push(Router::with_path("upload").post(upload_keypackage))
+            .push(Router::with_path("claim").post(claim_keypackage))
+            .push(Router::with_path("consume").post(consume_keypackages))
+            .push(Router::with_path("revoke").post(revoke_keypackages)),
+    )
+}
+
+pub fn legacy_router() -> Router {
     Router::with_path("keys").push(
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))

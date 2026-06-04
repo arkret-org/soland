@@ -202,7 +202,6 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // a UI banner. Reducer-level validation lives in `src/reducer.rs` under
 // `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
 // (still TODO stubs pending full attestation-chain verification).
-pub use cokret_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDIT_POLICY_DOWNGRADE;
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
 // governance + per-device push route binding.
 //
@@ -222,7 +221,6 @@ pub use cokret_sdk::events::kinds::REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDI
 //   `(recipient_service_did, principal, device, push_route)`. MUST NOT be
 //   replicated outside the binding's recipient_service_did context. Stored
 //   as actor-private state on the recipient Principal Server only.
-pub use cokret_sdk::events::kinds::REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY;
 // `ck.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
 // Reducer maintains a `ck.component.realm.inheritance_policy.v1`
@@ -259,6 +257,8 @@ pub use cokret_sdk::events::kinds::{
     DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE, MLS_COMMIT as CK_MLS_COMMIT,
     MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
     MLS_WELCOME as CK_MLS_WELCOME, MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
+    REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDIT_POLICY_DOWNGRADE,
+    REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
 };
 
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {

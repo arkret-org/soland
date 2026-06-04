@@ -25,7 +25,11 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportReqBody, ModerationReportResBody};
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new().push(Router::with_path("moderation/report").post(moderation_report))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("moderation/report").post(moderation_report))
         .push(Router::with_path("moderation/reports").get(moderation_reports))

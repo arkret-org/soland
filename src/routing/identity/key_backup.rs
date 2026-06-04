@@ -15,7 +15,18 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoverySessionRecord};
 use crate::wire::{KeysBackupsDeleteResBody, KeysBackupsListResBody, KeysBackupsPutResBody};
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("keys/backups/{backup_id}")
+                .put(put_key_backup)
+                .get(get_key_backup)
+                .delete(delete_key_backup),
+        )
+        .push(Router::with_path("keys/backups").get(list_key_backups))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("keys/backups/describe").get(super::describe::key_backups_describe))
         .push(

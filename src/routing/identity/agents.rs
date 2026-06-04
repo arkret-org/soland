@@ -43,7 +43,29 @@ use crate::wire::{
 };
 
 /// Mounted under `/_cokret/self`.
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("agents")
+                .post(provision_agent)
+                .get(list_agents)
+                .push(Router::with_path("{agent_id}").get(get_agent))
+                .push(Router::with_path("{agent_id}/pause").post(pause_agent))
+                .push(Router::with_path("{agent_id}/resume").post(resume_agent))
+                .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
+                .push(Router::with_path("{agent_id}/rotate-key").post(rotate_agent_key))
+                .push(
+                    Router::with_path("{agent_id}/grants")
+                        .post(attach_agent_grant)
+                        .push(Router::with_path("{grant_id}").delete(detach_agent_grant)),
+                ),
+        )
+        .push(
+            Router::with_path("agent-sidecar-threads:ensure").post(ensure_sidecar_thread_canonical),
+        )
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::with_path("agents")
         .post(provision_agent)
         .get(list_agents)
@@ -616,11 +638,19 @@ async fn ensure_sidecar_thread(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentSidecarThreadEnsureResBody> {
+    ensure_sidecar_thread_impl(aa, agent_id.into_inner(), body.into_inner(), depot, req).await
+}
+
+async fn ensure_sidecar_thread_impl(
+    aa: AuthArgs,
+    agent_id: String,
+    body: AgentSidecarThreadEnsureReqBody,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentSidecarThreadEnsureResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
-    let body = body.into_inner();
     // ERR-1 — SIDECAR_CREATE_DENIED + PAIRING_REQUEST_EXPIRED reason
     // codes surface here when the controller<->agent sidecar policy
     // forbids creation or when the pairing request has timed out.
@@ -660,6 +690,27 @@ async fn ensure_sidecar_thread(
             "P2-impl: enforce context-realm-preferred sidecar home policy".to_owned(),
         ],
     })
+}
+
+#[endpoint(
+    operation_id = "ck.agent.sidecar_thread.ensure",
+    tags("agents"),
+    summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
+    status_codes(200, 201, 400, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.agent.sidecar_thread.ensure"))]
+async fn ensure_sidecar_thread_canonical(
+    aa: AuthArgs,
+    body: JsonBody<AgentSidecarThreadEnsureReqBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentSidecarThreadEnsureResBody> {
+    let mut body = body.into_inner();
+    let agent_id = body
+        .agent_principal_id
+        .take()
+        .ok_or_else(|| AppError::missing_param("agent_principal_id is required"))?;
+    ensure_sidecar_thread_impl(aa, agent_id, body, depot, req).await
 }
 
 #[cfg(test)]

@@ -70,7 +70,15 @@ const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 static TEST_STATELESS_CURSOR_PROFILE_DECLARED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(Router::with_path("account/describe").get(account_describe))
+        .push(Router::with_path("account/subscribe").get(account_subscribe))
+        .push(Router::with_path("ephemeral").post(submit_ephemeral))
+        .push(Router::with_path("snapshot/head").get(snapshot_head))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))

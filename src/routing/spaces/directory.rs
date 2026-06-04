@@ -73,7 +73,26 @@ async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     live
 }
 
-pub(crate) fn router() -> Router {
+pub(crate) fn protocol_router() -> Router {
+    Router::new()
+        .push(Router::with_path("directory/describe").get(directory_describe))
+        .push(Router::with_path("directory/search-realms").post(search_realms))
+        .push(Router::with_path("directory/resolve-realm").post(resolve_realm))
+        .push(Router::with_path("directory/resolve-target").post(resolve_target))
+        .push(Router::with_path("directory/search-organizations").post(search_organizations))
+        .push(Router::with_path("directory/resolve-organization").post(resolve_organization))
+        .push(Router::with_path("directory/search-actors").post(search_actors))
+        .push(Router::with_path("directory/search-users").post(search_users))
+        .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
+        .push(
+            Router::with_path("directory/private-contact-discovery")
+                .post(private_contact_discovery),
+        )
+        .push(Router::with_path("directory/announce").post(directory_announce))
+        .push(Router::with_path("directory/withdraw").post(directory_withdraw))
+}
+
+pub(crate) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("directory/describe").get(directory_describe))
         .push(Router::with_path("directory/search-realms").post(search_realms))

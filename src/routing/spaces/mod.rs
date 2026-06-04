@@ -20,6 +20,14 @@ use super::{
 /// [`find_router`] because directory discovery belongs to the `find` trust
 /// segment, not `self`.
 pub fn router() -> Router {
+    protocol_router()
+}
+
+pub fn protocol_router() -> Router {
+    Router::new()
+}
+
+pub fn legacy_router() -> Router {
     Router::new()
         .push(space::router())
         .push(reaction::router())
@@ -34,5 +42,9 @@ pub fn router() -> Router {
 
 /// `find`-segment directory discovery surface (`/_cokret/find/directory/*`).
 pub fn find_router() -> Router {
-    directory::router()
+    directory::protocol_router()
+}
+
+pub fn find_legacy_router() -> Router {
+    directory::legacy_router()
 }

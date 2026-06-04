@@ -28,6 +28,40 @@ use super::{
 };
 
 pub fn router() -> Router {
+    protocol_router()
+}
+
+pub fn protocol_router() -> Router {
+    Router::new()
+        .push(
+            Router::with_path("gate")
+                .push(auth::protocol_account_router())
+                .push(Router::with_path("account").push(agents::agent_key_pair_router())),
+        )
+        .push(
+            Router::with_path("root").push(
+                Router::with_path("identity")
+                    .push(Router::with_path("describe").get(did::identity_describe))
+                    .push(Router::with_path("resolve").post(did::identity_resolve))
+                    .push(Router::with_path("document").get(did::identity_document))
+                    .push(Router::with_path("log").get(did::identity_log))
+                    .push(
+                        Router::with_path("submit-did-operation")
+                            .post(did::identity_submit_did_operation),
+                    )
+                    .push(Router::with_path("receipts").get(did::identity_receipts)),
+            ),
+        )
+        .push(
+            Router::with_path("self")
+                .push(keys::router())
+                .push(key_backup::protocol_router())
+                .push(device_messages::protocol_router())
+                .push(agents::protocol_router()),
+        )
+}
+
+pub fn legacy_router() -> Router {
     Router::new()
         // `gate` — authentication entry (session-grant / dev-login / logout /
         // agent-key-pair). Trust segment: outermost authenticated edge.
@@ -67,11 +101,11 @@ pub fn router() -> Router {
                 .push(consent::router())
                 .push(device::router())
                 .push(keys::router())
-                .push(key_backup::router())
-                .push(device_messages::router())
+                .push(key_backup::legacy_router())
+                .push(device_messages::legacy_router())
                 .push(profile::router())
                 // CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle.
-                .push(agents::router()),
+                .push(agents::legacy_router()),
         )
 }
 

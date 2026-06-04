@@ -38,7 +38,14 @@ use super::{
 
 pub fn router() -> Router {
     Router::new()
-        .push(sync::router())
+        .push(sync::protocol_router())
         .push(event_log::router())
-        .push(projection_query::router())
+        .push(projection_query::protocol_router())
+}
+
+pub fn legacy_router() -> Router {
+    Router::new()
+        .push(sync::legacy_router())
+        .push(event_log::router())
+        .push(projection_query::legacy_router())
 }

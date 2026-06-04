@@ -1508,6 +1508,8 @@ pub struct AgentGrantDetachResBody {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AgentSidecarThreadEnsureReqBody {
     #[serde(default)]
+    pub agent_principal_id: Option<String>,
+    #[serde(default)]
     pub context_realm_id: Option<String>,
 }
 

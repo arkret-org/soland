@@ -5,9 +5,7 @@ use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
 use salvo::http::request::SecureMaxSize;
-use salvo::oapi::{
-    OpenApi, Operation, PathItem, PathItemType, Response as OapiResponse, RouterExt,
-};
+use salvo::oapi::{OpenApi, Operation, PathItemType, Response as OapiResponse, RouterExt};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
@@ -138,7 +136,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(admin::spec_router())
                 .push(admin::admin_router())
                 .push(admin::router())
-                .push(federation::admin_anchor_sign_router()),
+                .push(federation::admin_anchor_sign_router())
+                .push(soland_compat_router()),
         )
         .push(api_v1_router());
     let doc = cached_cokret_openapi_doc(&router);
@@ -178,41 +177,22 @@ fn api_v1_router() -> Router {
         // `self` — the principal's own authenticated session surface.
         .push(
             Router::with_path("self")
-                // self/spaces|directory|... (self-scoped collaboration surface).
+                // self/events/account/snapshot/projection/keys/authz/policy etc.
                 .push(spaces::router())
-                // self/realms/*.
-                .push(realms::router())
-                // CKP-0007 — Circle administration (`/_cokret/self/circles/*`).
-                .push(circles::router())
-                .push(organizations::router())
                 // self/events/*.
                 .push(events::router())
                 // self/authz/* + self/policy/check.
                 .push(access::router())
-                // Audit endpoints stay on the protocol surface (NOT the
-                // deployment-local `/_soland/admin/*` operator namespace); as
-                // an authenticated session-scoped read surface they live under
-                // `self/audit/*`.
-                .push(admin::audit_router())
-                // self/conformance/* (deployment-local conformance harness).
-                .push(conformance::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
-                .push(mls::router())
-                // G3.S2: realm policy server (self/realms/{id}/policy-server).
-                .push(realm_policy::router()),
+                .push(mls::router()),
         )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
-        // `peer` — server↔server federation wire.
-        .push(Router::with_path("peer").push(federation::router()))
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
         // self/moderation/*, open/mimi/* — `interop::router()` declares its
         // own trust segments.
         .push(interop::router())
-        // G3.S9: extensions — applet bridge (edge), bot/ghost actor + TSP +
-        // sovereign (self). `extensions::router()` declares its own segments.
-        .push(extensions::router())
         // Catch-all so that anything under `/_cokret/...` that the typed
         // routers above don't match returns the canonical Cokret JSON
         // error envelope. `cors_preflight` is registered as an OPTIONS
@@ -230,6 +210,30 @@ fn api_v1_router() -> Router {
                 .options(cors_preflight)
                 .goal(api_not_found),
         )
+}
+
+fn soland_compat_router() -> Router {
+    Router::with_path("compat")
+        .oapi_tag("soland-compat")
+        .push(system::legacy_router())
+        .push(identity::legacy_router())
+        .push(
+            Router::with_path("self")
+                .push(spaces::legacy_router())
+                .push(realms::router())
+                .push(circles::router())
+                .push(organizations::router())
+                .push(events::legacy_router())
+                .push(access::legacy_router())
+                .push(admin::audit_router())
+                .push(conformance::router())
+                .push(mls::legacy_router())
+                .push(realm_policy::router()),
+        )
+        .push(Router::with_path("find").push(spaces::find_legacy_router()))
+        .push(Router::with_path("peer").push(federation::router()))
+        .push(interop::legacy_router())
+        .push(extensions::legacy_router())
 }
 
 static COKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
@@ -310,8 +314,6 @@ fn add_contract_operation(
         .add_response("200", OapiResponse::new("ok"));
     if let Some(path_item) = doc.paths.get_mut(path) {
         path_item.operations.insert(method, operation);
-    } else {
-        doc.paths.insert(path, PathItem::new(method, operation));
     }
 }
 
@@ -2162,14 +2164,10 @@ mod canonical_conformance_vectors {
     /// router and diffs it against the registry's `http` bindings; any
     /// route absent from the spec is a violation.
     ///
-    /// Currently `#[ignore]`d: the audit (2026-06-04) found 181 `/_cokret`
-    /// routes absent from the spec's 104 canonical operations — a broad
-    /// soland↔spec surface drift, not a localized bug. Un-ignore once the
-    /// remediation epic lands the surface back onto the spec (or relocates
-    /// soland-private routes under `/_soland`). Run on demand with
-    /// `--ignored` to reproduce the violation list.
+    /// The guard started as an ignored audit vector when the 2026-06-04
+    /// review found 181 off-spec routes. It is now part of the normal test
+    /// suite and must stay green as new surfaces are added.
     #[test]
-    #[ignore = "soland /_cokret surface drift remediation epic — 181 routes off-spec (2026-06-04)"]
     fn cokret_surface_has_no_routes_absent_from_spec() {
         use std::collections::BTreeSet;
 

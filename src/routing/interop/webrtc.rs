@@ -41,7 +41,15 @@ use crate::wire::{
 /// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token`. The
 /// soland-specific call-lifecycle + signaling endpoints (`calls/*`,
 /// `webrtc/sessions/*`) ride alongside on the same self surface.
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
+        .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
+        // CKP-0010 — media token exchange (`/_cokret/self/rtc/token`).
+        .push(Router::with_path("rtc/token").post(cokret_rtc_token))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
         .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))

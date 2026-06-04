@@ -50,7 +50,14 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(Router::with_path("projection/spaces").get(list_space_container_projections))
+        .push(Router::with_path("projection/flows").get(list_flow_projections))
+        .push(Router::with_path("projection/morphs").get(list_morph_projections))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
         .push(Router::with_path("projection/flows").get(list_flow_projections))

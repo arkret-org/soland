@@ -10,5 +10,13 @@ use super::{
 };
 
 pub fn router() -> Router {
-    Router::new().push(authz::router()).push(policy::router())
+    Router::new()
+        .push(authz::protocol_router())
+        .push(policy::protocol_router())
+}
+
+pub fn legacy_router() -> Router {
+    Router::new()
+        .push(authz::legacy_router())
+        .push(policy::legacy_router())
 }

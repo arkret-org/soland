@@ -32,7 +32,15 @@ pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
 pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
 pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "ck.notification.read_cursor.update";
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new().push(
+        Router::with_path("device_messages")
+            .post(send_device_messages)
+            .get(get_device_messages),
+    )
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(
             Router::with_path("device_messages/describe")

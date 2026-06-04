@@ -26,7 +26,14 @@ use crate::wire::{
     EffectiveGrantsResBody, InvitesResponse, RevokeGrantResponse,
 };
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(Router::with_path("authz/check").post(authz_check))
+        .push(Router::with_path("authz/effective-grants").get(effective_grants))
+        .push(Router::with_path("authz/invites").get(invites))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("authz/describe").get(super::describe::authz_describe))
         .push(Router::with_path("authz/check").post(authz_check))

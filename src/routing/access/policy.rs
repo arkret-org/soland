@@ -33,7 +33,11 @@ use crate::wire::{
     PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
 };
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
+    Router::new().push(Router::with_path("policy/check").post(policy_check))
+}
+
+pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("policy/check").post(policy_check))
         .push(

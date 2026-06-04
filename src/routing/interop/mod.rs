@@ -17,8 +17,34 @@ use super::{
 };
 
 pub fn router() -> Router {
+    protocol_router()
+}
+
+pub fn protocol_router() -> Router {
     Router::new()
-        // `edge` — push / bridge gateway (`/_cokret/edge/push/*`).
+        // `edge` — push gateway canonical surface.
+        .push(
+            Router::with_path("edge").push(
+                Router::new()
+                    .push(Router::with_path("push/register-device").post(push::push_register))
+                    .push(Router::with_path("push/unregister-device").post(push::push_unregister))
+                    .push(Router::with_path("push/notify").post(push::push_notify)),
+            ),
+        )
+        // `self` — RTC, blob, moderation report.
+        .push(
+            Router::with_path("self")
+                .push(webrtc::protocol_router())
+                .push(blob::router())
+                .push(moderation::protocol_router()),
+        )
+        // `open` — non-Cokret external vendor interop (MIMI).
+        .push(Router::with_path("open").push(mimi::router()))
+}
+
+pub fn legacy_router() -> Router {
+    Router::new()
+        // `edge` — push / bridge gateway (`/_soland/compat/edge/push/*`).
         .push(
             Router::with_path("edge").push(
                 Router::new()
@@ -37,9 +63,9 @@ pub fn router() -> Router {
         // `self` — RTC/WebRTC, blob, moderation (authenticated session surface).
         .push(
             Router::with_path("self")
-                .push(webrtc::router())
+                .push(webrtc::legacy_router())
                 .push(blob::router())
-                .push(moderation::router()),
+                .push(moderation::legacy_router()),
         )
         // `open` — non-Cokret external vendor interop (MIMI).
         .push(Router::with_path("open").push(mimi::router()))
