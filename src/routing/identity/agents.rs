@@ -559,7 +559,7 @@ async fn attach_agent_grant(
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
             "grant_kind": body.grant_kind,
-            "scope": body.scope,
+            "agent_key_scope": body.scope,
         }),
         "accepted",
     )

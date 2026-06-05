@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
+pub use cokret_sdk::api::ops::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,29 +41,6 @@ pub struct HealthResponse {
     /// aggregate it across all services without scraping the more
     /// expensive describe payload.
     pub hardening: HardeningStatus,
-}
-
-/// T8.3 — production deployment hardening checklist snapshot.
-///
-/// Returned on `/health` and embedded in `/_cokret/describe`.
-/// Every field is derived from runtime config; nothing is hand-set by
-/// the operator. Booleans are intentionally coarse so we don't leak
-/// configured paths, hostnames, or token tails — sodmin renders the
-/// chips, the operator runs the actual probes.
-#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct HardeningStatus {
-    pub development_mode: bool,
-    pub tls_enabled: bool,
-    pub csp_header_configured: bool,
-    pub cors_strict: bool,
-    pub secret_manager_in_use: bool,
-    pub log_redaction_enabled: bool,
-    pub admin_auth_mode: String,
-    pub rate_limit_enabled: bool,
-    pub provider_credential_rotation: String,
-    pub checklist_score: u32,
-    pub checklist_max: u32,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -1148,6 +1126,7 @@ pub struct UpdateProfileResponse {
 pub struct ContactRequestRequest {
     pub target: String,
     #[serde(default)]
+    #[serde(rename = "consent_scope")]
     pub scope: Option<String>,
 }
 
@@ -1161,6 +1140,7 @@ pub struct ContactRespondRequest {
 pub struct ContactResponse {
     pub requester: String,
     pub target: String,
+    #[serde(rename = "consent_scope")]
     pub scope: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
@@ -1498,6 +1478,7 @@ pub struct AgentRotateKeyResBody {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct AgentGrantAttachReqBody {
     pub grant_kind: String,
+    #[serde(rename = "agent_key_scope")]
     pub scope: Value,
     #[serde(default)]
     pub expires_at: Option<String>,
@@ -1509,6 +1490,7 @@ pub struct AgentGrantResBody {
     pub agent_principal_id: String,
     pub grant_id: String,
     pub grant_kind: String,
+    #[serde(rename = "agent_key_scope")]
     pub scope: Value,
     pub state: String,
     pub created_at: String,
@@ -1983,46 +1965,46 @@ pub fn describe(
         rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
-            "account.register".to_owned(),
-            "account.me".to_owned(),
-            "auth.logout".to_owned(),
-            "contacts.request".to_owned(),
-            "contacts.respond".to_owned(),
-            "space.lifecycle".to_owned(),
-            "schema.registry".to_owned(),
-            "events.describe".to_owned(),
-            "events.submit".to_owned(),
-            "events.read".to_owned(),
-            "federation.transaction".to_owned(),
-            "federation.operations".to_owned(),
-            "sync.client_sync".to_owned(),
-            "sync.bound_cursor".to_owned(),
-            "sync.incremental_since".to_owned(),
-            "sync.typing".to_owned(),
-            "sync.backfill".to_owned(),
-            "directory.search_realms".to_owned(),
-            "directory.resolve_realm".to_owned(),
-            "index.query".to_owned(),
-            "authz.check".to_owned(),
-            "profile.presence".to_owned(),
-            "push.register_device".to_owned(),
-            "push.rules".to_owned(),
-            "webrtc.signaling".to_owned(),
-            "blob.upload".to_owned(),
-            "blob.authenticated_download".to_owned(),
-            "blob.presigned_download.local_direct_serve".to_owned(),
-            "blob.upload_policy".to_owned(),
-            "federation.transaction_idempotency".to_owned(),
-            "policy.documents".to_owned(),
-            "moderation.report".to_owned(),
-            "mimi.provider_facade".to_owned(),
-            "mimi.discovery".to_owned(),
-            "mimi.key_material_receipt".to_owned(),
-            "mimi.room_projection".to_owned(),
-            "mimi.identifier_privacy".to_owned(),
-            "mimi.proxy_download_policy".to_owned(),
-            "registry.artifacts".to_owned(),
-            "plaintext_visible_services".to_owned(),
+            "ck.feature.soland.account.register".to_owned(),
+            "ck.feature.soland.account.me".to_owned(),
+            "ck.feature.soland.auth.logout".to_owned(),
+            "ck.feature.soland.contacts.request".to_owned(),
+            "ck.feature.soland.contacts.respond".to_owned(),
+            "ck.feature.soland.space.lifecycle".to_owned(),
+            "ck.feature.soland.schema.registry".to_owned(),
+            "ck.feature.soland.events.describe".to_owned(),
+            "ck.feature.soland.events.submit".to_owned(),
+            "ck.feature.soland.events.read".to_owned(),
+            "ck.feature.soland.federation.transaction".to_owned(),
+            "ck.feature.soland.federation.operations".to_owned(),
+            "ck.feature.soland.sync.client_sync".to_owned(),
+            "ck.feature.soland.sync.bound_cursor".to_owned(),
+            "ck.feature.soland.sync.incremental_since".to_owned(),
+            "ck.feature.soland.sync.typing".to_owned(),
+            "ck.feature.soland.sync.backfill".to_owned(),
+            "ck.feature.soland.directory.search_realms".to_owned(),
+            "ck.feature.soland.directory.resolve_realm".to_owned(),
+            "ck.feature.soland.index.query".to_owned(),
+            "ck.feature.soland.authz.check".to_owned(),
+            "ck.feature.soland.profile.presence".to_owned(),
+            "ck.feature.soland.push.register_device".to_owned(),
+            "ck.feature.soland.push.rules".to_owned(),
+            "ck.feature.soland.webrtc.signaling".to_owned(),
+            "ck.feature.soland.blob.upload".to_owned(),
+            "ck.feature.soland.blob.authenticated_download".to_owned(),
+            "ck.feature.soland.blob.presigned_download.local_direct_serve".to_owned(),
+            "ck.feature.soland.blob.upload_policy".to_owned(),
+            "ck.feature.soland.federation.transaction_idempotency".to_owned(),
+            "ck.feature.soland.policy.documents".to_owned(),
+            "ck.feature.soland.moderation.report".to_owned(),
+            "ck.feature.soland.mimi.provider_facade".to_owned(),
+            "ck.feature.soland.mimi.discovery".to_owned(),
+            "ck.feature.soland.mimi.key_material_receipt".to_owned(),
+            "ck.feature.soland.mimi.room_projection".to_owned(),
+            "ck.feature.soland.mimi.identifier_privacy".to_owned(),
+            "ck.feature.soland.mimi.proxy_download_policy".to_owned(),
+            "ck.feature.soland.registry.artifacts".to_owned(),
+            "ck.feature.soland.plaintext_visible_services".to_owned(),
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
