@@ -1,23 +1,25 @@
 //! CKP-0007 — Circle administration HTTP surface.
 //!
-//! Hosts the canonical `/_cokret/self/circles/*` admin/CRUD layer. Each handler
-//! builds a `ck.circle.*` Operation and routes it through the standard
+//! Hosts the soland deployment-local `/_soland/self/circles/*` admin/CRUD layer.
+//! (The Circle *data model* `ck.circle.*` is spec-canonical; this HTTP
+//! convenience surface is soland-private, not a `/_cokret/` protocol path.)
+//! Each handler builds a `ck.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
 //! to events arriving over the wire.
 //!
-//! Routes (mirror of `/_cokret/self/realms` / `/_soland/self/spaces` style):
+//! Routes (mirror of `/_soland/self/realms` / `/_soland/self/spaces` style):
 //!
-//! - `POST   /_cokret/self/circles`                              create Circle
-//! - `GET    /_cokret/self/circles`                              list Circles (filtered by
+//! - `POST   /_soland/self/circles`                              create Circle
+//! - `GET    /_soland/self/circles`                              list Circles (filtered by
 //!   `realm_id` query)
-//! - `GET    /_cokret/self/circles/{circle_id}`                  read Circle
-//! - `POST   /_cokret/self/circles/{circle_id}/members`          add member
-//! - `DELETE /_cokret/self/circles/{circle_id}/members/{actor}`  remove member
-//! - `POST   /_cokret/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
-//! - `POST   /_cokret/self/circles/{circle_id}/archive`          archive Circle
-//! - `POST   /_cokret/self/circles/{circle_id}/tombstone`        tombstone Circle
+//! - `GET    /_soland/self/circles/{circle_id}`                  read Circle
+//! - `POST   /_soland/self/circles/{circle_id}/members`          add member
+//! - `DELETE /_soland/self/circles/{circle_id}/members/{actor}`  remove member
+//! - `POST   /_soland/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
+//! - `POST   /_soland/self/circles/{circle_id}/archive`          archive Circle
+//! - `POST   /_soland/self/circles/{circle_id}/tombstone`        tombstone Circle
 //!
 //! `scope-rotate` intentionally returns `501 unsupported_feature` until the
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not

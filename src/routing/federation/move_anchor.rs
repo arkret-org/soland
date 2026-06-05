@@ -1,10 +1,10 @@
 //! Move / Anchor wire endpoints.
 //!
 //! Surfaces:
-//! - `POST /_cokret/peer/moves`   — submit a Move; verifier validates structural shape + signature
+//! - `POST /_soland/peer/moves`   — submit a Move; verifier validates structural shape + signature
 //!   payload_digest + effect-shape against the cell registry, then stashes pending in
 //!   [`MoveStore`].
-//! - `POST /_cokret/peer/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
+//! - `POST /_soland/peer/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
 //!   predecessor known → frontier monotonic → batch-verify Moves → atomic effect append → recompute
 //!   state_root → persist.
 //!
@@ -179,7 +179,7 @@ fn verify_jws_shape(
     Ok(())
 }
 
-/// Response from `POST /_cokret/peer/moves`.
+/// Response from `POST /_soland/peer/moves`.
 ///
 /// `state` is one of `pending` / `rejected` so callers can distinguish
 /// "we've stashed it for the next anchorer batch" from "verifier said no
@@ -258,7 +258,7 @@ async fn submit_move(
     })
 }
 
-/// Response from `POST /_cokret/peer/anchors`.
+/// Response from `POST /_soland/peer/anchors`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SubmitAnchorResponse {
     pub anchor_id: String,

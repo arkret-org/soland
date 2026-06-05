@@ -1459,8 +1459,8 @@ pub struct FederationOutboxRecord {
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: String,
     /// Endpoint path on the peer, e.g.
-    /// `/_cokret/peer/federation/push-operations` or
-    /// `/_cokret/peer/federation/anchors`.
+    /// `/_soland/peer/federation/push-operations` or
+    /// `/_soland/peer/federation/anchors`.
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
     /// deterministically from `(origin, resource_kind, resource_id)` so

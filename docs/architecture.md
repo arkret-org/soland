@@ -67,7 +67,7 @@ The end-to-end pipeline is observable on the
 
 ## 2. Federation outbox
 
-soland's outbound federation surface (`/_cokret/peer/federation/...`) is
+soland's outbound federation surface (`/_soland/peer/federation/...`) is
 implemented as an at-least-once outbox table backed by Postgres (or the
 in-memory mirror) and a single in-process dispatcher per replica.
 

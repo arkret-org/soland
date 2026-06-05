@@ -8,7 +8,7 @@ use super::common::*;
 #[tokio::test]
 async fn federation_accepts_idempotent_replayed_operations() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let push_url = "http://server/_cokret/peer/federation/push-operations";
+    let push_url = "http://server/_soland/peer/federation/push-operations";
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-4b147e97831e").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-20d6cfd24be6").unwrap(),
@@ -63,7 +63,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     assert_eq!(unsigned_body["error"]["code"], "schema_violation");
 
     let pulled: Value = TestClient::get(
-        "http://server/_cokret/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/_soland/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -76,7 +76,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     );
 
     let bootstrap: Value = TestClient::get(
-        "http://server/_cokret/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6&snapshot_bootstrap=true",
+        "http://server/_soland/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6&snapshot_bootstrap=true",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -122,7 +122,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     );
     assert!(replay["rejected"].as_array().unwrap().is_empty());
     let after_replay: Value = TestClient::get(
-        "http://server/_cokret/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/_soland/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -208,7 +208,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
     );
 
     let redacted_pull: Value = TestClient::get(
-        "http://server/_cokret/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
+        "http://server/_soland/peer/federation/pull-operations?space_id=ck:realm:01904100-0000-7000-8000-20d6cfd24be6",
     )
     .send(&app_from_state(state.clone()))
     .await
@@ -221,7 +221,7 @@ async fn federation_accepts_idempotent_replayed_operations() {
 #[tokio::test]
 async fn federation_push_rejects_bad_rfc9421_and_missing_relay_inner_signature() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let push_url = "http://server/_cokret/peer/federation/push-operations";
+    let push_url = "http://server/_soland/peer/federation/push-operations";
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-7e173b950001").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-7e173b950002").unwrap(),
@@ -357,7 +357,7 @@ async fn federation_verify_actor_request_binding_can_pass_while_actor_signature_
 #[tokio::test]
 async fn federation_transactions_are_idempotent_by_origin_and_body() {
     let state = AppState::new(test_config(), Db { pool: None });
-    let txn_url = "http://server/_cokret/peer/federation/transactions/txn-idem";
+    let txn_url = "http://server/_soland/peer/federation/transactions/txn-idem";
     let operation = Operation::create(
         OperationId::new("ck:operation:01904100-0000-7000-8000-91a2f2e7a3b4").unwrap(),
         RealmId::new("ck:realm:01904100-0000-7000-8000-788d17d38a52").unwrap(),
@@ -438,7 +438,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
     assert_eq!(conflict.status_code.unwrap().as_u16(), 409);
 
     let wrong_destination_url =
-        "http://server/_cokret/peer/federation/transactions/txn-wrong-destination";
+        "http://server/_soland/peer/federation/transactions/txn-wrong-destination";
     let wrong_destination_body = serde_json::json!({
         "origin": "did:web:remote.example",
         "destination": "did:web:other.example",
@@ -460,7 +460,7 @@ async fn federation_transactions_are_idempotent_by_origin_and_body() {
         .await;
     assert_eq!(wrong_destination.status_code.unwrap().as_u16(), 401);
 
-    let unsigned_url = "http://server/_cokret/peer/federation/transactions/txn-unsigned";
+    let unsigned_url = "http://server/_soland/peer/federation/transactions/txn-unsigned";
     let mut unsigned_req = TestClient::put(unsigned_url).json(&transaction_body);
     for (name, value) in signed_federation_transaction_headers(
         "did:web:remote.example",
@@ -537,7 +537,7 @@ fn verify_actor_signature_transcript(body: &Value, unsigned_digest: &str) -> Val
 
 async fn post_verify_actor(state: AppState, body: Value) -> Value {
     let mut request =
-        TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
+        TestClient::post("http://server/_soland/peer/federation/verify-actor").json(&body);
     for (name, value) in verify_actor_headers(&body) {
         request = request.add_header(name, value, true);
     }
@@ -551,7 +551,7 @@ async fn post_verify_actor(state: AppState, body: Value) -> Value {
 
 async fn post_verify_actor_error(state: AppState, body: Value) -> (u16, String) {
     let mut request =
-        TestClient::post("http://server/_cokret/peer/federation/verify-actor").json(&body);
+        TestClient::post("http://server/_soland/peer/federation/verify-actor").json(&body);
     for (name, value) in verify_actor_headers(&body) {
         request = request.add_header(name, value, true);
     }

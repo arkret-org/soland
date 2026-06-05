@@ -1,5 +1,5 @@
-//! End-to-end HTTP integration tests for `POST /_cokret/peer/moves` and
-//! `POST /_cokret/peer/anchors`.
+//! End-to-end HTTP integration tests for `POST /_soland/peer/moves` and
+//! `POST /_soland/peer/anchors`.
 //!
 //! These tests exercise the full wire path: a client signs a Move,
 //! posts it to soland, the server stashes it in the in-memory MoveStore,
@@ -228,7 +228,7 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
     // 1. Submit Move — soland verifies signature + effect shape and stashes it in the in-memory
     //    MoveStore.
     let move_obj = build_invited_to_join_move();
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -256,7 +256,7 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
         vec![],
         Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
     );
-    let genesis_resp: Value = TestClient::post("http://server/_cokret/peer/anchors")
+    let genesis_resp: Value = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&genesis)
         .send(&app)
@@ -274,7 +274,7 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
         vec![move_obj.id.clone()],
         expected_root.clone(),
     );
-    let resp: Value = TestClient::post("http://server/_cokret/peer/anchors")
+    let resp: Value = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&anchor)
         .send(&app)
@@ -311,7 +311,7 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
 
     // Submit a Move first so the anchor has a frontier candidate.
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -328,7 +328,7 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
     let bad_pred = AnchorId::new(format!("ck:anchor:sha256:{}", "ee".repeat(32))).unwrap();
     let anchor = build_anchor(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
 
-    let mut resp = TestClient::post("http://server/_cokret/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&anchor)
         .send(&app)
@@ -353,7 +353,7 @@ async fn anchor_with_non_empty_frontier_without_genesis_predecessor_is_rejected(
     let app = service(state.clone());
 
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -367,7 +367,7 @@ async fn anchor_with_non_empty_frontier_without_genesis_predecessor_is_rejected(
     let expected_root = compute_state_root(&expected).unwrap();
     let anchor = build_anchor(vec![], vec![move_obj.id], expected_root);
 
-    let mut resp = TestClient::post("http://server/_cokret/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&anchor)
         .send(&app)
@@ -388,7 +388,7 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
     let app = service(state.clone());
 
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -402,7 +402,7 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
         vec![],
         Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
     );
-    let _: Value = TestClient::post("http://server/_cokret/peer/anchors")
+    let _: Value = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&genesis)
         .send(&app)
@@ -416,7 +416,7 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
     let wrong_root = Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap();
     let anchor = build_anchor(vec![genesis.id], vec![move_obj.id], wrong_root);
 
-    let mut resp = TestClient::post("http://server/_cokret/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&anchor)
         .send(&app)
@@ -493,7 +493,7 @@ async fn move_on_soland_registered_cell_family_passes_verify() {
     let app = service(state.clone());
 
     let move_obj = build_consent_grant_add_move();
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -526,7 +526,7 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
 
     // 1. Submit a Move (membership FSM transition invite->join).
     let move_obj = build_invited_to_join_move();
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -803,7 +803,7 @@ async fn submit_move_rejects_stale_hlc_with_replay_window_reason() {
     let stale_ms = (chrono::Utc::now() - chrono::Duration::hours(1)).timestamp_millis() as u64;
     let move_obj = build_member_state_move_with_hlc(stale_ms);
 
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -833,7 +833,7 @@ async fn submit_move_rejects_future_hlc() {
     let future_ms = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp_millis() as u64;
     let move_obj = build_member_state_move_with_hlc(future_ms);
 
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -860,7 +860,7 @@ async fn submit_move_accepts_current_hlc_under_replay_window() {
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     let move_obj = build_member_state_move_with_hlc(now_ms);
 
-    let submit: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let submit: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -1062,7 +1062,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
         // anchor-pipeline space (`space_id()`), and the broadcast goes
         // out tagged with that space_id.
         let move_obj = build_invited_to_join_move();
-        let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+        let _: Value = TestClient::post("http://server/_soland/peer/moves")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&move_obj)
             .send(&app_writer)
@@ -1192,7 +1192,7 @@ async fn anchorer_pass_populates_projection_cells_map() {
     let app = service(state.clone());
 
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -1317,7 +1317,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     let app = service(state.clone());
 
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -1371,7 +1371,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
 async fn seed_member_cell_join(state: AppState, token: &str) -> String {
     let app = service(state.clone());
     let move_obj = build_invited_to_join_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&move_obj)
         .send(&app)
@@ -1462,7 +1462,7 @@ async fn admin_list_cells_filters_by_prefix() {
     //   2. ck.component.consent.grant.v1 (or-set, anchored via consent move)
     let _ = seed_member_cell_join(state.clone(), &token).await;
     let consent_move = build_consent_grant_add_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&consent_move)
         .send(&app)
@@ -1569,7 +1569,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     // Seed at least two cells (member + consent) under the same space.
     let _ = seed_member_cell_join(state.clone(), &token).await;
     let consent_move = build_consent_grant_add_move();
-    let _: Value = TestClient::post("http://server/_cokret/peer/moves")
+    let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&consent_move)
         .send(&app)

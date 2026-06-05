@@ -8,13 +8,13 @@
 //!
 //! Wire shapes mirror `cotest/e2e/scenarios/conformance/encoding-vectors.md`
 //! Pre-conditions §:
-//!   POST /_cokret/self/conformance/encode    { vector_id, input }                              → {
-//! canonical_json, digest }   POST /_cokret/self/conformance/sign      { vector_id, event,
+//!   POST /_soland/self/conformance/encode    { vector_id, input }                              → {
+//! canonical_json, digest }   POST /_soland/self/conformance/sign      { vector_id, event,
 //! signing_key_ref }             → { canonical_bytes, digest, signature, public_key }   POST /api/
 //! v1/conformance/hlc-merge { vector_id, clocks: [{actor, hlc, payload_hint}] } → { ordered: [...]
-//! }   POST /_cokret/self/conformance/cursor    { vector_id, events, reduce_round }               →
-//! { cursor }   POST /_cokret/self/conformance/envelope  { vector_id, envelope }
-//! → { canonical_bytes, digest }   POST /_cokret/self/conformance/redact    { vector_id, event,
+//! }   POST /_soland/self/conformance/cursor    { vector_id, events, reduce_round }               →
+//! { cursor }   POST /_soland/self/conformance/envelope  { vector_id, envelope }
+//! → { canonical_bytes, digest }   POST /_soland/self/conformance/redact    { vector_id, event,
 //! redaction, viewer_did }       → { projected_event }
 //!
 //! Reject paths (`vector_id` starts with `reject_`) return HTTP 4xx with

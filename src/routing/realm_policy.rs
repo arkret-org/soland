@@ -1,13 +1,13 @@
 //! G3.S2 — Realm policy server admin HTTP surface.
 //!
 //! Surfaces:
-//! - `GET /_cokret/self/realms/{realm_id}/policy-server` — fetch the currently-projected
+//! - `GET /_soland/self/realms/{realm_id}/policy-server` — fetch the currently-projected
 //!   `ck.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /_cokret/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move.
+//! - `PUT /_soland/self/realms/{realm_id}/policy-server` — submit a `ck.realm.policy_server` Move.
 //!   Routes through the standard `accept_local_operations` pipeline so the reducer's validators
 //!   (URL scheme, on_timeout enum) run.
-//! - `DELETE /_cokret/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins
+//! - `DELETE /_soland/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins
 //!   can remove the per-realm policy server config (callers fall back to the `governed_by` chain or
 //!   the local-only capability check after this lands).
 //!

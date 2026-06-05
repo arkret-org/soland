@@ -125,7 +125,7 @@ pub struct AppConfig {
     pub use_keystore: bool,
     /// Federation routing policy. The on-the-wire
     /// shape is identical for both variants (Move broadcast push / Anchor
-    /// pull-push under `/_cokret/peer/federation/{push-operations,anchors,...}`);
+    /// pull-push under `/_soland/peer/federation/{push-operations,anchors,...}`);
     /// the policy only changes which set of peer endpoints we talk to.
     ///
     /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every known peer

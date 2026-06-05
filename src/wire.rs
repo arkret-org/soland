@@ -2025,7 +2025,13 @@ pub fn describe(
             "plaintext_visible_services".to_owned(),
         ],
         supported_operations,
-        supported_bindings: vec![serde_json::json!({"kind": "http_json", "base_path": "/_cokret"})],
+        // service-surface.md §3 documents `base_url` (typed `format: uri` in
+        // service-describe.schema.json) as the connectable service base. The
+        // routing layer overrides this with the deployment's actual
+        // `public_base_url`; the typed default omits the URL (only `kind` is
+        // schema-required) rather than advertise a non-connectable relative
+        // `base_path` segment.
+        supported_bindings: vec![serde_json::json!({"kind": "http_json"})],
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
         auth_metadata,

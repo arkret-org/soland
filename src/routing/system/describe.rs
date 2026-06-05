@@ -223,6 +223,17 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // Round R2/R3 (T08) — expose deployment trust_domain so peers /
     // clients can bind `ck.cross_signing.reset` payloads correctly.
     value["trust_domain"] = json!(state.config.trust_domain);
+    // service-surface.md §3 — `supported_bindings[].base_url` is the only
+    // documented example field and is typed `format: uri` in
+    // service-describe.schema.json. Emit the deployment's connectable base
+    // URL so clients can build `base_url + operation_path` directly instead
+    // of receiving a non-connectable relative `base_path` segment.
+    value["supported_bindings"] = json!([
+        {
+            "kind": "http_json",
+            "base_url": state.config.public_base_url.trim_end_matches('/'),
+        }
+    ]);
     // Stream-F (Wave 2C) — advertise the audit erasure-receipts
     // surface. Spec `realm-and-space.md` §2.5.2 requires the receipt
     // list to be reachable via `server.describe.erasure_receipts_endpoint`

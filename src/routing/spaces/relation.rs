@@ -1,9 +1,9 @@
 //! Relation create / delete / list handlers.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/relations`                — create
-//! - `GET    /_cokret/self/relations`                — list, filtered by `?realm_id` / `?kind`
-//! - `DELETE /_cokret/self/relations/{relation_id}`  — tombstone
+//! - `POST   /_soland/self/relations`                — create
+//! - `GET    /_soland/self/relations`                — list, filtered by `?realm_id` / `?kind`
+//! - `DELETE /_soland/self/relations/{relation_id}`  — tombstone
 //!
 //! `ck.relation.update` is intentionally not exposed as its own handler — the
 //! reducer handles in-place patch-merge per round-1 work (Round-1 A1a in

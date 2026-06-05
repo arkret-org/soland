@@ -6,7 +6,7 @@
 //! at `cotest/e2e/tests/conformance/encoding-vectors.spec.ts` can drive the
 //! same vectors against a running soland.
 //!
-//! Routes (all `POST /_cokret/self/conformance/...`):
+//! Routes (all `POST /_soland/self/conformance/...`):
 //!   - `encode`
 //!   - `sign`
 //!   - `hlc-merge`

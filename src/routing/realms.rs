@@ -1,17 +1,17 @@
 //! Realm governance HTTP surface (R3.1 + G3.S5).
 //!
 //! Surfaces:
-//! - `GET /_cokret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
+//! - `GET /_soland/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
 //!   ` — list the typed cross-Realm links projected from `ck.realm.link` events. Powered by
 //!   [`crate::reducer::ProjectionState::realm_links_query`].
-//! - `POST /_cokret/self/realms/{realm_id}/links` — write a `ck.realm.link` Move from `realm_id →
+//! - `POST /_soland/self/realms/{realm_id}/links` — write a `ck.realm.link` Move from `realm_id →
 //!   target_realm_id`. The reducer runs the `realm_link_*` validators including cycle detection
 //!   (G3.S5); a rejected payload comes back as HTTP 422 with the spec reason code (e.g.
 //!   `realm_link_cycle`, `realm_link_self_reference`).
-//! - `DELETE /_cokret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
+//! - `DELETE /_soland/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
 //!   `ck.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
 //!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
-//! - `GET /_cokret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
+//! - `GET /_soland/self/realms/{realm_id}/effective-policy` — return the merged effective policy
 //!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
 //!   `ck.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.

@@ -1,8 +1,8 @@
 //! Reaction add / remove handlers.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/reactions` — add a reaction
-//! - `DELETE /_cokret/self/reactions` — remove a reaction
+//! - `POST   /_soland/self/reactions` — add a reaction
+//! - `DELETE /_soland/self/reactions` — remove a reaction
 //!
 //! Both routes validate a `ck.reaction.add` / `ck.reaction.remove` operation
 //! and project it through the canonical projection layer.

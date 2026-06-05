@@ -50,7 +50,7 @@ pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 
 /// other audit event; the receiving reducer dispatches on the canonical
 /// kind string and lands the receipt in its own `erasure_receipts`
 /// projection.
-const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_cokret/peer/federation/push-operations";
+const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_soland/peer/federation/push-operations";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ErasurePeerTarget {

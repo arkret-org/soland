@@ -12,8 +12,8 @@
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
 //! dispatcher to inline projection helpers.
 //!
-//! The Move/Anchor receive pipeline (`POST /_cokret/peer/moves` /
-//! `POST /_cokret/peer/anchors`) routes through [`registry::LatticeKind`] /
+//! The Move/Anchor receive pipeline (`POST /_soland/peer/moves` /
+//! `POST /_soland/peer/anchors`) routes through [`registry::LatticeKind`] /
 //! [`registry::LatticeRegistry`]. Concrete impls live in
 //! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
 //! the SDK's `verify_move` / `apply_anchor` pipeline. This is the
@@ -4419,7 +4419,7 @@ impl ProjectionState {
     /// lattice, cell_subject = `(realm_id, target_realm_id, link_kind)`)
     /// AND mirrors into the structured `realm_links` /
     /// `realm_links_inbound` caches consumed by the
-    /// `/_cokret/self/realms/{id}/links` query API.
+    /// `/_soland/self/realms/{id}/links` query API.
     ///
     /// Schema-level validation:
     /// - `link_kind` MUST be one of the eight canonical values declared on
@@ -7490,7 +7490,7 @@ impl ProjectionState {
 
     /// CKP-0007 read helper — return the Circle projection for `circle_id`,
     /// or `None` when the Circle is unknown or already tombstoned. Used by
-    /// `/_cokret/self/circles/*` route handlers and by `scope_circle_id`
+    /// `/_soland/self/circles/*` route handlers and by `scope_circle_id`
     /// validators that need to confirm the Circle is alive before allowing
     /// Flow / Space / Morph writes against it.
     pub fn circle(&self, circle_id: &str) -> Option<&CircleProjection> {

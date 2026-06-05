@@ -238,7 +238,7 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // (R3.1). The CKP-0007 P2A.4 pass lifts the previous TODO(realm-rework)
 // marker: the canonical link kinds (`governed_by`, `inherits_policy_from`,
 // `mirror_of`, `references`, `audited_by`) all evaluate, and the
-// `/_cokret/self/realms/{realm_id}/effective-policy` surface walks the
+// `/_soland/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
 // G3.S2 — `ck.realm.policy_server` (realm / reducer_input): declares the

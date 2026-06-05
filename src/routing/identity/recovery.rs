@@ -2,8 +2,8 @@
 //!
 //! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
 //!
-//! - `POST /_cokret/root/identity/recovery-policy`  — persist + advance a recovery policy.
-//! - `POST /_cokret/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
+//! - `POST /_soland/root/identity/recovery-policy`  — persist + advance a recovery policy.
+//! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
 //!   session.
 //!
 //! Wire-level validation lands here (proof_kind enum, recovery_session

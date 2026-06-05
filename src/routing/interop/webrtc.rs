@@ -1,10 +1,14 @@
 //! WebRTC session + signaling handlers.
 //!
 //! Surfaces:
-//! - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list — currently empty)
-//! - `POST /_cokret/self/webrtc/sessions` create
-//! - `PUT/GET /_cokret/self/webrtc/sessions/{session_id}/signals`
-//! - `DELETE /_cokret/self/webrtc/sessions/{session_id}` close
+//! - Protocol face (dual-mounted, `protocol_router` + `legacy_router`):
+//!   - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list — currently empty)
+//!   - `POST /_cokret/self/rtc/token` (media token exchange, CKP-0010)
+//! - Deployment face (soland-local, `legacy_router` only → `/_soland/...`):
+//!   - `POST /_soland/self/webrtc/sessions` create
+//!   - `PUT/GET /_soland/self/webrtc/sessions/{session_id}/signals`
+//!   - `DELETE /_soland/self/webrtc/sessions/{session_id}` close
+//!   - `POST /_soland/self/calls/*` call-lifecycle helpers
 //!
 //! Sessions are persisted through `state.persistence.webrtc()`. Durable
 //! Pg backing + TURN policy + spec rule (no DID in TURN username / push

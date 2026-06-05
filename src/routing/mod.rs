@@ -129,7 +129,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         //      cells, control-frames, retention.
         //   4. `admin_anchor_sign_router` — `POST /_soland/admin/anchors/sign`
         //      operator anchor-signing trigger, detached from the
-        //      `/_cokret/peer/federation` router so it sits in the admin
+        //      `/_soland/peer/federation` router so it sits in the admin
         //      namespace.
         .push(
             Router::with_path("_soland")
@@ -546,35 +546,35 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "list invites",
     ),
     (
-        "/_cokret/peer/federation/transactions/{txn_id}",
+        "/_soland/peer/federation/transactions/{txn_id}",
         PathItemType::Put,
         "federation",
         "ck.extension.soland.federation.transaction",
         "submit federation transaction",
     ),
     (
-        "/_cokret/peer/federation/push-operations",
+        "/_soland/peer/federation/push-operations",
         PathItemType::Post,
         "federation",
         "ck.extension.soland.federation.push_operations",
         "push federation operations",
     ),
     (
-        "/_cokret/peer/federation/pull-operations",
+        "/_soland/peer/federation/pull-operations",
         PathItemType::Get,
         "federation",
         "ck.extension.soland.federation.pull_operations",
         "pull federation operations",
     ),
     (
-        "/_cokret/peer/federation/space-members",
+        "/_soland/peer/federation/space-members",
         PathItemType::Get,
         "federation",
         "ck.extension.soland.federation.space_members",
         "list space memberships",
     ),
     (
-        "/_cokret/peer/federation/verify-actor",
+        "/_soland/peer/federation/verify-actor",
         PathItemType::Post,
         "federation",
         "ck.extension.soland.federation.verify_actor",
@@ -2547,7 +2547,7 @@ mod framework_error_routing_tests {
         // Unknown path → `None`, which is the cue for `api_not_found`
         // to emit `unrecognized_endpoint` instead of `method_not_allowed`.
         assert!(allow_methods_for_path("/_cokret/self/does-not-exist").is_none());
-        assert!(allow_methods_for_path("/_cokret/peer/does-not-exist").is_none());
+        assert!(allow_methods_for_path("/_soland/peer/does-not-exist").is_none());
     }
 
     /// End-to-end check that `/_cokret/*` unrecognized paths return

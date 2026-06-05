@@ -3,7 +3,7 @@
 //! - `GET /.well-known/cokret` — server description. Spec-aligned shape so peers can discover the
 //!   service DID, trust domain, public base URL, and federation policy without an auth round-trip.
 //!   The body is built from the live `AppConfig`; the route is unauthenticated.
-//! - `POST /_cokret/peer/federation/send-event` — outbound federation send-event stub. Returns 501
+//! - `POST /_soland/peer/federation/send-event` — outbound federation send-event stub. Returns 501
 //!   `unsupported_feature` until the active path lands; the route is mounted today so peers can
 //!   probe support and the OpenAPI doc carries the operation id.
 
@@ -54,11 +54,11 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
                 state.config.public_base_url.trim_end_matches('/')
             ),
             "federation_transaction": format!(
-                "{}/_cokret/peer/federation/transactions/{{txn_id}}",
+                "{}/_soland/peer/federation/transactions/{{txn_id}}",
                 state.config.public_base_url.trim_end_matches('/')
             ),
             "federation_pull_operations": format!(
-                "{}/_cokret/peer/federation/pull-operations",
+                "{}/_soland/peer/federation/pull-operations",
                 state.config.public_base_url.trim_end_matches('/')
             ),
         },
