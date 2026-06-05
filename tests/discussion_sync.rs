@@ -98,10 +98,8 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
     login["access_token"].as_str().unwrap().to_owned()
 }
 
-/// Seed a Realm directly via AppState (the Realm REST mutation surface
-/// `POST /_soland/self/spaces` was removed in W2A; tests now set up Realm
-/// fixtures internally and exercise downstream behaviour via the canonical
-/// `POST /_cokret/self/events` path).
+/// Seed a Realm directly via AppState so the tests can focus on downstream
+/// sync behaviour through the canonical `POST /_cokret/self/events` path.
 async fn seed_realm(
     state: &AppState,
     owner: &str,
@@ -204,9 +202,9 @@ async fn admit_member(
     );
 }
 
-async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) {
+async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) {
     let payload = json!({
-        "flow_id": flow_id_for_realm(space_id),
+        "flow_id": flow_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {
             "kind": "ck.content.text",
@@ -220,7 +218,7 @@ async fn send_message(state: AppState, token: &str, space_id: &str, body: &str) 
         "schema_id": "ck.schema.message.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -329,7 +327,7 @@ async fn send_circle_scoped_encrypted_message(
     token: &str,
     actor_did: &str,
     device_id: &str,
-    space_id: &str,
+    realm_id: &str,
 ) -> String {
     let event_id = new_prefixed_uuid7("ck:event:");
     // Spec-conforming encrypted message: `encrypted_content` (not the retired
@@ -337,7 +335,7 @@ async fn send_circle_scoped_encrypted_message(
     // event_kind. The message does NOT carry scope_circle_id — its circle
     // scope is derived server-side from the Flow (install_projected_flow_scope).
     let payload = json!({
-        "flow_id": flow_id_for_realm(space_id),
+        "flow_id": flow_id_for_realm(realm_id),
         "track_name": "discussion",
         "encrypted_content": {
             "scheme": "mls-rfc9420",
@@ -348,7 +346,7 @@ async fn send_circle_scoped_encrypted_message(
             "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",
             "aad_visibility_event_id": "hidden",
             "aad": {
-                "realm_id": space_id,
+                "realm_id": realm_id,
                 "event_kind": "ck.message.create"
             },
             "key_ref": {
@@ -365,7 +363,7 @@ async fn send_circle_scoped_encrypted_message(
         "schema_id": "ck.schema.message.v1",
         "actor_id": actor_did,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "device_id": device_id,
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -515,8 +513,8 @@ fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
-fn sync_bodies(sync: &Value, space_id: &str) -> Vec<String> {
-    sync["realms"][space_id]["timeline"]["events"]
+fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
+    sync["realms"][realm_id]["timeline"]["events"]
         .as_array()
         .unwrap()
         .iter()
@@ -546,9 +544,9 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     let bob_did = "did:web:bob.example";
     let _bob_session_device = dev_token(state.clone(), bob_did, "b0b000000000").await;
     let bob = _bob_session_device;
-    let space_id = seed_realm(&state, alice_did, "joined history", "joined").await;
+    let realm_id = seed_realm(&state, alice_did, "joined history", "joined").await;
 
-    send_message(state.clone(), &alice, &space_id, "before bob joined").await;
+    send_message(state.clone(), &alice, &realm_id, "before bob joined").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     admit_member(
         state.clone(),
@@ -556,14 +554,14 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
         alice_did,
         alice_device_id,
         bob_did,
-        &space_id,
+        &realm_id,
     )
     .await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    send_message(state.clone(), &alice, &space_id, "after bob joined").await;
+    send_message(state.clone(), &alice, &realm_id, "after bob joined").await;
 
     let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
-    let bodies = sync_bodies(&sync, &space_id);
+    let bodies = sync_bodies(&sync, &realm_id);
     assert!(
         !bodies.contains(&"before bob joined".to_owned()),
         "{bodies:?}"
@@ -574,7 +572,7 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}&limit=20"
+        "http://server/_cokret/self/events?realms={realm_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -601,9 +599,9 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = "did:web:bob.example";
     let bob = dev_token(state.clone(), bob_did, "b0b000000002").await;
-    let space_id = seed_realm(&state, alice_did, "shared history", "shared").await;
+    let realm_id = seed_realm(&state, alice_did, "shared history", "shared").await;
 
-    send_message(state.clone(), &alice, &space_id, "shared before join").await;
+    send_message(state.clone(), &alice, &realm_id, "shared before join").await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     admit_member(
         state.clone(),
@@ -611,18 +609,18 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
         alice_did,
         alice_device_id,
         bob_did,
-        &space_id,
+        &realm_id,
     )
     .await;
 
     let sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
     assert!(
-        sync_bodies(&sync, &space_id).contains(&"shared before join".to_owned()),
+        sync_bodies(&sync, &realm_id).contains(&"shared before join".to_owned()),
         "{sync:?}"
     );
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}&limit=20"
+        "http://server/_cokret/self/events?realms={realm_id}&limit=20"
     ))
     .add_header("authorization", format!("Bearer {bob}"), true)
     .send(&app_from_state(state.clone()))
@@ -646,7 +644,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     let bob = dev_token(state.clone(), bob_did, "b0b000000010").await;
     let mallory_did = "did:web:mallory.example";
     let mallory = dev_token(state.clone(), mallory_did, "ca2010000010").await;
-    let space_id = seed_realm(&state, alice_did, "circle scoped e2ee", "shared").await;
+    let realm_id = seed_realm(&state, alice_did, "circle scoped e2ee", "shared").await;
     for actor in [alice_did, bob_did, mallory_did] {
         admit_member(
             state.clone(),
@@ -654,7 +652,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
             alice_did,
             alice_device_id,
             actor,
-            &space_id,
+            &realm_id,
         )
         .await;
     }
@@ -662,7 +660,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     let circle_id = new_prefixed_uuid7("ck:circle:");
     install_projected_circle_scope(
         &state,
-        &space_id,
+        &realm_id,
         &circle_id,
         alice_did,
         &[alice_did, bob_did],
@@ -671,8 +669,8 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     // NO scope_circle_id — soland derives its effective scope from this Flow.
     install_projected_flow_scope(
         &state,
-        &space_id,
-        &flow_id_for_realm(&space_id),
+        &realm_id,
+        &flow_id_for_realm(&realm_id),
         &circle_id,
         alice_did,
     );
@@ -681,12 +679,12 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         &alice,
         alice_did,
         alice_device_id,
-        &space_id,
+        &realm_id,
     )
     .await;
 
     let bob_sync = account_subscribe_frame(state.clone(), &bob, "catchup=true").await;
-    let bob_events = bob_sync["realms"][&space_id]["timeline"]["events"]
+    let bob_events = bob_sync["realms"][&realm_id]["timeline"]["events"]
         .as_array()
         .unwrap();
     let bob_event = bob_events
@@ -698,7 +696,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
     assert_eq!(bob_event["encrypted"], true);
 
     let mallory_sync = account_subscribe_frame(state.clone(), &mallory, "catchup=true").await;
-    let mallory_events = mallory_sync["realms"][&space_id]["timeline"]["events"]
+    let mallory_events = mallory_sync["realms"][&realm_id]["timeline"]["events"]
         .as_array()
         .unwrap();
     assert!(
@@ -743,14 +741,14 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     let bob_did = "did:web:bob.example";
     let bob_device_id = "ck:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
-    let space_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
+    let realm_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
     admit_member(
         state.clone(),
         &alice,
         alice_did,
         alice_device_id,
         bob_did,
-        &space_id,
+        &realm_id,
     )
     .await;
 
@@ -759,10 +757,10 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &alice,
         alice_did,
         alice_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.text",
@@ -784,10 +782,10 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
@@ -802,7 +800,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &alice,
         alice_did,
         alice_device_id,
-        &space_id,
+        &realm_id,
         "ck.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
@@ -815,7 +813,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.reaction.add",
         json!({
             "target_ref": root_message_ref.clone(),
@@ -828,7 +826,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.reaction.remove",
         json!({
             "target_ref": root_message_ref.clone(),
@@ -838,7 +836,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     .await;
 
     let sync = account_subscribe_frame(state.clone(), &alice, "catchup=true").await;
-    let timeline = sync["realms"][&space_id]["timeline"]["events"]
+    let timeline = sync["realms"][&realm_id]["timeline"]["events"]
         .as_array()
         .expect("timeline events");
     let root = timeline
@@ -895,14 +893,14 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     let carol_did = "did:web:carol.example";
     let carol_device_id = "ck:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
-    let space_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
+    let realm_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
     admit_member(
         state.clone(),
         &alice,
         alice_did,
         alice_device_id,
         bob_did,
-        &space_id,
+        &realm_id,
     )
     .await;
     admit_member(
@@ -911,7 +909,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         alice_did,
         alice_device_id,
         carol_did,
-        &space_id,
+        &realm_id,
     )
     .await;
 
@@ -921,10 +919,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &alice,
         alice_did,
         alice_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll",
@@ -945,10 +943,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -964,10 +962,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -983,10 +981,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &carol,
         carol_did,
         carol_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -999,7 +997,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     .await;
 
     let sync = account_subscribe_frame(state.clone(), &alice, "catchup=true").await;
-    let timeline = sync["realms"][&space_id]["timeline"]["events"]
+    let timeline = sync["realms"][&realm_id]["timeline"]["events"]
         .as_array()
         .expect("timeline events");
     let poll = timeline
@@ -1018,10 +1016,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &alice,
         alice_did,
         alice_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.close",
@@ -1036,10 +1034,10 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &bob,
         bob_did,
         bob_device_id,
-        &space_id,
+        &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&space_id),
+            "flow_id": flow_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",

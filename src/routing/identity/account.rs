@@ -473,7 +473,7 @@ async fn export_account(
     req: &mut Request,
 ) -> JsonResult<serde_json::Value> {
     // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
-    // include account / profile / spaces / messages / devices / audit_log
+    // include account / profile / realms / messages / devices / audit_log
     // facets. We assemble each from the existing persistence stores; the
     // bundle is shipped as a single JSON blob, and a `ck.audit.exported`
     // audit entry records the operation so subsequent governance reviews
@@ -516,17 +516,17 @@ async fn export_account(
         })
         .collect::<Vec<_>>();
 
-    let spaces: Vec<serde_json::Value> = state
+    let realms: Vec<serde_json::Value> = state
         .persistence
         .realm_meta()
         .list()
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|(_sid, meta)| meta.owner == actor)
-        .map(|(sid, meta)| {
+        .filter(|(_realm_id, meta)| meta.owner == actor)
+        .map(|(realm_id, meta)| {
             json!({
-                "space_id": sid,
+                "realm_id": realm_id,
                 "discoverability": meta.discoverability,
                 "history_visibility": meta.history_visibility,
                 "created_at": meta.created_at.to_rfc3339(),
@@ -558,7 +558,7 @@ async fn export_account(
         "exported_at": now(),
         "account": account_payload,
         "profile": profile,
-        "spaces": spaces,
+        "realms": realms,
         "devices": devices,
         // Messages — plaintext for own events, ciphertext-only for E2EE
         // peers — lands when the projection event read API exposes a
@@ -568,8 +568,8 @@ async fn export_account(
         // ── v1 forward-compat stub fields (round 2) ─────────────────
         //
         // The export bundle's v1 scope is `{ account, devices,
-        // audit_log }` plus the always-empty `messages` and `spaces`
-        // collections; conversation/space history, contacts, and key
+        // audit_log }` plus the always-empty `messages` and `realms`
+        // collections; conversation history, contacts, and key
         // backup state will land in a later round once the underlying
         // stores expose per-actor extracts. The three keys below are
         // reserved now so downstream tooling can write its
@@ -1455,13 +1455,13 @@ fn notification_priority_overrides(priority: &str) -> bool {
 
 fn content_mentions_actor(
     content: &serde_json::Value,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
     actor_handle: &str,
 ) -> bool {
     if content
         .get("mention_sidecar_hash")
-        .is_some_and(|sidecar| mention_sidecar_targets_actor(sidecar, space_id, actor))
+        .is_some_and(|sidecar| mention_sidecar_targets_actor(sidecar, realm_id, actor))
     {
         return true;
     }
@@ -1625,8 +1625,8 @@ fn content_has_explicit_mention(content: &serde_json::Value) -> bool {
         .any(|token| token.starts_with('@') && token.len() > 1)
 }
 
-fn mention_sidecar_targets_actor(sidecar: &serde_json::Value, space_id: &str, actor: &str) -> bool {
-    let expected = mention_sidecar_hash(space_id, actor);
+fn mention_sidecar_targets_actor(sidecar: &serde_json::Value, realm_id: &str, actor: &str) -> bool {
+    let expected = mention_sidecar_hash(realm_id, actor);
     match sidecar {
         serde_json::Value::String(value) => value == &expected,
         serde_json::Value::Array(values) => values
@@ -1637,10 +1637,10 @@ fn mention_sidecar_targets_actor(sidecar: &serde_json::Value, space_id: &str, ac
     }
 }
 
-fn mention_sidecar_hash(space_id: &str, actor: &str) -> String {
+fn mention_sidecar_hash(realm_id: &str, actor: &str) -> String {
     use sha2::{Digest as _, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(space_id.as_bytes());
+    hasher.update(realm_id.as_bytes());
     hasher.update(b"|");
     hasher.update(actor.as_bytes());
     let digest = hasher.finalize();
@@ -1987,21 +1987,26 @@ mod tests {
 
     #[test]
     fn principal_realm_for_did_is_deterministic() {
-        let a = super::recovery::principal_control_realm_for_did("did:web:alice.example");
-        let b = super::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let a =
+            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let b =
+            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
         assert_eq!(a, b);
     }
 
     #[test]
     fn principal_realm_for_did_diverges_per_did() {
-        let a = super::recovery::principal_control_realm_for_did("did:web:alice.example");
-        let c = super::recovery::principal_control_realm_for_did("did:web:bob.example");
+        let a =
+            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let c =
+            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:bob.example");
         assert_ne!(a, c);
     }
 
     #[test]
     fn principal_realm_for_did_is_realm_uuid7() {
-        let s = super::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let s =
+            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
         assert!(s.starts_with("ck:realm:"), "got {s}");
         let uuid_segment = s.strip_prefix("ck:realm:").unwrap();
         // Sections separated by '-'.

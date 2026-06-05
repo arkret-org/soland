@@ -385,7 +385,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
             json!({
                 "object": {
                     "id": FLOW_X,
-                    "space_id": REALM_A,
+                    "realm_id": REALM_A,
                     "title": "Circle-scoped Flow",
                     "scope_circle_id": CIRCLE_A,
                 }
@@ -463,7 +463,7 @@ fn flow_scope_circle_id_rejects_cross_realm() {
             json!({
                 "object": {
                     "id": FLOW_X,
-                    "space_id": REALM_A,
+                    "realm_id": REALM_A,
                     "title": "Cross-Realm Flow",
                     "scope_circle_id": CIRCLE_B,
                 }

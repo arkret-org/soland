@@ -601,10 +601,10 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
     }
 }
 
-/// Walk the projection cell map for one Space, collect every
+/// Walk the projection cell map for one Realm, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
 fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
-    let Ok(space) = RealmId::new(realm_id.to_owned()) else {
+    let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
     let proj = match state.projection.lock() {
@@ -613,7 +613,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
     };
     let mut cells: BTreeSet<CellRef> = state
         .cell_store
-        .list_cells(&space)
+        .list_cells(&realm)
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -711,7 +711,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     )
     .await?;
     let realm_id = realm_id.into_inner();
-    let space = RealmId::new(realm_id.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
@@ -780,7 +780,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
         space.clone(),
-        pick_admin_anchor_ref(state, &space),
+        pick_admin_anchor_ref(state, &realm),
         vec![effect],
         fresh_hlc(state)?,
     );
@@ -798,7 +798,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     // we're the round leader, this folds the Move into a fresh Anchor
     // immediately and the response carries an anchor_id. Otherwise the
     // Move sits pending until the round leader signs.
-    let outcome = crate::anchorer::run_one_signing_pass(state, &space, 1024);
+    let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
     match outcome {
         Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
             move_id,
@@ -923,7 +923,7 @@ pub(super) async fn admin_repair_bottom(
     .await?;
     let realm_id = realm_id.into_inner();
     let cell_id_str = cell_id.into_inner();
-    let space = RealmId::new(realm_id.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
@@ -963,7 +963,7 @@ pub(super) async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
-            let anchor_ref = pick_admin_anchor_ref(state, &space);
+            let anchor_ref = pick_admin_anchor_ref(state, &realm);
             let state_witness_ref = cokret_sdk::move_event::SemanticRef {
                 id: anchor_ref.as_str().to_owned(),
                 role: "state_witness".to_owned(),
@@ -995,7 +995,7 @@ pub(super) async fn admin_repair_bottom(
                 .put_pending(&signed_move)
                 .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
-            let outcome = crate::anchorer::run_one_signing_pass(state, &space, 1024);
+            let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
             match outcome {
                 Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
                     move_id,
@@ -1123,12 +1123,12 @@ pub(super) async fn admin_get_anchor_dag(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let space = RealmId::new(realm_id.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let anchor_store = state.anchor_store.as_ref();
-    let leaf_ids = anchor_store.list_leaves(&space).map_err(|e| {
+    let leaf_ids = anchor_store.list_leaves(&realm).map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
             format!("anchor_store.list_leaves failed: {e}"),
@@ -1222,7 +1222,7 @@ pub(super) async fn admin_compact_anchor_dag(
     )
     .await?;
     let realm_id = realm_id.into_inner();
-    let space = RealmId::new(realm_id.clone()).map_err(|e| {
+    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -1237,11 +1237,11 @@ pub(super) async fn admin_compact_anchor_dag(
     // `CompactionPolicy` per-candidate and call
     // `AnchorStore::prune_predecessor`.
     if let Err(crate::anchorer::AnchorerError::NotAuthorized(_)) =
-        crate::anchorer::run_one_signing_pass(state, &space, max_pending)
+        crate::anchorer::run_one_signing_pass(state, &realm, max_pending)
     {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "not authorized to compact anchors for this space".to_owned(),
+            "not authorized to compact anchors for this Realm".to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN));
     }
@@ -1252,7 +1252,7 @@ pub(super) async fn admin_compact_anchor_dag(
     // moves); `state_root` is taken from the view.
     let leaves = state
         .anchor_store
-        .list_leaves(&space)
+        .list_leaves(&realm)
         .map_err(|e| AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}")))?;
     if leaves.is_empty() {
         return Err(AppError::new(
@@ -1263,7 +1263,7 @@ pub(super) async fn admin_compact_anchor_dag(
     }
     let view = cokret_sdk::effective_anchor_view(
         &leaves,
-        &space,
+        &realm,
         state.anchor_store.as_ref(),
         state.cell_store.as_ref(),
         state.cell_registry.as_ref(),
@@ -1716,7 +1716,7 @@ pub(super) async fn admin_list_multisig_pending(
     let rows = state
         .persistence
         .multisig_pending()
-        .list_for_space(&realm_id_str)
+        .list_for_realm(&realm_id_str)
         .await
         .map_err(persistence_to_app_err)?;
 

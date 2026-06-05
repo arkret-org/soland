@@ -121,7 +121,7 @@ async fn mimi_room_update(
     // timeline observes the binding. Updates without a binding block
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
-    // is rejected — we never implicitly route to a default Space.
+    // is rejected; we never implicitly route to a default Realm.
     let binding_event_id = match body.get("room_binding") {
         Some(binding) if binding.is_object() => {
             let event_id = emit_mimi_room_binding_event(state, &room_id, binding)
@@ -1055,7 +1055,7 @@ async fn mimi_bound_realm_id(state: &AppState, room_id: &str) -> Option<String> 
 /// Returns `None` when the binding payload declares no Cokret
 /// `realm_id` (neither under `binding_scope.realm_id` nor at the top
 /// level). The caller is expected to surface that to the client as a
-/// 400 rather than implicitly bind the room to some default Space.
+/// 400 rather than implicitly bind the room to some default Realm.
 async fn emit_mimi_room_binding_event(
     state: &AppState,
     room_id: &str,

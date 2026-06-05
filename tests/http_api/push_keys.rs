@@ -122,7 +122,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let active_typing = state
         .persistence
         .typing()
-        .list_for_space(DEMO_REALM_ID)
+        .list_for_realm(DEMO_REALM_ID)
         .await
         .unwrap();
     assert_eq!(active_typing.len(), 1);
@@ -153,7 +153,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let cleared_typing = state
         .persistence
         .typing()
-        .list_for_space(DEMO_REALM_ID)
+        .list_for_realm(DEMO_REALM_ID)
         .await
         .unwrap();
     assert!(cleared_typing.is_empty());
@@ -553,10 +553,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(large_blob["size_bytes"], large_plaintext.len());
     assert_eq!(large_blob["media_type"], "image/jpeg");
 
-    let locked_space = seed_test_realm(
+    let locked_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Blob Policy Space",
+        "Blob Policy Realm",
         None,
         "invite_only",
         &[],
@@ -566,8 +566,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let plaintext_private_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
-            "x-cokret-space-id",
-            locked_space["space_id"].as_str().unwrap(),
+            "x-cokret-realm-id",
+            locked_realm["realm_id"].as_str().unwrap(),
             true,
         )
         .body("plaintext-private")
@@ -583,8 +583,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("x-cokret-filename", "..\\danger<script>.txt", true)
         .add_header("x-cokret-blob-encrypted", "true", true)
         .add_header(
-            "x-cokret-space-id",
-            locked_space["space_id"].as_str().unwrap(),
+            "x-cokret-realm-id",
+            locked_realm["realm_id"].as_str().unwrap(),
             true,
         )
         .add_header("x-cokret-content-digest", ciphertext_digest.clone(), true)
@@ -670,15 +670,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     add_test_realm_member(
         &state,
-        locked_space["space_id"].as_str().unwrap(),
+        locked_realm["realm_id"].as_str().unwrap(),
         "did:web:blob-bob.example",
     );
 
     let service_did = state.config.service_did.clone();
-    let shared_plaintext_space = seed_test_realm(
+    let shared_plaintext_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Shared Plaintext Blob Space",
+        "Shared Plaintext Blob Realm",
         None,
         "invite_only",
         &[service_did.as_str()],
@@ -687,7 +687,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     .await;
     add_test_realm_member(
         &state,
-        shared_plaintext_space["space_id"].as_str().unwrap(),
+        shared_plaintext_realm["realm_id"].as_str().unwrap(),
         "did:web:blob-bob.example",
     );
     let plaintext_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
@@ -695,8 +695,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("content-type", "text/plain; charset=utf-8", true)
         .add_header("x-cokret-filename", "report final.txt", true)
         .add_header(
-            "x-cokret-space-id",
-            shared_plaintext_space["space_id"].as_str().unwrap(),
+            "x-cokret-realm-id",
+            shared_plaintext_realm["realm_id"].as_str().unwrap(),
             true,
         )
         .body("shared plaintext")
@@ -706,8 +706,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert_eq!(
-        plaintext_blob["upload_receipt"]["space_id"],
-        shared_plaintext_space["space_id"]
+        plaintext_blob["upload_receipt"]["realm_id"],
+        shared_plaintext_realm["realm_id"]
     );
     assert_eq!(
         plaintext_blob["upload_receipt"]["filename"],
@@ -741,7 +741,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "blob_ref": plaintext_blob["blob_ref"].as_str().unwrap(),
             "purpose": "message_attachment",
-            "space_id": shared_plaintext_space["space_id"].as_str().unwrap()
+            "realm_id": shared_plaintext_realm["realm_id"].as_str().unwrap()
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -833,7 +833,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let invisible_body: Value = invisible_blob.take_json().await.unwrap();
     assert_eq!(invisible_body["error"]["code"], "not_found");
     let invisible_text = invisible_body.to_string();
-    assert!(!invisible_text.contains(locked_space["space_id"].as_str().unwrap()));
+    assert!(!invisible_text.contains(locked_realm["realm_id"].as_str().unwrap()));
     assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
 
     let push_registration: Value =

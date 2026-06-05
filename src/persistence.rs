@@ -68,7 +68,7 @@ pub trait SessionStore: Send + Sync {
 /// Trait for actor-private account data storage.
 ///
 /// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
-/// `ck.contacts.space.<realm_id>`, `ck.read_receipt.preferences`). The
+/// `ck.contacts.space.<space_id>`, `ck.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
 ///
@@ -128,7 +128,7 @@ pub trait SpaceContainerProjectionStore: Send + Sync {
         container_space_id: &str,
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>>;
     async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>>;
@@ -141,7 +141,7 @@ pub trait SpaceContainerProjectionStore: Send + Sync {
 pub trait FlowProjectionStore: Send + Sync {
     async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>>;
     async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>>;
     async fn delete(&self, flow_id: &str) -> PersistenceResult<()>;
 }
@@ -151,7 +151,7 @@ pub trait FlowProjectionStore: Send + Sync {
 pub trait MorphProjectionStore: Send + Sync {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>>;
     async fn put(&self, record: &MorphProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_space(&self, realm_id: &str)
+    async fn list_for_realm(&self, realm_id: &str)
     -> PersistenceResult<Vec<MorphProjectionRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>>;
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()>;
@@ -219,7 +219,7 @@ pub struct MorphProjectionRecord {
 pub trait MessageStore: Send + Sync {
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<MessageRecord>>;
     async fn put(&self, record: &MessageRecord) -> PersistenceResult<()>;
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
         limit: usize,
@@ -414,7 +414,7 @@ pub trait ModerationStore: Send + Sync {
 pub trait FederationOperationsStore: Send + Sync {
     async fn append(&self, operation: Operation) -> PersistenceResult<()>;
     async fn contains(&self, operation_id: &str) -> PersistenceResult<bool>;
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>>;
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>>;
 }
 
@@ -449,12 +449,12 @@ pub trait PresenceStore: Send + Sync {
     async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
 }
 
-/// Typing indicators per (actor, space). Auto-prunes expired entries.
+/// Typing indicators per (actor, Realm). Auto-prunes expired entries.
 #[async_trait]
 pub trait TypingStore: Send + Sync {
     async fn put(&self, typing: TypingRecord) -> PersistenceResult<()>;
     async fn remove(&self, actor: &str, realm_id: &str) -> PersistenceResult<()>;
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<TypingRecord>>;
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<TypingRecord>>;
     async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
@@ -730,11 +730,11 @@ pub trait MultisigPendingStore: Send + Sync {
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord>;
-    async fn list_for_space(&self, realm_id: &str)
+    async fn list_for_realm(&self, realm_id: &str)
     -> PersistenceResult<Vec<MultisigPendingRecord>>;
     async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
 
-    /// List every row across all spaces. Used by the leader-election
+    /// List every row across all Realms. Used by the leader-election
     /// watchdog to scan for threshold-met rows that need aggregation +
     /// publication.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>>;
@@ -1329,7 +1329,7 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok(record.clone())
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<MultisigPendingRecord>> {
@@ -1703,7 +1703,7 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
         Ok(())
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
@@ -1752,7 +1752,7 @@ impl FlowProjectionStore for MemoryFlowProjectionStore {
         Ok(())
     }
 
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -1798,7 +1798,7 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
         Ok(())
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<MorphProjectionRecord>> {
@@ -1848,7 +1848,7 @@ impl MessageStore for MemoryMessageStore {
         Ok(())
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
         limit: usize,
@@ -2339,7 +2339,7 @@ impl FederationOperationsStore for MemoryFederationOperationsStore {
             .any(|known| known.operation_id.as_str() == operation_id))
     }
 
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
         Ok(self
             .data
             .lock()
@@ -2494,7 +2494,7 @@ impl TypingStore for MemoryTypingStore {
         Ok(())
     }
 
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<TypingRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<TypingRecord>> {
         let now = Utc::now();
         Ok(self
             .data
@@ -4702,7 +4702,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
 
     async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let space_id_uuid: Option<Uuid> = record
+        let realm_id_uuid: Option<Uuid> = record
             .realm_id
             .as_deref()
             .map(ids::typed_uuid_part_or_panic);
@@ -4722,7 +4722,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .bind::<Text, _>(&record.txn_id)
         .bind::<Text, _>(&record.origin)
         .bind::<Text, _>(&record.destination)
-        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Text, _>(&record.status)
         .bind::<Text, _>(&record.content_digest)
         .bind::<Jsonb, _>(&record.response)
@@ -5118,7 +5118,7 @@ impl From<MultisigPendingRow> for MultisigPendingRecord {
         };
         Self {
             anchor_id: row.anchor_id,
-            realm_id: ids::format_typed_uuid("space", &row.realm_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             threshold_k: row.threshold_k as u32,
             threshold_n: row.threshold_n as u32,
             members: row.members,
@@ -5145,7 +5145,7 @@ fn partials_to_jsonb(partials: &BTreeMap<String, Value>) -> Value {
 impl MultisigPendingStore for PgMultisigPendingStore {
     async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO multisig_pending \
              (anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
@@ -5159,7 +5159,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                 expires_at = EXCLUDED.expires_at",
         )
         .bind::<Text, _>(&record.anchor_id)
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Integer, _>(record.threshold_k as i32)
         .bind::<Integer, _>(record.threshold_n as i32)
         .bind::<Array<Text>, _>(&record.members)
@@ -5210,19 +5210,19 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         })
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let space_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
         sql_query(
             "SELECT anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
         )
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .load::<MultisigPendingRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())
@@ -5400,13 +5400,13 @@ impl AuditStore for PgAuditStore {
             .ok_or_else(|| PersistenceError::Internal("audit entry missing outcome".to_owned()))?;
         let actor = extract("actor");
         let request_id = extract("request_id");
-        let realm_id = extract("space_id");
+        let realm_id = extract("realm_id");
         let operation_id = extract("operation_id");
         let device_id = extract("device_id");
         let audit_id_uuid = ids::typed_uuid_part_or_panic(&audit_id);
         let request_id_uuid: Option<Uuid> =
             request_id.as_deref().map(ids::typed_uuid_part_or_panic);
-        let space_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
         let operation_id_uuid: Option<Uuid> =
             operation_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
@@ -5420,7 +5420,7 @@ impl AuditStore for PgAuditStore {
         .bind::<Nullable<SqlUuid>, _>(request_id_uuid)
         .bind::<Text, _>(&action)
         .bind::<Text, _>(&outcome)
-        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Nullable<SqlUuid>, _>(operation_id_uuid)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Jsonb, _>(&entry)
@@ -5703,7 +5703,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \
              (id, realm_id, object_type, object_id, operation_type, payload, created_at) \
@@ -5711,7 +5711,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(operation_id_uuid)
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Text, _>(&operation.object_type)
         .bind::<Nullable<Text>, _>(&object_id)
         .bind::<Text, _>(&operation_type)
@@ -5739,14 +5739,14 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .map_err(PersistenceError::from)
     }
 
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let space_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
         let rows: Vec<FederationOperationRow> = sql_query(
             "SELECT payload FROM federation_operations \
              WHERE realm_id = $1 ORDER BY created_at ASC, id ASC",
         )
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .load::<FederationOperationRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
@@ -5812,12 +5812,12 @@ impl ModerationStore for PgModerationStore {
         let reporter = extract("reporter");
         let target_actor = extract("target_actor");
         let target_event_id = extract("target_event_id");
-        let realm_id = extract("space_id");
+        let realm_id = extract("realm_id");
         let report_id_uuid = ids::typed_uuid_part_or_panic(&report_id);
         let target_event_id_uuid: Option<Uuid> = target_event_id
             .as_deref()
             .map(ids::typed_uuid_part_or_panic);
-        let space_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_reports \
              (id, reporter, target_actor, target_event_id, realm_id, payload, created_at) \
@@ -5828,7 +5828,7 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&reporter)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
-        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Jsonb, _>(&report)
         .execute(&mut *conn)
         .await
@@ -5850,9 +5850,9 @@ impl ModerationStore for PgModerationStore {
         let moderator = extract("moderator");
         let target_actor = extract("target_actor");
         let action_kind = extract("action_kind");
-        let realm_id = extract("space_id");
+        let realm_id = extract("realm_id");
         let action_id_uuid = ids::typed_uuid_part_or_panic(&action_id);
-        let space_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
+        let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_actions \
              (id, moderator, target_actor, action_kind, realm_id, payload, created_at) \
@@ -5863,7 +5863,7 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&moderator)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<Text>, _>(&action_kind)
-        .bind::<Nullable<SqlUuid>, _>(space_id_uuid)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
         .bind::<Jsonb, _>(&action)
         .execute(&mut *conn)
         .await
@@ -6128,7 +6128,7 @@ impl From<SpaceInviteRow> for SpaceInviteRecord {
     fn from(row: SpaceInviteRow) -> Self {
         Self {
             invite_id: ids::format_typed_uuid("invite", &row.id),
-            realm_id: ids::format_typed_uuid("space", &row.realm_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             inviter: row.inviter,
             invitee: row.invitee,
             invite_token: row.invite_token,
@@ -6159,7 +6159,7 @@ impl SpaceInviteStore for PgSpaceInviteStore {
     async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(&record.invite_id);
-        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO space_invites \
              (id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at) \
@@ -6173,7 +6173,7 @@ impl SpaceInviteStore for PgSpaceInviteStore {
                 expires_at = EXCLUDED.expires_at",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Text, _>(&record.inviter)
         .bind::<Nullable<Text>, _>(&record.invitee)
         .bind::<Text, _>(&record.invite_token)
@@ -6741,7 +6741,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let signaling_state = webrtc_signaling_state(&record);
         let ice_config: Value = serde_json::json!({});
         let session_id_uuid = ids::typed_uuid_part_or_panic(&record.session_id);
-        let space_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO webrtc_sessions \
              (id, realm_id, initiator_did, ice_config, signaling_state, created_at, expires_at) \
@@ -6754,7 +6754,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
                 expires_at = EXCLUDED.expires_at",
         )
         .bind::<SqlUuid, _>(session_id_uuid)
-        .bind::<SqlUuid, _>(space_id_uuid)
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Text, _>(&record.created_by)
         .bind::<Jsonb, _>(&ice_config)
         .bind::<Jsonb, _>(&signaling_state)
@@ -7879,7 +7879,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
@@ -8024,7 +8024,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_space(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
@@ -8175,7 +8175,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_space(
+    async fn list_for_realm(
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Vec<MorphProjectionRecord>> {
@@ -8434,7 +8434,7 @@ mod tests {
             origin: "did:web:remote.example".to_owned(),
             txn_id: "txn1".to_owned(),
             destination: "did:web:soland.local".to_owned(),
-            realm_id: Some("ck:space:01904100-0000-7000-8000-cfc039892036".to_owned()),
+            realm_id: Some("ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned()),
             content_digest: "sha256:first".to_owned(),
             status: "accepted".to_owned(),
             response: serde_json::json!({"ok": true}),
@@ -8784,13 +8784,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_federation_operations_store_dedups_and_filters_by_space() {
+    async fn memory_federation_operations_store_dedups_and_filters_by_realm() {
         let store = MemoryFederationOperationsStore::new();
-        let space_a = "ck:realm:0196419b-0000-7000-8000-00000000aaaa";
-        let space_b = "ck:realm:0196419b-0000-7000-8000-00000000bbbb";
-        let op1 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000001", space_a);
-        let op2 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000002", space_a);
-        let op3 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000003", space_b);
+        let realm_a = "ck:realm:0196419b-0000-7000-8000-00000000aaaa";
+        let realm_b = "ck:realm:0196419b-0000-7000-8000-00000000bbbb";
+        let op1 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000001", realm_a);
+        let op2 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000002", realm_a);
+        let op3 = make_test_operation("ck:operation:0196419b-0000-7000-8000-000000000003", realm_b);
 
         store.append(op1.clone()).await.unwrap();
         store.append(op2.clone()).await.unwrap();
@@ -8798,8 +8798,8 @@ mod tests {
 
         assert!(store.contains(op1.operation_id.as_str()).await.unwrap());
         assert!(!store.contains("ck:operation:missing").await.unwrap());
-        assert_eq!(store.list_for_space(space_a).await.unwrap().len(), 2);
-        assert_eq!(store.list_for_space(space_b).await.unwrap().len(), 1);
+        assert_eq!(store.list_for_realm(realm_a).await.unwrap().len(), 2);
+        assert_eq!(store.list_for_realm(realm_b).await.unwrap().len(), 1);
         assert_eq!(store.snapshot_all().await.unwrap().len(), 3);
     }
 
@@ -8809,7 +8809,7 @@ mod tests {
         let now = Utc::now();
         let record = MultisigPendingRecord {
             anchor_id: "ck:anchor:sha256:lease".to_owned(),
-            realm_id: "ck:space:0196419b-0000-7000-8000-00000000abcd".to_owned(),
+            realm_id: "ck:realm:0196419b-0000-7000-8000-00000000abcd".to_owned(),
             threshold_k: 2,
             threshold_n: 3,
             members: vec![
@@ -9008,7 +9008,7 @@ mod tests {
         let now = Utc::now();
         let record = SpaceInviteRecord {
             invite_id: "ck:invite:01".to_owned(),
-            realm_id: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
             inviter: "did:web:alice.example".to_owned(),
             invitee: Some("did:web:bob.example".to_owned()),
             invite_token: "tok-abc".to_owned(),
@@ -9079,7 +9079,7 @@ mod tests {
         participants.insert("did:web:bob.example".to_owned());
         let record = WebrtcSessionRecord {
             session_id: "ck:call:01".to_owned(),
-            realm_id: "ck:space:0196419b-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
             created_by: "did:web:alice.example".to_owned(),
             participants,
             mode: "p2p".to_owned(),

@@ -66,7 +66,7 @@ use system::util::{
     bearer_token, classify_handle, handle_for_did, is_json_integer, is_valid_discoverability,
     is_valid_handle, is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token,
     normalize_handle, query_param, query_param_all, render_error, sha256_hex, validate_device_id,
-    validate_did, validate_space_id,
+    validate_did, validate_realm_id, validate_space_id,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -1444,7 +1444,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
     let messages = state
         .persistence
         .messages()
-        .list_for_space(realm_id, 1024)
+        .list_for_realm(realm_id, 1024)
         .await
         .unwrap_or_default();
     let generated_at = messages
@@ -2781,9 +2781,9 @@ async fn wait_for_sync_token(
     ctrl.call_next(req, depot, res).await;
 }
 
-fn generate_invite_token(invite_id: &str, space_id: &str, invitee: &str) -> String {
+fn generate_invite_token(invite_id: &str, realm_id: &str, invitee: &str) -> String {
     format!(
         "ck:invite-token:{}",
-        sha256_hex(format!("{invite_id}:{space_id}:{invitee}").as_bytes())
+        sha256_hex(format!("{invite_id}:{realm_id}:{invitee}").as_bytes())
     )
 }

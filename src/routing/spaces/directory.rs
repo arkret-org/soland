@@ -188,25 +188,25 @@ async fn resolve_realm(
     }
 
     let session = authenticated_session(state, req).await.ok();
-    let invite_space_id = match body.invite_token.as_deref() {
+    let invite_realm_id = match body.invite_token.as_deref() {
         Some(token) => invite_token_realm_id(state, token).await,
         None => None,
     };
     let candidates: Vec<RealmDirectoryEntry> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .cloned()
             .collect()
     };
-    let mut space = None;
+    let mut matched_realm = None;
     for entry in candidates {
         let matches_query = body
             .realm_id
             .as_deref()
             .is_some_and(|id| id == entry.realm_id.as_str())
-            || invite_space_id
+            || invite_realm_id
                 .as_deref()
                 .is_some_and(|id| id == entry.realm_id.as_str())
             || body
@@ -223,20 +223,17 @@ async fn resolve_realm(
             )
             .await
         {
-            space = Some(entry);
+            matched_realm = Some(entry);
             break;
         }
     }
-    match space {
-        Some(space) => {
-            let discoverability = realm_discoverability(state, space.realm_id.as_str()).await;
-            let searchable = realm_search_discoverability(state, space.realm_id.as_str()).await;
+    match matched_realm {
+        Some(realm) => {
+            let discoverability = realm_discoverability(state, realm.realm_id.as_str()).await;
+            let searchable = realm_search_discoverability(state, realm.realm_id.as_str()).await;
             json_ok(ResolveRealmResponse {
-                realm_preview: space.clone(),
+                realm_preview: realm.clone(),
                 stripped_state: vec![json!({
-                    // R1.2 (Realm/Space reversal): security-namespace
-                    // event renamed from `ck.space.discovery` to
-                    // `ck.realm.discovery`.
                     "type": "ck.realm.discovery",
                     "subject": "",
                     "content": {
@@ -253,7 +250,7 @@ async fn resolve_realm(
                 },
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
-                    space.realm_id.as_str(),
+                    realm.realm_id.as_str(),
                     discoverability.as_str(),
                 ),
             })

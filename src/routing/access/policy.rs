@@ -625,8 +625,7 @@ fn policy_resource_matches(resource: &Value, request: &PolicyCheckReqBody) -> bo
     if resource.is_empty() {
         return true;
     }
-    // Policy resources are Realm-scoped. The protocol no longer accepts
-    // legacy `space_id` constraints here.
+    // Policy resources are Realm-scoped; constraints use `realm_id`.
     if let Some(constraint_realm_id) = resource.get("realm_id").and_then(|value| value.as_str())
         && request.realm_id.as_deref() != Some(constraint_realm_id)
     {

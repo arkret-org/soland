@@ -535,7 +535,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Note: `events_query_durable_scope` is the typed wrapper around the
     // dispatched `_impl` helper; the original `#[endpoint]` wrapper had
     // no route registered (it's only called from sync.rs::events_query
-    // when the selector has no `spaces[]`), so OpenAPI doesn't emit it.
+    // when the selector has no `realms[]`), so OpenAPI doesn't emit it.
     // Skip its operation_id assertion accordingly.
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from

@@ -158,10 +158,10 @@ mod tests {
     const REALM_CHILD: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
     const REALM_ORG: &str = "ck:realm:01904100-0000-7000-8000-000000000000";
 
-    fn op(space_id: &str, payload: Value) -> Operation {
+    fn op(realm_id: &str, payload: Value) -> Operation {
         Operation::create(
             OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            RealmId::new(space_id).unwrap(),
+            RealmId::new(realm_id).unwrap(),
             crate::kinds::CK_REALM_POLICY_SERVER,
             payload,
         )

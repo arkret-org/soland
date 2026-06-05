@@ -1,4 +1,4 @@
-//! Reducer-level tests for the `ck.space.delivery_binding_policy`
+//! Reducer-level tests for the `ck.realm.delivery_binding_policy`
 //! cell projection + `ck.member.state{join,routable}` validation
 //! (Round C46, spec join-policy.md §5.1).
 //!
@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::reducer::{ProjectionEffect, ProjectionState};
 
-const SPACE_A: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
+const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-cfc039892036";
 
-fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(space_id).unwrap(),
+        cokret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )
@@ -27,7 +27,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
             soland::kinds::CK_REALM_DELIVERY_BINDING_POLICY,
-            SPACE_A,
+            REALM_A,
             payload,
         ),
         hlc,
@@ -41,7 +41,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 fn join_op(member: &str, binding: Value) -> Operation {
     op(
         soland::kinds::CK_MEMBER_STATE,
-        SPACE_A,
+        REALM_A,
         json!({
             "actor_id": member,
             "membership": "join",
@@ -76,7 +76,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
     );
 
     // Cell projected — sanity check.
-    assert!(state.delivery_binding_policy_cell_value(SPACE_A).is_some());
+    assert!(state.realm_delivery_binding_policy_cell_value(REALM_A).is_some());
 
     // Recipient is NOT in the allow-list → reject.
     let bad = join_op(
@@ -95,7 +95,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         other => panic!("expected Rejected(recipient_service_not_allowed), got {other:?}"),
     }
     // Membership cache NOT populated on rejection.
-    assert!(state.member(SPACE_A, "did:web:bob").is_none());
+    assert!(state.member(REALM_A, "did:web:bob").is_none());
 
     // Recipient IN the allow-list → accept.
     let good = join_op(
@@ -190,8 +190,8 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
-    // No `ck.space.delivery_binding_policy` was projected for this Space.
-    assert!(state.delivery_binding_policy_cell_value(SPACE_A).is_none());
+    // No `ck.realm.delivery_binding_policy` was projected for this Realm.
+    assert!(state.realm_delivery_binding_policy_cell_value(REALM_A).is_none());
 
     // Reasonable-looking binding (would pass a permissive policy) MUST
     // still be rejected because policy is unset.
@@ -210,12 +210,12 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         }
         other => panic!("expected Rejected(delivery_binding_policy_unset), got {other:?}"),
     }
-    assert!(state.member(SPACE_A, "did:web:eve").is_none());
+    assert!(state.member(REALM_A, "did:web:eve").is_none());
 }
 
 // Even when a policy exists, `did_document_default` is rejected unless
 // `allow_did_document_default=true`. Spec §5.1.3 — organization /
-// compliance Spaces MUST set this to false.
+// compliance Realms MUST set this to false.
 #[test]
 fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
     let mut state = ProjectionState::new();
@@ -272,7 +272,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
             "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": [],
             // Lexicographic comparison is fine here — frontier strings
-            // are spec'd as monotonic per-Space identifiers.
+            // are spec'd as monotonic per-Realm identifiers.
             "policy_frontier": "ck:frontier:02000000",
         }),
     );
@@ -373,7 +373,7 @@ fn delivery_binding_policy_event_projects_cell_value() {
     );
 
     let value = state
-        .delivery_binding_policy_cell_value(SPACE_A)
+        .realm_delivery_binding_policy_cell_value(REALM_A)
         .expect("policy cell must be projected");
     let allowed = value
         .get("allowed_recipient_services")
@@ -384,7 +384,7 @@ fn delivery_binding_policy_event_projects_cell_value() {
         vec!["did:web:principal.acme.example"]
     );
     assert_eq!(
-        state.delivery_binding_policy_frontier(SPACE_A),
+        state.realm_delivery_binding_policy_frontier(REALM_A),
         Some("ck:frontier:02000000")
     );
 }

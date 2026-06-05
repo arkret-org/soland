@@ -15,10 +15,10 @@ const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-cccccccccccc";
 
-fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        cokret_sdk::RealmId::new(space_id).unwrap(),
+        cokret_sdk::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )

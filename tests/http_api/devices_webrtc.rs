@@ -221,7 +221,7 @@ async fn webrtc_signaling_contracts_work() {
 
     let unauthenticated = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .json(&serde_json::json!({
-            "space_id": DEMO_REALM_ID
+            "realm_id": DEMO_REALM_ID
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -230,7 +230,7 @@ async fn webrtc_signaling_contracts_work() {
     let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "participants": ["did:web:alice.example"],
             "mode": "p2p",
             "recording_policy": "none",
@@ -251,7 +251,7 @@ async fn webrtc_signaling_contracts_work() {
     let ice: Value = TestClient::post("http://server/_cokret/self/calls/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
@@ -261,7 +261,7 @@ async fn webrtc_signaling_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["space_id"], DEMO_REALM_ID);
+    assert_eq!(ice["realm_id"], DEMO_REALM_ID);
     assert_eq!(ice["call_id"], session_id);
     assert_eq!(ice["turn_servers"].as_array().unwrap().len(), 1);
     let turn_username = ice["turn_servers"][0]["username"].as_str().unwrap();
@@ -276,7 +276,7 @@ async fn webrtc_signaling_contracts_work() {
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
-        "space_id": DEMO_REALM_ID,
+        "realm_id": DEMO_REALM_ID,
         "actor_id": "did:web:alice.example",
         "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"
     }))
@@ -380,7 +380,7 @@ async fn webrtc_signaling_contracts_work() {
         "http://server/_cokret/self/calls/{session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({"space_id": DEMO_REALM_ID}))
+    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(
@@ -404,7 +404,7 @@ async fn webrtc_signaling_contracts_work() {
     let recording_session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "participants": ["did:web:alice.example"],
             "mode": "sfu",
             "recording_policy": "allow",
@@ -422,7 +422,7 @@ async fn webrtc_signaling_contracts_work() {
         "http://server/_cokret/self/calls/{recording_session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({"space_id": DEMO_REALM_ID}))
+    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
     .send(&app_from_state(state.clone()))
     .await
     .take_json()
@@ -675,7 +675,7 @@ async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String
     let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "space_id": DEMO_REALM_ID,
+            "realm_id": DEMO_REALM_ID,
             "participants": ["did:web:alice.example"],
             "mode": "sfu",
             "recording_policy": "none",

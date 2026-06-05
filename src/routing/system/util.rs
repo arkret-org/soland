@@ -12,7 +12,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{DeviceId, Did, RealmId};
+use cokret_sdk::{DeviceId, Did, RealmId, SpaceId};
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 
@@ -105,13 +105,13 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-// The repeated-arg form (`?spaces=A&spaces=B`) is what every selector
+// The repeated-arg form (`?realms=A&realms=B`) is what every selector
 // path uses; comma-separated values are not standardized.
 
 /// Pull **every** occurrence of `key` from the query string as repeated args
-/// (e.g. `?spaces=A&spaces=B&spaces=C`) — required for spec C17
+/// (e.g. `?realms=A&realms=B&realms=C`) — required for spec C17
 /// `ck.self.events.query` / `ck.self.events.subscribe` selectors which accept
-/// `spaces[]` ∪ `actors[]`. `+` decoded to space; empty values dropped.
+/// `realms[]` ∪ `actors[]`. `+` decoded to space; empty values dropped.
 pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
     let Some(query) = req.uri().query() else {
         return Vec::new();
@@ -219,8 +219,12 @@ pub fn validate_device_id(value: &str) -> Result<DeviceId, ()> {
     DeviceId::new(value.to_owned()).map_err(|_| ())
 }
 
-pub fn validate_space_id(value: &str) -> Result<RealmId, ()> {
+pub fn validate_realm_id(value: &str) -> Result<RealmId, ()> {
     RealmId::new(value.to_owned()).map_err(|_| ())
+}
+
+pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
+    SpaceId::new(value.to_owned()).map_err(|_| ())
 }
 
 /// `@`-prefixed, lowercase, alphanumeric + `-_.` only.

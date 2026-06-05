@@ -6,7 +6,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn sync_directory_and_index_share_demo_space() {
+async fn sync_directory_and_index_share_demo_realm() {
     let sync_describe: Value = TestClient::get("http://server/_cokret/self/account/describe")
         .send(&app())
         .await
@@ -208,7 +208,7 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
         &[],
     )
     .await;
-    let realm_id = realm["space_id"].as_str().unwrap();
+    let realm_id = realm["realm_id"].as_str().unwrap();
     let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
     let flow_id = new_prefixed_uuid7("ck:flow:");
     let flow_uuid = flow_id.strip_prefix("ck:flow:").unwrap();
@@ -244,7 +244,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         &[],
     )
     .await;
-    let realm_id = realm["space_id"].as_str().unwrap();
+    let realm_id = realm["realm_id"].as_str().unwrap();
     let policy = serde_json::json!({
         "mode": "stripped_state",
         "audiences": ["link_token_holder"],

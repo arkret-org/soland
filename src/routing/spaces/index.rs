@@ -191,7 +191,7 @@ async fn index_notifications(
         let messages = state
             .persistence
             .messages()
-            .list_for_space(space.realm_id.as_str(), 100)
+            .list_for_realm(space.realm_id.as_str(), 100)
             .await
             .unwrap_or_default();
         for message in messages {
@@ -371,7 +371,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
             let messages = state
                 .persistence
                 .messages()
-                .list_for_space(&realm_id, 500)
+                .list_for_realm(&realm_id, 500)
                 .await
                 .unwrap_or_default();
             for message in messages {
@@ -728,7 +728,7 @@ async fn index_debug_reducer(
     let messages = state
         .persistence
         .messages()
-        .list_for_space(&realm_id, limit)
+        .list_for_realm(&realm_id, limit)
         .await
         .unwrap_or_default();
     let projection_events: Vec<Value> = messages

@@ -74,7 +74,7 @@ async fn mimi_provider_facade_contracts_work() {
                 "room_binding": {
                     "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
                     "binding_scope": {
-                        "space_id": "ck:space:0196419b-0000-7000-8000-000000000000"
+                        "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
                     }
                 }
             }))
@@ -177,8 +177,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let demo_space = DEMO_REALM_ID;
-    let custom_space = "ck:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    let demo_realm = DEMO_REALM_ID;
+    let custom_realm = "ck:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
     let room_id = "01JSMIMI-P4-E2E";
 
     // Step 1: post a room_update carrying a room_binding block.
@@ -190,7 +190,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
             "profile": "ck.profile.mimi_interop.v1",
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
-                "space_id": demo_space,
+                "realm_id": demo_realm,
                 "flow_id": null,
             },
             "hub_provider": "did:web:test.local",
@@ -242,8 +242,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     .unwrap();
     assert_eq!(msg_resp["ok"], true);
     assert_eq!(
-        msg_resp["space_id"], demo_space,
-        "submit_message must use bound space_id"
+        msg_resp["realm_id"], demo_realm,
+        "submit_message must use bound realm_id"
     );
     assert_eq!(
         msg_resp["receipt"]["extra"]["reducer_chain"], "wired",
@@ -253,11 +253,11 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .as_str()
         .expect("cokret_event_id missing");
 
-    // Step 3: query /_cokret/self/events against the bound space and
+    // Step 3: query /_cokret/self/events against the bound Realm and
     // verify both the room_binding event and the message event are
     // present.
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={demo_space}"
+        "http://server/_cokret/self/events?realms={demo_realm}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)
@@ -274,11 +274,11 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     assert_eq!(binding_event["event_kind"], "ck.mimi.room_binding");
     assert_eq!(
         binding_event["payload"]["mimi_room_id"], room_id,
-        "room_binding payload must echo room_id for bound-space dispatch"
+        "room_binding payload must echo room_id for bound-Realm dispatch"
     );
     assert_eq!(
-        binding_event["payload"]["binding_scope"]["space_id"],
-        demo_space
+        binding_event["payload"]["binding_scope"]["realm_id"],
+        demo_realm
     );
 
     let message_event = list
@@ -312,7 +312,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
             "target_event_digest": "sha256:abuse-target",
             "frank": {"scheme": "dev-frank"},
             "reporter_did": "did:web:reporter.example",
-            "space_id": demo_space,
+            "realm_id": demo_realm,
             "protocol_draft": "draft-ietf-mimi-protocol-06",
         }))
         .send(&service)
@@ -330,7 +330,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     );
 
     let events_again: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={demo_space}"
+        "http://server/_cokret/self/events?realms={demo_realm}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)
@@ -352,7 +352,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 5: a second room_update with a different binding_scope
     // updates the dispatch lookup. The most-recently-recorded
-    // binding wins per `mimi_bound_space_id` semantics.
+    // binding wins per `mimi_bound_realm_id` semantics.
     let _: Value = TestClient::put(format!(
         "http://server/_cokret/open/mimi/flows/{room_id}/update"
     ))
@@ -361,7 +361,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
             "profile": "ck.profile.mimi_interop.v1",
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
-                "space_id": custom_space,
+                "realm_id": custom_realm,
                 "flow_id": null,
             },
             "hub_provider": "did:web:test.local",
@@ -396,8 +396,8 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     .await
     .unwrap();
     assert_eq!(
-        msg_resp_2["space_id"], custom_space,
-        "second message must route to the rebound space_id"
+        msg_resp_2["realm_id"], custom_realm,
+        "second message must route to the rebound realm_id"
     );
 }
 
@@ -406,7 +406,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
-    let space_id = DEMO_REALM_ID;
+    let realm_id = DEMO_REALM_ID;
     let room_id = "01JSMIMI-P75-POLICY";
 
     let update_resp: Value = TestClient::put(format!(
@@ -417,7 +417,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
             "profile": "ck.profile.mimi_interop.v1",
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
-                "space_id": space_id,
+                "realm_id": realm_id,
                 "flow_id": null,
             },
             "content_profile": "application/mimi-content",
@@ -554,7 +554,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}"
+        "http://server/_cokret/self/events?realms={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&service)

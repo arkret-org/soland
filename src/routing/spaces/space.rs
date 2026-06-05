@@ -1,11 +1,4 @@
-//! Space read + visibility surface.
-//!
-//! The lifecycle / membership mutation REST endpoints that previously lived
-//! here bypassed canonical
-//! Event Envelope construction and maintained Realm-level state outside the
-//! event log. They have been removed (see `_spec_report_claude.md` §2.5 and
-//! `realm-and-space.md:140`); Realm state mutations MUST flow through the
-//! canonical operation pipeline (`POST /_cokret/self/operations`).
+//! Realm lifecycle read surface and Space-container cell read surface.
 //!
 //! Surfaces that remain:
 //! - `GET    /_soland/self/realms/{realm_id}` — read a Realm lifecycle response.
@@ -19,7 +12,7 @@
 //! write in this Realm?".
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, RealmId};
+use cokret_sdk::{Did, RealmId, SpaceId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -262,12 +255,7 @@ async fn export_realm(
 }
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
-    if space_id.starts_with("ck:space:") {
-        RealmId::new(space_id.to_owned())
-            .map_err(|_| AppError::invalid_param("invalid space_id"))?;
-        return Ok(());
-    }
-    RealmId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    SpaceId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
     Ok(())
 }
 
@@ -901,7 +889,7 @@ pub async fn typing_ephemeral_for_realm(
     let typing_records = state
         .persistence
         .typing()
-        .list_for_space(realm_id)
+        .list_for_realm(realm_id)
         .await
         .unwrap_or_default();
     for record in &typing_records {

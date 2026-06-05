@@ -155,10 +155,10 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
         &[],
     )
     .await;
-    let space_id = space["space_id"].as_str().unwrap().to_owned();
+    let realm_id = space["realm_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -174,7 +174,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let proof = &head["generator_proof"];
     assert_eq!(
         proof["realm_id"].as_str().unwrap(),
-        space_id,
+        realm_id,
         "generator_proof binds the snapshot to its Realm"
     );
     assert_eq!(
@@ -245,7 +245,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
         &[],
     )
     .await;
-    let space_id = space["space_id"].as_str().unwrap().to_owned();
+    let realm_id = space["realm_id"].as_str().unwrap().to_owned();
 
     // 64 messages × ~4 KB body each ≈ 256 KB serialized — should land
     // ≥ 2 chunks once the snapshot wrapper + per-message JSON overhead
@@ -268,7 +268,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
             state.clone(),
             &token,
             "did:web:alice.example",
-            &space_id,
+            &realm_id,
             &format!("ck:flow:multi-chunk-{:02}", seq % 4),
             serde_json::json!({"body": body_text, "msgtype": "m.text", "seq": seq}),
             false,
@@ -281,7 +281,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     }
 
     let head: Value = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await

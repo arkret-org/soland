@@ -597,7 +597,7 @@ pub struct ResolveHandleResponse {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct IndexQueryRequest {
     #[serde(default)]
-    pub space_ids: Vec<String>,
+    pub realm_ids: Vec<String>,
     /// Filter by typed-id kinds (`space`, `flow`, `message`, …) drawn from the
     /// spec id-kind-registry. Replaces the round-5 `entity_types[]` field that
     /// referenced the soland-local entity scaffold.
@@ -635,7 +635,7 @@ pub struct IndexDescribeResponse {
 pub struct IndexSearchRequest {
     pub query: String,
     #[serde(default)]
-    pub space_ids: Vec<String>,
+    pub realm_ids: Vec<String>,
     /// Filter by typed-id kinds drawn from the spec id-kind-registry. Replaces
     /// the round-5 `entity_types[]` alias.
     #[serde(default)]
@@ -2001,7 +2001,7 @@ pub fn describe(
                     },
                     "not_replaced": [
                         "cokret_signed_event_reducer",
-                        "space_id",
+                        "realm_id",
                         "did",
                         "hlc",
                         "capability",

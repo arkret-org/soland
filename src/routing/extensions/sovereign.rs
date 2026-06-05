@@ -230,8 +230,8 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("realm/{realm_id}").get(realm_info))
         .push(Router::with_path("account/accept-external-invite").post(accept_external_invite))
         .push(Router::with_path("account/{did}").get(external_account_status))
-        .push(Router::with_path("space/{space_id}").get(guard_space_access))
-        .push(Router::with_path("directory/spaces").get(directory_spaces))
+        .push(Router::with_path("realm/{realm_id}/access").get(guard_realm_access))
+        .push(Router::with_path("directory/realms").get(directory_realms))
         .push(Router::with_path("federation/proxy").post(federation_proxy))
 }
 
@@ -579,15 +579,15 @@ async fn external_account_status(depot: &mut Depot, did: PathParam<String>) -> J
 }
 
 #[endpoint]
-#[tracing::instrument(skip_all, fields(op = "deployment.guard_space_access"))]
-async fn guard_space_access(
+#[tracing::instrument(skip_all, fields(op = "deployment.guard_realm_access"))]
+async fn guard_realm_access(
     depot: &mut Depot,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     actor: QueryParam<String, false>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
-    let space_id = space_id.into_inner();
+    let realm_id = realm_id.into_inner();
     let mut guard = state
         .sovereign_deployment
         .lock()
@@ -596,8 +596,8 @@ async fn guard_space_access(
         audit(
             &mut guard,
             &actor,
-            "boundary.space_access",
-            Some(&space_id),
+            "boundary.realm_access",
+            Some(&realm_id),
             "rejected",
             json!({"reason": "external_user_no_main_access"}),
         );
@@ -605,12 +605,12 @@ async fn guard_space_access(
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("external_user_no_main_access"));
     }
-    json_ok(json!({"space_id": space_id, "visible": true}))
+    json_ok(json!({"realm_id": realm_id, "visible": true}))
 }
 
 #[endpoint]
-#[tracing::instrument(skip_all, fields(op = "deployment.directory_spaces"))]
-async fn directory_spaces(
+#[tracing::instrument(skip_all, fields(op = "deployment.directory_realms"))]
+async fn directory_realms(
     depot: &mut Depot,
     actor: QueryParam<String, false>,
     q: QueryParam<String, false>,

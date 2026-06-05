@@ -371,7 +371,7 @@ pub fn sync_timeline_message_json_with_projection(
     projection: &crate::reducer::ProjectionState,
 ) -> serde_json::Value {
     let mut event = sync_timeline_message_json(message);
-    if actor_erased_in_space(projection, &message.sender, &message.realm_id) {
+    if actor_erased_in_realm(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
     }
     augment_timeline_message_json(event, &message.event_id, &message.content, projection)
@@ -600,7 +600,7 @@ pub fn event_is_visible(event: &ProjectionEventRecord, redacted: &HashSet<String
     !kinds::is_redaction_kind(&event.event_kind) && !redacted.contains(&event.event_id)
 }
 
-pub fn actor_erased_in_space(
+pub fn actor_erased_in_realm(
     projection: &crate::reducer::ProjectionState,
     actor: &str,
     realm_id: &str,
@@ -645,7 +645,7 @@ pub fn tombstone_projection_event_for_erased_actor(
     let Some(actor) = projection_event_actor(event) else {
         return;
     };
-    if !actor_erased_in_space(projection, actor, &event.realm_id) {
+    if !actor_erased_in_realm(projection, actor, &event.realm_id) {
         return;
     }
     event.sender = Some(ERASED_USER_PLACEHOLDER.to_owned());
@@ -926,7 +926,7 @@ pub async fn load_projected_events_from_pg(
         return Ok(Vec::new());
     };
     let mut conn = pool.get().await?;
-    let space_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+    let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
     let rows = sql_query(
         "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
          FROM events WHERE realm_id = $1 \
@@ -935,13 +935,13 @@ pub async fn load_projected_events_from_pg(
          FROM space_state_events WHERE realm_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
-    .bind::<SqlUuid, _>(space_id_uuid)
+    .bind::<SqlUuid, _>(realm_id_uuid)
     .load::<ProjectionEventRow>(&mut *conn).await?;
     Ok(rows
         .into_iter()
         .map(|row| ProjectionEventRecord {
             event_id: ids::format_typed_uuid("event", &row.event_id),
-            realm_id: ids::format_typed_uuid("space", &row.realm_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             event_kind: row.event_kind,
             operation_type: row.operation_type,
             operation_id: row
@@ -1038,7 +1038,7 @@ pub async fn ingest_federation_operations(
 }
 
 pub async fn project_federation_operation(state: &AppState, origin: &str, operation: &Operation) {
-    ensure_projected_space(state, origin, operation).await;
+    ensure_projected_realm(state, origin, operation).await;
     if kinds::operation_is_message_create(operation) {
         project_federated_message(state, origin, operation).await;
     } else if kinds::operation_is_invite_create(operation) {
@@ -1485,7 +1485,7 @@ async fn project_accepted_operations_inner(
             origin = %origin,
             "project_accepted_operations"
         );
-        ensure_projected_space(state, origin, operation).await;
+        ensure_projected_realm(state, origin, operation).await;
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
@@ -1626,7 +1626,7 @@ pub async fn persist_projected_operation(
             .get("thread_id")
             .and_then(|value| value.as_str());
         let event_id_uuid = ids::typed_uuid_part_or_panic(&event_id);
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
                 "INSERT INTO events (id, realm_id, event_type, sender, thread_id, operation_id, payload, created_at) \
@@ -1634,7 +1634,7 @@ pub async fn persist_projected_operation(
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind::<SqlUuid, _>(event_id_uuid)
-            .bind::<SqlUuid, _>(space_id_uuid)
+            .bind::<SqlUuid, _>(realm_id_uuid)
             .bind::<Text, _>(&event_type)
             .bind::<Nullable<Text>, _>(Some(sender))
             .bind::<Nullable<Text>, _>(thread_id)
@@ -1660,7 +1660,7 @@ pub async fn persist_projected_operation(
                 "invite_only"
             }
         });
-        let space_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         if title.is_some() {
             sql_query(
@@ -1668,7 +1668,7 @@ pub async fn persist_projected_operation(
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
                      ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
                 )
-                .bind::<SqlUuid, _>(space_id_uuid)
+                .bind::<SqlUuid, _>(realm_id_uuid)
                 .bind::<Text, _>(title_for_insert)
                 .bind::<Nullable<Text>, _>(summary)
                 .bind::<Nullable<Text>, _>(Some(origin))
@@ -1682,7 +1682,7 @@ pub async fn persist_projected_operation(
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
                      ON CONFLICT (id) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
                 )
-                .bind::<SqlUuid, _>(space_id_uuid)
+                .bind::<SqlUuid, _>(realm_id_uuid)
                 .bind::<Text, _>(title_for_insert)
                 .bind::<Nullable<Text>, _>(summary)
                 .bind::<Nullable<Text>, _>(Some(origin))
@@ -1707,7 +1707,7 @@ pub async fn persist_projected_operation(
                      VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
                      ON CONFLICT (realm_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
                 )
-                .bind::<SqlUuid, _>(space_id_uuid)
+                .bind::<SqlUuid, _>(realm_id_uuid)
                 .bind::<Text, _>(member)
                 .bind::<Text, _>(membership)
                 .bind::<Jsonb, _>(&operation.payload)
@@ -1725,7 +1725,7 @@ pub async fn persist_projected_operation(
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind::<SqlUuid, _>(operation_id_uuid)
-            .bind::<SqlUuid, _>(space_id_uuid)
+            .bind::<SqlUuid, _>(realm_id_uuid)
             .bind::<Text, _>(&event_type)
             .bind::<Text, _>(
                 operation
@@ -1981,7 +1981,7 @@ async fn fanout_projection_effect_private_update(
     .await;
 }
 
-pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &Operation) {
+pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &Operation) {
     let Ok(realm_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
     };
@@ -1993,8 +1993,8 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
     let explicit_discoverability =
         operation_realm_discoverability(operation).filter(|value| is_valid_discoverability(value));
     let directory_public = {
-        let mut spaces = state.realms.lock().expect("spaces lock");
-        if let Some(existing) = spaces.get(&realm_id) {
+        let mut realms = state.realms.lock().expect("realms lock");
+        if let Some(existing) = realms.get(&realm_id) {
             existing.public
         } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
@@ -2010,7 +2010,7 @@ pub async fn ensure_projected_space(state: &AppState, origin: &str, operation: &
                 entry.members.insert(origin);
             }
             let entry_public = entry.public;
-            spaces.upsert(entry);
+            realms.upsert(entry);
             entry_public
         }
     };
@@ -2227,8 +2227,8 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     }
 
     {
-        let mut spaces = state.realms.lock().expect("spaces lock");
-        let Some(mut entry) = spaces.get(&realm_id).cloned() else {
+        let mut realms = state.realms.lock().expect("realms lock");
+        let Some(mut entry) = realms.get(&realm_id).cloned() else {
             return;
         };
         if let Ok(member) = Did::new(member) {
@@ -2246,7 +2246,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 let _ = operation; // intentionally unused: payload no longer feeds roster identity
             }
         }
-        spaces.upsert(entry);
+        realms.upsert(entry);
     }
     touch_realm(state, operation.realm_id.as_str()).await;
 }

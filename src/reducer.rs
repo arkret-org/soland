@@ -1832,8 +1832,7 @@ fn apply_member_identity_update_dispatch(
     }
 }
 
-/// R1.2 — dispatch for `ck.realm.delivery_binding_policy`. Renamed from
-/// the pre-rename `ck.space.delivery_binding_policy`; cell family is
+/// Dispatch for `ck.realm.delivery_binding_policy`; cell family is
 /// `ck.component.realm.delivery_binding_policy.v1`.
 fn apply_delivery_binding_policy_dispatch(
     s: &mut ProjectionState,
@@ -2630,8 +2629,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
     m.insert(CK_AGENT_ACTION_APPROVE, apply_agent_action_approve_dispatch);
     m.insert(CK_AGENT_ACTION_REJECT, apply_agent_action_reject_dispatch);
-    // R1.2 — Realm/Space reversal. delivery_binding_policy now lives on
-    // `ck.realm.*` with cell_family `ck.component.realm.delivery_binding_policy.v1`.
+    // delivery_binding_policy is Realm-scoped with cell_family
+    // `ck.component.realm.delivery_binding_policy.v1`.
     m.insert(
         CK_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,

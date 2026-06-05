@@ -1014,7 +1014,7 @@ pub(super) async fn federation_pull_operations(
     let space_operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id)
+        .list_for_realm(&realm_id)
         .await
         .unwrap_or_default();
     let redacted = redaction_targets_from_operations(&space_operations);
@@ -2040,7 +2040,7 @@ async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
     let operations = state
         .persistence
         .federation_operations()
-        .list_for_space(&realm_id)
+        .list_for_realm(&realm_id)
         .await
         .unwrap_or_default();
     let mut operation_ids = operations

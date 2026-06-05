@@ -1,8 +1,6 @@
-//! R2.2 (Phase 2, 2026-05-20) — Realm delivery-binding-policy admin
-//! endpoint smoke tests.
+//! Realm delivery-binding-policy admin endpoint smoke tests.
 //!
-//! Pins the wire shape on the two paths the Realm/Space reversal
-//! introduced on the admin surface:
+//! Pins the wire shape on the admin Realm delivery-binding-policy surface:
 //!
 //! - `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` returns 200 with the SDK-typed
 //!   `RealmDeliveryBindingPolicy` envelope (sodmin's `RealmDeliveryBindingPolicy` DTO consumes
@@ -103,7 +101,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
 async fn realms_delivery_binding_policy_endpoint_responds() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let realm_id = "ck:space:01904100-0000-7000-8000-d00ddeadbeef";
+    let realm_id = "ck:realm:01904100-0000-7000-8000-d00ddeadbeef";
     let body: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{realm_id}/delivery-binding-policy"
     ))

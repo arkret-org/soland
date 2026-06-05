@@ -12,7 +12,7 @@ use super::{
     device_inventory_to_json, flow_id_from_realm_id, handle_for_did, invite_token_matches_realm,
     invite_token_realm_id, is_realm_deleted, normalize_handle, now, sha256_hex,
     realm_discoverability, realm_has_member, realm_history_visibility, realm_resolvable_to,
-    realm_search_discoverability, realm_search_visible_to, validate_space_id,
+    realm_search_discoverability, realm_search_visible_to, validate_realm_id, validate_space_id,
 };
 
 /// `self`-segment spaces surface (spaces, reactions, read-cursors,

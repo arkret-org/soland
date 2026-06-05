@@ -322,7 +322,7 @@ async fn delete_realm_link(
 /// Body shape:
 /// ```json
 /// {
-///   "realm_id": "ck:space:...",
+///   "realm_id": "ck:realm:...",
 ///   "effective_policy": { "allowed_policies": [...], "allowed_capability_bundles": [...] },
 ///   "inheritance_chain": ["ck:space:...parent...", "ck:space:...grandparent..."],
 ///   "inheritance_mode": "explicit" | "none"

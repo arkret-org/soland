@@ -147,7 +147,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 async fn projection_flows_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = DEMO_REALM_ID;
+    let realm_id = DEMO_REALM_ID;
     let flow_id = "ck:flow:01904100-0000-7000-8000-f20dc0000001";
     let board_space_id = "ck:space:01904100-0000-7000-8000-f20dc0000100";
     let list_space_id = "ck:space:01904100-0000-7000-8000-f20dc0000200";
@@ -159,7 +159,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": space_id,
+                "realm_id": realm_id,
                 "metadata": {
                     "title": "Hydration flow",
                     "fields": {
@@ -201,7 +201,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={space_id}"
+        "http://server/_cokret/self/projection/flows?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -305,7 +305,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
 async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = DEMO_REALM_ID;
+    let realm_id = DEMO_REALM_ID;
     let morph_id = "ck:morph:01904100-0000-7000-8000-d20dc0000001";
 
     let create_event = signed_morph_event(
@@ -315,7 +315,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": space_id,
+                "realm_id": realm_id,
                 "morph_type": "task",
                 "metadata": { "title": "Hydration morph" },
                 "created_by": "did:web:alice.example",
@@ -335,7 +335,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Initial state — Active.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -371,7 +371,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -389,7 +389,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
 
     // Unauthenticated → 401, no body leak.
     let unauth = TestClient::get(format!(
-        "http://server/_cokret/self/projection/morphs?realm_id={space_id}"
+        "http://server/_cokret/self/projection/morphs?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await;
@@ -420,7 +420,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": realm_id,
+                "realm_id": realm_id,
                 "morph_type": "document",
                 "metadata": { "title": "Postmortem draft" },
                 "schema_refs": ["ck.schema.morph.v1"],
@@ -587,7 +587,6 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
-    let space_id = realm_id;
     let container_space_id = "ck:space:01904100-0000-7000-8000-c15d70000001";
     let flow_id = "ck:flow:01904100-0000-7000-8000-c15d70000002";
 
@@ -679,7 +678,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": space_id,
+                "realm_id": realm_id,
                 "metadata": { "title": "Doomed Flow" },
                 "created_by": "did:web:alice.example",
             }
@@ -717,7 +716,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Default Flow listing — redacted Flow hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={space_id}"
+        "http://server/_cokret/self/projection/flows?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -736,7 +735,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 
     // Explicit include_terminal=true — redacted Flow visible.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={space_id}&include_terminal=true"
+        "http://server/_cokret/self/projection/flows?realm_id={realm_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -814,18 +813,18 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     assert_eq!(place_row.state, "archived");
     assert_eq!(place_row.title, "Persistent Space");
 
-    // list_for_space + snapshot_all reach the same row.
+    // list_for_realm + snapshot_all reach the same row.
     let by_space = state
         .persistence
         .space_container_projections()
-        .list_for_space(DEMO_REALM_ID)
+        .list_for_realm(DEMO_REALM_ID)
         .await
         .unwrap();
     assert!(
         by_space
             .iter()
             .any(|p| p.container_space_id == container_space_id),
-        "list_for_space MUST surface the persisted space container"
+        "list_for_realm MUST surface the persisted space container"
     );
     let snapshot = state
         .persistence
@@ -847,7 +846,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Persistent Flow" },
                 "created_by": "did:web:alice.example",
             }
@@ -911,7 +910,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "metadata": { "title": "Persistent Morph" },
                 "created_by": "did:web:alice.example",

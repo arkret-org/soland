@@ -6,7 +6,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn account_contacts_and_space_lifecycle_workflow() {
+async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
     let bob = register_account(
@@ -121,42 +121,41 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .unwrap();
     assert_eq!(visible_bob["results"][0]["subject"], "did:web:bob.example");
 
-    let created_space = seed_test_realm(
+    let created_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Workflow Space",
+        "Workflow Realm",
         Some("created by lifecycle workflow"),
         "invite_only",
         &["did:web:soland.local"],
         &[],
     )
     .await;
-    let space_id = created_space["space_id"].as_str().unwrap().to_owned();
-    assert!(space_id.starts_with("ck:realm:"));
-    let realm_id = space_id.clone();
-    assert_eq!(created_space["owner"], "did:web:alice.example");
+    let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
+    assert!(realm_id.starts_with("ck:realm:"));
+    assert_eq!(created_realm["owner"], "did:web:alice.example");
 
-    let hidden_space: Value =
+    let hidden_realm: Value =
         TestClient::post("http://server/_cokret/find/directory/search-realms")
-            .json(&serde_json::json!({"query": "Workflow Space"}))
+            .json(&serde_json::json!({"query": "Workflow Realm"}))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert!(hidden_space["results"].as_array().unwrap().is_empty());
+    assert!(hidden_realm["results"].as_array().unwrap().is_empty());
 
-    let invite_space = seed_test_realm(
+    let invite_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Invite Token Space",
+        "Invite Token Realm",
         None,
         "invite_only",
         &[],
         &["did:web:bob.example"],
     )
     .await;
-    let invite_space_id = invite_space["space_id"].as_str().unwrap().to_owned();
+    let invite_realm_id = invite_realm["realm_id"].as_str().unwrap().to_owned();
     let bob_invites: Value = TestClient::get("http://server/_cokret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -165,7 +164,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .await
         .unwrap();
     assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
-    assert_eq!(bob_invites["invites"][0]["realm_id"], invite_space_id);
+    assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     let invite_token = bob_invites["invites"][0]["invite_token"]
         .as_str()
         .unwrap()
@@ -184,22 +183,22 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(invite_resolve["realm_preview"]["realm_id"], invite_space_id);
+    assert_eq!(invite_resolve["realm_preview"]["realm_id"], invite_realm_id);
 
-    let listed_space = seed_test_realm(
+    let listed_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Listed Directory Space",
+        "Listed Directory Realm",
         None,
         "listed",
         &[],
         &[],
     )
     .await;
-    let listed_space_id = listed_space["space_id"].as_str().unwrap().to_owned();
+    let listed_realm_id = listed_realm["realm_id"].as_str().unwrap().to_owned();
     let listed_search: Value =
         TestClient::post("http://server/_cokret/find/directory/search-realms")
-            .json(&serde_json::json!({"query": "Listed Directory Space"}))
+            .json(&serde_json::json!({"query": "Listed Directory Realm"}))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -207,7 +206,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .unwrap();
     assert_eq!(
         listed_search["results"][0]["realm_id"],
-        listed_space_id.as_str()
+        listed_realm_id.as_str()
     );
     let anonymous_sync_after_listed =
         account_subscribe_frame(state.clone(), None, "catchup=true").await;
@@ -215,23 +214,23 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         !anonymous_sync_after_listed["realms"]
             .as_object()
             .unwrap()
-            .contains_key(&listed_space_id)
+            .contains_key(&listed_realm_id)
     );
 
-    let unlisted_space = seed_test_realm(
+    let unlisted_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Unlisted Directory Space",
+        "Unlisted Directory Realm",
         None,
         "unlisted",
         &[],
         &[],
     )
     .await;
-    let unlisted_space_id = unlisted_space["space_id"].as_str().unwrap().to_owned();
+    let unlisted_realm_id = unlisted_realm["realm_id"].as_str().unwrap().to_owned();
     let unlisted_search: Value =
         TestClient::post("http://server/_cokret/find/directory/search-realms")
-            .json(&serde_json::json!({"query": "Unlisted Directory Space"}))
+            .json(&serde_json::json!({"query": "Unlisted Directory Realm"}))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -240,7 +239,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(unlisted_search["results"].as_array().unwrap().is_empty());
     let unlisted_resolve: Value =
         TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-            .json(&serde_json::json!({"realm_id": unlisted_space_id.clone()}))
+            .json(&serde_json::json!({"realm_id": unlisted_realm_id.clone()}))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -248,11 +247,11 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .unwrap();
     assert_eq!(
         unlisted_resolve["realm_preview"]["realm_id"],
-        unlisted_space_id
+        unlisted_realm_id
     );
 
     let anonymous_resolve = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
-        .json(&serde_json::json!({"realm_id": space_id}))
+        .json(&serde_json::json!({"realm_id": realm_id}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(anonymous_resolve.status_code.unwrap().as_u16(), 404);
@@ -260,31 +259,31 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     let owner_resolve: Value =
         TestClient::post("http://server/_cokret/find/directory/resolve-realm")
             .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"realm_id": space_id}))
+            .json(&serde_json::json!({"realm_id": realm_id}))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(owner_resolve["realm_preview"]["realm_id"], space_id);
+    assert_eq!(owner_resolve["realm_preview"]["realm_id"], realm_id);
 
-    let locked_space = seed_test_realm(
+    let locked_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
-        "Locked Plaintext Space",
+        "Locked Plaintext Realm",
         None,
         "invite_only",
         &[],
         &[],
     )
     .await;
-    let locked_space_id = locked_space["space_id"].as_str().unwrap();
+    let locked_realm_id = locked_realm["realm_id"].as_str().unwrap();
     let plaintext_without_service = post_message_event(
         state.clone(),
         &alice,
         "did:web:alice.example",
-        locked_space_id,
-        locked_space_id,
+        locked_realm_id,
+        locked_realm_id,
         serde_json::json!({"body": "should be denied"}),
         false,
     )
@@ -295,8 +294,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        locked_space_id,
-        locked_space_id,
+        locked_realm_id,
+        locked_realm_id,
         serde_json::json!({"ciphertext": "opaque"}),
         true,
     )
@@ -307,8 +306,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        locked_space_id,
-        locked_space_id,
+        locked_realm_id,
+        locked_realm_id,
         encrypted_envelope("ck.message.v1", "opaque-ciphertext"),
         true,
     )
@@ -325,10 +324,10 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         !bob_private_sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key(&space_id)
+            .contains_key(&realm_id)
     );
 
-    let with_bob = add_test_realm_member(&state, &space_id, "did:web:bob.example");
+    let with_bob = add_test_realm_member(&state, &realm_id, "did:web:bob.example");
     assert!(
         with_bob["members"]
             .as_array()
@@ -354,7 +353,6 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .starts_with("ck:operation:")
     );
     assert_eq!(sent_message["realm_id"], realm_id);
-    assert_eq!(sent_message["space_id"], space_id);
     assert_eq!(sent_message["source_realm_id"], realm_id);
     let send_cursor = decode_cursor(sent_message["sync_token"].as_str().unwrap());
     assert_eq!(send_cursor["v"], "1");
@@ -365,7 +363,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        &space_id,
+        &realm_id,
         "ck:flow:workflow",
         serde_json::json!({"kind": "ck.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
         false,
@@ -377,7 +375,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        &space_id,
+        &realm_id,
         "ck:flow:workflow",
         serde_json::json!({"kind": "ck.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
@@ -389,7 +387,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        &space_id,
+        &realm_id,
         "ck:flow:workflow",
         serde_json::json!({"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]}),
         false,
@@ -401,7 +399,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        &space_id,
+        &realm_id,
         "ck:flow:workflow",
         serde_json::json!({
             "kind": "ck.content.composite",
@@ -426,7 +424,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "block message response: {block_message}"
     );
 
-    let workflow_thread_id = expected_flow_id_for_scope(&space_id);
+    let workflow_thread_id = expected_flow_id_for_scope(&realm_id);
     let thread: Value = TestClient::get(format!(
         "http://server/_soland/self/index/thread?thread_id={workflow_thread_id}"
     ))
@@ -442,7 +440,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "query": "workflow",
-            "space_ids": [space_id],
+            "realm_ids": [realm_id],
             "object_kinds": ["message"]
         }))
         .send(&app_from_state(state.clone()))
@@ -473,7 +471,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let sync_with_message =
         account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let synced_members = sync_with_message["realms"][&space_id]["members"]
+    let synced_members = sync_with_message["realms"][&realm_id]["members"]
         .as_array()
         .unwrap();
     assert!(
@@ -487,8 +485,8 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|member| member["actor_id"] == "did:web:bob.example")
     );
     assert_eq!(
-        sync_with_message["realms"][&space_id]["summary"]["members"],
-        sync_with_message["realms"][&space_id]["members"]
+        sync_with_message["realms"][&realm_id]["summary"]["members"],
+        sync_with_message["realms"][&realm_id]["members"]
     );
     let cursor = decode_cursor(
         sync_with_message["cursor"]
@@ -506,20 +504,20 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(cursor.get("_sig").is_none());
     assert!(cursor.get("issuer_kid").is_none());
     assert_eq!(
-        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["event_id"],
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
     assert_eq!(
-        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["flow_id"],
-        expected_flow_id_for_scope(&space_id)
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["flow_id"],
+        expected_flow_id_for_scope(&realm_id)
     );
     // Message v1 exposes the timeline track as the const string `discussion`.
     assert_eq!(
-        sync_with_message["realms"][&space_id]["timeline"]["events"][0]["track_name"],
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["track_name"],
         "discussion"
     );
     assert_eq!(
-        sync_with_message["realms"][&space_id]["summary"]["flow"]["schema"],
+        sync_with_message["realms"][&realm_id]["summary"]["flow"]["schema"],
         "ck.schema.flow.v1"
     );
 
@@ -538,7 +536,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     )
     .await;
     assert!(
-        incremental_noop["realms"][&space_id].is_null(),
+        incremental_noop["realms"][&realm_id].is_null(),
         "unchanged realm should be absent from incremental noop delta: {incremental_noop}"
     );
 
@@ -547,7 +545,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         state.clone(),
         &alice,
         "did:web:alice.example",
-        &space_id,
+        &realm_id,
         "ck:flow:workflow",
         serde_json::json!({"body": "second workflow"}),
         false,
@@ -562,7 +560,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         ),
     )
     .await;
-    let incremental_events = incremental_after_message["realms"][&space_id]["timeline"]["events"]
+    let incremental_events = incremental_after_message["realms"][&realm_id]["timeline"]["events"]
         .as_array()
         .unwrap();
     assert_eq!(incremental_events.len(), 1);
@@ -581,9 +579,9 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(mismatch.status_code.unwrap().as_u16(), 400);
 
     let filter_mismatch = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={}&filter=%7B%22spaces%22%3A%5B%22{}%22%5D%7D",
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={}&filter=%7B%22realms%22%3A%5B%22{}%22%5D%7D",
         sync_with_message["cursor"].as_str().unwrap(),
-        space_id
+        realm_id
     ))
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
@@ -604,7 +602,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
     let exported: Value = TestClient::get(format!(
-        "http://server/_soland/self/spaces/{space_id}/export"
+        "http://server/_soland/self/realms/{realm_id}/export"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -623,7 +621,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
 
     let waited_sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
     assert_eq!(
-        waited_sync["realms"][&space_id]["timeline"]["events"][0]["event_id"],
+        waited_sync["realms"][&realm_id]["timeline"]["events"][0]["event_id"],
         sent_message["event_id"]
     );
 
@@ -635,7 +633,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
     let snapshot: Value = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={space_id}"
+        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -672,7 +670,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert_eq!(proof["chunk_count"], 1);
     assert_eq!(
         proof["realm_id"].as_str().unwrap(),
-        space_id,
+        realm_id,
         "generator_proof.realm_id matches the snapshot Realm"
     );
 
@@ -702,7 +700,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
         "chunk merkle_root matches head merkle_root"
     );
 
-    let kicked = remove_test_realm_member(&state, &space_id, "did:web:bob.example");
+    let kicked = remove_test_realm_member(&state, &realm_id, "did:web:bob.example");
     assert!(
         !kicked["members"]
             .as_array()
@@ -711,11 +709,11 @@ async fn account_contacts_and_space_lifecycle_workflow() {
             .any(|member| member["did"] == "did:web:bob.example")
     );
 
-    let deleted = delete_test_realm(&state, &space_id).await;
+    let deleted = delete_test_realm(&state, &realm_id).await;
     assert_eq!(deleted["deleted"], true);
 
     let directory: Value = TestClient::post("http://server/_cokret/find/directory/search-realms")
-        .json(&serde_json::json!({"query": "Workflow Space"}))
+        .json(&serde_json::json!({"query": "Workflow Realm"}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -724,7 +722,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(directory["results"].as_array().unwrap().is_empty());
 
     let index: Value = TestClient::post("http://server/_soland/self/index/query")
-        .json(&serde_json::json!({"realm_ids": [space_id]}))
+        .json(&serde_json::json!({"realm_ids": [realm_id]}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -733,7 +731,7 @@ async fn account_contacts_and_space_lifecycle_workflow() {
     assert!(index["results"].as_array().unwrap().is_empty());
 
     let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
-    assert!(!sync["realms"].as_object().unwrap().contains_key(&space_id));
+    assert!(!sync["realms"].as_object().unwrap().contains_key(&realm_id));
 
     let audit_events: Value = TestClient::get("http://server/_soland/self/audit/events?limit=20")
         .add_header("authorization", format!("Bearer {alice}"), true)

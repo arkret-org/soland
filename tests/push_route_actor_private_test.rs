@@ -20,13 +20,10 @@ use soland::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
 
 const SERVICE_DID_LOCAL: &str = "did:web:principal.acme.example";
 const SERVICE_DID_OTHER: &str = "did:web:principal.rogue.example";
-// Actor-private events on the chime/soland wire still carry a `space_id`
-// in the Operation envelope (the SDK's `Operation::create` requires
-// one); post-R1.2 the SDK envelope field is conceptually a `realm_id`
-// (the security boundary, ex-`space_id`). For control-stream /
-// actor-private use the convention is the actor's principal control
-// stream id, but a placeholder is fine for reducer-level tests — the
-// dispatcher reads everything it needs from `operation.payload`.
+// Actor-private operations still carry a Realm in the Operation envelope.
+// For control-stream actor-private use the convention is the actor's
+// principal control Realm, but a placeholder is fine for reducer-level
+// tests because the dispatcher reads everything it needs from payload.
 const PLACEHOLDER_REALM: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const PRINCIPAL_A: &str = "did:web:alice.example";
 const PRINCIPAL_B: &str = "did:web:bob.example";

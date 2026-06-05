@@ -10,10 +10,10 @@ use soland::reducer::{ProjectionEffect, ProjectionState};
 const REALM_PARENT: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_CHILD: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 
-fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        RealmId::new(space_id).unwrap(),
+        RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )

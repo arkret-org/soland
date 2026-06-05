@@ -110,7 +110,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
     serde_json::from_str(body.lines().next().unwrap()).unwrap()
 }
 
-async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> String {
+async fn create_plaintext_realm(state: AppState, _token: &str, title: &str) -> String {
     let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new("did:web:alice.example".to_owned()).unwrap();
@@ -148,8 +148,8 @@ async fn create_plaintext_space(state: AppState, _token: &str, title: &str) -> S
     realm_id
 }
 
-async fn add_space_member(state: AppState, _token: &str, space_id: &str, member: &str) {
-    let typed_realm_id = RealmId::new(space_id.to_owned()).unwrap();
+async fn add_realm_member(state: AppState, _token: &str, realm_id: &str, member: &str) {
+    let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
     let mut realms = state.realms.lock().unwrap();
     let entry = realms
@@ -166,11 +166,11 @@ async fn send_plaintext_message(
     state: AppState,
     token: &str,
     actor: &str,
-    space_id: &str,
+    realm_id: &str,
     body: &str,
 ) -> Value {
     let payload = json!({
-        "flow_id": flow_id_for_realm(space_id),
+        "flow_id": flow_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {"kind": "ck.content.text", "body": body}
     });
@@ -180,7 +180,7 @@ async fn send_plaintext_message(
         "schema_id": "ck.schema.message.v1",
         "actor_id": actor,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "device_id": "ck:device:01904100-0000-7000-8000-b0b000000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -369,11 +369,11 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         "Bob",
     )
     .await;
-    let space_id = create_plaintext_space(state.clone(), &alice_desktop, "Blocklist Fixture").await;
-    add_space_member(
+    let realm_id = create_plaintext_realm(state.clone(), &alice_desktop, "Blocklist Fixture").await;
+    add_realm_member(
         state.clone(),
         &alice_desktop,
-        &space_id,
+        &realm_id,
         "did:web:bob.example",
     )
     .await;
@@ -395,7 +395,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         &alice_desktop,
         "did:web:alice.example",
         "ck:device:01904100-0000-7000-8000-a11ce0000001",
-        &space_id,
+        &realm_id,
         "ck.account_data.set",
         json!({
             "key": "ck.account.blocklist.v1",
@@ -463,7 +463,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         state.clone(),
         &bob,
         "did:web:bob.example",
-        &space_id,
+        &realm_id,
         "blocked notification",
     )
     .await;
@@ -488,7 +488,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         &alice_desktop,
         "did:web:alice.example",
         "ck:device:01904100-0000-7000-8000-a11ce0000001",
-        &space_id,
+        &realm_id,
         "ck.account_data.set",
         json!({
             "key": "ck.account.blocklist.v1",
@@ -504,7 +504,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         state.clone(),
         &bob,
         "did:web:bob.example",
-        &space_id,
+        &realm_id,
         "visible notification",
     )
     .await;
@@ -549,8 +549,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "Bob",
     )
     .await;
-    let realm_a = create_plaintext_space(state.clone(), &alice_desktop, "Parent Realm").await;
-    let realm_b = create_plaintext_space(state.clone(), &alice_desktop, "Discussion Realm").await;
+    let realm_a = create_plaintext_realm(state.clone(), &alice_desktop, "Parent Realm").await;
+    let realm_b = create_plaintext_realm(state.clone(), &alice_desktop, "Discussion Realm").await;
     let event_a = "ck:event:01904100-0000-7000-8000-0000000000aa";
     let event_b = "ck:event:01904100-0000-7000-8000-0000000000bb";
 
@@ -673,7 +673,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             "notification": {
                 "type": "blind_wakeup",
                 "event_id": "ck:event:01904100-0000-7000-8000-0000000000ee",
-                "realm_id": "ck:space:0190419b-0000-7000-8000-0000000000ee",
+                "realm_id": "ck:realm:0190419b-0000-7000-8000-0000000000ee",
                 "sender": "did:web:bob.example",
                 "devices": [{"device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001"}]
             }

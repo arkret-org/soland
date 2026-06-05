@@ -2514,7 +2514,6 @@ async fn hydrate_realm_create_event(
                 .and_then(|object| object.get("id"))
                 .and_then(Value::as_str)
         })
-        .or_else(|| record.envelope.get("space_id").and_then(Value::as_str))
         .or(record.realm_id.as_deref())
         .map(normalize_persisted_realm_id)
     else {

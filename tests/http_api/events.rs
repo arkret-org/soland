@@ -19,12 +19,12 @@ async fn account_subscribe_projects_realm_encryption_profile() {
         &[],
     )
     .await;
-    let space_id = created["space_id"].as_str().unwrap();
+    let realm_id = created["realm_id"].as_str().unwrap();
 
     let mut meta = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .unwrap()
         .expect("seeded realm meta");
@@ -33,12 +33,12 @@ async fn account_subscribe_projects_realm_encryption_profile() {
     state
         .persistence
         .realm_meta()
-        .put(space_id, &meta)
+        .put(realm_id, &meta)
         .await
         .unwrap();
 
     let sync = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let realm = &sync["realms"][space_id];
+    let realm = &sync["realms"][realm_id];
     assert_eq!(realm["history_visibility"], "joined");
     assert_eq!(realm["encryption_profile"], "mls_rfc9420");
     assert_eq!(realm["summary"]["history_visibility"], "joined");
@@ -465,7 +465,7 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
 async fn index_query_supports_facet_projection_binding() {
     let query: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
+            "realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"],
             "facets": ["container", "replyable"],
             "renderer": "collection",
             "limit": 20
@@ -477,7 +477,7 @@ async fn index_query_supports_facet_projection_binding() {
         .unwrap();
     let unsupported: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "space_ids": ["ck:space:0196419b-0000-7000-8000-000000000000"],
+            "realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"],
             "facets": ["not_supported"],
             "limit": 20
         }))
@@ -502,13 +502,13 @@ async fn index_query_supports_facet_projection_binding() {
 async fn index_reducer_debug_reports_projection_frontier() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = DEMO_REALM_ID;
+    let realm_id = DEMO_REALM_ID;
 
     let sent = submit_message_event(
         state.clone(),
         &token,
         "did:web:alice.example",
-        space_id,
+        realm_id,
         "ck:flow:debug-reducer",
         serde_json::json!({"body": "debug reducer"}),
         false,
@@ -516,7 +516,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
     .await;
 
     let debug: Value = TestClient::get(format!(
-        "http://server/_soland/self/index/debug/reducer?realm_id={space_id}&limit=5"
+        "http://server/_soland/self/index/debug/reducer?realm_id={realm_id}&limit=5"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -529,7 +529,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         debug["schema_profiles"],
         serde_json::json!(["ck.schema.core.v1"])
     );
-    assert_eq!(debug["realm_id"], space_id);
+    assert_eq!(debug["realm_id"], realm_id);
     assert_eq!(debug["frontier"]["message_count"], 1);
     assert_eq!(debug["frontier"]["projection_event_count"], 1);
     assert_eq!(debug["frontier"]["latest_event_id"], sent["event_id"]);
@@ -548,7 +548,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
 #[tokio::test]
 async fn index_query_supports_structured_filters_sort_and_cursor() {
     let state = AppState::new(test_config(), Db { pool: None });
-    for title in ["Zulu Query Space", "Alpha Query Space"] {
+    for title in ["Zulu Query Realm", "Alpha Query Realm"] {
         let created = seed_test_realm(
             &state,
             "did:web:alice.example",
@@ -559,12 +559,12 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
             &[],
         )
         .await;
-        assert!(created["space_id"].as_str().is_some());
+        assert!(created["realm_id"].as_str().is_some());
     }
 
     let first_page: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "filters": {"text": "Query Space"},
+            "filters": {"text": "Query Realm"},
             "sort": [{"field": "title", "direction": "asc"}],
             "limit": 1
         }))
@@ -574,13 +574,13 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
         .await
         .unwrap();
     assert_eq!(first_page["results"].as_array().unwrap().len(), 1);
-    assert_eq!(first_page["results"][0]["title"], "Alpha Query Space");
+    assert_eq!(first_page["results"][0]["title"], "Alpha Query Realm");
     assert_eq!(first_page["frontier"]["limited"], true);
     let cursor = first_page["next_cursor"].as_str().unwrap().to_owned();
 
     let second_page: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({
-            "filters": {"text": "Query Space"},
+            "filters": {"text": "Query Realm"},
             "sort": [{"field": "title", "direction": "asc"}],
             "cursor": cursor,
             "limit": 1
@@ -591,7 +591,7 @@ async fn index_query_supports_structured_filters_sort_and_cursor() {
         .await
         .unwrap();
     assert_eq!(second_page["results"].as_array().unwrap().len(), 1);
-    assert_eq!(second_page["results"][0]["title"], "Zulu Query Space");
+    assert_eq!(second_page["results"][0]["title"], "Zulu Query Realm");
     assert!(second_page["next_cursor"].is_null());
 
     let mismatch = TestClient::post("http://server/_soland/self/index/query")
@@ -616,7 +616,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
     let cursor = first["cursor"].as_str().unwrap();
 
     let filter_changed = TestClient::get(format!(
-        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22spaces%22%3A%5B%22ck%3Aspace%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
+        "http://server/_cokret/self/account/subscribe?catchup=true&after={cursor}&filter=%7B%22realms%22%3A%5B%22ck%3Arealm%3A0196419b-0000-7000-8000-000000000000%22%5D%7D"
     ))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -628,14 +628,14 @@ async fn sync_cursor_rejects_facets_and_renderer_changes() {
 async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let space_id = DEMO_REALM_ID;
+    let realm_id = DEMO_REALM_ID;
 
     for body in ["first backfill page", "second backfill page"] {
         let sent = submit_message_event(
             state.clone(),
             &token,
             "did:web:alice.example",
-            space_id,
+            realm_id,
             "ck:flow:backfill-pages",
             serde_json::json!({"body": body}),
             false,
@@ -645,7 +645,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     }
 
     let first_page: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}&limit=1"
+        "http://server/_cokret/self/events?realms={realm_id}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -659,7 +659,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}&limit=1&after={next_cursor}"
+        "http://server/_cokret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -671,7 +671,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
     let to_cursor = second_page["events"][0]["event_id"].as_str().unwrap();
     let gap: Value = TestClient::get(format!(
-        "http://server/_cokret/self/sync/backfill/gap?realm_id={space_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
+        "http://server/_cokret/self/sync/backfill/gap?realm_id={realm_id}&from_cursor={next_cursor}&to_cursor={to_cursor}&limit=10"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -687,7 +687,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(gap["production_gap"], "durable_sync_position_validation");
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/_cokret/self/events?realms={space_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
+        "http://server/_cokret/self/events?realms={realm_id}&after=ck:event:01904100-0000-7000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -822,7 +822,7 @@ async fn account_subscribe_long_poll_wakes_on_broadcast() {
             serde_json::json!({
                 "kind": "ck.message.create",
                 "event_id": message.event_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
             }),
         ));
         message

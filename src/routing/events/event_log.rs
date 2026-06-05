@@ -358,7 +358,7 @@ async fn resolve_events(
 /// Plain async helper version of [`events_query_durable_scope`] so other
 /// handlers (e.g. the projection-aware `routing::events::sync::events_query`) can
 /// dispatch to the durable-store reader when the selector contains only
-/// `actors[]` (no `spaces[]`). Both the `#[endpoint]` wrapper and the
+/// `actors[]` (no `realms[]`). Both the `#[endpoint]` wrapper and the
 /// sync-side dispatcher call this impl.
 ///
 /// Returns `Result<EventsPageResponse, AppError>` so the wrapper can be a
@@ -376,10 +376,10 @@ pub(super) async fn events_query_durable_scope_impl(
             actors.push(single);
         }
     }
-    let mut spaces = query_param_all(req, "realms");
+    let mut realms = query_param_all(req, "realms");
     if let Some(single) = query_param(req, "realm_id") {
-        if !spaces.contains(&single) {
-            spaces.push(single);
+        if !realms.contains(&single) {
+            realms.push(single);
         }
     }
     for actor in &actors {
@@ -387,9 +387,9 @@ pub(super) async fn events_query_durable_scope_impl(
             return Err(AppError::invalid_param(format!("invalid actor: {actor}")));
         }
     }
-    for space in &mut spaces {
-        if RealmId::new(space.clone()).is_err() {
-            return Err(AppError::invalid_param(format!("invalid realm: {space}")));
+    for realm in &mut realms {
+        if RealmId::new(realm.clone()).is_err() {
+            return Err(AppError::invalid_param(format!("invalid realm: {realm}")));
         }
     }
     // Round C44 (spec dc01ad7): query refactor — `from` / `until` /
@@ -414,7 +414,7 @@ pub(super) async fn events_query_durable_scope_impl(
         .unwrap_or(50)
         .clamp(1, 100);
     let actors_set: std::collections::BTreeSet<&str> = actors.iter().map(String::as_str).collect();
-    let spaces_set: std::collections::BTreeSet<&str> = spaces.iter().map(String::as_str).collect();
+    let realms_set: std::collections::BTreeSet<&str> = realms.iter().map(String::as_str).collect();
     let scoped = state
         .persistence
         .events()
@@ -426,15 +426,15 @@ pub(super) async fn events_query_durable_scope_impl(
             // Spec selector semantics: union — match actor OR realm membership.
             // Empty selector means "all reachable" (handler will still gate
             // through `event_visible_to_session`).
-            if actors_set.is_empty() && spaces_set.is_empty() {
+            if actors_set.is_empty() && realms_set.is_empty() {
                 return true;
             }
             let actor_match = actors_set.contains(record.actor_id.as_str());
-            let space_match = record
+            let realm_match = record
                 .realm_id
                 .as_deref()
-                .is_some_and(|s| spaces_set.contains(s));
-            actor_match || space_match
+                .is_some_and(|realm| realms_set.contains(realm));
+            actor_match || realm_match
         });
     let mut records = Vec::new();
     for record in scoped {
@@ -482,7 +482,7 @@ pub(super) async fn events_query_durable_scope_impl(
 /// Salvo `#[endpoint]` wrapper around [`events_query_durable_scope_impl`] so
 /// the actor-scoped durable-store reader can be wired to a route directly
 /// (currently used only as a fallback dispatched from `routing::events::sync::events_query`
-/// when the selector has no `spaces[]`).
+/// when the selector has no `realms[]`).
 #[endpoint(
     operation_id = "ck.events.query_durable",
     tags("events"),
@@ -1463,52 +1463,6 @@ async fn validate_event_envelope(
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
     })?;
-    // R1.2 (Realm/Space reversal) — hard_reject the pre-rename security
-    // `ck.space.<event>` and container `ck.place.*` wire kinds with a
-    // distinct reason_code so clients can detect they need to upgrade.
-    // The reversal moved the security namespace from `ck.space.*` to
-    // `ck.realm.*` and the container namespace from `ck.place.*` to
-    // `ck.space.*`; both lists below name the pre-rename kinds that are
-    // now extinct on the wire.
-    if matches!(
-        kind.as_str(),
-        "ck.space.upgrade"
-            | "ck.space.organization"
-            | "ck.space.policy"
-            | "ck.space.join_rule"
-            | "ck.space.history_visibility"
-            | "ck.space.discovery"
-            | "ck.space.policy_server"
-            | "ck.space.policy_components"
-            | "ck.space.history_sharing_policy"
-            | "ck.space.delivery_binding_policy"
-            | "ck.space.asset_privacy_policy"
-            | "ck.space.read_receipt_policy"
-            | "ck.space.moderation_policy"
-            | "ck.space.plaintext_visible_services"
-            | "ck.space.media_service"
-            | "ck.space.schema"
-            | "ck.space.audit_policy_downgrade"
-            | "ck.space.destroy"
-            | "ck.space.freeze"
-            | "ck.space.notification.audit"
-            | "ck.space.child"
-    ) {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "realm_kind_renamed_in_v1",
-            "this security-namespace `ck.space.*` kind was renamed to \
-             `ck.realm.*` in v1 (Realm/Space reversal)",
-        ));
-    }
-    if kind.as_str().starts_with("ck.place.") {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "place_kind_renamed_to_space",
-            "the container namespace `ck.place.*` was renamed to \
-             `ck.space.*` in v1 (Realm/Space reversal)",
-        ));
-    }
     // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
     // kinds at the submit entrypoint. Aggressive mode: no compat path —
     // pre-Round-R2/R3 senders MUST switch to ck.schema.ephemeral_envelope.v1
@@ -5427,7 +5381,7 @@ mod proof_strictness_tests {
             "ck.morph.update",
             "ck.space.update",
             "ck.profile.update",
-            "ck.profile.space_override",
+            "ck.profile.realm_override",
         ];
         let missing = catalog.missing_payload_validators_for(object_patch_kinds);
         assert!(

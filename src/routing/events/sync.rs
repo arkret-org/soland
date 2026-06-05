@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use super::projection::{
-    actor_erased_in_space, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
+    actor_erased_in_realm, retention_tombstone_for_event, tombstone_timeline_event_for_retention,
     tombstone_timeline_event_value,
 };
 use super::{
@@ -660,7 +660,7 @@ async fn build_sync_snapshot(
             .copied()
             .unwrap_or_default();
         let (timeline_events, space_position) =
-            timeline_events_for_space(state, &projection, &realm_id, after_position, session).await;
+            timeline_events_for_realm(state, &projection, &realm_id, after_position, session).await;
         positions.insert(realm_id.clone(), space_position);
         // Incremental sync skips realms whose timeline position is
         // unchanged AND whose meta `updated_at` is at-or-before the
@@ -687,8 +687,8 @@ async fn build_sync_snapshot(
                 continue;
             }
         }
-        let bottom_cells = bottom_cells_for_space(&projection, &realm_id);
-        let anchor_view = anchor_view_for_space(&bottom_cells);
+        let bottom_cells = bottom_cells_for_realm(&projection, &realm_id);
+        let anchor_view = anchor_view_for_realm(&bottom_cells);
         let ephemeral = typing_ephemeral_for_realm(state, &realm_id, session).await;
         sync_realms.insert(
             realm_id.clone(),
@@ -1041,7 +1041,7 @@ fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bo
     (out, limited)
 }
 
-async fn timeline_events_for_space(
+async fn timeline_events_for_realm(
     state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
@@ -1088,7 +1088,7 @@ async fn timeline_events_for_space(
     for message in state
         .persistence
         .messages()
-        .list_for_space(realm_id, 100)
+        .list_for_realm(realm_id, 100)
         .await
         .unwrap_or_default()
     {
@@ -1217,7 +1217,7 @@ async fn realm_event_visible_to_session_with_projection(
     }
 }
 
-fn bottom_cells_for_space(projection: &ProjectionState, realm_id: &str) -> Vec<Value> {
+fn bottom_cells_for_realm(projection: &ProjectionState, realm_id: &str) -> Vec<Value> {
     projection
         .cells
         .iter()
@@ -1239,7 +1239,7 @@ fn bottom_cells_for_space(projection: &ProjectionState, realm_id: &str) -> Vec<V
         .collect()
 }
 
-fn anchor_view_for_space(bottom_cells: &[Value]) -> Value {
+fn anchor_view_for_realm(bottom_cells: &[Value]) -> Value {
     let cells = bottom_cells
         .iter()
         .filter_map(|entry| {
@@ -1508,7 +1508,7 @@ fn sync_timeline_message_record_json_with_projection(
     projection: &ProjectionState,
 ) -> serde_json::Value {
     let mut event = sync_timeline_message_record_json(message);
-    if actor_erased_in_space(projection, &message.sender, &message.realm_id) {
+    if actor_erased_in_realm(projection, &message.sender, &message.realm_id) {
         tombstone_timeline_event_value(&mut event);
     }
     augment_timeline_message_json(event, &message.event_id, &message.content, projection)
@@ -2176,7 +2176,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     for message in state
         .persistence
         .messages()
-        .list_for_space(realm_id, 1000)
+        .list_for_realm(realm_id, 1000)
         .await
         .unwrap_or_default()
     {
@@ -3051,11 +3051,11 @@ async fn durable_events_query_from_parts(
     let mut records = Vec::new();
     for record in all_records {
         let actor_match = actors_set.contains(record.actor_id.as_str());
-        let space_match = record
+        let realm_match = record
             .realm_id
             .as_deref()
-            .is_some_and(|s| realms_set.contains(s));
-        if !(actor_match || space_match) {
+            .is_some_and(|realm| realms_set.contains(realm));
+        if !(actor_match || realm_match) {
             continue;
         }
         if !super::event_log::event_visible_to_session(state, &record, session).await {

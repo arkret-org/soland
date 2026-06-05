@@ -104,10 +104,6 @@ fn realm_id() -> RealmId {
     RealmId::new("ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned()).unwrap()
 }
 
-fn space_id() -> RealmId {
-    realm_id()
-}
-
 fn member_cell() -> CellRef {
     CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
 }
@@ -115,7 +111,7 @@ fn member_cell() -> CellRef {
 fn build_invited_to_join_move() -> Move {
     let body = json!({
         "issuer": "did:web:admin.example",
-        "space_id": space_id().as_str(),
+        "realm_id": realm_id().as_str(),
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
@@ -455,7 +451,7 @@ fn build_consent_grant_add_move() -> Move {
     let consent_cell = "ck:cell:ck.component.consent.grant.v1:cnt.01js0c000000000000000000aa";
     let body = json!({
         "issuer": "did:web:admin.example",
-        "space_id": space_id().as_str(),
+        "realm_id": realm_id().as_str(),
         "preconditions": [],
         "effects": [{
             "cell": consent_cell,
@@ -545,7 +541,7 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
     let sign_resp: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
-            "space_id": space_id().as_str(),
+            "realm_id": realm_id().as_str(),
             "max_moves": 100,
         }))
         .send(&app)
@@ -590,19 +586,19 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
 /// Demo realm pre-seeded by AppState::new. Public/discoverable so the
 /// test's dev-login session can subscribe without explicit membership
 /// registration. Other tests in this file use a different realm id
-/// (Move/Anchor tests don't go through space_id_accessible).
-fn demo_space_id() -> &'static str {
+/// (Move/Anchor tests don't go through realm_id_accessible).
+fn demo_realm_id() -> &'static str {
     "ck:realm:0196419b-0000-7000-8000-000000000000"
 }
 
-fn event_envelope(event_id: &str, actor: &str, space_id: &str, payload: Value) -> Value {
+fn event_envelope(event_id: &str, actor: &str, realm_id: &str, payload: Value) -> Value {
     let suffix = event_id.trim_start_matches("ck:event:");
     let mut event = json!({
         "event_id": event_id,
         "kind": "ck.message.create",
         "actor_id": actor,
         "actor_seq": 1,
-        "space_id": space_id,
+        "realm_id": realm_id,
         "created_at": "2026-05-02T00:00:00Z",
         "hlc": "01970e589d21-0001-a13f9c2e",
         "payload": payload,
@@ -670,7 +666,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
     // because salvo::Service is not Clone.
     let writer_state = state.clone();
     let token_writer = token.clone();
-    let space = demo_space_id().to_owned();
+    let realm = demo_realm_id().to_owned();
     let writer = tokio::spawn(async move {
         let app_writer = service(writer_state);
         // Wait for the subscribe request to land + register its receiver.
@@ -681,7 +677,7 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
             .json(&event_envelope(
                 event_id,
                 "did:web:alice.example",
-                &space,
+                &realm,
                 json!({
                     "body": "hello live",
                     "content": {"body": "hello live"},
@@ -696,8 +692,8 @@ async fn events_subscribe_streams_live_event_then_closes_at_deadline() {
 
     // Subscribe with a short deadline so the test doesn't block.
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?spaces={}&max_duration_ms=500&heartbeat_ms=200",
-        demo_space_id()
+        "http://server/_cokret/self/events/subscribe?realms={}&max_duration_ms=500&heartbeat_ms=200",
+        demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app)
@@ -753,7 +749,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
     let hlc_str = format!("{physical_ms:012x}-0000-aabbccdd");
     let body = json!({
         "issuer": "did:web:admin.example",
-        "space_id": space_id().as_str(),
+        "realm_id": realm_id().as_str(),
         "preconditions": [],
         "effects": [{
             "cell": member_cell().as_str(),
@@ -1027,17 +1023,17 @@ async fn production_verifier_rejects_unknown_verification_method() {
 
 /// Post-anchor `kind=frontier` mid-stream control frame.
 ///
-/// Subscribe to the demo space → trigger an Anchor sign for that space →
+/// Subscribe to the demo Realm → trigger an Anchor sign for that Realm →
 /// verify the streaming subscriber sees a `kind=frontier` frame whose
 /// `state_root` matches the anchor's post_state_root and `anchor_id`
 /// starts with `ck:anchor:sha256:`.
 ///
-/// **Note**: this test uses a different space (the Move/Anchor pipeline
-/// space, not the demo space) for the anchor, so we subscribe to that
-/// space too. We bypass the access check by using the dev-mode public
-/// space test fixture. We can't easily subscribe to the same anchor
-/// space the existing anchorer tests use because that space isn't
-/// registered in SpaceSearchIndex; so we subscribe to demo_space and
+/// **Note**: this test uses a different Realm (the Move/Anchor pipeline
+/// Realm, not the demo Realm) for the anchor, so we subscribe to that
+/// Realm too. We bypass the access check by using the dev-mode public
+/// Realm test fixture. We can't easily subscribe to the same anchor
+/// Realm the existing anchorer tests use because that Realm isn't
+/// registered in RealmSearchIndex; so we subscribe to the demo Realm and
 /// post the Move's effects there instead.
 #[tokio::test]
 async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
@@ -1049,9 +1045,9 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
     let token = dev_token(state.clone()).await;
     let _app = service(state.clone());
 
-    // The anchor pipeline writes to space_id() (test-only space). We
-    // subscribe to that space — the broadcast filter accepts any
-    // space the broadcast notification's space_id matches.
+    // The anchor pipeline writes to realm_id() (test-only Realm). We
+    // subscribe to that Realm — the broadcast filter accepts any
+    // realm the broadcast notification's realm_id matches.
     let writer_state = state.clone();
     let token_writer = token.clone();
     let writer = tokio::spawn(async move {
@@ -1059,8 +1055,8 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
         // Wait so the subscriber's broadcast receiver is registered.
         sleep(StdDuration::from_millis(150)).await;
         // Submit a Move + trigger the anchorer; both happen on the
-        // anchor-pipeline space (`space_id()`), and the broadcast goes
-        // out tagged with that space_id.
+        // anchor-pipeline Realm (`realm_id()`), and the broadcast goes
+        // out tagged with that realm_id.
         let move_obj = build_invited_to_join_move();
         let _: Value = TestClient::post("http://server/_soland/peer/moves")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
@@ -1072,7 +1068,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             .unwrap_or_default();
         let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
-            .json(&json!({"space_id": space_id().as_str()}))
+            .json(&json!({"realm_id": realm_id().as_str()}))
             .send(&app_writer)
             .await
             .take_json()
@@ -1080,14 +1076,14 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             .unwrap_or_default();
     });
 
-    // Subscribe to the SAME space the anchor will be published on. We
-    // need that space to pass space_id_accessible — for tests, the
-    // simplest path is to use a space that's already registered as
-    // public. But space_id() isn't registered so this would 404. So we
-    // bypass by checking what `space_id_accessible` does: if a session
-    // is None and the space has discoverability=public, accept; else
+    // Subscribe to the same Realm the anchor will be published on. We
+    // need that Realm to pass realm_id_accessible — for tests, the
+    // simplest path is to use a Realm that's already registered as
+    // public. But realm_id() isn't registered so this would 404. So we
+    // bypass by checking what `realm_id_accessible` does: if a session
+    // is None and the Realm has discoverability=public, accept; else
     // require session has membership. The test config injects a session
-    // (dev_token), so we'd need the actor in space.members. To avoid
+    // (dev_token), so we'd need the actor in realm.members. To avoid
     // wiring all that, we use the broadcast directly: subscribe to the
     // receiver and check the notification arrives.
     let mut rx = state.event_broadcast.subscribe();
@@ -1140,8 +1136,8 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     let app = service(state.clone());
 
     let mut response = TestClient::get(format!(
-        "http://server/_cokret/self/events/subscribe?spaces={}&max_duration_ms=300&heartbeat_ms=10000",
-        demo_space_id()
+        "http://server/_cokret/self/events/subscribe?realms={}&max_duration_ms=300&heartbeat_ms=10000",
+        demo_realm_id()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app)
@@ -1203,7 +1199,7 @@ async fn anchorer_pass_populates_projection_cells_map() {
 
     let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str()}))
+        .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
         .await
         .take_json()
@@ -1247,7 +1243,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     // but we want a successful reconfigure here, so pick external DIDs).
     let url = format!(
         "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
-        space_id().as_str()
+        realm_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1289,7 +1285,7 @@ async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
 
     let url = format!(
         "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
-        space_id().as_str()
+        realm_id().as_str()
     );
     let response = TestClient::post(&url)
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1329,7 +1325,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     // First pass: publishes.
     let first: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str()}))
+        .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
         .await
         .take_json()
@@ -1340,7 +1336,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
     // Second pass: no pending Moves, no Anchor.
     let second: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str()}))
+        .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
         .await
         .take_json()
@@ -1381,7 +1377,7 @@ async fn seed_member_cell_join(state: AppState, token: &str) -> String {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
         .await
         .take_json()
@@ -1400,7 +1396,10 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
     // registry) but no Move ever wrote to this subject — so the cell is
     // "absent" and the endpoint returns 404 with the canonical envelope.
     let unknown = "ck:cell:ck.component.member.state.v1:did.web.nobody.example";
-    let mut resp = TestClient::get(format!("http://server/_soland/admin/cells/{unknown}"))
+    let mut resp = TestClient::get(format!(
+        "http://server/_soland/admin/cells/{unknown}?realm_id={}",
+        realm_id().as_str()
+    ))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1431,7 +1430,10 @@ async fn admin_get_cell_returns_value_after_anchored_move() {
     // and lands in ProjectionState::cells.
     let cell_id = seed_member_cell_join(state.clone(), &token).await;
 
-    let mut resp = TestClient::get(format!("http://server/_soland/admin/cells/{cell_id}"))
+    let mut resp = TestClient::get(format!(
+        "http://server/_soland/admin/cells/{cell_id}?realm_id={}",
+        realm_id().as_str()
+    ))
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1472,7 +1474,7 @@ async fn admin_list_cells_filters_by_prefix() {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
         .await
         .take_json()
@@ -1481,8 +1483,8 @@ async fn admin_list_cells_filters_by_prefix() {
 
     // List with prefix=ck.component.consent. → only the consent.grant cell.
     let mut resp = TestClient::get(format!(
-        "http://server/_soland/admin/cells?space_id={}&prefix=ck.component.consent.",
-        space_id().as_str()
+        "http://server/_soland/admin/cells?realm_id={}&prefix=ck.component.consent.",
+        realm_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app)
@@ -1540,12 +1542,12 @@ async fn admin_get_cell_requires_bearer_token() {
 }
 
 #[tokio::test]
-async fn admin_list_cells_requires_space_id_query_param() {
+async fn admin_list_cells_requires_realm_id_query_param() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Missing space_id → 400 missing_param.
+    // Missing realm_id → 400 missing_param.
     let mut resp = TestClient::get("http://server/_soland/admin/cells?prefix=ck.")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1553,7 +1555,7 @@ async fn admin_list_cells_requires_space_id_query_param() {
     assert_eq!(
         resp.status_code,
         Some(StatusCode::BAD_REQUEST),
-        "list without space_id should surface as 400"
+        "list without realm_id should surface as 400"
     );
     let body: Value = resp.take_json().await.unwrap();
     let envelope = body.get("error").or(Some(&body)).expect("envelope");
@@ -1566,7 +1568,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Seed at least two cells (member + consent) under the same space.
+    // Seed at least two cells (member + consent) under the same Realm.
     let _ = seed_member_cell_join(state.clone(), &token).await;
     let consent_move = build_consent_grant_add_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
@@ -1579,7 +1581,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"space_id": space_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
         .await
         .take_json()
@@ -1588,8 +1590,8 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
 
     // limit=1 → exactly one cell page.
     let mut resp = TestClient::get(format!(
-        "http://server/_soland/admin/cells?space_id={}&limit=1",
-        space_id().as_str()
+        "http://server/_soland/admin/cells?realm_id={}&limit=1",
+        realm_id().as_str()
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(&app)
@@ -1603,7 +1605,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
     let total = body["total"].as_u64().unwrap();
     assert!(
         total >= 2,
-        "test seeds ≥2 cells under the space (got total={total} body={body})"
+        "test seeds ≥2 cells under the Realm (got total={total} body={body})"
     );
 }
 
@@ -1621,7 +1623,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
 
     let url = format!(
         "http://server/_soland/admin/realms/{}/anchorer/rotate-signing-key",
-        space_id().as_str()
+        realm_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -1657,16 +1659,16 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     );
 }
 
-/// `account/{did}/principal-space` returns the deterministic
-/// DID → control-Space mapping. Two queries for the same DID return the
-/// same `space_id`; two queries for different DIDs return different ones.
+/// `account/{did}/principal-realm` returns the deterministic
+/// DID → control-Realm mapping. Two queries for the same DID return the
+/// same `realm_id`; two queries for different DIDs return different ones.
 #[tokio::test]
-async fn account_principal_space_is_deterministic() {
+async fn account_principal_realm_is_deterministic() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    let alice_url = "http://server/_soland/self/account/did:web:alice.example/principal-space";
+    let alice_url = "http://server/_soland/self/account/did:web:alice.example/principal-realm";
     let resp_a: Value = TestClient::get(alice_url)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1682,18 +1684,18 @@ async fn account_principal_space_is_deterministic() {
         .await
         .unwrap();
     assert_eq!(
-        resp_a["space_id"], resp_a2["space_id"],
-        "same DID → same space_id (got {resp_a:?} vs {resp_a2:?})"
+        resp_a["realm_id"], resp_a2["realm_id"],
+        "same DID → same realm_id (got {resp_a:?} vs {resp_a2:?})"
     );
     assert_eq!(resp_a["mapping_kind"], "deterministic");
     assert_eq!(resp_a["did"], "did:web:alice.example");
-    let space_id_str = resp_a["space_id"].as_str().expect("space_id present");
+    let realm_id_str = resp_a["realm_id"].as_str().expect("realm_id present");
     assert!(
-        space_id_str.starts_with("ck:space:"),
-        "space_id has ck:space: prefix (got {space_id_str})"
+        realm_id_str.starts_with("ck:realm:"),
+        "realm_id has ck:realm: prefix (got {realm_id_str})"
     );
 
-    let bob_url = "http://server/_soland/self/account/did:web:bob.example/principal-space";
+    let bob_url = "http://server/_soland/self/account/did:web:bob.example/principal-realm";
     let resp_b: Value = TestClient::get(bob_url)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1702,8 +1704,8 @@ async fn account_principal_space_is_deterministic() {
         .await
         .unwrap();
     assert_ne!(
-        resp_a["space_id"], resp_b["space_id"],
-        "alice and bob MUST map to different spaces (both got {})",
-        resp_a["space_id"]
+        resp_a["realm_id"], resp_b["realm_id"],
+        "alice and bob MUST map to different Realms (both got {})",
+        resp_a["realm_id"]
     );
 }

@@ -79,7 +79,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     )
     .await;
 
-    let created_space = seed_test_realm(
+    let created_realm = seed_test_realm(
         &state,
         alice_did,
         "Seed Invite Event Path",
@@ -89,14 +89,14 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         &[],
     )
     .await;
-    let space_id = created_space["space_id"].as_str().unwrap().to_owned();
+    let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
     // Submit alice's ck.member.state{membership=invite} pointing at bob.
     let event_id = "ck:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "actor_id": bob_did,
         "membership": "invite",
-        "reason": "space_create",
+        "reason": "realm_invite",
     });
     let mut event = serde_json::json!({
         "event_id": event_id,
@@ -104,7 +104,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         "schema_id": "ck.schema.event.v1",
         "actor_id": alice_did,
         "actor_seq": 100_u64,
-        "realm_id": space_id.clone(),
+        "realm_id": realm_id.clone(),
         "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
         "audience": "did:web:soland.local",
         "domain": "did:web:soland.local",
@@ -146,11 +146,11 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let invites = bob_invites["invites"].as_array().unwrap();
     assert!(
         invites.iter().any(|invite| {
-            invite["realm_id"].as_str() == Some(space_id.as_str())
+            invite["realm_id"].as_str() == Some(realm_id.as_str())
                 && invite["invitee"].as_str() == Some(bob_did)
                 && invite["status"].as_str() == Some("pending")
         }),
-        "expected pending invite for bob in {space_id} (got: {invites:?})"
+        "expected pending invite for bob in {realm_id} (got: {invites:?})"
     );
 }
 
@@ -243,7 +243,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
         &[],
     )
     .await;
-    let resolved_realm_id = resolved_realm["space_id"].as_str().unwrap();
+    let resolved_realm_id = resolved_realm["realm_id"].as_str().unwrap();
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
 

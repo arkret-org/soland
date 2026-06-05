@@ -15,7 +15,7 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::json;
 
-use super::{accept_local_operations, validate_space_id};
+use super::{accept_local_operations, validate_realm_id};
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -51,7 +51,7 @@ async fn create_relation(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_space_id(&body.realm_id).is_err() {
+    if validate_realm_id(&body.realm_id).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     // Spec: models/relation.md §3.2 — structural relations (`contains`,

@@ -182,12 +182,12 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let applet_id = format!("applet:bridge:smoke-{suffix}");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
-    let space_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
     let install = install_applet_package(
         &app,
         &token,
         &package,
-        &space_id,
+        &realm_id,
         &format!("bridge-{suffix}"),
     )
     .await;
@@ -198,7 +198,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_id": applet_id,
-            "realm_id": space_id,
+            "realm_id": realm_id,
             "external_user": {"id": "ext-user-x", "display_name": "External X"},
             "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
         }))
@@ -226,7 +226,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let messages = state
         .persistence
         .messages()
-        .list_for_space(&space_id, 10)
+        .list_for_realm(&realm_id, 10)
         .await
         .unwrap();
     assert_eq!(messages.len(), 1);
@@ -253,7 +253,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
-        "effective_scope": {"kind": "realm", "realm_id": space_id},
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
         "registration_epoch": package.registration_epoch.clone(),
         "reason": "smoke-test",
     }))
@@ -268,7 +268,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_id": applet_id,
-            "realm_id": space_id,
+            "realm_id": realm_id,
             "external_id": "ext-user-x",
             "payload": {"kind": "message", "text": "after revoke"},
         }))
@@ -286,7 +286,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_id": applet_id,
-            "realm_id": space_id,
+            "realm_id": realm_id,
             "payload": {"kind": "message", "text": "bot after revoke"},
         }))
         .send(&app)

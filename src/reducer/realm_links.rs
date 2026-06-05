@@ -376,10 +376,10 @@ mod tests {
     const REALM_C: &str = "ck:realm:01904100-0000-7000-8000-ccccccccccc3";
     const REALM_D: &str = "ck:realm:01904100-0000-7000-8000-ddddddddddd4";
 
-    fn op(kind: &str, space_id: &str, payload: Value) -> Operation {
+    fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
         Operation::create(
             OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-            RealmId::new(space_id).unwrap(),
+            RealmId::new(realm_id).unwrap(),
             kind,
             payload,
         )

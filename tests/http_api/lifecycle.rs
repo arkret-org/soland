@@ -173,7 +173,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Launch flow" },
                 "created_by": "did:web:alice.example",
             }
@@ -290,7 +290,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "metadata": { "title": "Backfill" },
                 "created_by": "did:web:alice.example",
@@ -402,7 +402,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Encrypted realm metadata title" },
                 "created_by": "did:web:alice.example",
             }
@@ -469,7 +469,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "object": {
                 "id": task_flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
                 "created_by": "did:web:alice.example",
             }
@@ -555,7 +555,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         serde_json::json!({
             "object": {
                 "id": incident_flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
                 "created_by": "did:web:alice.example",
             }
@@ -650,7 +650,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Sensitive flow" },
                 "created_by": "did:web:alice.example",
             }
@@ -728,7 +728,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         serde_json::json!({
             "object": {
                 "id": morph_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "morph_type": "task",
                 "metadata": { "title": "Sensitive task" },
                 "created_by": "did:web:alice.example",
@@ -803,7 +803,7 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         serde_json::json!({
             "object": {
                 "id": flow_id,
-                "space_id": DEMO_REALM_ID,
+                "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Launch flow" },
                 "created_by": "did:web:alice.example",
             }

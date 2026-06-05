@@ -331,7 +331,7 @@ pub(crate) async fn seed_test_realm(
 
     serde_json::json!({
         "ok": true,
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "owner": owner,
         "members": [{"did": owner}],
         "deleted": false
@@ -348,7 +348,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
         realms.upsert(entry);
         serde_json::json!({
             "ok": true,
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "members": members,
             "deleted": false
         })
@@ -367,7 +367,7 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
         realms.upsert(entry);
         serde_json::json!({
             "ok": true,
-            "space_id": realm_id,
+            "realm_id": realm_id,
             "members": members,
             "deleted": false
         })
@@ -403,7 +403,7 @@ pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value
     }
     serde_json::json!({
         "ok": true,
-        "space_id": realm_id,
+        "realm_id": realm_id,
         "deleted": true
     })
 }
@@ -696,7 +696,6 @@ pub(crate) async fn submit_message_event(
         response["kind"] = Value::String("ck.message.create".to_owned());
         response["message_id"] = Value::String(format!("ck:message:{event_suffix}"));
         response["realm_id"] = Value::String(realm_id.to_owned());
-        response["space_id"] = Value::String(realm_id.to_owned());
         response["source_realm_id"] = Value::String(realm_id.to_owned());
         response["sender"] = Value::String(actor.to_owned());
         response["encrypted"] = Value::Bool(encrypted);
