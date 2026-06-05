@@ -1182,7 +1182,7 @@ pub struct IdentityDescribeResBody {
 pub struct IdentityResolveReqBody {
     pub did: String,
     #[serde(default)]
-    pub include: Vec<String>,
+    pub requested_evidence_kinds: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

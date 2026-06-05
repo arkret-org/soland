@@ -610,7 +610,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(exported["schema"], "ck.export.space.v1");
+    assert_eq!(exported["schema"], "ck.export.realm.v1");
     assert!(
         exported["operations"]
             .as_array()

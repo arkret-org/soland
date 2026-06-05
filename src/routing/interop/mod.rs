@@ -11,9 +11,8 @@ use super::admin::audit;
 use super::identity::auth;
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
-    is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
-    realm_allows_plaintext_service, realm_has_member, validate_canonical_json_value,
-    validate_device_id, validate_did,
+    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service, realm_has_member,
+    render_error, sha256_hex, validate_canonical_json_value, validate_device_id, validate_did,
 };
 
 pub fn router() -> Router {

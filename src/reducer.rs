@@ -1487,6 +1487,13 @@ fn apply_realm_update_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_UPDATE)
 }
+fn apply_realm_archive_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_ARCHIVE)
+}
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -2559,6 +2566,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     );
     m.insert(CK_REALM_CREATE, apply_realm_create_dispatch);
     m.insert(CK_REALM_UPDATE, apply_realm_update_dispatch);
+    m.insert(CK_REALM_ARCHIVE, apply_realm_archive_dispatch);
     m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
     m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
     m.insert(CK_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
@@ -4965,7 +4973,9 @@ impl ProjectionState {
                     // Without a projected policy cell, fail-closed for
                     // routable joins per spec join-policy.md §5.1.3 —
                     // there is no DID Document fallback path.
-                    let policy_value = self.realm_delivery_binding_policy_cell_value(&realm_id).cloned();
+                    let policy_value = self
+                        .realm_delivery_binding_policy_cell_value(&realm_id)
+                        .cloned();
                     let Some(policy) = policy_value else {
                         return ProjectionEffect::Rejected {
                             reason: "delivery_binding_policy_unset".to_owned(),
@@ -5286,9 +5296,9 @@ impl ProjectionState {
 
     /// Apply a `ck.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former Realm lifecycle reducer: the function is now
-    /// restricted to the four canonical Realm lifecycle kinds
-    /// (`ck.realm.create`, `ck.realm.update`, `ck.realm.tombstone`,
-    /// `ck.realm.destroy`). Space-container lifecycle
+    /// restricted to the canonical Realm lifecycle kinds
+    /// (`ck.realm.create`, `ck.realm.update`, `ck.realm.archive`,
+    /// `ck.realm.tombstone`, `ck.realm.destroy`). Space-container lifecycle
     /// (`ck.space.create` / `update` / `parent` / `archive` / `restore`
     /// / `tombstone`) is handled by `apply_space_container_*`
     /// in this same impl block — they were already separate methods
@@ -5305,7 +5315,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
         kind: &'static str,
     ) -> ProjectionEffect {
-        // Defensive: only the four canonical Realm-lifecycle kinds may
+        // Defensive: only canonical Realm-lifecycle kinds may
         // reach this function. The dispatch table enforces this; the
         // assertion keeps internal callers honest.
         debug_assert!(
@@ -5313,6 +5323,7 @@ impl ProjectionState {
                 kind,
                 crate::kinds::CK_REALM_CREATE
                     | crate::kinds::CK_REALM_UPDATE
+                    | crate::kinds::CK_REALM_ARCHIVE
                     | crate::kinds::CK_REALM_TOMBSTONE
                     | crate::kinds::CK_REALM_DESTROY
             ),
@@ -5325,6 +5336,7 @@ impl ProjectionState {
         // writes a distinct cell family with its own lattice:
         //   ck.realm.create     → ck.component.realm.create.v1  (ordered-log, singleton)
         //   ck.realm.update     → ck.component.realm.organization.v1 (cas-register, singleton)
+        //   ck.realm.archive    → ck.component.realm.archive.v1 (cas-register, singleton)
         //   ck.realm.tombstone  → ck.component.realm.destroy.v1 (cas-register, singleton)
         //   ck.realm.destroy    → ck.component.realm.destroy.v1 (cas-register, singleton)
         //
@@ -5335,12 +5347,6 @@ impl ProjectionState {
         // second terminal-state write rejects with
         // `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
-        let action = operation
-            .payload
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
         let realm_id = operation.realm_id.to_string();
         let owner = operation
             .payload
@@ -5529,7 +5535,7 @@ impl ProjectionState {
         }
 
         // Structured cache mirror.
-        let space = self
+        let realm = self
             .realm_states
             .entry(realm_id.clone())
             .or_insert_with(|| RealmState {
@@ -5546,37 +5552,31 @@ impl ProjectionState {
         // Lock trust_domain on first observation (ck.realm.create). The
         // mismatch case is already rejected above; here we only set the
         // value when it has not yet been captured.
-        if space.trust_domain.is_none()
+        if realm.trust_domain.is_none()
             && let Some(td) = payload_trust_domain.clone()
         {
-            space.trust_domain = Some(td);
+            realm.trust_domain = Some(td);
         }
-        let is_destroy = matches!(
-            action.as_str(),
-            "delete" | "space.delete" | "destroy" | "space.destroy"
-        ) || kind == crate::kinds::CK_REALM_DESTROY;
         // Stream-F (Wave 1B): both terminal-state events flip the
-        // legacy `deleted` flag so existing admin/audit tooling that
-        // queries `realm_states[id].deleted` keeps working. The richer
-        // `terminal_state` / `successor_realm_id` fields are the new
-        // source of truth.
-        if is_destroy || kind == crate::kinds::CK_REALM_TOMBSTONE {
-            space.deleted = true;
+        // summary `deleted` flag. The richer `terminal_state` /
+        // `successor_realm_id` fields are the source of truth.
+        if kind == crate::kinds::CK_REALM_DESTROY || kind == crate::kinds::CK_REALM_TOMBSTONE {
+            realm.deleted = true;
         }
         if kind == crate::kinds::CK_REALM_TOMBSTONE {
-            space.terminal_state = Some("tombstoned".to_owned());
-            space.successor_realm_id = payload_successor_realm_id.clone();
+            realm.terminal_state = Some("tombstoned".to_owned());
+            realm.successor_realm_id = payload_successor_realm_id.clone();
         } else if kind == crate::kinds::CK_REALM_DESTROY {
-            space.terminal_state = Some("destroyed".to_owned());
-            space.successor_realm_id = None;
+            realm.terminal_state = Some("destroyed".to_owned());
+            realm.successor_realm_id = None;
         }
         if owner.is_some() {
-            space.owner.clone_from(&owner);
+            realm.owner.clone_from(&owner);
         }
         if title.is_some() {
-            space.title.clone_from(&title);
+            realm.title.clone_from(&title);
         }
-        space.updated_at = now;
+        realm.updated_at = now;
 
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
@@ -5584,7 +5584,7 @@ impl ProjectionState {
             k if k == crate::kinds::CK_REALM_CREATE => {
                 // ordered-log: append entries. We model the log here as
                 // an array of envelopes; each create event appends. For
-                // most Spaces there's exactly one create entry, but the
+                // most Realms there's exactly one create entry, but the
                 // spec lattice allows multiple (e.g. spec changes,
                 // re-genesis under recovery).
                 if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
@@ -5645,6 +5645,31 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Object(value)));
                 }
             }
+            k if k == crate::kinds::CK_REALM_ARCHIVE => {
+                if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+                    "ck:cell:ck.component.realm.archive.v1:{realm_id}"
+                )) {
+                    let mut value = serde_json::Map::new();
+                    value.insert(
+                        "archived".to_owned(),
+                        operation
+                            .payload
+                            .get("archived")
+                            .cloned()
+                            .unwrap_or(Value::Bool(true)),
+                    );
+                    if let Some(reason) = operation.payload.get("reason").cloned() {
+                        value.insert("reason".to_owned(), reason);
+                    }
+                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                    value.insert(
+                        "operation_id".to_owned(),
+                        Value::String(operation.operation_id.as_str().to_owned()),
+                    );
+                    self.cells
+                        .insert(cell_id, CellState::Value(Value::Object(value)));
+                }
+            }
             k if k == crate::kinds::CK_REALM_TOMBSTONE => {
                 // Stream-F (Wave 1B): tombstone writes the same cell
                 // family as destroy but with `terminal_kind=tombstoned`
@@ -5689,7 +5714,13 @@ impl ProjectionState {
             _ => {}
         }
 
-        ProjectionEffect::RealmLifecycle { realm_id, action }
+        ProjectionEffect::RealmLifecycle {
+            realm_id,
+            action: kind
+                .strip_prefix("ck.realm.")
+                .unwrap_or(kind)
+                .to_owned(),
+        }
     }
 
     /// Stream-F (Wave 1B + Wave 2C) — `ck.realm.destroy` child-cascade.
@@ -9118,11 +9149,7 @@ mod tests {
     fn realm_organization_cell_returns_none_for_uncreated_realm() {
         let realm_id = "ck:realm:01904100-0000-7000-8000-0f863ed7d6d2";
         let state = ProjectionState::new();
-        assert!(
-            state
-                .realm_organization_cell_value(realm_id)
-                .is_none()
-        );
+        assert!(state.realm_organization_cell_value(realm_id).is_none());
         assert!(state.realm_create_log(realm_id).is_none());
         assert!(!state.realm_is_destroyed(realm_id));
     }

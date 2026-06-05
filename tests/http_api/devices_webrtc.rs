@@ -265,7 +265,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(ice["call_id"], session_id);
     assert_eq!(ice["turn_servers"].as_array().unwrap().len(), 1);
     let turn_username = ice["turn_servers"][0]["username"].as_str().unwrap();
-    assert!(turn_username.starts_with("cx-turn-"));
+    assert!(turn_username.starts_with("ck-turn-"));
     assert!(!turn_username.contains("alice"));
     assert!(!turn_username.contains("did:web"));
     let turn_credential = ice["turn_servers"][0]["credential"].as_str().unwrap();

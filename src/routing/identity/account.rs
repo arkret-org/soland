@@ -1906,8 +1906,7 @@ async fn list_contacts(
 /// ```
 ///
 /// `mapping_kind` is one of:
-/// - `"deterministic"` — the response was computed via the SHA-256 principal-control Realm
-///   mapping.
+/// - `"deterministic"` — the response was computed via the SHA-256 principal-control Realm mapping.
 ///
 /// `stashed` indicates the result was persisted to the audit log as a
 /// follow-up hook.
@@ -1987,26 +1986,31 @@ mod tests {
 
     #[test]
     fn principal_realm_for_did_is_deterministic() {
-        let a =
-            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
-        let b =
-            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let a = crate::routing::identity::recovery::principal_control_realm_for_did(
+            "did:web:alice.example",
+        );
+        let b = crate::routing::identity::recovery::principal_control_realm_for_did(
+            "did:web:alice.example",
+        );
         assert_eq!(a, b);
     }
 
     #[test]
     fn principal_realm_for_did_diverges_per_did() {
-        let a =
-            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
-        let c =
-            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:bob.example");
+        let a = crate::routing::identity::recovery::principal_control_realm_for_did(
+            "did:web:alice.example",
+        );
+        let c = crate::routing::identity::recovery::principal_control_realm_for_did(
+            "did:web:bob.example",
+        );
         assert_ne!(a, c);
     }
 
     #[test]
     fn principal_realm_for_did_is_realm_uuid7() {
-        let s =
-            crate::routing::identity::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let s = crate::routing::identity::recovery::principal_control_realm_for_did(
+            "did:web:alice.example",
+        );
         assert!(s.starts_with("ck:realm:"), "got {s}");
         let uuid_segment = s.strip_prefix("ck:realm:").unwrap();
         // Sections separated by '-'.

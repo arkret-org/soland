@@ -26,7 +26,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    now, sha256_hex, realm_has_member, validate_canonical_json_value, validate_device_id,
+    now, realm_has_member, sha256_hex, validate_canonical_json_value, validate_device_id,
     validate_did,
 };
 use crate::error::{AppError, ErrorCode};
@@ -258,7 +258,7 @@ fn pairwise_turn_username(
         "soland-turn-user-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}",
         state.config.service_did
     );
-    format!("cx-turn-{}", &sha256_hex(material.as_bytes())[..24])
+    format!("ck-turn-{}", &sha256_hex(material.as_bytes())[..24])
 }
 
 fn turn_credential(

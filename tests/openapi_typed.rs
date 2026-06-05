@@ -190,7 +190,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — access/authz typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.self.authz.get_invites", "ck.self.authz.get_effective_grants"] {
+    for operation_id in [
+        "ck.self.authz.get_invites",
+        "ck.self.authz.get_effective_grants",
+    ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15g typed conversion"
@@ -372,7 +375,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15o typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.self.keys.upload", "ck.self.keys.query", "ck.self.keys.claim"] {
+    for operation_id in [
+        "ck.self.keys.upload",
+        "ck.self.keys.query",
+        "ck.self.keys.claim",
+    ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15o typed conversion"

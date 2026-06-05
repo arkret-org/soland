@@ -1,7 +1,7 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.report`) — file a report. Persists both
-//!   the report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
+//! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.report`) — file a report. Persists
+//!   both the report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
 //!   architecture.
 //! - `POST /_cokret/self/moderation/appeal` (`ck.moderation.appeal.submit`) — file an appeal
 //!   against a moderation decision. Validates the four-state FSM via

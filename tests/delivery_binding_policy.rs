@@ -76,7 +76,11 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
     );
 
     // Cell projected — sanity check.
-    assert!(state.realm_delivery_binding_policy_cell_value(REALM_A).is_some());
+    assert!(
+        state
+            .realm_delivery_binding_policy_cell_value(REALM_A)
+            .is_some()
+    );
 
     // Recipient is NOT in the allow-list → reject.
     let bad = join_op(
@@ -191,7 +195,11 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
     let hlc = ServerHlc::new("test");
 
     // No `ck.realm.delivery_binding_policy` was projected for this Realm.
-    assert!(state.realm_delivery_binding_policy_cell_value(REALM_A).is_none());
+    assert!(
+        state
+            .realm_delivery_binding_policy_cell_value(REALM_A)
+            .is_none()
+    );
 
     // Reasonable-looking binding (would pass a permissive policy) MUST
     // still be rejected because policy is unset.

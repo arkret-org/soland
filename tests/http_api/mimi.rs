@@ -129,7 +129,10 @@ async fn mimi_provider_facade_contracts_work() {
         .await
         .unwrap();
     assert_eq!(mapped["ok"], true);
-    assert_eq!(mapped["receipt"]["operation_id"], "ck.open.mimi.submit_message");
+    assert_eq!(
+        mapped["receipt"]["operation_id"],
+        "ck.open.mimi.submit_message"
+    );
     assert_eq!(
         mapped["receipt"]["extra"]["target_format"],
         "ck.message.create"

@@ -356,8 +356,7 @@ mod tests {
 
     #[test]
     fn parse_realm_scope_accepts_realm_id() {
-        let realm =
-            parse_realm_scope("ck:realm:0196419b-0000-7000-8000-00000000014a").unwrap();
+        let realm = parse_realm_scope("ck:realm:0196419b-0000-7000-8000-00000000014a").unwrap();
         assert_eq!(
             realm.as_str(),
             "ck:realm:0196419b-0000-7000-8000-00000000014a"

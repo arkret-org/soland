@@ -14,6 +14,7 @@
 //! intentionally not exposed here yet; policy changes flow through the
 //! regular `ck.realm.delivery_binding_policy` event submit path.
 
+use cokret_sdk::RealmId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -23,7 +24,6 @@ use serde_json::Value;
 use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
-use cokret_sdk::RealmId;
 
 /// `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` response.
 ///
@@ -123,10 +123,9 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     }
     // Locking the projection mirrors how the anchor admin reads anchorer
     // cells in the same module.
-    let value = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.realm_delivery_binding_policy_cell_value(&realm_id).cloned());
+    let value = state.projection.lock().ok().and_then(|proj| {
+        proj.realm_delivery_binding_policy_cell_value(&realm_id)
+            .cloned()
+    });
     json_ok(response_from_cell(&realm_id, value.as_ref()))
 }

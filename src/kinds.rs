@@ -97,7 +97,8 @@ pub use cokret_sdk::events::kinds::{
     MEMBER_STATE as CK_MEMBER_STATE, MORPH_ARCHIVE as CK_MORPH_ARCHIVE,
     MORPH_CREATE as CK_MORPH_CREATE, MORPH_RESTORE as CK_MORPH_RESTORE,
     MORPH_UPDATE as CK_MORPH_UPDATE, READ_CURSOR_ADVANCE as CK_READ_MARKER,
-    REALM_CREATE as CK_REALM_CREATE, REALM_DESTROY as CK_REALM_DESTROY,
+    REALM_ARCHIVE as CK_REALM_ARCHIVE, REALM_CREATE as CK_REALM_CREATE,
+    REALM_DESTROY as CK_REALM_DESTROY,
     REALM_HISTORY_SHARING_POLICY as CK_REALM_HISTORY_SHARING_POLICY,
     REALM_HISTORY_VISIBILITY as CK_REALM_HISTORY_VISIBILITY, REALM_KEY_SHARE as CK_REALM_KEY_SHARE,
     REALM_MODERATION_POLICY as CK_REALM_MODERATION_POLICY,
@@ -143,9 +144,9 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // Canonical kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ck.self.keys.keypackages.upload` / `ck.self.keys.keypackages.claim`); the
-//     event log stores only the canonical kind. The reducer dispatches publish-vs-claim on the
-//     `payload.action == "publish" | "claim"` field.
+//     HTTP operation_id layer (`ck.self.keys.keypackages.upload` /
+//     `ck.self.keys.keypackages.claim`); the event log stores only the canonical kind. The reducer
+//     dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
 //   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
 //     are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from
@@ -401,9 +402,14 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_CONTAINER_REBALANCE => Some(CK_CONTAINER_REBALANCE),
         CK_INVITE_CREATE => Some(CK_INVITE_CREATE),
         CK_READ_MARKER => Some(CK_READ_MARKER),
-        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_DESTROY | CK_REALM_TOMBSTONE => {
+        CK_REALM_CREATE
+        | CK_REALM_UPDATE
+        | CK_REALM_ARCHIVE
+        | CK_REALM_DESTROY
+        | CK_REALM_TOMBSTONE => {
             Some(match object_type {
                 CK_REALM_CREATE => CK_REALM_CREATE,
+                CK_REALM_ARCHIVE => CK_REALM_ARCHIVE,
                 CK_REALM_DESTROY => CK_REALM_DESTROY,
                 CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
                 _ => CK_REALM_UPDATE,
@@ -568,7 +574,11 @@ pub fn is_invite_kind(kind: &str) -> bool {
 pub fn is_realm_lifecycle_kind(kind: &str) -> bool {
     matches!(
         kind,
-        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_DESTROY | CK_REALM_TOMBSTONE
+        CK_REALM_CREATE
+            | CK_REALM_UPDATE
+            | CK_REALM_ARCHIVE
+            | CK_REALM_DESTROY
+            | CK_REALM_TOMBSTONE
     )
 }
 

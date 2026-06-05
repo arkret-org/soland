@@ -195,18 +195,15 @@ const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::R
     "patch",
     "ck.realm.update operation requires patch",
 )];
+const REALM_ARCHIVE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+    "archived",
+    "ck.realm.archive operation requires archived",
+)];
 const REALM_TERMINAL_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "value",
     "realm policy event requires value",
-)];
-// `ck.realm.update` / `ck.realm.destroy` carry an `action` string +
-// per-action fields (mirrors space-container / morph lifecycle for non-create
-// paths).
-const SPACE_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "action",
-    "space lifecycle operation requires action",
 )];
 const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("cell_id", "conflict repair requires cell_id"),
@@ -1051,14 +1048,16 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_REALM_CREATE => OperationPayloadSchema {
             // `ck.realm.create` is technically lifecycle but carries the
-            // full Realm `object` rather than an `action`. Match it
-            // explicitly so the broader `is_realm_lifecycle_kind` branch
-            // below stays focused on update / destroy.
+            // full Realm `object` rather than a facet payload.
             requirements: REALM_CREATE_REQUIREMENTS,
             validate: None,
         },
         kinds::CK_REALM_UPDATE => OperationPayloadSchema {
             requirements: REALM_UPDATE_REQUIREMENTS,
+            validate: None,
+        },
+        kinds::CK_REALM_ARCHIVE => OperationPayloadSchema {
+            requirements: REALM_ARCHIVE_REQUIREMENTS,
             validate: None,
         },
         // Circle lifecycle. Structure is owned by the registered
@@ -1098,10 +1097,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         kinds::CK_CONFLICT_REPAIR => OperationPayloadSchema {
             requirements: CONFLICT_REPAIR_REQUIREMENTS,
             validate: Some(validate_conflict_repair_payload),
-        },
-        kind if kinds::is_realm_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: SPACE_LIFECYCLE_REQUIREMENTS,
-            validate: None,
         },
         kind if kinds::is_space_container_lifecycle_kind(kind) => OperationPayloadSchema {
             requirements: SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS,

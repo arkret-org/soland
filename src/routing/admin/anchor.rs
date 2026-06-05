@@ -779,7 +779,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     let signer = admin_signer_for(state, &operator_did)?;
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
-        space.clone(),
+        realm.clone(),
         pick_admin_anchor_ref(state, &realm),
         vec![effect],
         fresh_hlc(state)?,
@@ -980,7 +980,7 @@ pub(super) async fn admin_repair_bottom(
             let signer = admin_signer_for(state, &admin_session.actor)?;
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
-                space.clone(),
+                realm.clone(),
                 anchor_ref,
                 vec![effect],
                 fresh_hlc(state)?,
@@ -1281,7 +1281,7 @@ pub(super) async fn admin_compact_anchor_dag(
     // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
     let compaction = cokret_sdk::Anchor::sign_single_kind(
-        space.clone(),
+        realm.clone(),
         view.predecessor_refs.clone(),
         view.frontier.clone(),
         view.state_root.clone(),

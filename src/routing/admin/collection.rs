@@ -21,10 +21,9 @@ use serde_json::{Value, json};
 
 use super::{
     accept_local_operations, append_audit_log, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_realm_id as flow_id_from_realm_id,
-    flow_projection_for_realm as flow_projection_for_realm, policy_document_to_response,
-    projection_event_from_operation, sha256_hex,
+    discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
+    flow_projection_for_realm, policy_document_to_response, projection_event_from_operation,
+    sha256_hex,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};

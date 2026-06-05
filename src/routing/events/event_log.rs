@@ -1274,7 +1274,7 @@ async fn enqueue_peer_event_fanout(
     });
     let service_binding_ref = json!({
         "realm_id": parsed.realm_id,
-        "space_policy_hash": canonical_json_hash(&binding_payload),
+        "realm_policy_digest": canonical_json_hash(&binding_payload),
         "membership_frontier": [event_id],
         "delivery_binding_frontier": [event_id],
         "destination_service_type": "principal_server",
@@ -4732,7 +4732,7 @@ mod admission_tests {
         let req = EventsSubmitFederationRequest {
             service_binding_ref: cokret_sdk::FederationServiceBindingRef {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-                space_policy_hash: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+                realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
                     .unwrap(),
                 membership_frontier: vec![
                     cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001")

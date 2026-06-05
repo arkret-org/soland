@@ -11,7 +11,7 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{now, sha256_hex, realm_has_member};
+use super::{now, realm_has_member, sha256_hex};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -278,13 +278,10 @@ async fn audit_events(
 }
 
 fn audit_event_matches_realm(event: &Value, realm_id: &str) -> bool {
-    [
-        event.pointer("/payload/realm_id"),
-        event.get("realm_id"),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|value| value.as_str() == Some(realm_id))
+    [event.pointer("/payload/realm_id"), event.get("realm_id")]
+        .into_iter()
+        .flatten()
+        .any(|value| value.as_str() == Some(realm_id))
 }
 
 fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {

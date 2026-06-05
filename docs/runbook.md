@@ -277,7 +277,7 @@ soland is the canonical issuer of media tokens. The wire surface is
 
 `service_signature.kid` rotation:
 
-- KIDs follow `cx-media-issuer/{realm_id_short}/{yyyy}-{NN}` where NN is a
+- KIDs follow `ck-media-issuer/{realm_id_short}/{yyyy}-{NN}` where NN is a
   monotone counter per realm-year.
 - Active set is **previous + current + next** for at least one rotation
   cycle; tokens with `expires_at` inside their own kid's validity window

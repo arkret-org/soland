@@ -373,7 +373,10 @@ mod tests {
             groups.iter().any(|group| {
                 group.surface == "events_sync"
                     && group.tier == "core"
-                    && group.operations.iter().any(|op| op == "ck.self.events.submit")
+                    && group
+                        .operations
+                        .iter()
+                        .any(|op| op == "ck.self.events.submit")
             }),
             "events_sync operation surface group should come from operation-registry.json"
         );

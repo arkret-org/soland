@@ -530,8 +530,8 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
                 "constraint_type": "claim_based",
                 "subtype": "claim",
                 "effect": "allow",
-                "object_type_allow": ["key_backup"],
-                "facet_allow": ["recovery"]
+                "allowed_object_types": ["key_backup"],
+                "allowed_facets": ["recovery"]
             }
         ],
         "check_request_example": {
@@ -553,8 +553,8 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
                     "constraint_type": "claim_based",
                     "subtype": "claim",
                     "effect": "allow",
-                    "object_type_allow": ["key_backup"],
-                    "facet_allow": ["recovery"]
+                    "allowed_object_types": ["key_backup"],
+                    "allowed_facets": ["recovery"]
                 }
             ]
         },

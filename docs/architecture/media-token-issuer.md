@@ -78,7 +78,7 @@ the realm's `ck.realm.media_service.foci[]` set, returning `focus_mismatch`.
 ```json
 {
   "scheme": "ck.media.participant_binding.v1",
-  "issuer_kid": "cx-media-issuer/example/2026-05",
+  "issuer_kid": "ck-media-issuer/example/2026-05",
   "realm_id": "ck:realm:...",
   "call_id": "ck:call:...",
   "focus_id": "ck:focus:livekit:eu-west-1",
@@ -136,7 +136,7 @@ The `kid` (Key ID) embedded in `service_signature` is the canonical name
 soland uses to look up the signing key. Form:
 
 ```text
-cx-media-issuer/<realm-short-or-deployment-label>/<yyyy>-<NN>
+ck-media-issuer/<realm-short-or-deployment-label>/<yyyy>-<NN>
 ```
 
 - `realm-short-or-deployment-label` is either the realm's 8-char short id

@@ -8,8 +8,8 @@
 //! - `POST /_cokret/self/ephemeral`               — `ck.self.ephemeral.send` (broadcast ephemeral)
 //! - `GET  /_cokret/self/events/subscribe`        — `ck.self.events.subscribe`. Multi-Realm /
 //!   multi-actor stream; frame `kind` field replaces `type`.
-//! - `GET  /_cokret/self/events`                  — `ck.self.events.query` (replaces `ck.events.list` +
-//!   `ck.sync.backfill` via `direction=forward|backward`).
+//! - `GET  /_cokret/self/events`                  — `ck.self.events.query` (replaces
+//!   `ck.events.list` + `ck.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /_cokret/self/sync/backfill/gap`       — `ck.sync.backfill_gap` (deployment-local; not
 //!   in spec)
 //! - `GET  /_cokret/self/snapshot/head`

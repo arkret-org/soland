@@ -136,7 +136,7 @@ fn peer_submit_body(event: &Value) -> Value {
     serde_json::json!({
         "service_binding_ref": {
             "realm_id": TEST_REALM_ID,
-            "space_policy_hash": sha256_json(&binding_payload),
+            "realm_policy_digest": sha256_json(&binding_payload),
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [event_id],
             "destination_service_type": "principal_server",

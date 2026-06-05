@@ -16,7 +16,8 @@
 //! - `POST   /_cokret/self/agents/{id}/rotate-key`             — `ck.self.agent.rotate_key`
 //! - `POST   /_cokret/self/agents/{id}/grants`                 — `ck.self.agent.grant.attach`
 //! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      — `ck.self.agent.grant.detach`
-//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  — `ck.self.agent.sidecar_thread.ensure`
+//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  —
+//!   `ck.self.agent.sidecar_thread.ensure`
 //!
 //! All endpoints accept controller-self bearer sessions (TODO(P2-impl):
 //! tighten to `controller-only` actor binding once the personal-agent

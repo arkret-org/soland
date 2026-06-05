@@ -1400,9 +1400,9 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
         "http://server/_soland/admin/cells/{unknown}?realm_id={}",
         realm_id().as_str()
     ))
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await;
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await;
     assert_eq!(
         resp.status_code,
         Some(StatusCode::NOT_FOUND),
@@ -1434,9 +1434,9 @@ async fn admin_get_cell_returns_value_after_anchored_move() {
         "http://server/_soland/admin/cells/{cell_id}?realm_id={}",
         realm_id().as_str()
     ))
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(&app)
-        .await;
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(&app)
+    .await;
     assert_eq!(
         resp.status_code,
         Some(StatusCode::OK),

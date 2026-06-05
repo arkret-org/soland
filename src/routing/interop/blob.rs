@@ -13,6 +13,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use cokret_sdk::RealmId;
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
@@ -21,10 +22,9 @@ use serde_json::{Value, json};
 
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
-    is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
-    realm_allows_plaintext_service, realm_has_member,
+    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service, realm_has_member,
+    render_error, sha256_hex,
 };
-use cokret_sdk::RealmId;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, BlobRecord, SessionRecord};

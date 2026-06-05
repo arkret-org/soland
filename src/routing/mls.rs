@@ -3,8 +3,8 @@
 //! Spec-canonical binding under `/_cokret/self/keys/keypackages/*` (see
 //! `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
 //!
-//! - `POST /_cokret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload` (publishes a
-//!   fresh KeyPackage).
+//! - `POST /_cokret/self/keys/keypackages/upload` — op `ck.self.keys.keypackages.upload` (publishes
+//!   a fresh KeyPackage).
 //! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.claim` (atomically
 //!   claim a published KeyPackage; second claim of the same id returns `409 cas_conflict`).
 //! - `GET  /_cokret/self/keys/keypackages/welcomes/pending` — extension op
