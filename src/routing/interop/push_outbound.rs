@@ -565,7 +565,11 @@ pub(super) fn join_edge_push_url(base: &str, path: &str) -> String {
     if base.ends_with("/_cokret/edge") {
         format!("{base}/{path}")
     } else {
-        format!("{base}/_cokret/edge/{path}")
+        let mut url = String::with_capacity(base.len() + "/_cokret/edge/".len() + path.len());
+        url.push_str(base);
+        url.push_str("/_cokret/edge/");
+        url.push_str(path);
+        url
     }
 }
 

@@ -66,7 +66,8 @@ pub fn protocol_router() -> Router {
             .push(Router::with_path("upload").post(upload_keypackage))
             .push(Router::with_path("claim").post(claim_keypackage))
             .push(Router::with_path("consume").post(consume_keypackages))
-            .push(Router::with_path("revoke").post(revoke_keypackages)),
+            .push(Router::with_path("revoke").post(revoke_keypackages))
+            .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
     )
 }
 
@@ -201,7 +202,7 @@ async fn claim_keypackage(
 
     let body = body.into_inner();
     let keypackage_id = require_str(&body, "keypackage_id")?.to_owned();
-    let group_id = require_str(&body, "group_id")?;
+    let mls_group_ref = require_str(&body, "mls_group_ref")?;
 
     // Build the canonical op so the reducer sees the same shape as a
     // federated `ck.mls.keypackage` envelope would. Canonical event
@@ -211,7 +212,7 @@ async fn claim_keypackage(
     let payload = json!({
         "action": "claim",
         "keypackage_id": keypackage_id,
-        "group_id": group_id,
+        "group_id": mls_group_ref,
     });
     let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, payload);
     let effect = reducer::mls::apply_keypackage_claim(&mut state.projection.lock().unwrap(), &op);
@@ -273,7 +274,7 @@ async fn claim_keypackage(
 
     json_ok(json!({
         "keypackage_id": claimed_keypackage_id,
-        "group_id": claimed_group_id,
+        "mls_group_ref": claimed_group_id,
         "claimed_at": consumed_at,
     }))
 }
@@ -444,7 +445,7 @@ async fn pending_welcomes(
         .map(|row| {
             json!({
                 "welcome_id": row.id,
-                "group_id": row.group_id,
+                "mls_group_ref": row.group_id,
                 "recipient_actor_id": row.recipient_actor_did,
                 "recipient_device_id": row.recipient_device_id,
                 "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&row.welcome_bytes),

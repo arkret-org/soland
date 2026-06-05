@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn metrics_render_required_http_series() {
-        let op = "GET /_cokret/self/events/{id}/metrics-test";
+        let op = "GET /_cokret/self/events/{event_id}";
         record_http_request(op, 200, Duration::from_millis(25));
         let rendered = render_http_metrics();
 

@@ -72,8 +72,8 @@ fn high_assurance_accepts_closed_restricted_and_quarantine() {
         );
         let effect = state.apply(&good, &hlc);
         assert!(
-            matches!(effect, ProjectionEffect::SpaceLifecycle { .. }),
-            "expected SpaceLifecycle for federation_policy={fp}, got {effect:?}"
+            matches!(effect, ProjectionEffect::RealmLifecycle { .. }),
+            "expected RealmLifecycle for federation_policy={fp}, got {effect:?}"
         );
         // Subsequent reads see the projected security_class.
         assert_eq!(
@@ -104,7 +104,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     );
     assert!(matches!(
         state.apply(&create, &hlc),
-        ProjectionEffect::SpaceLifecycle { .. }
+        ProjectionEffect::RealmLifecycle { .. }
     ));
 
     // Mirror the create event into the organization cell too — in real
@@ -123,7 +123,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
     );
     let effect = state.apply(&update_to_restricted, &hlc);
     assert!(
-        matches!(effect, ProjectionEffect::SpaceLifecycle { .. }),
+        matches!(effect, ProjectionEffect::RealmLifecycle { .. }),
         "first update must succeed, got {effect:?}"
     );
 
@@ -162,7 +162,7 @@ fn realm_update_rejects_encryption_profile_patch() {
     );
     assert!(matches!(
         state.apply(&create, &hlc),
-        ProjectionEffect::SpaceLifecycle { .. }
+        ProjectionEffect::RealmLifecycle { .. }
     ));
     assert_eq!(
         state.realm_encryption_profile(REALM_STANDARD).as_deref(),
@@ -207,8 +207,8 @@ fn standard_realm_accepts_open_federation_policy() {
     );
     let effect = state.apply(&good, &hlc);
     assert!(
-        matches!(effect, ProjectionEffect::SpaceLifecycle { .. }),
-        "expected SpaceLifecycle for standard realm + open federation_policy, got {effect:?}"
+        matches!(effect, ProjectionEffect::RealmLifecycle { .. }),
+        "expected RealmLifecycle for standard realm + open federation_policy, got {effect:?}"
     );
 }
 

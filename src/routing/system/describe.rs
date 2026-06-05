@@ -189,6 +189,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let description = describe(
         &state.config.service_did,
+        &state.config.public_base_url,
         state.db.mode(),
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),

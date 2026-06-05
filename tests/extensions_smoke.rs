@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use cokret_sdk::{
     AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, Did, Ed25519MoveSigner, Hash,
 };
+use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland::config::{AppConfig, FederationPolicy, ObjectStorageConfig};
@@ -111,6 +112,10 @@ async fn applet_protocol_describe_smoke() {
         json!("/_cokret/self/applets/install")
     );
     assert_eq!(
+        describe["install"]["ghost_actor_provision_path"],
+        json!("/_cokret/self/applets/{applet_id}/ghosts/provision")
+    );
+    assert_eq!(
         describe["transaction_path"],
         json!("/_cokret/edge/applet/transactions")
     );
@@ -159,6 +164,137 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     assert_eq!(bot_doc["id"], json!(bot_actor_id));
     assert_eq!(bot_doc["status"], json!("active"));
     assert_eq!(bot_doc["applet_id"], json!(applet_id));
+}
+
+#[tokio::test]
+async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let app = service(state.clone());
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
+    let namespace = format!("bridge.provision.{suffix}");
+    let package = signed_applet_package(&applet_id, &namespace);
+    let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
+    let install = install_applet_package(
+        &app,
+        &token,
+        &package,
+        &realm_id,
+        &format!("ghost-provision-{suffix}"),
+    )
+    .await;
+    assert_eq!(install["effective_status"], json!("installed"));
+
+    let ghost_actor_did = format!(
+        "did:web:{}.applet.example:ghost:u123",
+        safe_did_token(&namespace)
+    );
+    let mut response = TestClient::post(format!(
+        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "schema": "ck.applet.ghost_actor.provision_request.v1",
+        "applet_id": applet_id,
+        "service_did": package.service_did.to_string(),
+        "ghost_actor_did": ghost_actor_did,
+        "protocol": "slack",
+        "tenant": "T123",
+        "external_user_id": "U123",
+        "display_name": "Alice on Slack",
+        "realm_id": realm_id,
+        "external_ref": {
+            "team_id": "T123",
+            "user_id": "U123"
+        }
+    }))
+    .send(&app)
+    .await;
+    assert_eq!(response.status_code.unwrap(), StatusCode::CREATED);
+    let provision: Value = response.take_json().await.unwrap();
+    assert_eq!(provision["ghost_actor_did"], json!(ghost_actor_did));
+    assert_eq!(provision["display_name"], json!("Alice on Slack"));
+    let profile_event_ref = provision["profile_event_ref"].as_str().unwrap();
+    let accountability_grant_ref = provision["accountability_grant_ref"].as_str().unwrap();
+    let authorization_ref = provision["authorization_ref"].as_str().unwrap();
+    assert!(profile_event_ref.starts_with("ck:event:"));
+    assert!(accountability_grant_ref.starts_with("ck:event:"));
+    assert_eq!(authorization_ref, accountability_grant_ref);
+
+    let profile_event = state
+        .persistence
+        .events()
+        .get(profile_event_ref)
+        .await
+        .unwrap()
+        .expect("profile event is durable");
+    assert_eq!(profile_event.kind, "ck.profile.create");
+    assert_eq!(profile_event.actor_id, ghost_actor_did);
+    assert_eq!(
+        profile_event.envelope["executed_by"],
+        json!(package.service_did.to_string())
+    );
+    assert_eq!(
+        profile_event.envelope["authorization_ref"],
+        json!(authorization_ref)
+    );
+    assert_eq!(profile_event.envelope["applet_id"], json!(applet_id));
+    assert_eq!(
+        profile_event.envelope["payload"]["object"]["profile_fields"]["managed_by_applet"],
+        json!(applet_id)
+    );
+    assert_eq!(
+        profile_event.envelope["payload"]["object"]["profile_fields"]["external_ref"]["external_user_id"],
+        json!("U123")
+    );
+    assert!(
+        profile_event.envelope["payload"]["object"]["accountable_principal_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|did| did == &json!(package.service_did.to_string()))
+    );
+    assert_eq!(
+        profile_event.envelope["proofs"][0]["kind"],
+        json!("detached_jws")
+    );
+
+    let grant_event = state
+        .persistence
+        .events()
+        .get(accountability_grant_ref)
+        .await
+        .unwrap()
+        .expect("accountability grant event is durable");
+    assert_eq!(grant_event.kind, "ck.identity.accountability_grant");
+    assert_eq!(grant_event.actor_id, package.service_did.to_string());
+    assert_eq!(
+        grant_event.envelope["payload"]["issuer"],
+        json!(package.service_did.to_string())
+    );
+    assert_eq!(
+        grant_event.envelope["payload"]["subject"],
+        json!(ghost_actor_did)
+    );
+    assert_eq!(
+        grant_event.envelope["payload"]["proof"]["kind"],
+        json!("detached_jws")
+    );
+
+    let projection_events = state
+        .persistence
+        .projection_events()
+        .snapshot_all()
+        .await
+        .unwrap();
+    assert!(projection_events.iter().any(|event| {
+        event.event_id == profile_event_ref && event.event_kind == "ck.profile.create"
+    }));
+    assert!(projection_events.iter().any(|event| {
+        event.event_id == accountability_grant_ref
+            && event.event_kind == "ck.identity.accountability_grant"
+    }));
 }
 
 async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {

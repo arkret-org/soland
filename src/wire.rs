@@ -1770,6 +1770,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
 
 pub fn describe(
     service_did: &str,
+    public_base_url: &str,
     storage: &'static str,
     development_mode: bool,
     oauth_introspection_enabled: bool,
@@ -1920,12 +1921,12 @@ pub fn describe(
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in
-        // service-describe.schema.json) as the connectable service base. The
-        // routing layer overrides this with the deployment's actual
-        // `public_base_url`; the typed default omits the URL (only `kind` is
-        // schema-required) rather than advertise a non-connectable relative
-        // `base_path` segment.
-        supported_bindings: vec![serde_json::json!({"kind": "http_json"})],
+        // service-describe.schema.json) as the connectable service base.
+        // Emit the same public base URL used by the HTTP describe handler so
+        // clients can build `base_url + operation_path` directly.
+        supported_bindings: vec![
+            serde_json::json!({"kind": "http_json", "base_url": public_base_url.trim_end_matches('/')}),
+        ],
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
         auth_metadata,
@@ -2228,6 +2229,25 @@ pub struct CreateGrantRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_describe_supported_bindings_advertise_public_base_url() {
+        let description = describe(
+            "did:web:soland.example",
+            "https://soland.example/",
+            "memory",
+            true,
+            false,
+            None,
+            "ck:trust_domain:soland.example",
+        );
+        let value = serde_json::to_value(description).expect("description serializes");
+        assert_eq!(
+            value["supported_bindings"],
+            json!([{"kind": "http_json", "base_url": "https://soland.example"}])
+        );
+        assert!(value["supported_bindings"][0].get("base_path").is_none());
+    }
 
     #[test]
     fn handle_claim_serializes_spec_shape() {

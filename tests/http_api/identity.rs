@@ -204,6 +204,10 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         true
     );
     assert_eq!(
+        describe["did_webvh"]["providers"][0]["registration_url"],
+        "https://soland.example/_soland/root/identity/webvh/register"
+    );
+    assert_eq!(
         describe["did_webvh"]["providers"][0]["document_url_template"],
         "https://soland.example/webvh/{local_id}/did.json"
     );
@@ -212,7 +216,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         "https://soland.example/webvh/{local_id}/did.jsonl"
     );
 
-    let unauthorized = TestClient::post("http://server/_cokret/root/identity/webvh/register")
+    let unauthorized = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .json(&serde_json::json!({
             "local_id": "mallory",
             "did_public_key_multibase": "z6Mkmallory",
@@ -222,7 +226,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
 
-    let reused_key = TestClient::post("http://server/_cokret/root/identity/webvh/register")
+    let reused_key = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "reused",
@@ -248,7 +252,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         version_time,
     );
 
-    let registered: Value = TestClient::post("http://server/_cokret/root/identity/webvh/register")
+    let registered: Value = TestClient::post("http://server/_soland/root/identity/webvh/register")
         .add_header("authorization", "Bearer test-webvh-token", true)
         .json(&serde_json::json!({
             "local_id": "alice",

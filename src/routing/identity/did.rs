@@ -5,7 +5,7 @@
 //! - `POST /_cokret/root/identity/resolve`      — resolve a DID via SDK + local store
 //! - `GET  /_cokret/root/identity/document`     — fetch the locally-cached DID document
 //! - `GET  /_cokret/root/identity/log`          — return the local key log for a DID
-//! - `POST /_cokret/root/identity/webvh/register` — register through the embedded webvh provider
+//! - `POST /_soland/root/identity/webvh/register` — register through the embedded webvh provider
 //! - `GET  /webvh/{local_id}/did.json` — embedded webvh DID document
 //! - `GET  /webvh/{local_id}/did.jsonl` — embedded webvh log
 //! - `POST /_cokret/root/identity/submit-did-operation` — submit a DID operation
@@ -779,7 +779,7 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "method": "did:webvh",
             "default": default_provider_id.as_deref() == Some(embedded_id),
             "active": active,
-            "registration_url": format!("{}/_cokret/root/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
+            "registration_url": format!("{}/_soland/root/identity/webvh/register", state.config.public_base_url.trim_end_matches('/')),
             "resolver_url": format!("{}/_cokret/root/identity", state.config.public_base_url.trim_end_matches('/')),
             "document_url_template": document_url_template,
             "log_url_template": log_url_template,

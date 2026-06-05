@@ -10,8 +10,10 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use cokret_sdk::{
-    AppletPackage, AppletWireNamespaces, EffectiveScope, InstallCommitRequest,
-    InstallPreviewRequest, InstallRevokeRequest,
+    AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
+    AppletDelegatedEventAuthorization, AppletId, AppletPackage, AppletWireNamespaces, Did,
+    EffectiveScope, Event, EventRef, GhostActorProfileRequest, Hash, Hlc, InstallCommitRequest,
+    InstallPreviewRequest, InstallRevokeRequest, Proof, RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -28,8 +30,13 @@ use crate::routing::events::flow::flow_id_from_realm_id;
 use crate::routing::events::projection::projection_event_json;
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::sha256_hex;
-use crate::state::{AppState, EventNotification, MessageRecord, ProjectionEventRecord};
+use crate::state::{
+    AppState, CanonicalEventRecord, EventNotification, MessageRecord, ProjectionEventRecord,
+};
 use crate::{ids, kinds};
+
+const GHOST_ACTOR_PROVISION_REQUEST_SCHEMA: &str = "ck.applet.ghost_actor.provision_request.v1";
+const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletBridgeRecord {
@@ -72,6 +79,22 @@ pub struct GhostActorRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GhostActorProvisionRequest {
+    schema: String,
+    applet_id: String,
+    service_did: String,
+    ghost_actor_did: String,
+    protocol: String,
+    tenant: String,
+    external_user_id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    realm_id: String,
+    external_ref: Value,
 }
 
 static APPLET_BRIDGE_REGISTRY: Mutex<Vec<AppletBridgeRecord>> = Mutex::new(Vec::new());
@@ -118,7 +141,14 @@ pub(super) fn protocol_router() -> Router {
                             .push(Router::with_path("preview").post(install_preview_endpoint))
                             .post(install_endpoint),
                     )
-                    .push(Router::with_path("{applet_id}/revoke").post(revoke_install_endpoint)),
+                    .push(
+                        Router::with_path("{applet_id}")
+                            .push(Router::with_path("revoke").post(revoke_install_endpoint))
+                            .push(
+                                Router::with_path("ghosts/provision")
+                                    .post(provision_ghost_actor_endpoint),
+                            ),
+                    ),
             ),
         )
 }
@@ -149,7 +179,8 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
         "install": {
             "preview_path": "/_cokret/self/applets/install/preview",
             "commit_path": "/_cokret/self/applets/install",
-            "revoke_path": "/_cokret/self/applets/{applet_id}/revoke"
+            "revoke_path": "/_cokret/self/applets/{applet_id}/revoke",
+            "ghost_actor_provision_path": "/_cokret/self/applets/{applet_id}/ghosts/provision"
         },
         "transaction_path": "/_cokret/edge/applet/transactions",
         "package_schema": "ck.schema.applet_package.v1"
@@ -280,6 +311,98 @@ async fn revoke_install_endpoint(
         );
     }
     json_ok(revoke_applet_record(state, &session.actor, &applet_id).await?)
+}
+
+#[endpoint(
+    operation_id = "ck.self.applet.ghost_actor.provision",
+    tags("applet"),
+    summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
+    status_codes(200, 201, 400, 401, 403, 404, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.ghost_actor.provision"))]
+async fn provision_ghost_actor_endpoint(
+    aa: AuthArgs,
+    body: JsonBody<Value>,
+    depot: &mut Depot,
+    req: &mut Request,
+    res: &mut Response,
+) -> JsonResult<Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let _session = aa.authenticated_session(state, req).await?;
+    let path_applet_id = applet_id_param(req)?;
+    let provision: GhostActorProvisionRequest =
+        parse_typed_body(body.into_inner(), "ghost actor provision")?;
+    validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
+
+    let applet_id = AppletId::new(provision.applet_id.clone())
+        .map_err(|error| AppError::invalid_param(format!("applet_id invalid: {error}")))?;
+    let service_did = Did::new(provision.service_did.clone())
+        .map_err(|error| AppError::invalid_param(format!("service_did invalid: {error}")))?;
+    let ghost_actor_did = Did::new(provision.ghost_actor_did.clone())
+        .map_err(|error| AppError::invalid_param(format!("ghost_actor_did invalid: {error}")))?;
+    let realm_id = RealmId::new(provision.realm_id.clone())
+        .map_err(|error| AppError::invalid_param(format!("realm_id invalid: {error}")))?;
+
+    let record = applet_record(&path_applet_id)
+        .ok_or_else(|| AppError::not_found("applet is not installed"))?;
+    ensure_not_revoked(&record)?;
+    ensure_formal_ghost_provision_allowed(&record, &provision)?;
+
+    let now = chrono::Utc::now();
+    let grant_event = build_ghost_accountability_grant_event(
+        state,
+        &record,
+        &provision,
+        &service_did,
+        &ghost_actor_did,
+        &realm_id,
+        now,
+    )
+    .await?;
+    let authorization_ref = grant_event.event_id.clone();
+
+    let profile_event = build_ghost_profile_create_event(
+        state,
+        &record,
+        &provision,
+        applet_id,
+        &service_did,
+        &ghost_actor_did,
+        &realm_id,
+        &authorization_ref,
+    )
+    .await?;
+
+    persist_formal_applet_event(state, grant_event).await?;
+    persist_formal_applet_event(state, profile_event.clone()).await?;
+
+    crate::routing::append_audit_log(
+        state,
+        Some(&service_did.to_string()),
+        "applet.ghost_actor.provision",
+        json!({
+            "applet_id": provision.applet_id,
+            "service_did": service_did,
+            "ghost_actor_did": ghost_actor_did,
+            "realm_id": realm_id,
+            "profile_event_ref": profile_event.event_id,
+            "accountability_grant_ref": authorization_ref,
+        }),
+        "accepted",
+    )
+    .await;
+
+    res.status_code(StatusCode::CREATED);
+    let mut response = json!({
+        "ghost_actor_did": ghost_actor_did,
+        "profile_event_ref": profile_event.event_id,
+        "accountability_grant_ref": authorization_ref,
+        "authorization_ref": authorization_ref,
+    });
+    if let Some(display_name) = provision.display_name {
+        response["display_name"] = json!(display_name);
+    }
+    json_ok(response)
 }
 
 #[endpoint(
@@ -725,6 +848,409 @@ pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
         }
     }
     None
+}
+
+#[derive(Clone)]
+struct FormalAppletEvent {
+    event_id: String,
+    canonical: CanonicalEventRecord,
+    projection: ProjectionEventRecord,
+}
+
+async fn build_ghost_accountability_grant_event(
+    state: &AppState,
+    record: &AppletBridgeRecord,
+    provision: &GhostActorProvisionRequest,
+    service_did: &Did,
+    ghost_actor_did: &Did,
+    realm_id: &RealmId,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<FormalAppletEvent, AppError> {
+    let proof = production_payload_proof(
+        state,
+        service_did,
+        "applet-accountability-grant",
+        &json!({
+            "issuer": service_did,
+            "subject": ghost_actor_did,
+            "applet_id": provision.applet_id,
+            "realm_id": realm_id,
+            "protocol": provision.protocol,
+            "tenant": provision.tenant,
+            "external_user_id": provision.external_user_id,
+            "external_ref": provision.external_ref,
+        }),
+        now,
+    )?;
+    let grant = AccountabilityGrantPayload::new(
+        service_did.clone(),
+        ghost_actor_did.clone(),
+        AccountabilityScope::Multiple(vec![
+            "applet_ghost_actor".to_owned(),
+            format!("applet:{}", provision.applet_id),
+            format!("protocol:{}", provision.protocol),
+            format!("tenant:{}", provision.tenant),
+        ]),
+        now - chrono::Duration::seconds(1),
+        now + chrono::Duration::days(365),
+        proof,
+    );
+    grant.validate_lifecycle_at(now).map_err(|error| {
+        AppError::invalid_param(format!("accountability_grant invalid: {error}"))
+    })?;
+    let event = grant
+        .to_event(
+            realm_id.clone(),
+            next_actor_seq(state, service_did.as_str()).await?,
+            next_hlc(state)?,
+            None,
+        )
+        .map_err(|error| {
+            AppError::internal(format!("accountability grant event build failed: {error}"))
+        })?;
+    formal_event_from_sdk_event(
+        state,
+        event,
+        service_did,
+        "applet_ghost_accountability_grant",
+        Some(service_did.as_str()),
+        json!({
+            "applet_id": record.applet_id,
+            "service_did": service_did,
+            "ghost_actor_did": ghost_actor_did,
+            "protocol": provision.protocol,
+            "tenant": provision.tenant,
+            "external_user_id": provision.external_user_id,
+            "external_ref": provision.external_ref,
+        }),
+    )
+}
+
+async fn build_ghost_profile_create_event(
+    state: &AppState,
+    record: &AppletBridgeRecord,
+    provision: &GhostActorProvisionRequest,
+    applet_id: AppletId,
+    service_did: &Did,
+    ghost_actor_did: &Did,
+    realm_id: &RealmId,
+    authorization_ref: &str,
+) -> Result<FormalAppletEvent, AppError> {
+    let display_name = provision
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(provision.external_user_id.as_str());
+    let profile_id = ActorProfileId::new(cokret_sdk::new_prefixed_uuid7("ck:actor_profile:"))
+        .map_err(|error| AppError::internal(format!("profile id generation failed: {error}")))?;
+    let external_ref = json!({
+        "schema": "ck.applet.ghost_actor.external_ref.v1",
+        "protocol": provision.protocol,
+        "tenant": provision.tenant,
+        "external_user_id": provision.external_user_id,
+        "realm_id": realm_id,
+        "external_ref": provision.external_ref,
+    });
+    let mut accountable_principal_ids = vec![service_did.clone()];
+    if let Ok(controller) = Did::new(record.registry_did.clone())
+        && !accountable_principal_ids
+            .iter()
+            .any(|did| did == &controller)
+    {
+        accountable_principal_ids.push(controller);
+    }
+    let request = GhostActorProfileRequest::new(
+        profile_id,
+        ghost_actor_did.clone(),
+        display_name,
+        applet_id.clone(),
+    )
+    .with_realm_id(realm_id.clone())
+    .with_accountable_principal_ids(accountable_principal_ids)
+    .with_external_ref(external_ref);
+    let authorization = AppletDelegatedEventAuthorization::new(
+        service_did.clone(),
+        authorization_ref.to_owned(),
+        applet_id,
+    );
+    let mut event = request
+        .profile_create_event(
+            realm_id.clone(),
+            next_actor_seq(state, ghost_actor_did.as_str()).await?,
+            next_hlc(state)?,
+            Some(&authorization),
+        )
+        .map_err(|error| {
+            AppError::internal(format!("profile create event build failed: {error}"))
+        })?;
+    event
+        .refs
+        .push(EventRef::new(authorization_ref, "authorized_by"));
+    formal_event_from_sdk_event(
+        state,
+        event,
+        service_did,
+        "applet_ghost_profile_create",
+        Some(ghost_actor_did.as_str()),
+        json!({
+            "applet_id": record.applet_id,
+            "service_did": service_did,
+            "ghost_actor_did": ghost_actor_did,
+            "authorization_ref": authorization_ref,
+            "protocol": provision.protocol,
+            "tenant": provision.tenant,
+            "external_user_id": provision.external_user_id,
+            "display_name": provision.display_name,
+            "external_ref": provision.external_ref,
+        }),
+    )
+}
+
+async fn persist_formal_applet_event(
+    state: &AppState,
+    event: FormalAppletEvent,
+) -> Result<(), AppError> {
+    if let Err(error) = state.persistence.events().put(event.canonical).await {
+        tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist canonical event");
+        return Err(AppError::internal(
+            "failed to persist ghost actor provisioning event",
+        ));
+    }
+    let _ = state.event_broadcast.send(EventNotification::event(
+        event.projection.realm_id.clone(),
+        event.projection.event_id.clone(),
+        projection_event_json(&event.projection),
+    ));
+    if let Err(error) = state
+        .persistence
+        .projection_events()
+        .append(event.projection)
+        .await
+    {
+        tracing::error!(%error, event_id = %event.event_id, "applet ghost provisioning: failed to persist projection event");
+        return Err(AppError::internal(
+            "failed to persist ghost actor provisioning projection",
+        ));
+    }
+    Ok(())
+}
+
+fn formal_event_from_sdk_event(
+    state: &AppState,
+    event: Event,
+    signing_did: &Did,
+    operation_type: &str,
+    sender: Option<&str>,
+    projection_payload: Value,
+) -> Result<FormalAppletEvent, AppError> {
+    let event_id = event.event_id.to_string();
+    let actor_id = event.actor_id.to_string();
+    let actor_seq = event.actor_seq;
+    let realm_id = event.realm_id.to_string();
+    let kind = event.kind.clone();
+    let mut envelope = serde_json::to_value(&event)
+        .map_err(|error| AppError::internal(format!("event serialize failed: {error}")))?;
+    let canonical_source = event_canonical_source(&envelope);
+    let canonical_bytes = canonical::canonical_json_bytes(&canonical_source)
+        .map_err(|error| AppError::internal(format!("event canonicalization failed: {error}")))?;
+    let canonical_digest = canonical::sha256_digest(&canonical_bytes);
+    let proof = event_proof(state, signing_did, &actor_id, &canonical_digest)?;
+    envelope
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("event envelope is not an object"))?
+        .insert("proofs".to_owned(), json!([proof]));
+
+    let received_at = chrono::Utc::now();
+    let canonical = CanonicalEventRecord {
+        event_id: event_id.clone(),
+        actor_id,
+        actor_seq,
+        realm_id: Some(realm_id.clone()),
+        kind: kind.clone(),
+        schema_id: EVENT_SCHEMA_ID.to_owned(),
+        canonical_digest,
+        canonical_bytes,
+        envelope,
+        received_at,
+    };
+    let projection = ProjectionEventRecord {
+        event_id: event_id.clone(),
+        realm_id,
+        event_kind: kind,
+        operation_type: operation_type.to_owned(),
+        operation_id: Some(ids::generate_operation_id()),
+        sender: sender.map(ToOwned::to_owned),
+        payload: projection_payload,
+        created_at: received_at,
+    };
+    Ok(FormalAppletEvent {
+        event_id,
+        canonical,
+        projection,
+    })
+}
+
+fn event_canonical_source(envelope: &Value) -> Value {
+    let mut value = envelope.clone();
+    if let Value::Object(object) = &mut value {
+        object.remove("proofs");
+        object.remove("unsigned");
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    value
+}
+
+fn event_proof(
+    state: &AppState,
+    signing_did: &Did,
+    actor_id: &str,
+    event_digest: &str,
+) -> Result<Proof, AppError> {
+    let created_at = chrono::Utc::now();
+    let verification_method = format!("{signing_did}#applet-service-key");
+    let binding = json!({
+        "event_digest": event_digest,
+        "actor_id": actor_id,
+        "verification_method": verification_method,
+        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
+        AppError::internal(format!("proof binding canonicalization failed: {error}"))
+    })?;
+    let jws =
+        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.anchorer_signing_key().as_ref())
+            .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
+    Ok(Proof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method,
+        event_digest: Hash::new(event_digest.to_owned())
+            .map_err(|error| AppError::internal(format!("event digest invalid: {error}")))?,
+        created_at,
+        domain: None,
+        audience: None,
+        jws,
+    })
+}
+
+fn production_payload_proof(
+    state: &AppState,
+    signing_did: &Did,
+    label: &str,
+    payload: &Value,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Proof, AppError> {
+    let binding = json!({
+        "label": label,
+        "payload": payload,
+        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
+        AppError::internal(format!(
+            "accountability proof canonicalization failed: {error}"
+        ))
+    })?;
+    let digest = canonical::sha256_digest(&binding_bytes);
+    let jws =
+        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.anchorer_signing_key().as_ref())
+            .map_err(|error| {
+                AppError::internal(format!("accountability proof signing failed: {error}"))
+            })?;
+    Ok(Proof {
+        kind: "detached_jws".to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{signing_did}#applet-service-key"),
+        event_digest: Hash::new(digest)
+            .map_err(|error| AppError::internal(format!("proof digest invalid: {error}")))?,
+        created_at,
+        domain: None,
+        audience: None,
+        jws,
+    })
+}
+
+async fn next_actor_seq(state: &AppState, actor_id: &str) -> Result<u64, AppError> {
+    state
+        .persistence
+        .events()
+        .max_actor_seq(actor_id)
+        .await
+        .map(|seq| seq.unwrap_or(0) + 1)
+        .map_err(|error| AppError::internal(format!("event sequence lookup failed: {error}")))
+}
+
+fn next_hlc(state: &AppState) -> Result<Hlc, AppError> {
+    Hlc::new(state.hlc.now()).map_err(|error| AppError::internal(format!("HLC invalid: {error}")))
+}
+
+fn validate_ghost_actor_provision_request(
+    path_applet_id: &str,
+    provision: &GhostActorProvisionRequest,
+) -> Result<(), AppError> {
+    if provision.schema != GHOST_ACTOR_PROVISION_REQUEST_SCHEMA {
+        return Err(AppError::invalid_param(format!(
+            "schema must be {GHOST_ACTOR_PROVISION_REQUEST_SCHEMA}"
+        )));
+    }
+    if provision.applet_id != path_applet_id {
+        return Err(AppError::invalid_param(
+            "body applet_id must match applet_id path segment",
+        ));
+    }
+    for (field, value) in [
+        ("protocol", provision.protocol.as_str()),
+        ("tenant", provision.tenant.as_str()),
+        ("external_user_id", provision.external_user_id.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(AppError::missing_param(format!("{field} is required")));
+        }
+    }
+    if let Some(display_name) = provision.display_name.as_deref()
+        && display_name.trim().is_empty()
+    {
+        return Err(AppError::invalid_param(
+            "display_name must be omitted or non-empty",
+        ));
+    }
+    if provision.external_ref.is_null() {
+        return Err(AppError::missing_param("external_ref is required"));
+    }
+    Ok(())
+}
+
+fn ensure_formal_ghost_provision_allowed(
+    record: &AppletBridgeRecord,
+    provision: &GhostActorProvisionRequest,
+) -> Result<(), AppError> {
+    let package = record.package.as_ref().ok_or_else(|| {
+        AppError::conflict("formal ghost provisioning requires package install")
+            .with_wire_code("applet_install_required")
+    })?;
+    if package.service_did.to_string() != provision.service_did {
+        return Err(AppError::capability_denied(
+            "service_did does not match installed applet package",
+        ));
+    }
+    if record.portal_realm_id != provision.realm_id {
+        return Err(
+            AppError::conflict("realm_id does not match installed applet effective scope")
+                .with_wire_code("applet_effective_scope_mismatch"),
+        );
+    }
+    if !record.allow_ghost_actors
+        && !record
+            .capabilities
+            .iter()
+            .any(|capability| capability_allows_ghost_actor(capability))
+    {
+        return Err(AppError::capability_denied(
+            "applet install does not grant ghost actor provisioning",
+        ));
+    }
+    Ok(())
 }
 
 async fn register_package_install(

@@ -167,7 +167,7 @@ async fn mls_lifecycle_end_to_end() {
     let keypackage_id = "ck:mls_keypackage:t-01";
     let publish_body = json!({
         "keypackage_id": keypackage_id,
-        "actor_did": alice_did,
+        "actor_id": alice_did,
         "device_id": alice_device,
         "lifetime": {"not_before": 1, "not_after": 4_102_444_800_i64},
         "key_package_bytes_b64": b64(b"opaque-mls-keypackage"),
@@ -200,21 +200,22 @@ async fn mls_lifecycle_end_to_end() {
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
             "keypackage_id": keypackage_id,
-            "group_id": "ck:mls_group:abc"
+            "mls_group_ref": "ck:mls_group:abc"
         }))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(claim_resp.status_code, Some(StatusCode::OK));
     let mut claim_resp = claim_resp;
     let claim_json: Value = claim_resp.take_json().await.unwrap();
-    assert_eq!(claim_json["group_id"], json!("ck:mls_group:abc"));
+    assert_eq!(claim_json["mls_group_ref"], json!("ck:mls_group:abc"));
+    assert!(claim_json.get("group_id").is_none());
 
     // ── 2b. second claim must collide with 409 ───────────────────
     let collide_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({
             "keypackage_id": keypackage_id,
-            "group_id": "ck:mls_group:second"
+            "mls_group_ref": "ck:mls_group:second"
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -439,7 +440,8 @@ async fn mls_lifecycle_end_to_end() {
     let welcomes = drain_json["welcomes"].as_array().expect("welcomes array");
     assert_eq!(welcomes.len(), 1);
     assert_eq!(welcomes[0]["welcome_id"], json!(welcome_ref));
-    assert_eq!(welcomes[0]["group_id"], json!("ck:mls_group:abc"));
+    assert_eq!(welcomes[0]["mls_group_ref"], json!("ck:mls_group:abc"));
+    assert!(welcomes[0].get("group_id").is_none());
     assert_eq!(welcomes[0]["key_package_id"], json!(keypackage_ref));
     assert!(
         welcomes[0]["delivered_at"].is_i64(),
