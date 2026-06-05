@@ -1137,10 +1137,10 @@ fn mimi_room_participants(state: &AppState, realm_id: &str) -> Vec<Value> {
     state
         .realms
         .lock()
-        .expect("spaces lock")
+        .expect("realms lock")
         .get(&realm_id)
-        .map(|space| {
-            space
+        .map(|realm| {
+            realm
                 .members
                 .iter()
                 .map(|did| {

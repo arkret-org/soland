@@ -54,11 +54,11 @@ pub mod reasons {
     pub const FLOW_NOT_ACTIVE: &str = core_error::REASON_FLOW_NOT_ACTIVE;
     pub const FLOW_NOT_ARCHIVED: &str = core_error::REASON_FLOW_NOT_ARCHIVED;
     pub const FLOW_ALREADY_TERMINAL: &str = core_error::REASON_FLOW_ALREADY_TERMINAL;
-    pub const PLACE_NOT_ACTIVE: &str = core_error::REASON_PLACE_NOT_ACTIVE;
-    pub const PLACE_NOT_ARCHIVED: &str = core_error::REASON_PLACE_NOT_ARCHIVED;
-    pub const PLACE_ALREADY_TERMINAL: &str = core_error::REASON_PLACE_ALREADY_TERMINAL;
-    pub const PLACE_PARENT_CYCLE: &str = core_error::REASON_PLACE_PARENT_CYCLE;
-    pub const PLACE_HAS_LIVE_DEPENDENTS: &str = core_error::REASON_PLACE_HAS_LIVE_DEPENDENTS;
+    pub const SPACE_NOT_ACTIVE: &str = core_error::REASON_SPACE_NOT_ACTIVE;
+    pub const SPACE_NOT_ARCHIVED: &str = core_error::REASON_SPACE_NOT_ARCHIVED;
+    pub const SPACE_ALREADY_TERMINAL: &str = core_error::REASON_SPACE_ALREADY_TERMINAL;
+    pub const SPACE_PARENT_CYCLE: &str = core_error::REASON_SPACE_PARENT_CYCLE;
+    pub const SPACE_HAS_LIVE_DEPENDENTS: &str = core_error::REASON_SPACE_HAS_LIVE_DEPENDENTS;
     pub const MORPH_NOT_ACTIVE: &str = core_error::REASON_MORPH_NOT_ACTIVE;
     pub const MORPH_NOT_ARCHIVED: &str = core_error::REASON_MORPH_NOT_ARCHIVED;
     pub const MORPH_ALREADY_TERMINAL: &str = core_error::REASON_MORPH_ALREADY_TERMINAL;

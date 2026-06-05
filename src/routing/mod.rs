@@ -1556,11 +1556,11 @@ pub(crate) async fn snapshot_bundle_for_realm(
 
 fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
     let rest = snapshot_ref.strip_prefix("ck:snapshot:")?;
-    let (space_id, digest) = rest.rsplit_once(':')?;
-    if RealmId::new(space_id.to_owned()).is_err() || !is_valid_sha256_hex(digest) {
+    let (realm_id, digest) = rest.rsplit_once(':')?;
+    if RealmId::new(realm_id.to_owned()).is_err() || !is_valid_sha256_hex(digest) {
         return None;
     }
-    Some((space_id.to_owned(), format!("sha256:{digest}")))
+    Some((realm_id.to_owned(), format!("sha256:{digest}")))
 }
 
 fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {

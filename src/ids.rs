@@ -12,15 +12,10 @@
 /// soland re-exports them so the whole server shares one validated newtype per
 /// id-kind instead of maintaining parallel local copies.
 ///
-/// - [`RealmId`] is the SDK merged security-boundary id; its validator accepts both
-///   `ck:realm:` and `ck:space:` strict-typed ids (Realm/Space inversion).
-/// - [`SpaceContainerId`] is an alias for the SDK [`RealmId`].
-pub use cokret_sdk::RealmId;
+/// - [`RealmId`] is the SDK security-boundary id and validates `ck:realm:`.
+/// - [`SpaceContainerId`] is the SDK Space container id and validates `ck:space:`.
+pub use cokret_sdk::{RealmId, SpaceId as SpaceContainerId};
 use uuid::Uuid;
-
-/// Space-container typed id. Alias for the SDK [`RealmId`] newtype; the local
-/// `SpaceContainerId` struct was removed in favour of the shared SDK type.
-pub type SpaceContainerId = RealmId;
 
 /// Generate a new typed wire ID with the given kind prefix.
 ///
@@ -285,7 +280,7 @@ mod tests {
         let space = generate_space_id();
         assert!(RealmId::new(space).is_err());
         // Non-Realm kinds and malformed UUIDs are rejected.
-        assert!(RealmId::new("ck:place:00000000-0000-7000-8000-000000000000").is_err());
+        assert!(RealmId::new("ck:flow:00000000-0000-7000-8000-000000000000").is_err());
         assert!(RealmId::new("ck:realm:not-a-uuid").is_err());
         assert!(RealmId::new("ck:realm:00000000-0000-0000-0000-000000000000").is_err());
         assert!(RealmId::new("").is_err());
@@ -316,10 +311,7 @@ mod tests {
 
     #[test]
     fn space_container_id_rejects_bad_kind() {
-        // `SpaceContainerId` aliases the SDK `RealmId`, whose validator accepts
-        // both `ck:space:` and `ck:realm:` strict-typed ids (Realm/Space
-        // inversion). Non-typed / wrong-prefix forms are still rejected.
-        assert!(SpaceContainerId::new("ck:place:00000000-0000-7000-8000-000000000000").is_err());
+        assert!(SpaceContainerId::new(generate_realm_id()).is_err());
         assert!(SpaceContainerId::new("ck:space:not-a-uuid").is_err());
         assert!(SpaceContainerId::new("").is_err());
     }

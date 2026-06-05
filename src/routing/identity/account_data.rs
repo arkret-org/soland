@@ -94,7 +94,7 @@ fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     if data_type.len() > MAX_DATA_TYPE_LEN {
         return Err(AppError::invalid_param("data_type too long"));
     }
-    // Keys are dot-delimited namespaces (`ck.contacts.space.<space_id>` etc.).
+    // Keys are dot-delimited namespaces (`ck.contacts.realm.<realm_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
     // log-safe; everything else (including the `:` in `ck:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
@@ -195,10 +195,6 @@ async fn put_account_data(
         payload: body.content,
         updated_at: now(),
     };
-    let is_blocklist_update = matches!(
-        data_type.as_str(),
-        "ck.account.blocklist" | "ck.account.blocklist.v1"
-    );
     state
         .persistence
         .account_data()
@@ -227,14 +223,6 @@ async fn put_account_data(
         }),
     )
     .await;
-    if is_blocklist_update {
-        crate::routing::federation::federation::fanout_blocklist_hints_to_peers(
-            state,
-            &session.actor,
-            &record.payload,
-        );
-    }
-
     if !existed {
         res.status_code(StatusCode::CREATED);
     }

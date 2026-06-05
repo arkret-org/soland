@@ -113,11 +113,17 @@ async fn authz_check(
             .ok()
             .flatten()
             .map(|m| m.owner);
-        let spaces = state.realms.lock().expect("spaces lock");
+        let realms = state.realms.lock().expect("realms lock");
         let members = cokret_sdk::RealmId::new(realm_id.clone())
             .ok()
-            .and_then(|realm_id| spaces.get(&realm_id))
-            .map(|s| s.members.iter().map(|m| m.to_string()).collect::<Vec<_>>())
+            .and_then(|realm_id| realms.get(&realm_id))
+            .map(|realm| {
+                realm
+                    .members
+                    .iter()
+                    .map(|member| member.to_string())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         (owner, members)
     };
@@ -504,7 +510,7 @@ async fn invites(
     let now = now();
     let invite_list = state
         .persistence
-        .space_invites()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()

@@ -909,7 +909,7 @@ pub struct OkResBody {
 pub struct ModerationReportReqBody {
     pub realm_id: String,
     pub target_ref: String,
-    pub reason: String,
+    pub report_reason_code: String,
     pub reporter: String,
     pub description: Option<String>,
     #[serde(default)]

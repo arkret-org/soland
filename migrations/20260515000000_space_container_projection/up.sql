@@ -1,5 +1,5 @@
 -- Space-container projection state - server-side state-machine for ck.space.*
--- lifecycle events. Spec: cokret-spec/spec/v1/zh/models/space-and-place.md
+-- lifecycle events. Spec: cokret-spec/spec/v1/zh/models/realm-and-space.md
 -- §4.4 + common-fields.md §5.1. soland's reducer maintains this in-memory
 -- (ProjectionState::space_containers) and persists here for restart durability.
 --

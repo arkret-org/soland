@@ -3208,7 +3208,7 @@ async fn member_join_accepts_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.persistence.space_invites().get(invite_id).await else {
+    let Ok(Some(invite)) = state.persistence.realm_invites().get(invite_id).await else {
         return false;
     };
     if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
@@ -3876,7 +3876,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // this slot; soland MUST NOT silently drop projection for such
     // events ── fall through to the event_id-derived form so the
     // projection chain (`project_accepted_operations` →
-    // `project_membership_operation` → SpaceInviteRecord write) still
+    // `project_membership_operation` → RealmInviteRecord write) still
     // runs. The alias-when-present remains the dedupe key for clients
     // that submit it correctly.
     if let Some(alias) = envelope

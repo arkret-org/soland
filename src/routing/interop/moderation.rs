@@ -71,7 +71,7 @@ async fn moderation_report(
         "report_id": report_id,
         "realm_id": body.realm_id,
         "target_ref": body.target_ref,
-        "reason": body.reason,
+        "report_reason_code": body.report_reason_code,
         "reporter": body.reporter,
         "created_at": now(),
     });

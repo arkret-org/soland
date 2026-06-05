@@ -402,19 +402,14 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_CONTAINER_REBALANCE => Some(CK_CONTAINER_REBALANCE),
         CK_INVITE_CREATE => Some(CK_INVITE_CREATE),
         CK_READ_MARKER => Some(CK_READ_MARKER),
-        CK_REALM_CREATE
-        | CK_REALM_UPDATE
-        | CK_REALM_ARCHIVE
-        | CK_REALM_DESTROY
-        | CK_REALM_TOMBSTONE => {
-            Some(match object_type {
-                CK_REALM_CREATE => CK_REALM_CREATE,
-                CK_REALM_ARCHIVE => CK_REALM_ARCHIVE,
-                CK_REALM_DESTROY => CK_REALM_DESTROY,
-                CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
-                _ => CK_REALM_UPDATE,
-            })
-        }
+        CK_REALM_CREATE | CK_REALM_UPDATE | CK_REALM_ARCHIVE | CK_REALM_DESTROY
+        | CK_REALM_TOMBSTONE => Some(match object_type {
+            CK_REALM_CREATE => CK_REALM_CREATE,
+            CK_REALM_ARCHIVE => CK_REALM_ARCHIVE,
+            CK_REALM_DESTROY => CK_REALM_DESTROY,
+            CK_REALM_TOMBSTONE => CK_REALM_TOMBSTONE,
+            _ => CK_REALM_UPDATE,
+        }),
         CK_REALM_MODERATION_POLICY => Some(CK_REALM_MODERATION_POLICY),
         CK_REALM_HISTORY_VISIBILITY => Some(CK_REALM_HISTORY_VISIBILITY),
         CK_REALM_HISTORY_SHARING_POLICY => Some(CK_REALM_HISTORY_SHARING_POLICY),

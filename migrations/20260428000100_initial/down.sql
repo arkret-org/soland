@@ -7,7 +7,7 @@ DROP TABLE IF EXISTS policy_documents;
 DROP TABLE IF EXISTS webrtc_sessions;
 DROP TABLE IF EXISTS key_backups;
 DROP TABLE IF EXISTS blobs;
-DROP TABLE IF EXISTS space_invites;
+DROP TABLE IF EXISTS realm_invites;
 DROP TABLE IF EXISTS webvh_log_events;
 DROP TABLE IF EXISTS webvh_documents;
 DROP TABLE IF EXISTS presence;

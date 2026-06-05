@@ -166,7 +166,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
 #[endpoint(
     operation_id = "ck.extension.soland.index.notifications",
     tags("index"),
-    summary = "List inbox notifications for an actor across known spaces"
+    summary = "List inbox notifications for an actor across known Realms"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.notifications"))]
 async fn index_notifications(
@@ -176,22 +176,27 @@ async fn index_notifications(
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let mut notifications: Vec<Value> = Vec::new();
-    let space_snapshot: Vec<RealmDirectoryEntry> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+    let realm_snapshot: Vec<RealmDirectoryEntry> = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .cloned()
             .collect()
     };
-    for space in &space_snapshot {
-        if !actor.is_empty() && !space.members.iter().any(|member| member.as_str() == actor) {
+    for realm_entry in &realm_snapshot {
+        if !actor.is_empty()
+            && !realm_entry
+                .members
+                .iter()
+                .any(|member| member.as_str() == actor)
+        {
             continue;
         }
         let messages = state
             .persistence
             .messages()
-            .list_for_realm(space.realm_id.as_str(), 100)
+            .list_for_realm(realm_entry.realm_id.as_str(), 100)
             .await
             .unwrap_or_default();
         for message in messages {

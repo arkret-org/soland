@@ -6,7 +6,7 @@
 use super::common::*;
 
 #[tokio::test]
-async fn account_data_space_remark_round_trip() {
+async fn account_data_realm_remark_round_trip() {
     const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000001";
 
@@ -20,13 +20,13 @@ async fn account_data_space_remark_round_trip() {
     .await;
     let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
 
-    let space_id = "ck:space:0196419b-0000-7000-8000-000000000000";
-    let key = format!("ck.contacts.space.{space_id}");
+    let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+    let key = format!("ck.contacts.realm.{realm_id}");
     let remark = serde_json::json!({
         "version": 1,
-        "subject": {"kind": "space", "id": space_id},
+        "subject": {"kind": "realm", "id": realm_id},
         "local_name": "Acme 内部 · 工程",
-        "note": "和外包侧 Engineering Space 同名",
+        "note": "和外包侧 Engineering Realm 同名",
         "tags": ["work"],
         "pinned": true,
         "verified_title_at_save": "Engineering",
@@ -66,7 +66,7 @@ async fn account_data_space_remark_round_trip() {
     // Second event updates the same key with the new payload.
     let updated_remark = serde_json::json!({
         "version": 1,
-        "subject": {"kind": "space", "id": space_id},
+        "subject": {"kind": "realm", "id": realm_id},
         "local_name": "Acme · Eng (final)",
         "pinned": false,
         "saved_at": "2026-05-08T10:00:00Z",
@@ -161,7 +161,7 @@ async fn account_data_requires_auth() {
         DEMO_REALM_ID,
         "ck.account_data.set",
         serde_json::json!({
-            "key": "ck.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000",
+            "key": "ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000",
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
             "updated_at": "2026-05-08T10:00:00Z"

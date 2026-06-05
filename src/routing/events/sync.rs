@@ -577,15 +577,15 @@ async fn build_sync_snapshot(
     };
     let mut visible_realms: Vec<(String, String, Option<String>, _, Option<String>, _)> =
         Vec::new();
-    for space in &candidate_realms {
-        if realm_visible_to(state, space, session).await {
-            let members = roster_members_for_realm(state, space, session, body);
+    for realm_entry in &candidate_realms {
+        if realm_visible_to(state, realm_entry, session).await {
+            let members = roster_members_for_realm(state, realm_entry, session, body);
             visible_realms.push((
-                space.realm_id.to_string(),
-                space.name.clone(),
-                space.description.clone(),
-                space.tags.clone(),
-                space.category.clone(),
+                realm_entry.realm_id.to_string(),
+                realm_entry.name.clone(),
+                realm_entry.description.clone(),
+                realm_entry.tags.clone(),
+                realm_entry.category.clone(),
                 members,
             ));
         }
@@ -659,9 +659,9 @@ async fn build_sync_snapshot(
             .get(&realm_id)
             .copied()
             .unwrap_or_default();
-        let (timeline_events, space_position) =
+        let (timeline_events, realm_position) =
             timeline_events_for_realm(state, &projection, &realm_id, after_position, session).await;
-        positions.insert(realm_id.clone(), space_position);
+        positions.insert(realm_id.clone(), realm_position);
         // Incremental sync skips realms whose timeline position is
         // unchanged AND whose meta `updated_at` is at-or-before the
         // cursor's `issued_at`. This drops the always-full
@@ -677,7 +677,7 @@ async fn build_sync_snapshot(
         if is_incremental
             && known_to_cursor
             && timeline_events.is_empty()
-            && space_position == after_position
+            && realm_position == after_position
         {
             let meta_changed = meta
                 .as_ref()
@@ -755,9 +755,9 @@ async fn build_sync_snapshot(
 
     // Actor-private account data: hydrate every `(actor, data_type)` row
     // owned by the authenticated session so the client can join e.g.
-    // `ck.contacts.space.<realm_id>` Space remarks against the public
-    // Space `title` during render. Spec: discovery/client-preferences.md
-    // §2 (storage model) / §3.7 (Space remarks).
+    // `ck.contacts.realm.<realm_id>` Realm remarks against the public
+    // Realm title during render. Spec: discovery/client-preferences.md
+    // §2 (storage model) / §3.7 (Realm remarks).
     let account_data = if let Some(session) = session {
         state
             .persistence
@@ -823,13 +823,13 @@ async fn build_sync_snapshot(
 /// effective `identity_event_ids[]` are listed.
 fn roster_members_for_realm(
     state: &AppState,
-    space: &crate::state::RealmDirectoryEntry,
+    realm_entry: &crate::state::RealmDirectoryEntry,
     session: Option<&SessionRecord>,
     body: &ClientSyncRequest,
 ) -> Vec<Value> {
     let registry = state.member_identity_registry();
-    let context = RosterDisclosureContext::new(state, space, session, body);
-    space
+    let context = RosterDisclosureContext::new(state, realm_entry, session, body);
+    realm_entry
         .members
         .iter()
         .map(|did| {
@@ -841,7 +841,9 @@ fn roster_members_for_realm(
             // structured FSM lives in `ProjectionState::members` and
             // bare-`members` set here represents "join" rows.
             entry.insert("membership".to_owned(), json!("join"));
-            if let Some(snapshot) = registry.snapshot_for_actor(space.realm_id.as_str(), did_str) {
+            if let Some(snapshot) =
+                registry.snapshot_for_actor(realm_entry.realm_id.as_str(), did_str)
+            {
                 if !snapshot.identity_event_ids.is_empty() {
                     entry.insert(
                         "identity_event_ids".to_owned(),
@@ -889,7 +891,7 @@ fn roster_members_for_realm(
                             })
                             .collect();
                         if let Some(digest) = crate::state::display_state_digest(
-                            space.realm_id.as_str(),
+                            realm_entry.realm_id.as_str(),
                             did_str,
                             &snapshot.effective_entries,
                             &digest_inputs,
@@ -932,14 +934,14 @@ struct RosterDisclosureContext<'a> {
 impl<'a> RosterDisclosureContext<'a> {
     fn new(
         state: &'a AppState,
-        space: &'a RealmDirectoryEntry,
+        realm_entry: &'a RealmDirectoryEntry,
         session: Option<&'a SessionRecord>,
         body: &ClientSyncRequest,
     ) -> Self {
         Self {
             service_did: &state.config.service_did,
-            realm_public: space.public,
-            realm_members: &space.members,
+            realm_public: realm_entry.public,
+            realm_members: &realm_entry.members,
             caller: session.map(|session| session.actor.as_str()),
             audience: roster_handle_claim_audience(state, session, body),
             now: now(),
@@ -2107,10 +2109,10 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
 /// - Plain string that does NOT start with `ck:cursor:` → pass through unchanged; the caller
 ///   already speaks the projection's `event_id` cursor.
 /// - `ck:cursor:...` → decode the structured cursor, look up the handle's stored position for
-///   `realm_id` (a `timestamp_micros` checkpoint), then walk the space's projected events and
+///   `realm_id` (a `timestamp_micros` checkpoint), then walk the Realm's projected events and
 ///   persisted messages to find the most recent event at-or-before that checkpoint and return its
 ///   `event_id`. When no event sits at-or-before the checkpoint, return `None` so backfill streams
-///   from the start of the space.
+///   from the start of the Realm.
 pub async fn resolve_sync_cursor_to_event_id(
     state: &AppState,
     realm_id: &str,

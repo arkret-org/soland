@@ -12,7 +12,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     let container_space_id = "ck:space:01904100-0000-7000-8000-c10dc0000001";
 
     // 1) ck.space.create — Active.
-    let create_event = signed_place_event(
+    let create_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000001",
         1,
         "ck.space.create",
@@ -37,8 +37,8 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         .unwrap();
     assert_eq!(create_response["status"], "accepted");
 
-    // 2) ck.space.restore on Active → 412 place_not_archived.
-    let bad_restore = signed_place_event(
+    // 2) ck.space.restore on Active → 412 space_not_archived.
+    let bad_restore = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000002",
         2,
         "ck.space.restore",
@@ -56,10 +56,10 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "restore on Active must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_restore_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "place_not_archived");
+    assert_eq!(body["error"]["code"], "space_not_archived");
 
     // 3) ck.space.archive — legal (Active → Archived).
-    let archive_event = signed_place_event(
+    let archive_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000003",
         3,
         "ck.space.archive",
@@ -77,7 +77,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     assert_eq!(archive_response["status"], "accepted");
 
     // 4) ck.space.restore — legal now (Archived → Active).
-    let good_restore = signed_place_event(
+    let good_restore = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000004",
         4,
         "ck.space.restore",
@@ -95,7 +95,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     assert_eq!(restore_response["status"], "accepted");
 
     // 5) ck.space.tombstone — legal (Active → Tombstoned).
-    let tombstone_event = signed_place_event(
+    let tombstone_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000005",
         5,
         "ck.space.tombstone",
@@ -112,8 +112,8 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         .unwrap();
     assert_eq!(tombstone_response["status"], "accepted");
 
-    // 6) ck.space.tombstone again on Tombstoned → 412 place_already_terminal.
-    let bad_tombstone = signed_place_event(
+    // 6) ck.space.tombstone again on Tombstoned → 412 space_already_terminal.
+    let bad_tombstone = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000006",
         6,
         "ck.space.tombstone",
@@ -131,12 +131,12 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "tombstone-again on Tombstoned must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_tombstone_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "place_already_terminal");
+    assert_eq!(body["error"]["code"], "space_already_terminal");
 
-    // 7) ck.space.restore on Tombstoned → 412 place_not_archived (terminal
+    // 7) ck.space.restore on Tombstoned → 412 space_not_archived (terminal
     // state cannot be revived even though tombstone-vs-restore are different
     // transitions).
-    let bad_restore_terminal = signed_place_event(
+    let bad_restore_terminal = signed_space_event(
         "ck:event:01904100-0000-7000-8000-d10dc0000007",
         7,
         "ck.space.restore",
@@ -153,7 +153,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         412
     );
     let body: Value = bad_restore_terminal_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "place_not_archived");
+    assert_eq!(body["error"]["code"], "space_not_archived");
 }
 
 #[tokio::test]

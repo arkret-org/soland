@@ -602,7 +602,7 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
     let now = now();
     state
         .persistence
-        .space_invites()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()

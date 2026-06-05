@@ -279,7 +279,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
-            "reason": "spam",
+            "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
         .send(&app_from_state(state.clone()))
@@ -315,7 +315,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "target_ref": "ck:event:01904100-0000-7000-8000-4a4116cba4e8",
-            "reason": "spam",
+            "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
         .send(&app_from_state(state.clone()))

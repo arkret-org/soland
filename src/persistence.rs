@@ -25,8 +25,8 @@ use crate::state::{
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
     FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
-    PushRuleRecord, RealmMetaRecord, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SessionRecord, SpaceInviteRecord, TypingRecord, WebrtcSessionRecord,
+    PushRuleRecord, RealmInviteRecord, RealmMetaRecord, RecoveryPolicyRecord,
+    RecoveryReceiptRecord, RecoverySessionRecord, SessionRecord, TypingRecord, WebrtcSessionRecord,
     WebrtcSignalRecord, WebvhDocumentRecord, WebvhLogRecord,
 };
 
@@ -68,12 +68,12 @@ pub trait SessionStore: Send + Sync {
 /// Trait for actor-private account data storage.
 ///
 /// `data_type` is the canonical wire key (e.g. `ck.contacts.actor.<did>`,
-/// `ck.contacts.space.<space_id>`, `ck.read_receipt.preferences`). The
+/// `ck.contacts.realm.<realm_id>`, `ck.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model), §3.6
-/// (actor remarks), §3.7 (Space remarks).
+/// (actor remarks), §3.7 (Realm remarks).
 #[async_trait]
 pub trait AccountDataStore: Send + Sync {
     async fn get(
@@ -587,12 +587,12 @@ pub trait WebvhStore: Send + Sync {
     async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>>;
 }
 
-/// Space invite tokens.
+/// realm invite tokens.
 #[async_trait]
-pub trait SpaceInviteStore: Send + Sync {
-    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>>;
-    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>>;
+pub trait RealmInviteStore: Send + Sync {
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>>;
+    async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>>;
 }
 
 /// Canonical event log keyed by `event_id`.
@@ -1022,7 +1022,7 @@ pub trait PersistenceStore: Send + Sync {
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore;
     fn webvh(&self) -> &dyn WebvhStore;
-    fn space_invites(&self) -> &dyn SpaceInviteStore;
+    fn realm_invites(&self) -> &dyn RealmInviteStore;
     fn events(&self) -> &dyn EventStore;
     fn projection_events(&self) -> &dyn ProjectionEventStore;
     fn device_messages(&self) -> &dyn DeviceMessageStore;
@@ -1065,7 +1065,7 @@ pub struct MemoryPersistenceStore {
     recovery_receipts: MemoryRecoveryReceiptStore,
     recovery_sessions: MemoryRecoverySessionStore,
     webvh: MemoryWebvhStore,
-    space_invites: MemorySpaceInviteStore,
+    realm_invites: MemoryRealmInviteStore,
     events: MemoryEventStore,
     projection_events: MemoryProjectionEventStore,
     device_messages: MemoryDeviceMessageStore,
@@ -1109,7 +1109,7 @@ impl MemoryPersistenceStore {
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
             recovery_sessions: MemoryRecoverySessionStore::new(),
             webvh: MemoryWebvhStore::new(),
-            space_invites: MemorySpaceInviteStore::new(),
+            realm_invites: MemoryRealmInviteStore::new(),
             events: MemoryEventStore::new(),
             projection_events: MemoryProjectionEventStore::new(),
             device_messages: MemoryDeviceMessageStore::new(),
@@ -1231,8 +1231,8 @@ impl PersistenceStore for MemoryPersistenceStore {
         &self.webvh
     }
 
-    fn space_invites(&self) -> &dyn SpaceInviteStore {
-        &self.space_invites
+    fn realm_invites(&self) -> &dyn RealmInviteStore {
+        &self.realm_invites
     }
 
     fn events(&self) -> &dyn EventStore {
@@ -3098,41 +3098,41 @@ impl WebvhStore for MemoryWebvhStore {
 }
 
 #[derive(Default)]
-struct MemorySpaceInviteStore {
-    data: Mutex<BTreeMap<String, SpaceInviteRecord>>,
+struct MemoryRealmInviteStore {
+    data: Mutex<BTreeMap<String, RealmInviteRecord>>,
 }
 
-impl MemorySpaceInviteStore {
+impl MemoryRealmInviteStore {
     fn new() -> Self {
         Self::default()
     }
 }
 
 #[async_trait]
-impl SpaceInviteStore for MemorySpaceInviteStore {
-    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
+impl RealmInviteStore for MemoryRealmInviteStore {
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>> {
         Ok(self
             .data
             .lock()
-            .expect("space invites lock")
+            .expect("realm invites lock")
             .get(invite_id)
             .cloned())
     }
 
-    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
         let id = record.invite_id.clone();
         self.data
             .lock()
-            .expect("space invites lock")
+            .expect("realm invites lock")
             .insert(id, record);
         Ok(())
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         Ok(self
             .data
             .lock()
-            .expect("space invites lock")
+            .expect("realm invites lock")
             .values()
             .cloned()
             .collect())
@@ -3821,7 +3821,7 @@ pub struct PgPersistenceStore {
     moderation: PgModerationStore,
     presence: PgPresenceStore,
     webvh: PgWebvhStore,
-    space_invites: PgSpaceInviteStore,
+    realm_invites: PgRealmInviteStore,
     key_backups: PgKeyBackupStore,
     webrtc: PgWebrtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
@@ -3856,7 +3856,7 @@ impl PgPersistenceStore {
             moderation: PgModerationStore { pool: pool.clone() },
             presence: PgPresenceStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
-            space_invites: PgSpaceInviteStore { pool: pool.clone() },
+            realm_invites: PgRealmInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             webrtc: PgWebrtcSessionStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
@@ -3972,8 +3972,8 @@ impl PersistenceStore for PgPersistenceStore {
         &self.webvh
     }
 
-    fn space_invites(&self) -> &dyn SpaceInviteStore {
-        &self.space_invites
+    fn realm_invites(&self) -> &dyn RealmInviteStore {
+        &self.realm_invites
     }
 
     fn events(&self) -> &dyn EventStore {
@@ -5780,7 +5780,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
 // ── Pg-backed wire-facing sub-stores ─────────────────────────────────────
 //
-// ModerationStore / PresenceStore / WebvhStore / SpaceInviteStore. Each
+// ModerationStore / PresenceStore / WebvhStore / RealmInviteStore. Each
 // follows the same pattern: a typed-column header (extracted from the JSON
 // payload where applicable) plus the full canonical envelope in a JSONB
 // column. The trait surface itself is the architectural contract; the
@@ -6100,12 +6100,12 @@ impl WebvhStore for PgWebvhStore {
     }
 }
 
-struct PgSpaceInviteStore {
+struct PgRealmInviteStore {
     pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct SpaceInviteRow {
+struct RealmInviteRow {
     #[diesel(sql_type = SqlUuid)]
     id: Uuid,
     #[diesel(sql_type = SqlUuid)]
@@ -6124,8 +6124,8 @@ struct SpaceInviteRow {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<SpaceInviteRow> for SpaceInviteRecord {
-    fn from(row: SpaceInviteRow) -> Self {
+impl From<RealmInviteRow> for RealmInviteRecord {
+    fn from(row: RealmInviteRow) -> Self {
         Self {
             invite_id: ids::format_typed_uuid("invite", &row.id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
@@ -6140,28 +6140,28 @@ impl From<SpaceInviteRow> for SpaceInviteRecord {
 }
 
 #[async_trait]
-impl SpaceInviteStore for PgSpaceInviteStore {
-    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<SpaceInviteRecord>> {
+impl RealmInviteStore for PgRealmInviteStore {
+    async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
         sql_query(
             "SELECT id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at \
-             FROM space_invites WHERE id = $1",
+             FROM realm_invites WHERE id = $1",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
-        .get_result::<SpaceInviteRow>(&mut *conn)
+        .get_result::<RealmInviteRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(SpaceInviteRecord::from))
+        .map(|row| row.map(RealmInviteRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    async fn put(&self, record: SpaceInviteRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(&record.invite_id);
         let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
-            "INSERT INTO space_invites \
+            "INSERT INTO realm_invites \
              (id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (id) DO UPDATE SET \
@@ -6186,15 +6186,15 @@ impl SpaceInviteStore for PgSpaceInviteStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceInviteRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at \
-             FROM space_invites ORDER BY created_at ASC, id ASC",
+             FROM realm_invites ORDER BY created_at ASC, id ASC",
         )
-        .load::<SpaceInviteRow>(&mut *conn)
+        .load::<RealmInviteRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(SpaceInviteRecord::from).collect())
+        .map(|rows| rows.into_iter().map(RealmInviteRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 }
@@ -6961,7 +6961,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
 
     async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         // Linear scan in Pg — same semantics as Memory backend but driven by
-        // a SELECT. The row count is small (per-Space policy documents) so a
+        // a SELECT. The row count is small (per-Realm policy documents) so a
         // full table walk is acceptable. Callers apply their own match
         // predicate on the returned rows.
         let mut conn = pg_conn(&self.pool).await?;
@@ -9003,10 +9003,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_space_invite_store_put_get_snapshot_matches_trait() {
-        let store = MemorySpaceInviteStore::new();
+    async fn memory_realm_invite_store_put_get_snapshot_matches_trait() {
+        let store = MemoryRealmInviteStore::new();
         let now = Utc::now();
-        let record = SpaceInviteRecord {
+        let record = RealmInviteRecord {
             invite_id: "ck:invite:01".to_owned(),
             realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
             inviter: "did:web:alice.example".to_owned(),
@@ -9024,7 +9024,7 @@ mod tests {
         assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
 
         // Idempotent upsert (latest status wins).
-        let updated = SpaceInviteRecord {
+        let updated = RealmInviteRecord {
             status: "accepted".to_owned(),
             ..record
         };

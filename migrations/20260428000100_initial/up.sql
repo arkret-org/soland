@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS webvh_log_events (
 CREATE INDEX IF NOT EXISTS webvh_log_events_did_seq_idx
     ON webvh_log_events (did, seq);
 
-CREATE TABLE IF NOT EXISTS space_invites (
+CREATE TABLE IF NOT EXISTS realm_invites (
     id UUID PRIMARY KEY,
     realm_id UUID NOT NULL,
     inviter TEXT NOT NULL,
@@ -246,11 +246,11 @@ CREATE TABLE IF NOT EXISTS space_invites (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS space_invites_space_idx
-    ON space_invites (realm_id);
+CREATE INDEX IF NOT EXISTS realm_invites_realm_idx
+    ON realm_invites (realm_id);
 
-CREATE INDEX IF NOT EXISTS space_invites_invitee_idx
-    ON space_invites (invitee);
+CREATE INDEX IF NOT EXISTS realm_invites_invitee_idx
+    ON realm_invites (invitee);
 
 CREATE TABLE IF NOT EXISTS blobs (
     blob_ref TEXT PRIMARY KEY,

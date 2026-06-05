@@ -196,7 +196,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    space_invites (id) {
+    realm_invites (id) {
         id -> Uuid,
         realm_id -> Uuid,
         inviter -> Text,
@@ -431,7 +431,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     presence,
     webvh_documents,
     webvh_log_events,
-    space_invites,
+    realm_invites,
     blobs,
     key_backups,
     webrtc_sessions,

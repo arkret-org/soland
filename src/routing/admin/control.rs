@@ -60,7 +60,7 @@ pub struct AdminControlFrameResponse {
     /// was closed (server is shutting down).
     pub broadcast: bool,
     /// Number of receivers active at send time. `0` is normal — it means
-    /// no clients are currently subscribed to this Space.
+    /// no clients are currently subscribed to this Realm.
     pub receivers: usize,
     /// The kind that was emitted: `"resync_required"` or `"unauthorized"`.
     pub kind: String,

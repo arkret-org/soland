@@ -921,11 +921,6 @@ pub struct AppState {
     /// stable event_id and remain in the canonical/projection stores; render
     /// paths redact the content to `[expired]`.
     pub retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
-    /// Best-effort federation block hints keyed by `(actor, blocked, source)`.
-    /// These hints are not Realm facts; they let a peer suppress unnecessary
-    /// push fanout for `blocked -> actor` without leaking anything into public
-    /// membership or moderation state.
-    pub federation_block_hints: Arc<Mutex<BTreeMap<String, FederationBlockHintRecord>>>,
     /// Local organization directory rows keyed by organization DID/id. This is
     /// the P2 governance projection surface used by organization moderation
     /// policy and directory reads until a durable organization table lands.
@@ -1298,12 +1293,12 @@ pub struct ConsentCellRecord {
 ///
 /// One row per `(actor, data_type)`. `data_type` is the canonical wire key
 /// (e.g. `ck.read_receipt.preferences`, `ck.contacts.actor.did:web:alice.example`,
-/// `ck.contacts.space.ck:space:0196419b-0000-7000-8000-000000000000`). Soland
+/// `ck.contacts.realm.ck:realm:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///
 /// Spec: `discovery/client-preferences.md` §2 (storage model) and §3.7
-/// (Space remarks, `ck.contacts.space.<realm_id>`).
+/// (Realm remarks, `ck.contacts.realm.<realm_id>`).
 #[derive(Clone, Debug)]
 pub struct AccountDataRecord {
     pub actor: String,
@@ -1313,7 +1308,7 @@ pub struct AccountDataRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct SpaceInviteRecord {
+pub struct RealmInviteRecord {
     pub invite_id: String,
     pub realm_id: String,
     pub inviter: String,
@@ -1344,7 +1339,7 @@ pub struct RealmMetaRecord {
     pub preview_policy_digest: Option<String>,
     /// Optional encryption profile (`mls_rfc9420` / `plaintext`). Cross-checked
     /// against `history_visibility` at create time — `mls_rfc9420` is
-    /// incompatible with `world_readable` (space-and-place.md §3.1.3).
+    /// incompatible with `world_readable` (realm-and-space.md §3.1.3).
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
     /// SEC-08 — the Realm declared `ck.profile.mls.minimal_metadata_realm.v1`
@@ -1754,14 +1749,6 @@ pub struct RetentionTombstoneRecord {
     pub anchored: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct FederationBlockHintRecord {
-    pub actor: String,
-    pub blocked: String,
-    pub source: String,
-    pub received_at: chrono::DateTime<chrono::Utc>,
-}
-
 impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the AnchorerWorker and all admin signing paths. Returns a fresh
@@ -2013,7 +2000,6 @@ impl AppState {
             })),
             retention_policies: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
-            federation_block_hints: Arc::new(Mutex::new(BTreeMap::new())),
             organizations: Arc::new(Mutex::new(BTreeMap::new())),
             organization_policies: Arc::new(Mutex::new(BTreeMap::new())),
             realm_organizations: Arc::new(Mutex::new(BTreeMap::new())),

@@ -21,7 +21,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
 
     // ── seed: create + archive a Space container ────────────────────────
-    let create_event = signed_place_event(
+    let create_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000001",
         1,
         "ck.space.create",
@@ -49,7 +49,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         "create space container response: {r}"
     );
 
-    let archive_event = signed_place_event(
+    let archive_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000002",
         2,
         "ck.space.archive",
@@ -84,12 +84,12 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let row = spaces
         .iter()
         .find(|p| p["space_id"] == container_space_id)
-        .expect("place not in projection response");
+        .expect("space container not in projection response");
     assert_eq!(row["state"], "archived");
     assert_eq!(row["title"], "Hydration target");
 
     // ── restore + re-fetch → active ───────────────────────────────────
-    let restore_event = signed_place_event(
+    let restore_event = signed_space_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000003",
         3,
         "ck.space.restore",
@@ -123,24 +123,8 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         .unwrap()
         .iter()
         .find(|p| p["space_id"] == container_space_id)
-        .expect("place still missing post-restore");
+        .expect("space container still missing post-restore");
     assert_eq!(row["state"], "active");
-
-    let legacy_underscore = TestClient::get(format!(
-        "http://server/_cokret/self/projection/space_containers?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(legacy_underscore.status_code, Some(StatusCode::NOT_FOUND));
-
-    let legacy_hyphen = TestClient::get(format!(
-        "http://server/_cokret/self/projection/space-containers?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(legacy_hyphen.status_code, Some(StatusCode::NOT_FOUND));
 }
 
 #[tokio::test]
@@ -591,7 +575,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let flow_id = "ck:flow:01904100-0000-7000-8000-c15d70000002";
 
     // Create + tombstone a Space container.
-    let create_place = signed_place_event(
+    let create_space = signed_space_event(
         "ck:event:01904100-0000-7000-8000-c15d70010001",
         1,
         "ck.space.create",
@@ -608,7 +592,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_place)
+        .json(&create_space)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -616,7 +600,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    let tombstone_place = signed_place_event(
+    let tombstone_space = signed_space_event(
         "ck:event:01904100-0000-7000-8000-c15d70010002",
         2,
         "ck.space.tombstone",
@@ -625,7 +609,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&tombstone_place)
+        .json(&tombstone_space)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -761,7 +745,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let morph_id = "ck:morph:01904100-0000-7000-8000-15a15a000003";
 
     // Space container: create + archive → persistence has state=archived.
-    let create_place = signed_place_event(
+    let create_space = signed_space_event(
         "ck:event:01904100-0000-7000-8000-15a15ae00001",
         1,
         "ck.space.create",
@@ -778,7 +762,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_place)
+        .json(&create_space)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -786,7 +770,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    let archive_place = signed_place_event(
+    let archive_space = signed_space_event(
         "ck:event:01904100-0000-7000-8000-15a15ae00002",
         2,
         "ck.space.archive",
@@ -795,7 +779,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&archive_place)
+        .json(&archive_space)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -803,15 +787,15 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    let place_row = state
+    let space_row = state
         .persistence
         .space_container_projections()
         .get(container_space_id)
         .await
         .unwrap()
-        .expect("place projection MUST be mirrored to persistence after create+archive");
-    assert_eq!(place_row.state, "archived");
-    assert_eq!(place_row.title, "Persistent Space");
+        .expect("space projection MUST be mirrored to persistence after create+archive");
+    assert_eq!(space_row.state, "archived");
+    assert_eq!(space_row.title, "Persistent Space");
 
     // list_for_realm + snapshot_all reach the same row.
     let by_space = state

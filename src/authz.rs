@@ -145,7 +145,7 @@ impl AuthzEngine {
         constraints: Vec<Constraint>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Grant, DelegationError> {
-        let parent_realm_id = {
+        let delegated_realm_id = {
             let grants = self.grants.lock().expect("grants lock");
             grants
                 .get(parent_grant_id)
@@ -164,7 +164,7 @@ impl AuthzEngine {
             // (the wire `realm_id` argument is informational only; the SDK
             // helper does not check it). Use the parent's so persisted
             // child matches.
-            realm_id: parent_realm_id,
+            realm_id: delegated_realm_id,
             issuer,
             subject,
             resource,

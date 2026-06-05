@@ -126,7 +126,7 @@ pub struct ProjectionState {
     /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
     /// Server-side Flow projection. Mirrors the canonical state-machine
-    /// for ck.flow.create / update / archive / restore. Unlike Place
+    /// for ck.flow.create / update / archive / restore. Unlike Space
     /// there is no dedicated `ck.flow.tombstone` event; terminal state
     /// is reached via `ck.redaction`. Mirror table is `projection_flows`
     /// (durable).
@@ -4988,7 +4988,7 @@ impl ProjectionState {
                     }
                 }
                 Some("unroutable") => {
-                    // Member is recorded but Space-scoped delivery is
+                    // Member is recorded but Realm-scoped delivery is
                     // suppressed until a rebind upgrades to routable.
                 }
                 Some(other) => {
@@ -5716,10 +5716,7 @@ impl ProjectionState {
 
         ProjectionEffect::RealmLifecycle {
             realm_id,
-            action: kind
-                .strip_prefix("ck.realm.")
-                .unwrap_or(kind)
-                .to_owned(),
+            action: kind.strip_prefix("ck.realm.").unwrap_or(kind).to_owned(),
         }
     }
 
@@ -5734,10 +5731,10 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    /// CKP-0007: the legacy `Flow.discussion_realm_ref` cross-Realm edge
-    /// has been removed; intra-Realm discussion boundaries now live on a
-    /// Circle (`scope_circle_id`) and never cross the Realm frontier, so
-    /// no cross-Realm discussion cascade is required here.
+    /// CKP-0007: `Flow.discussion_realm_ref` is a removed wire field.
+    /// Intra-Realm discussion boundaries now live on a Circle
+    /// (`scope_circle_id`) and never cross the Realm frontier, so no
+    /// cross-Realm discussion cascade is required here.
     ///
     /// The terminal-state admission check (event_log.rs) prevents
     /// further writes against the destroyed Realm itself, which is the
@@ -5978,21 +5975,21 @@ impl ProjectionState {
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
             CK_SPACE_CONTAINER_CREATE => return Ok(()),
             CK_SPACE_CONTAINER_UPDATE | CK_SPACE_CONTAINER_PARENT => {
-                (&[SpaceContainerLifecycleState::Active], "place_not_active")
+                (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
             CK_SPACE_CONTAINER_ARCHIVE => {
-                (&[SpaceContainerLifecycleState::Active], "place_not_active")
+                (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
             CK_SPACE_CONTAINER_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
-                "place_not_archived",
+                "space_not_archived",
             ),
             CK_SPACE_CONTAINER_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
                 ],
-                "place_already_terminal",
+                "space_already_terminal",
             ),
             _ => return Ok(()),
         };
@@ -6022,7 +6019,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(object) = operation.payload.get("object").and_then(|v| v.as_object()) else {
             return ProjectionEffect::Rejected {
-                reason: "place_create_missing_object".to_owned(),
+                reason: "space_create_missing_object".to_owned(),
             };
         };
         let Some(container_space_id) = object
@@ -6031,7 +6028,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "place_create_missing_id".to_owned(),
+                reason: "space_create_missing_id".to_owned(),
             };
         };
         // CKP-0007 — validate optional `scope_circle_id` /
@@ -6113,7 +6110,7 @@ impl ProjectionState {
 
     /// Apply `ck.space.update` — patch title / rank / fields on an
     /// existing Space container. Per common-fields.md §5.1 ("update on non-active
-    /// object MUST fail"): rejects with the legacy `place_not_active` reason
+    /// object MUST fail"): rejects with the spec `space_not_active` reason
     /// code if the target is not in Active state. Unknown Space container is
     /// tolerated.
     fn apply_space_container_update(
@@ -6123,7 +6120,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
             return ProjectionEffect::Rejected {
-                reason: "place_update_missing_space_id".to_owned(),
+                reason: "space_update_missing_space_id".to_owned(),
             };
         };
         let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
@@ -6131,7 +6128,7 @@ impl ProjectionState {
         };
         if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
-                reason: "place_not_active".to_owned(),
+                reason: "space_not_active".to_owned(),
             };
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
@@ -6165,7 +6162,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(container_space_id) = space_container_id_from_payload(&operation.payload) else {
             return ProjectionEffect::Rejected {
-                reason: "place_parent_missing_space_id".to_owned(),
+                reason: "space_parent_missing_space_id".to_owned(),
             };
         };
         let parent_ref = if operation.payload.get("parent_space_id").is_some() {
@@ -6186,7 +6183,7 @@ impl ProjectionState {
         };
         if space_container.state != SpaceContainerLifecycleState::Active {
             return ProjectionEffect::Rejected {
-                reason: "place_not_active".to_owned(),
+                reason: "space_not_active".to_owned(),
             };
         }
         space_container.parent_ref = parent_ref;
@@ -6225,12 +6222,12 @@ impl ProjectionState {
             SpaceContainerLifecycleTransition::Archive => (
                 &[SpaceContainerLifecycleState::Active][..],
                 SpaceContainerLifecycleState::Archived,
-                "place_not_active",
+                "space_not_active",
             ),
             SpaceContainerLifecycleTransition::Restore => (
                 &[SpaceContainerLifecycleState::Archived][..],
                 SpaceContainerLifecycleState::Active,
-                "place_not_archived",
+                "space_not_archived",
             ),
             SpaceContainerLifecycleTransition::Tombstone => (
                 &[
@@ -6238,7 +6235,7 @@ impl ProjectionState {
                     SpaceContainerLifecycleState::Archived,
                 ][..],
                 SpaceContainerLifecycleState::Tombstoned,
-                "place_already_terminal",
+                "space_already_terminal",
             ),
         };
 
@@ -6597,8 +6594,8 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        // CKP-0007: `discussion_realm_ref` is now a forbidden wire field
-        // hard-rejected at the envelope validator. Intra-Realm discussion
+        // CKP-0007: `discussion_realm_ref` is a forbidden wire field,
+        // rejected at the envelope validator. Intra-Realm discussion
         // boundaries are expressed via `scope_circle_id` (Circle); when
         // present, validate the Circle is in this Realm and active.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
@@ -6674,10 +6671,10 @@ impl ProjectionState {
                 reason: "flow_update_missing_flow_id".to_owned(),
             };
         };
-        // CKP-0007: `discussion_realm_ref` is now a forbidden wire field
-        // hard-rejected at the envelope validator before reaching the
-        // reducer; the patch handler below intentionally drops any legacy
-        // path.
+        // CKP-0007: `discussion_realm_ref` is a forbidden wire field,
+        // rejected at the envelope validator before reaching the reducer.
+        // Flow scope is set at create time; `scope_circle_id` rebinds fail
+        // below with `scope_rebind_forbidden`.
         let Some(flow) = self.flows.get_mut(&flow_id) else {
             return ProjectionEffect::Ignored;
         };
@@ -6693,6 +6690,11 @@ impl ProjectionState {
         }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
+            if patch.contains_key("scope_circle_id") {
+                return ProjectionEffect::Rejected {
+                    reason: "scope_rebind_forbidden".to_owned(),
+                };
+            }
             if let Some(title) = patch_metadata_string_value(patch, "title") {
                 flow.title = title.unwrap_or_default();
             }
@@ -9214,7 +9216,7 @@ mod tests {
     /// End-to-end Space-container lifecycle through the dispatcher: create →
     /// archive (active → archived) → restore (archived → active) →
     /// tombstone (active → tombstoned). Verifies the projection's
-    /// `places` map tracks state transitions correctly and the
+    /// `space_containers` map tracks state transitions correctly and the
     /// effects carry the new state.
     #[test]
     fn space_container_lifecycle_round_trip() {
@@ -9326,7 +9328,7 @@ mod tests {
         let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         let container_space_id = "ck:space:01904100-0000-7000-8000-1fb50799ad43";
 
-        // Create the place (Active).
+        // Create the Space container (Active).
         state.apply(
             &make_operation(
                 crate::kinds::CK_SPACE_CONTAINER_CREATE,
@@ -9344,7 +9346,7 @@ mod tests {
             &hlc,
         );
 
-        // restore on Active → place_not_archived
+        // restore on Active → space_not_archived
         let restore_op = make_operation(
             crate::kinds::CK_SPACE_CONTAINER_RESTORE,
             realm_id,
@@ -9352,10 +9354,10 @@ mod tests {
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&restore_op),
-            Err("place_not_archived")
+            Err("space_not_archived")
         );
 
-        // Archive then try archive again → place_not_active
+        // Archive then try archive again → space_not_active
         state.apply(
             &make_operation(
                 crate::kinds::CK_SPACE_CONTAINER_ARCHIVE,
@@ -9371,7 +9373,7 @@ mod tests {
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&archive_op),
-            Err("place_not_active")
+            Err("space_not_active")
         );
 
         // Tombstone (legal from Archived).
@@ -9383,7 +9385,7 @@ mod tests {
             ),
             &hlc,
         );
-        // Now restore on Tombstoned → still place_not_archived.
+        // Now restore on Tombstoned → still space_not_archived.
         let restore_again = make_operation(
             crate::kinds::CK_SPACE_CONTAINER_RESTORE,
             realm_id,
@@ -9391,9 +9393,9 @@ mod tests {
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&restore_again),
-            Err("place_not_archived")
+            Err("space_not_archived")
         );
-        // Tombstone on Tombstoned → place_already_terminal.
+        // Tombstone on Tombstoned → space_already_terminal.
         let tombstone_again = make_operation(
             crate::kinds::CK_SPACE_CONTAINER_TOMBSTONE,
             realm_id,
@@ -9401,9 +9403,9 @@ mod tests {
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&tombstone_again),
-            Err("place_already_terminal")
+            Err("space_already_terminal")
         );
-        // Update on Tombstoned → place_not_active.
+        // Update on Tombstoned → space_not_active.
         let update_op = make_operation(
             crate::kinds::CK_SPACE_CONTAINER_UPDATE,
             realm_id,
@@ -9414,11 +9416,11 @@ mod tests {
         );
         assert_eq!(
             state.check_space_container_lifecycle_transition(&update_op),
-            Err("place_not_active")
+            Err("space_not_active")
         );
     }
 
-    /// Preflight is permissive when the Place is unknown — causal /
+    /// Preflight is permissive when the Space container is unknown — causal /
     /// backfill window. Spec: unknown-object tolerance rule in
     /// common-fields §5.1.
     #[test]

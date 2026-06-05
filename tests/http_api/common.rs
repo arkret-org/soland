@@ -22,7 +22,7 @@ pub(crate) use soland::db::Db;
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
     AppState, EventNotification, MessageRecord, PresenceRecord, RealmDirectoryEntry,
-    RealmMetaRecord, SpaceInviteRecord,
+    RealmInviteRecord, RealmMetaRecord,
 };
 pub(crate) use soland::{
     artifacts, kinds, service, service_with_rate_limiter_config, service_with_request_size_limit,
@@ -314,8 +314,8 @@ pub(crate) async fn seed_test_realm(
         let invite_token = new_prefixed_uuid7("ck:invite-token:");
         state
             .persistence
-            .space_invites()
-            .put(SpaceInviteRecord {
+            .realm_invites()
+            .put(RealmInviteRecord {
                 invite_id,
                 realm_id: realm_id.clone(),
                 inviter: owner.to_owned(),
@@ -912,11 +912,10 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `/_cokret/self/views` scaffold.
 
 /// Build a signed container `ck.space.*` event envelope for the Space
-/// (container) state-machine integration test. Post-R1.2 the container
-/// namespace moved from `ck.place.*` to `ck.space.*`. Mirrors
-/// [`signed_event_envelope`] but with a custom `kind` + `payload`
-/// (container lifecycle events do not carry a message body).
-pub(crate) fn signed_place_event(
+/// (container) state-machine integration test. Mirrors [`signed_event_envelope`]
+/// but with a custom `kind` + `payload`; container lifecycle events do not
+/// carry a message body.
+pub(crate) fn signed_space_event(
     event_id: &str,
     actor_seq: u64,
     kind: &str,
@@ -979,7 +978,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 // `StatusCode::PRECONDITION_FAILED`).
 
 /// Build a signed `ck.flow.*` event envelope for the Flow state-machine
-/// integration test. Mirror of `signed_place_event` with a Flow-specific
+/// integration test. Mirror of `signed_space_event` with a Flow-specific
 /// schema_id.
 pub(crate) fn signed_flow_event(
     event_id: &str,

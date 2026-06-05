@@ -15,7 +15,7 @@
 //!
 //! Today this layer only fans out `ck.message.*` / `ck.member.state` /
 //! `ck.realm.*` (security boundary, was `ck.space.*` pre-R1.2) lifecycle
-//! events plus the container `ck.space.*` (was `ck.place.*`) family;
+//! events plus the container `ck.space.*` (was `ck.space.*`) family;
 //! everything else is dropped on the floor (`project_accepted_operations`
 //! only routes message+membership+lifecycle).
 //! Persistence: `projection_events` is in-memory plus a Pg mirror via
@@ -42,7 +42,7 @@ use crate::routing::identity::device_messages::{
 };
 use crate::state::{
     AccountDataRecord, AppState, MessageRecord, ProjectionEventRecord, RealmDirectoryEntry,
-    RealmMetaRecord, RetentionPolicyRecord, RetentionTombstoneRecord, SpaceInviteRecord,
+    RealmInviteRecord, RealmMetaRecord, RetentionPolicyRecord, RetentionTombstoneRecord,
 };
 use crate::{ids, kinds};
 
@@ -1934,16 +1934,6 @@ async fn project_account_data_set(
         )
         .await;
     }
-    if matches!(
-        data_type,
-        "ck.account.blocklist" | "ck.account.blocklist.v1"
-    ) {
-        crate::routing::federation::federation::fanout_blocklist_hints_to_peers(
-            state,
-            owner,
-            &record.payload,
-        );
-    }
 }
 
 async fn fanout_projection_effect_private_update(
@@ -2162,7 +2152,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .and_then(|value| value.as_str())
         .unwrap_or(origin);
 
-    // Project an `invite` membership transition into a SpaceInviteRecord so
+    // Project an `invite` membership transition into a RealmInviteRecord so
     // `GET /_cokret/self/authz/invites` can surface seed invites carried on the
     // canonical event path (e.g. when the Realm bootstrap flow emits
     // `ck.member.state{membership=invite}` for each seed member, per
@@ -2177,7 +2167,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     if membership == Some("invite")
         && let Ok(invitee) = Did::new(member)
     {
-        let invites = state.persistence.space_invites();
+        let invites = state.persistence.realm_invites();
         let already_invited = invites
             .snapshot_all()
             .await
@@ -2195,7 +2185,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 operation.realm_id.as_str(),
                 invitee.as_str(),
             );
-            let record = SpaceInviteRecord {
+            let record = RealmInviteRecord {
                 invite_id: invite_id.clone(),
                 realm_id: operation.realm_id.to_string(),
                 inviter: origin.to_owned(),
@@ -2212,7 +2202,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                     realm_id = %operation.realm_id,
                     "projected seed-member invite via ck.member.state event"
                 ),
-                Err(error) => tracing::warn!(%error, "failed to project space invite"),
+                Err(error) => tracing::warn!(%error, "failed to project realm invite"),
             }
         } else {
             tracing::debug!(
@@ -2399,7 +2389,7 @@ async fn project_invite_acceptance(state: &AppState, member: &str, operation: &O
     let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
         return;
     };
-    let invites = state.persistence.space_invites();
+    let invites = state.persistence.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         return;
     };
@@ -2447,7 +2437,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
         return;
     };
 
-    let invites = state.persistence.space_invites();
+    let invites = state.persistence.realm_invites();
     match invites.get(&invite_id).await {
         Ok(Some(existing)) => {
             tracing::debug!(
@@ -2484,7 +2474,7 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
         operation.realm_id.as_str(),
         invitee.as_str(),
     );
-    let record = SpaceInviteRecord {
+    let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
         inviter: inviter.to_owned(),

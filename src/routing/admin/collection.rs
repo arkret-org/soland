@@ -160,8 +160,6 @@ pub(super) struct AdminCreateRealmRequest {
     #[serde(default, rename = "default_join_rule")]
     default_join_rule: Option<String>,
     #[serde(default)]
-    parent_realm_id: Option<String>,
-    #[serde(default)]
     is_encrypted: bool,
     realm_class: String,
 }
@@ -203,13 +201,6 @@ pub(super) async fn admin_create_realm(
             "discoverability must be public, invite_only, or private",
         ));
     }
-    if let Some(parent) = body.parent_realm_id.as_deref()
-        && !parent.trim().is_empty()
-    {
-        RealmId::new(parent.to_owned())
-            .map_err(|error| AppError::invalid_param(format!("parent_realm_id: {error}")))?;
-    }
-
     let realm_id = ids::generate_realm_id();
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
@@ -224,12 +215,6 @@ pub(super) async fn admin_create_realm(
         "realm_class": body.realm_class,
         "created_by": session.actor.clone(),
     });
-    if let Some(parent) = body
-        .parent_realm_id
-        .filter(|value| !value.trim().is_empty())
-    {
-        object["parent_realm_id"] = json!(parent);
-    }
     let payload = json!({
         "object": object,
         "sender": session.actor.clone(),
@@ -606,7 +591,7 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
 async fn admin_invite_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
-        .space_invites()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()

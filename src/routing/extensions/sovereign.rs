@@ -205,7 +205,7 @@ struct IngestStoreForwardRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct FederationProxyRequest {
+struct EnclaveProxyRequest {
     target: String,
     path: String,
     actor: Option<String>,
@@ -224,6 +224,7 @@ pub(super) fn router() -> Router {
                 .push(Router::with_path("store-and-forward/messages").post(store_forward_message))
                 .push(Router::with_path("store-and-forward/drain").post(drain_store_forward))
                 .push(Router::with_path("store-and-forward/ingest").post(ingest_store_forward))
+                .push(Router::with_path("enclave-proxy").post(enclave_proxy))
                 .push(Router::with_path("enclave-frontier").get(enclave_frontier))
                 .push(Router::with_path("audit").get(deployment_audit)),
         )
@@ -232,7 +233,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("account/{did}").get(external_account_status))
         .push(Router::with_path("realm/{realm_id}/access").get(guard_realm_access))
         .push(Router::with_path("directory/realms").get(directory_realms))
-        .push(Router::with_path("federation/proxy").post(federation_proxy))
 }
 
 #[endpoint]
@@ -639,10 +639,10 @@ async fn directory_realms(
 }
 
 #[endpoint]
-#[tracing::instrument(skip_all, fields(op = "deployment.federation_proxy"))]
-async fn federation_proxy(
+#[tracing::instrument(skip_all, fields(op = "deployment.enclave_proxy"))]
+async fn enclave_proxy(
     depot: &mut Depot,
-    body: JsonBody<FederationProxyRequest>,
+    body: JsonBody<EnclaveProxyRequest>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -655,7 +655,7 @@ async fn federation_proxy(
         audit(
             &mut guard,
             &actor,
-            "boundary.federation_proxy",
+            "boundary.enclave_proxy",
             None,
             "rejected",
             json!({"target": body.target, "path": body.path, "reason": "enclave_no_upstream_proxy_for_external"}),
@@ -667,7 +667,7 @@ async fn federation_proxy(
         );
     }
     Err(AppError::unsupported_feature(
-        "federation proxy is only defined for enclave boundary checks",
+        "enclave proxy is only defined for enclave boundary checks",
     ))
 }
 

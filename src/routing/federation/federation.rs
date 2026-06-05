@@ -9,8 +9,6 @@
 //! transcript plus retry/durability metadata before returning targets so cotest
 //! can observe the durable boundary instead of a purely opaque log.
 
-use std::collections::BTreeSet;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
@@ -34,7 +32,7 @@ use crate::ids;
 use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::policy_gate::{self, PolicyGateSurface};
-use crate::state::{AppState, FederationBlockHintRecord, FederationTransactionRecord};
+use crate::state::{AppState, FederationTransactionRecord};
 
 const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
@@ -276,389 +274,6 @@ pub(super) async fn federation_push_operations(
         rejected: ingest.rejected,
         quarantine: Vec::new(),
     })
-}
-
-#[endpoint(
-    operation_id = "ck.extension.soland.federation.block_hint",
-    tags("federation"),
-    summary = "Record a best-effort personal blocklist hint from a peer"
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.block_hint"))]
-pub(super) async fn federation_block_hint(
-    body: JsonBody<Value>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    let actor = required_json_string(&body, "actor")?;
-    let blocked = required_json_string(&body, "blocked")?;
-    let source = body.get("source").and_then(Value::as_str);
-    // Single authoritative action field with a strict enum, fail-closed on
-    // unknown values. The previous `action -> kind -> status` fallback
-    // chain amplified parsing ambiguity on a peer-controlled inbound entry
-    // (a malicious/buggy peer could set `action:"unblock"` and
-    // `status:"block"` and have behaviour depend on field precedence), and
-    // `status` is reserved by common-fields.md §2 for process/session state
-    // rather than object actions. Default (absent `action`) is `"block"`.
-    let action = match body.get("action") {
-        None => "block",
-        Some(Value::String(value)) => match value.as_str() {
-            "block" | "unblock" => value.as_str(),
-            other => {
-                return Err(AppError::invalid_param(format!(
-                    "federation block-hint `action` must be `block` or `unblock`, got `{other}`"
-                )));
-            }
-        },
-        Some(_) => {
-            return Err(AppError::invalid_param(
-                "federation block-hint `action` must be a string (`block` or `unblock`)",
-            ));
-        }
-    };
-    if action == "unblock" {
-        let removed = remove_block_hint(state, actor, blocked, source)?;
-        return json_ok(json!({
-            "ok": true,
-            "actor": actor,
-            "blocked": blocked,
-            "removed": removed,
-            "suppressed_push": false,
-        }));
-    }
-    let record = record_block_hint(state, actor, blocked, source)?;
-    json_ok(json!({
-        "ok": true,
-        "actor": record.actor,
-        "blocked": record.blocked,
-        "source": record.source,
-        "received_at": record.received_at,
-        "suppressed_push": true,
-    }))
-}
-
-#[endpoint(
-    operation_id = "ck.extension.soland.federation.block_hints",
-    tags("federation"),
-    summary = "List locally known personal blocklist hints"
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.block_hints"))]
-pub(super) async fn federation_block_hints(
-    actor: QueryParam<String, false>,
-    blocked: QueryParam<String, false>,
-    depot: &mut Depot,
-) -> JsonResult<Value> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let actor = actor.into_inner();
-    let blocked = blocked.into_inner();
-    if let Some(actor) = actor.as_deref()
-        && validate_did(actor).is_err()
-    {
-        return Err(AppError::invalid_param("invalid actor"));
-    }
-    if let Some(blocked) = blocked.as_deref()
-        && validate_did(blocked).is_err()
-    {
-        return Err(AppError::invalid_param("invalid blocked"));
-    }
-    let records = state
-        .federation_block_hints
-        .lock()
-        .expect("federation block hints lock")
-        .values()
-        .filter(|record| actor.as_deref().is_none_or(|actor| record.actor == actor))
-        .filter(|record| {
-            blocked
-                .as_deref()
-                .is_none_or(|blocked| record.blocked == blocked)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let suppressed_push = actor.as_deref().is_some()
-        && blocked.as_deref().is_some()
-        && federation_push_suppressed_by_block_hint(
-            state,
-            actor.as_deref().unwrap_or_default(),
-            blocked.as_deref().unwrap_or_default(),
-        );
-    let records = records
-        .into_iter()
-        .map(|record| {
-            json!({
-                "actor": record.actor,
-                "blocked": record.blocked,
-                "source": record.source,
-                "received_at": record.received_at,
-            })
-        })
-        .collect::<Vec<_>>();
-    json_ok(json!({
-        "actor": actor,
-        "blocked": blocked,
-        "suppressed_push": suppressed_push,
-        "records": records,
-    }))
-}
-
-pub(crate) fn record_block_hint(
-    state: &AppState,
-    actor: &str,
-    blocked: &str,
-    source: Option<&str>,
-) -> Result<FederationBlockHintRecord, AppError> {
-    if validate_did(actor).is_err() {
-        return Err(AppError::invalid_param("invalid actor"));
-    }
-    if validate_did(blocked).is_err() {
-        return Err(AppError::invalid_param("invalid blocked"));
-    }
-    let source = source
-        .filter(|source| !source.trim().is_empty())
-        .unwrap_or(state.config.service_did.as_str())
-        .to_owned();
-    if validate_did(&source).is_err() {
-        return Err(AppError::invalid_param("invalid source"));
-    }
-    let record = FederationBlockHintRecord {
-        actor: actor.to_owned(),
-        blocked: blocked.to_owned(),
-        source,
-        received_at: now(),
-    };
-    let key = federation_block_hint_key(&record.actor, &record.blocked, &record.source);
-    state
-        .federation_block_hints
-        .lock()
-        .expect("federation block hints lock")
-        .insert(key, record.clone());
-    Ok(record)
-}
-
-pub(crate) fn federation_push_suppressed_by_block_hint(
-    state: &AppState,
-    actor: &str,
-    blocked: &str,
-) -> bool {
-    state
-        .federation_block_hints
-        .lock()
-        .expect("federation block hints lock")
-        .values()
-        .any(|record| record.actor == actor && record.blocked == blocked)
-}
-
-pub(crate) fn fanout_blocklist_hints_to_peers(state: &AppState, actor: &str, payload: &Value) {
-    let blocked_targets = blocklist_hint_targets_from_payload(payload);
-    let source = state.config.service_did.clone();
-    let previous_targets = federation_block_hints_for_actor_source(state, actor, &source);
-    for blocked in &blocked_targets {
-        if let Err(error) = record_block_hint(state, actor, blocked, Some(&source)) {
-            tracing::warn!(%error, actor, blocked, "failed to record local federation block hint");
-        }
-    }
-    let removed_targets = previous_targets
-        .difference(&blocked_targets)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    for blocked in &removed_targets {
-        if let Err(error) = remove_block_hint(state, actor, blocked, Some(&source)) {
-            tracing::warn!(%error, actor, blocked, "failed to remove local federation block hint");
-        }
-    }
-    let peers = configured_peer_targets(state);
-    if peers.is_empty() {
-        return;
-    }
-    let client = match crate::security::build_egress_http_client(
-        crate::routing::federation::outbox::CONNECT_TIMEOUT,
-        crate::routing::federation::outbox::REQUEST_TIMEOUT,
-    ) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "failed to build federation block-hint client");
-            return;
-        }
-    };
-    for blocked in blocked_targets {
-        for peer in &peers {
-            spawn_block_hint_push(
-                client.clone(),
-                peer.url.clone(),
-                actor.to_owned(),
-                blocked.clone(),
-                source.clone(),
-                "block",
-                state.config.development_mode,
-            );
-        }
-    }
-    for blocked in removed_targets {
-        for peer in &peers {
-            spawn_block_hint_push(
-                client.clone(),
-                peer.url.clone(),
-                actor.to_owned(),
-                blocked.clone(),
-                source.clone(),
-                "unblock",
-                state.config.development_mode,
-            );
-        }
-    }
-}
-
-fn remove_block_hint(
-    state: &AppState,
-    actor: &str,
-    blocked: &str,
-    source: Option<&str>,
-) -> Result<bool, AppError> {
-    if validate_did(actor).is_err() {
-        return Err(AppError::invalid_param("invalid actor"));
-    }
-    if validate_did(blocked).is_err() {
-        return Err(AppError::invalid_param("invalid blocked"));
-    }
-    let source = source
-        .filter(|source| !source.trim().is_empty())
-        .unwrap_or(state.config.service_did.as_str())
-        .to_owned();
-    if validate_did(&source).is_err() {
-        return Err(AppError::invalid_param("invalid source"));
-    }
-    Ok(state
-        .federation_block_hints
-        .lock()
-        .expect("federation block hints lock")
-        .remove(&federation_block_hint_key(actor, blocked, &source))
-        .is_some())
-}
-
-fn federation_block_hints_for_actor_source(
-    state: &AppState,
-    actor: &str,
-    source: &str,
-) -> BTreeSet<String> {
-    state
-        .federation_block_hints
-        .lock()
-        .expect("federation block hints lock")
-        .values()
-        .filter(|record| record.actor == actor && record.source == source)
-        .map(|record| record.blocked.clone())
-        .collect()
-}
-
-fn spawn_block_hint_push(
-    client: reqwest::Client,
-    peer_url: String,
-    actor: String,
-    blocked: String,
-    source: String,
-    action: &'static str,
-    development_mode: bool,
-) {
-    let body = json!({
-        "actor": actor,
-        "blocked": blocked,
-        "source": source,
-        "action": action,
-    });
-    tokio::spawn(async move {
-        let target = format!(
-            "{}/_cokret/peer/events/frontier",
-            peer_url.trim_end_matches('/')
-        );
-        let target_url = match crate::security::validate_http_url_for_egress(
-            &target,
-            "federation block-hint",
-            development_mode,
-        ) {
-            Ok(url) => url,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    peer = %peer_url,
-                    "federation block-hint peer push denied by egress policy"
-                );
-                return;
-            }
-        };
-        match client.post(target_url).json(&body).send().await {
-            Ok(response) if response.status().is_success() => {}
-            Ok(response) => {
-                tracing::debug!(
-                    peer = %peer_url,
-                    status = %response.status(),
-                    "federation block-hint peer returned non-success"
-                );
-            }
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    peer = %peer_url,
-                    "federation block-hint peer push failed"
-                );
-            }
-        }
-    });
-}
-
-fn federation_block_hint_key(actor: &str, blocked: &str, source: &str) -> String {
-    format!("{actor}\u{1f}{blocked}\u{1f}{source}")
-}
-
-fn blocklist_hint_targets_from_payload(payload: &Value) -> BTreeSet<String> {
-    let entries = payload
-        .get("entries")
-        .or_else(|| payload.get("blocked"))
-        .and_then(Value::as_array);
-    let values = entries
-        .map(|entries| entries.iter().collect::<Vec<_>>())
-        .unwrap_or_else(|| vec![payload]);
-    values
-        .into_iter()
-        .filter_map(blocklist_hint_target)
-        .filter(|did| validate_did(did).is_ok())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn blocklist_hint_target(entry: &Value) -> Option<&str> {
-    match entry {
-        Value::String(value) => Some(value.as_str()),
-        Value::Object(object) => {
-            let mode = object
-                .get("mode")
-                .or_else(|| object.get("kind"))
-                .or_else(|| object.get("action"))
-                .or_else(|| object.get("status"))
-                .and_then(Value::as_str)
-                .unwrap_or("block");
-            if matches!(mode, "allow" | "unblock" | "removed" | "deleted") {
-                return None;
-            }
-            blocklist_hint_target_value(
-                object
-                    .get("target")
-                    .or_else(|| object.get("did"))
-                    .or_else(|| object.get("actor"))?,
-            )
-        }
-        _ => None,
-    }
-}
-
-fn blocklist_hint_target_value(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(value) => Some(value.as_str()),
-        Value::Object(object) => object
-            .get("did")
-            .or_else(|| object.get("actor"))
-            .or_else(|| object.get("id"))
-            .and_then(Value::as_str),
-        _ => None,
-    }
 }
 
 #[endpoint(
@@ -1011,19 +626,19 @@ pub(super) async fn federation_pull_operations(
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
-    let space_operations = state
+    let realm_operations = state
         .persistence
         .federation_operations()
         .list_for_realm(&realm_id)
         .await
         .unwrap_or_default();
-    let redacted = redaction_targets_from_operations(&space_operations);
+    let redacted = redaction_targets_from_operations(&realm_operations);
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
         let manifest = json!({
             "type": "snapshot_bootstrap",
             "realm_id": realm_id,
             "snapshot_ref": ids::generate_snapshot_id(),
-            "operation_count": space_operations.len(),
+            "operation_count": realm_operations.len(),
             "created_at": now(),
         });
         let state_digest = format!("sha256:{}", sha256_hex(manifest.to_string().as_bytes()));
@@ -1048,7 +663,7 @@ pub(super) async fn federation_pull_operations(
     });
     let mut seen_cursor = after_cursor.is_none();
     let mut operations = Vec::new();
-    for operation in space_operations {
+    for operation in realm_operations {
         if !seen_cursor {
             seen_cursor = Some(operation.operation_id.as_str()) == after_cursor.as_deref();
             continue;
@@ -1204,7 +819,7 @@ pub(super) async fn federation_realm_members(
     let members = state
         .realms
         .lock()
-        .expect("spaces lock")
+        .expect("realms lock")
         .get(&realm_id_value)
         .map(|realm| {
             realm
@@ -2984,54 +2599,6 @@ mod tests {
         assert_eq!(error.http_status(), StatusCode::CONFLICT);
     }
 
-    #[test]
-    fn block_hint_records_and_suppresses_push_direction() {
-        let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
-        let state = AppState::new(cfg, Db { pool: None });
-
-        let record = record_block_hint(
-            &state,
-            "did:web:alice.example",
-            "did:web:bob.example",
-            Some("did:web:peer.example"),
-        )
-        .expect("valid block hint records");
-
-        assert_eq!(record.actor, "did:web:alice.example");
-        assert_eq!(record.blocked, "did:web:bob.example");
-        assert!(federation_push_suppressed_by_block_hint(
-            &state,
-            "did:web:alice.example",
-            "did:web:bob.example"
-        ));
-        assert!(!federation_push_suppressed_by_block_hint(
-            &state,
-            "did:web:bob.example",
-            "did:web:alice.example"
-        ));
-    }
-
-    #[test]
-    fn blocklist_hint_targets_ignore_unblock_entries() {
-        let payload = json!({
-            "entries": [
-                {"target": {"kind": "actor", "did": "did:web:bob.example"}, "mode": "block"},
-                {"target": {"did": "did:web:mallory.example"}, "status": "removed"},
-                {"target": {"kind": "actor", "did": "did:web:trent.example"}, "mode": "unblock"},
-                "did:web:carol.example",
-                {"target": "not-a-did", "kind": "block"}
-            ]
-        });
-
-        let targets = blocklist_hint_targets_from_payload(&payload);
-
-        assert!(targets.contains("did:web:bob.example"));
-        assert!(targets.contains("did:web:carol.example"));
-        assert!(!targets.contains("did:web:mallory.example"));
-        assert!(!targets.contains("did:web:trent.example"));
-        assert!(!targets.contains("not-a-did"));
-    }
-
     #[tokio::test]
     async fn mesh_policy_broadcasts_to_every_peer() {
         let cfg = config_with_policy(
@@ -3209,7 +2776,7 @@ mod tests {
 
         let projected_invite = state
             .persistence
-            .space_invites()
+            .realm_invites()
             .get("ck:invite:01904100-0000-7000-8000-000000000056")
             .await
             .unwrap()

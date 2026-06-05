@@ -9,7 +9,7 @@
 //!   key.
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
-//! - `GET  /_soland/admin/bottom` — global cross-space list.
+//! - `GET  /_soland/admin/bottom` — global cross-Realm list.
 //! - `POST /_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
 //!   manual) repair Move.
 //! - `GET  /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
@@ -220,7 +220,7 @@ pub struct CompactionResponse {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AnchorPruneRequestBody {
     /// The Anchor id to evaluate for pruning. Must already exist in the
-    /// space's Anchor DAG.
+    /// Realm's Anchor DAG.
     pub anchor_id: String,
 }
 
@@ -641,11 +641,11 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 /// `GET /_soland/admin/realms/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchorer.get",
+    operation_id = "ck.extension.soland.admin.realms.anchorer.get",
     tags("admin", "anchorer"),
     summary = "Get current anchorer cell value"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.spaces.anchorer.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realms.anchorer.get"))]
 pub(super) async fn admin_get_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -685,13 +685,13 @@ pub(super) async fn admin_get_anchorer(
 /// the signing identity is still the service signer so Moves chain off the
 /// AnchorerWorker key.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchorer.reconfigure",
+    operation_id = "ck.extension.soland.admin.realms.anchorer.reconfigure",
     tags("admin", "anchorer"),
     summary = "Submit anchorer reconfiguration Move"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.spaces.anchorer.reconfigure")
+    fields(op = "ck.extension.soland.admin.realms.anchorer.reconfigure")
 )]
 pub(super) async fn admin_reconfigure_anchorer(
     aa: AuthArgs,
@@ -832,13 +832,13 @@ pub(super) async fn admin_reconfigure_anchorer(
 }
 
 /// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
-/// this Space.
+/// this Realm.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.bottom.list",
+    operation_id = "ck.extension.soland.admin.realms.bottom.list",
     tags("admin", "bottom"),
-    summary = "List Bottom cells in a Space"
+    summary = "List Bottom cells in a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.spaces.bottom.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realms.bottom.list"))]
 pub(super) async fn admin_list_realm_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -854,11 +854,11 @@ pub(super) async fn admin_list_realm_bottom(
     json_ok(collect_bottom_entries_for_realm(state, &realm_id))
 }
 
-/// `GET /_soland/admin/bottom` — global cross-space bottom entries.
+/// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
 #[endpoint(
     operation_id = "ck.extension.soland.admin.bottom.list_global",
     tags("admin", "bottom"),
-    summary = "List Bottom cells across every Space"
+    summary = "List Bottom cells across every Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.bottom.list_global"))]
 pub(super) async fn admin_list_bottom_global(
@@ -870,8 +870,8 @@ pub(super) async fn admin_list_bottom_global(
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
     let realm_ids: Vec<String> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .map(|s| s.realm_id.as_str().to_owned())
@@ -895,13 +895,13 @@ pub(super) async fn admin_list_bottom_global(
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer flow.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.bottom.repair",
+    operation_id = "ck.extension.soland.admin.realms.bottom.repair",
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.spaces.bottom.repair")
+    fields(op = "ck.extension.soland.admin.realms.bottom.repair")
 )]
 pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
@@ -1784,7 +1784,7 @@ pub struct RotateSigningKeyResponse {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchorer.rotate_signing_key",
+    operation_id = "ck.extension.soland.admin.realms.anchorer.rotate_signing_key",
     tags("admin", "anchorer"),
     summary = "Rotate the AnchorerWorker signing key"
 )]
