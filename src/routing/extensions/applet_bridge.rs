@@ -1286,7 +1286,7 @@ fn validate_applet_package(package: &AppletPackage) -> Result<(), AppError> {
             .map_err(|error| AppError::internal(format!("package proof digest failed: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
-    if proof.payload_digest != expected_payload_digest {
+    if proof.event_digest != expected_payload_digest {
         return Err(
             AppError::invalid_param("applet package proof payload_digest mismatch")
                 .with_wire_code("proof_invalid"),
