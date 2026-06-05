@@ -240,7 +240,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
     // so verifiers can query the issuing server's current view (incl.
     // per-peer fanout_status and the timeout-triggered `incomplete`
     // flip).
-    value["erasure_receipts_endpoint"] = json!("/_soland/self/audit/erasure-receipts");
+    value["erasure_receipts_endpoint"] = json!("/_soland/admin/audit/erasure-receipts");
     // T8.3 — embed the production hardening checklist so sodmin's
     // `/hardening` page can render it without an extra round-trip.
     value["hardening"] =

@@ -733,7 +733,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     let sync = account_subscribe_frame(state.clone(), None, "catchup=true").await;
     assert!(!sync["realms"].as_object().unwrap().contains_key(&realm_id));
 
-    let audit_events: Value = TestClient::get("http://server/_soland/self/audit/events?limit=20")
+    let audit_events: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=20")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -741,7 +741,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await
         .unwrap();
     assert!(!audit_events["events"].as_array().unwrap().is_empty());
-    let audit_page_one: Value = TestClient::get("http://server/_soland/self/audit/events?limit=1")
+    let audit_page_one: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=1")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -752,7 +752,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .as_str()
         .expect("audit page should expose next cursor");
     let audit_page_two: Value = TestClient::get(format!(
-        "http://server/_soland/self/audit/events?limit=1&cursor={audit_cursor}"
+        "http://server/_soland/admin/audit/events?limit=1&cursor={audit_cursor}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))
@@ -765,7 +765,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         audit_page_two["events"][0]["audit_id"]
     );
     let forbidden_audit =
-        TestClient::get("http://server/_soland/self/audit/events?actor=did:web:bob.example")
+        TestClient::get("http://server/_soland/admin/audit/events?actor=did:web:bob.example")
             .add_header("authorization", format!("Bearer {alice}"), true)
             .send(&app_from_state(state.clone()))
             .await;

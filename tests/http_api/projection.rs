@@ -210,7 +210,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     // ── 1. auth required ──────────────────────────────────────────────
-    let unauth = TestClient::post("http://server/_soland/self/audit/user-action")
+    let unauth = TestClient::post("http://server/_soland/admin/audit/user-action")
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
             "action": "ui.button.click",
@@ -221,7 +221,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(unauth.status_code.unwrap().as_u16(), 401);
 
     // ── 2. happy path: session actor posts ────────────────────────────
-    let ok: Value = TestClient::post("http://server/_soland/self/audit/user-action")
+    let ok: Value = TestClient::post("http://server/_soland/admin/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actor": "did:web:alice.example",
@@ -238,7 +238,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(ok["ok"], true);
 
     // ── 3. cross-actor post → 403 ─────────────────────────────────────
-    let mut bad = TestClient::post("http://server/_soland/self/audit/user-action")
+    let mut bad = TestClient::post("http://server/_soland/admin/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actor": "did:web:eve.example",
@@ -252,7 +252,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(body["error"]["code"], "capability_denied");
 
     // ── 4. missing actor / action → 400 ──────────────────────────────
-    let mut missing_actor = TestClient::post("http://server/_soland/self/audit/user-action")
+    let mut missing_actor = TestClient::post("http://server/_soland/admin/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"action": "ui.click"}))
         .send(&app_from_state(state.clone()))
@@ -261,7 +261,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     let body: Value = missing_actor.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "invalid_param");
 
-    let missing_action = TestClient::post("http://server/_soland/self/audit/user-action")
+    let missing_action = TestClient::post("http://server/_soland/admin/audit/user-action")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"actor": "did:web:alice.example"}))
         .send(&app_from_state(state.clone()))
@@ -269,7 +269,7 @@ async fn audit_user_action_endpoint_persists_session_actor_entries_and_rejects_c
     assert_eq!(missing_action.status_code.unwrap().as_u16(), 400);
 
     // ── 5. entry shows up in GET /audit/events for the same actor ────
-    let events: Value = TestClient::get("http://server/_soland/self/audit/events")
+    let events: Value = TestClient::get("http://server/_soland/admin/audit/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await

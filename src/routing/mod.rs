@@ -132,6 +132,11 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(
             Router::with_path("_soland")
                 .push(admin::spec_router())
+                // Client telemetry/audit ingest is deployment-local but not
+                // a protocol `self` surface. It carries per-handler actor
+                // auth instead of the shared admin-scope hoop so ordinary
+                // authenticated clients can post their own user-action log.
+                .push(Router::with_path("admin").push(admin::audit_router()))
                 .push(admin::admin_router())
                 .push(admin::router())
                 .push(federation::admin_anchor_sign_router())
