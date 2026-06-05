@@ -435,8 +435,7 @@ pub(crate) fn sha256_json(value: &Value) -> String {
 
 pub(crate) fn expected_flow_id_for_scope(scope_id: &str) -> String {
     scope_id
-        .strip_prefix("ck:space:")
-        .or_else(|| scope_id.strip_prefix("ck:realm:"))
+        .strip_prefix("ck:realm:")
         .map(|suffix| format!("ck:flow:{suffix}"))
         .unwrap_or_else(|| {
             let digest = Sha256::digest(scope_id.as_bytes());

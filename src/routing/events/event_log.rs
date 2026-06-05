@@ -4044,9 +4044,7 @@ pub(super) fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Op
 }
 
 fn normalize_persisted_realm_id(id: &str) -> String {
-    id.strip_prefix("ck:space:")
-        .map(|suffix| format!("ck:realm:{suffix}"))
-        .unwrap_or_else(|| id.to_owned())
+    id.to_owned()
 }
 
 pub(super) async fn event_visible_to_session(

@@ -178,13 +178,13 @@ fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&'a s
 }
 
 fn operation_realm_title(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["space_title", "title"])
+    first_string_field(&operation.payload, &["realm_title", "title"])
         .or_else(|| object_string_field(operation, &["title"]))
         .or_else(|| patch_string_field(operation, "title"))
 }
 
 fn operation_realm_summary(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["space_summary", "summary"])
+    first_string_field(&operation.payload, &["realm_summary", "summary"])
         .or_else(|| object_string_field(operation, &["summary"]))
         .or_else(|| patch_string_field(operation, "summary"))
 }
