@@ -259,11 +259,11 @@ fn aggregate_and_publish(
     // Reconstruct the structured anchor body from the canonical JSON.
     let body: serde_json::Value = serde_json::from_slice(&canonical_bytes)
         .map_err(|e| format!("canonical_bytes are not JSON: {e}"))?;
-    let space_id = body
-        .get("space_id")
+    let realm_id = body
+        .get("realm_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| "canonical body missing space_id".to_owned())?;
+        .ok_or_else(|| "canonical body missing realm_id".to_owned())?;
     let predecessor_refs = body
         .get("predecessor_refs")
         .and_then(|v| v.as_array())
@@ -293,7 +293,7 @@ fn aggregate_and_publish(
         .map(ToOwned::to_owned)
         .ok_or_else(|| "canonical body missing hlc".to_owned())?;
 
-    let space_id = RealmId::new(space_id).map_err(|e| format!("invalid space_id: {e}"))?;
+    let realm_id = RealmId::new(realm_id).map_err(|e| format!("invalid realm_id: {e}"))?;
     let predecessor_refs: Vec<AnchorId> = predecessor_refs
         .into_iter()
         .map(|s| AnchorId::new(s).map_err(|e| format!("invalid AnchorId: {e}")))
@@ -338,7 +338,7 @@ fn aggregate_and_publish(
         .map_err(|e| format!("aggregate: {e}"))?;
 
     let anchor = Anchor::sign_threshold_partial(
-        space_id,
+        realm_id,
         predecessor_refs,
         frontier,
         state_root,
@@ -431,7 +431,7 @@ mod tests {
 
             compaction_prune_walk_interval_seconds: 0,
 
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
@@ -456,7 +456,7 @@ mod tests {
         }
         MultisigPendingRecord {
             anchor_id: anchor_id.to_owned(),
-            realm_id: "ck:space:0196419b-0000-7000-8000-00000000014a".to_owned(),
+            realm_id: "ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned(),
             threshold_k,
             threshold_n: 3,
             members: (0..3)

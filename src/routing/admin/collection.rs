@@ -523,7 +523,7 @@ fn admin_capability_items(state: &AppState) -> Vec<Value> {
     };
     realm_snapshot
         .into_iter()
-        .flat_map(|realm| state.authz.grants_in_space(realm.realm_id.as_str()))
+        .flat_map(|realm| state.authz.grants_in_realm(realm.realm_id.as_str()))
         .map(|grant| json!(grant))
         .collect()
 }

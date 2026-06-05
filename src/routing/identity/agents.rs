@@ -6,17 +6,17 @@
 //! deep reducer logic.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/gate/account/agent-key-pair`               — `ck.account.agent_key_pair`
-//! - `POST   /_cokret/self/agents`                             — `ck.agent.provision`
-//! - `GET    /_cokret/self/agents`                             — `ck.agent.list`
-//! - `GET    /_cokret/self/agents/{id}`                        — `ck.agent.get`
-//! - `POST   /_cokret/self/agents/{id}/pause`                  — `ck.agent.pause`
-//! - `POST   /_cokret/self/agents/{id}/resume`                 — `ck.agent.resume`
-//! - `POST   /_cokret/self/agents/{id}/deactivate`             — `ck.agent.deactivate`
-//! - `POST   /_cokret/self/agents/{id}/rotate-key`             — `ck.agent.rotate_key`
-//! - `POST   /_cokret/self/agents/{id}/grants`                 — `ck.agent.grant.attach`
-//! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      — `ck.agent.grant.detach`
-//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  — `ck.agent.sidecar_thread.ensure`
+//! - `POST   /_cokret/gate/account/agent-key-pair`               — `ck.gate.account.agent_key_pair`
+//! - `POST   /_cokret/self/agents`                             — `ck.self.agent.provision`
+//! - `GET    /_cokret/self/agents`                             — `ck.self.agent.list`
+//! - `GET    /_cokret/self/agents/{id}`                        — `ck.self.agent.get`
+//! - `POST   /_cokret/self/agents/{id}/pause`                  — `ck.self.agent.pause`
+//! - `POST   /_cokret/self/agents/{id}/resume`                 — `ck.self.agent.resume`
+//! - `POST   /_cokret/self/agents/{id}/deactivate`             — `ck.self.agent.deactivate`
+//! - `POST   /_cokret/self/agents/{id}/rotate-key`             — `ck.self.agent.rotate_key`
+//! - `POST   /_cokret/self/agents/{id}/grants`                 — `ck.self.agent.grant.attach`
+//! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      — `ck.self.agent.grant.detach`
+//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  — `ck.self.agent.sidecar_thread.ensure`
 //!
 //! All endpoints accept controller-self bearer sessions (TODO(P2-impl):
 //! tighten to `controller-only` actor binding once the personal-agent
@@ -112,12 +112,12 @@ fn generate_agent_principal_did() -> String {
 }
 
 #[endpoint(
-    operation_id = "ck.account.agent_key_pair",
+    operation_id = "ck.gate.account.agent_key_pair",
     tags("agents"),
     summary = "Authorize an agent runtime key pair against the agent principal",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.account.agent_key_pair"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.agent_key_pair"))]
 async fn agent_key_pair(
     aa: AuthArgs,
     body: JsonBody<AgentKeyPairReqBody>,
@@ -192,12 +192,12 @@ async fn agent_key_pair(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.provision",
+    operation_id = "ck.self.agent.provision",
     tags("agents"),
     summary = "Provision a personal agent (DID + first agent key + grant attach)",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.provision"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.provision"))]
 async fn provision_agent(
     aa: AuthArgs,
     body: JsonBody<AgentProvisionReqBody>,
@@ -231,7 +231,7 @@ async fn provision_agent(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.agent.provision",
+        "ck.self.agent.provision",
         json!({
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
@@ -252,7 +252,7 @@ async fn provision_agent(
         updated_at: timestamp,
         grants: body.initial_grants,
         todos: vec![
-            "P2-impl: persist agent_principal row + emit ck.agent.provision event".to_owned(),
+            "P2-impl: persist agent_principal row + emit ck.self.agent.provision event".to_owned(),
             "P2-impl: orchestrate DID Document registration + first key authorize".to_owned(),
             "P2-impl: process initial_grants[] through ck.capability.grant pipeline".to_owned(),
         ],
@@ -260,12 +260,12 @@ async fn provision_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.list",
+    operation_id = "ck.self.agent.list",
     tags("agents"),
     summary = "List personal agents owned by the authenticated controller",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.list"))]
 async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -287,12 +287,12 @@ async fn list_agents(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.get",
+    operation_id = "ck.self.agent.get",
     tags("agents"),
     summary = "Get a personal agent by id (controller-self only)",
     status_codes(200, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.get"))]
 async fn get_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -339,19 +339,19 @@ async fn lifecycle_transition(
         "agent_principal_id": agent_id,
         "controller_principal_id": session.actor.clone(),
         "transition": match event_kind {
-            "ck.agent.pause" => "pause",
-            "ck.agent.resume" => "resume",
-            "ck.agent.deactivate" => "deactivate",
+            "ck.self.agent.pause" => "pause",
+            "ck.self.agent.resume" => "resume",
+            "ck.self.agent.deactivate" => "deactivate",
             _ => new_state,
         },
         "previous_status": match event_kind {
-            "ck.agent.resume" => "paused",
-            "ck.agent.deactivate" => "active",
+            "ck.self.agent.resume" => "paused",
+            "ck.self.agent.deactivate" => "active",
             _ => "active",
         },
         "status_changed_at": status_changed_at.clone(),
     });
-    let frontier_key = if event_kind == "ck.agent.deactivate" {
+    let frontier_key = if event_kind == "ck.self.agent.deactivate" {
         "revocation_frontier"
     } else {
         "freshness_frontier"
@@ -370,7 +370,7 @@ async fn lifecycle_transition(
     let mut todos = vec![format!(
         "P2-impl: emit {event_kind} event + fan-out capability cache invalidation"
     )];
-    if event_kind == "ck.agent.deactivate" {
+    if event_kind == "ck.self.agent.deactivate" {
         todos.push(
             "P2-impl: fan-out ck.agent.key.revoke + ck.capability.revoke + runtime endpoint revocation"
                 .to_owned(),
@@ -386,12 +386,12 @@ async fn lifecycle_transition(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.pause",
+    operation_id = "ck.self.agent.pause",
     tags("agents"),
     summary = "Pause a personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.pause"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.pause"))]
 async fn pause_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -408,7 +408,7 @@ async fn pause_agent(
             req,
             agent_id.into_inner(),
             "paused",
-            "ck.agent.pause",
+            "ck.self.agent.pause",
             body.reason,
         )
         .await?,
@@ -416,12 +416,12 @@ async fn pause_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.resume",
+    operation_id = "ck.self.agent.resume",
     tags("agents"),
     summary = "Resume a paused personal agent",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.resume"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.resume"))]
 async fn resume_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -438,7 +438,7 @@ async fn resume_agent(
             req,
             agent_id.into_inner(),
             "active",
-            "ck.agent.resume",
+            "ck.self.agent.resume",
             body.reason,
         )
         .await?,
@@ -446,12 +446,12 @@ async fn resume_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.deactivate",
+    operation_id = "ck.self.agent.deactivate",
     tags("agents"),
     summary = "Deactivate a personal agent (terminal lifecycle state)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.deactivate"))]
 async fn deactivate_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -468,7 +468,7 @@ async fn deactivate_agent(
             req,
             agent_id.into_inner(),
             "deactivated",
-            "ck.agent.deactivate",
+            "ck.self.agent.deactivate",
             body.reason,
         )
         .await?,
@@ -476,12 +476,12 @@ async fn deactivate_agent(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.rotate_key",
+    operation_id = "ck.self.agent.rotate_key",
     tags("agents"),
     summary = "Rotate the agent runtime key (revoke + authorize chain)",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.rotate_key"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.rotate_key"))]
 async fn rotate_agent_key(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -503,7 +503,7 @@ async fn rotate_agent_key(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.agent.rotate_key",
+        "ck.self.agent.rotate_key",
         json!({
             "agent_principal_id": agent_id,
             "new_verification_method": body.new_verification_method,
@@ -527,12 +527,12 @@ async fn rotate_agent_key(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.grant.attach",
+    operation_id = "ck.self.agent.grant.attach",
     tags("agents"),
     summary = "Attach a capability grant to an agent",
     status_codes(201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.grant.attach"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.attach"))]
 async fn attach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -554,7 +554,7 @@ async fn attach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.agent.grant.attach",
+        "ck.self.agent.grant.attach",
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
@@ -580,12 +580,12 @@ async fn attach_agent_grant(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.grant.detach",
+    operation_id = "ck.self.agent.grant.detach",
     tags("agents"),
     summary = "Detach (revoke) a capability grant from an agent",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.grant.detach"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.grant.detach"))]
 async fn detach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -607,7 +607,7 @@ async fn detach_agent_grant(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.agent.grant.detach",
+        "ck.self.agent.grant.detach",
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
@@ -625,12 +625,12 @@ async fn detach_agent_grant(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.sidecar_thread.ensure",
+    operation_id = "ck.self.agent.sidecar_thread.ensure",
     tags("agents"),
     summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
     status_codes(200, 201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.sidecar_thread.ensure"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.ensure"))]
 async fn ensure_sidecar_thread(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -669,7 +669,7 @@ async fn ensure_sidecar_thread_impl(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.agent.sidecar_thread.ensure",
+        "ck.self.agent.sidecar_thread.ensure",
         json!({
             "agent_principal_id": agent_id,
             "sidecar_circle_id": sidecar_circle_id,
@@ -693,12 +693,12 @@ async fn ensure_sidecar_thread_impl(
 }
 
 #[endpoint(
-    operation_id = "ck.agent.sidecar_thread.ensure",
+    operation_id = "ck.self.agent.sidecar_thread.ensure",
     tags("agents"),
     summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
     status_codes(200, 201, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.agent.sidecar_thread.ensure"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.ensure"))]
 async fn ensure_sidecar_thread_canonical(
     aa: AuthArgs,
     body: JsonBody<AgentSidecarThreadEnsureReqBody>,

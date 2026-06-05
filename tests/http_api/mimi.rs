@@ -65,7 +65,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(key_material["ok"], true);
     assert_eq!(
         key_material["receipt"]["operation_id"],
-        "ck.mimi.key_material"
+        "ck.open.mimi.key_material"
     );
 
     let room_binding: Value =
@@ -129,7 +129,7 @@ async fn mimi_provider_facade_contracts_work() {
         .await
         .unwrap();
     assert_eq!(mapped["ok"], true);
-    assert_eq!(mapped["receipt"]["operation_id"], "ck.mimi.submit_message");
+    assert_eq!(mapped["receipt"]["operation_id"], "ck.open.mimi.submit_message");
     assert_eq!(
         mapped["receipt"]["extra"]["target_format"],
         "ck.message.create"
@@ -305,7 +305,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         "soland.mimi.v1"
     );
 
-    // Step 4: report_abuse emits a ck.moderation.report event.
+    // Step 4: report_abuse emits a ck.self.moderation.report event.
     let report_resp: Value = TestClient::post("http://server/_cokret/open/mimi/report-abuse")
         .json(&serde_json::json!({
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
@@ -343,7 +343,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
         .iter()
         .find(|e| e["event_id"] == report_event_id)
         .expect("moderation.report event missing from projection log");
-    assert_eq!(report_event["event_kind"], "ck.moderation.report");
+    assert_eq!(report_event["event_kind"], "ck.self.moderation.report");
     assert_eq!(report_event["sender"], "did:web:reporter.example");
     assert_eq!(
         report_event["payload"]["mimi_provenance"]["mimi_room_uri"],

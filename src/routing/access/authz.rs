@@ -44,11 +44,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.authz.check",
+    operation_id = "ck.self.authz.check",
     tags("authz"),
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.authz.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.check"))]
 async fn authz_check(
     aa: AuthArgs,
     body: JsonBody<AuthzCheckReqBody>,
@@ -70,21 +70,7 @@ async fn authz_check(
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
             .or_else(|| {
-                obj.get("space_id")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .or_else(|| {
                 (kind == "realm")
-                    .then(|| {
-                        obj.get("id")
-                            .and_then(|v| v.as_str())
-                            .map(ToOwned::to_owned)
-                    })
-                    .flatten()
-            })
-            .or_else(|| {
-                (kind == "space")
                     .then(|| {
                         obj.get("id")
                             .and_then(|v| v.as_str())
@@ -195,11 +181,11 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.authz.get_effective_grants",
+    operation_id = "ck.self.authz.get_effective_grants",
     tags("authz"),
     summary = "List effective authorization grants for a subject"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.authz.get_effective_grants"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.get_effective_grants"))]
 async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -224,7 +210,7 @@ async fn effective_grants(
                     "grant_id": g.grant_id,
                     "subject": g.subject,
                     "actions": g.actions,
-                    "resources": [{"kind": "realm", "realm_id": g.space_id}]
+                    "resources": [{"kind": "realm", "realm_id": g.realm_id}]
                 })
             })
             .collect::<Vec<_>>()
@@ -238,7 +224,7 @@ async fn effective_grants(
                     "grant_id": g.grant_id,
                     "subject": g.subject,
                     "actions": g.actions,
-                    "resources": [{"kind": "realm", "realm_id": g.space_id}]
+                    "resources": [{"kind": "realm", "realm_id": g.realm_id}]
                 })
             })
             .collect::<Vec<_>>()
@@ -304,9 +290,9 @@ async fn create_grant(
             Err(err) => return Err(delegation_error_to_app_error(err)),
         }
     } else {
-        // Root grant: only the space owner MAY issue. capabilities.md §3
+        // Root grant: only the Realm owner MAY issue. capabilities.md §3
         // (Grant 由 issuer 持有,且 issuer MUST hold the action — owner does).
-        require_space_owner(state, &body.realm_id, &session.actor).await?;
+        require_realm_owner(state, &body.realm_id, &session.actor).await?;
         state.authz.create_grant_with_options(
             body.realm_id,
             session.actor.clone(),
@@ -365,15 +351,15 @@ fn parse_expires_at(
         .map_err(|_| AppError::invalid_param("expires_at must be RFC 3339"))
 }
 
-async fn require_space_owner(
+async fn require_realm_owner(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
 ) -> Result<(), AppError> {
     let owner = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
@@ -381,9 +367,9 @@ async fn require_space_owner(
     match owner.as_deref() {
         Some(value) if value == actor => Ok(()),
         Some(_) => Err(AppError::capability_denied(
-            "only the space owner may issue root grants",
+            "only the Realm owner may issue root grants",
         )),
-        None => Err(AppError::not_found("space not found")),
+        None => Err(AppError::not_found("Realm not found")),
     }
 }
 
@@ -455,7 +441,7 @@ async fn revoke_grant(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let grant_id = grant_id.into_inner();
-    // Only the grant's issuer OR the space owner may revoke. capabilities.md
+    // Only the grant's issuer OR the Realm owner may revoke. capabilities.md
     // §12 — revocation is explicit, but limited to the chain of trust that
     // produced it.
     let Some(grant) = state.authz.get_grant(&grant_id) else {
@@ -465,14 +451,14 @@ async fn revoke_grant(
         let owner = state
             .persistence
             .realm_meta()
-            .get(&grant.space_id)
+            .get(&grant.realm_id)
             .await
             .ok()
             .flatten()
             .map(|meta| meta.owner);
         if owner.as_deref() != Some(session.actor.as_str()) {
             return Err(AppError::capability_denied(
-                "only the grant issuer or space owner may revoke this grant",
+                "only the grant issuer or Realm owner may revoke this grant",
             ));
         }
     }
@@ -503,11 +489,11 @@ async fn revoke_grant(
 }
 
 #[endpoint(
-    operation_id = "ck.authz.get_invites",
+    operation_id = "ck.self.authz.get_invites",
     tags("authz"),
     summary = "List pending invites for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.authz.get_invites"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.get_invites"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

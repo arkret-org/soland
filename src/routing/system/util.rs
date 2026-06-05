@@ -110,7 +110,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 /// Pull **every** occurrence of `key` from the query string as repeated args
 /// (e.g. `?spaces=A&spaces=B&spaces=C`) — required for spec C17
-/// `ck.events.query` / `ck.events.subscribe` selectors which accept
+/// `ck.self.events.query` / `ck.self.events.subscribe` selectors which accept
 /// `spaces[]` ∪ `actors[]`. `+` decoded to space; empty values dropped.
 pub fn query_param_all(req: &Request, key: &str) -> Vec<String> {
     let Some(query) = req.uri().query() else {

@@ -45,7 +45,7 @@ async fn configure_retention_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_id = required_string(&body, "space_id")?;
+    let realm_id = required_string(&body, "realm_id")?;
     let ttl_seconds = ttl_seconds_from_body(&body)?;
     let now = Utc::now();
     let record = RetentionPolicyRecord {
@@ -88,8 +88,7 @@ async fn sweep_retention_policy(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_id =
-        required_string(&body, "realm_id").or_else(|_| required_string(&body, "space_id"))?;
+    let realm_id = required_string(&body, "realm_id")?;
     let now = optional_now(&body)?.unwrap_or_else(Utc::now);
     let policy = state
         .retention_policies

@@ -229,14 +229,12 @@ const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     "object",
     "space create operation requires object",
 )];
-// `ck.space.update` carries the canonical object_patch_payload
-// (`target_ref` + `patch`). `space_id` remains accepted while older
-// clients migrate.
-const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["target_ref", "space_id"];
+// `ck.space.update` carries the canonical Space target field plus patch.
+const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id"];
 const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         SPACE_CONTAINER_UPDATE_ID_FIELDS,
-        "space update operation requires target_ref",
+        "space update operation requires space_id",
     ),
     PayloadRequirement::Required("patch", "space update operation requires patch"),
 ];
@@ -455,31 +453,31 @@ const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
 const AGENT_PAUSE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "agent_principal_id",
-        "ck.agent.pause requires agent_principal_id",
+        "ck.self.agent.pause requires agent_principal_id",
     ),
     PayloadRequirement::Required(
         "status_changed_at",
-        "ck.agent.pause requires status_changed_at",
+        "ck.self.agent.pause requires status_changed_at",
     ),
 ];
 const AGENT_RESUME_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "agent_principal_id",
-        "ck.agent.resume requires agent_principal_id",
+        "ck.self.agent.resume requires agent_principal_id",
     ),
     PayloadRequirement::Required(
         "status_changed_at",
-        "ck.agent.resume requires status_changed_at",
+        "ck.self.agent.resume requires status_changed_at",
     ),
 ];
 const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "agent_principal_id",
-        "ck.agent.deactivate requires agent_principal_id",
+        "ck.self.agent.deactivate requires agent_principal_id",
     ),
     PayloadRequirement::Required(
         "status_changed_at",
-        "ck.agent.deactivate requires status_changed_at",
+        "ck.self.agent.deactivate requires status_changed_at",
     ),
 ];
 
@@ -637,7 +635,7 @@ fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<()
 /// soland operation admission pipeline.
 ///
 /// For the space lifecycle events the SDK's typed payload requires
-/// `space_id` + `new_state`. The validator here HARD-REJECTS the
+/// `space_id`. The validator here HARD-REJECTS the
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
 fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
@@ -1782,7 +1780,7 @@ pub async fn validate_operation_policy(
     for operation in operations {
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
-            && known_space_denies_plaintext_service(state, operation.realm_id.as_str()).await
+            && known_realm_denies_plaintext_service(state, operation.realm_id.as_str()).await
         {
             return Err(
                 "private plaintext message operations require this service in plaintext_visible_services",
@@ -1981,15 +1979,8 @@ fn validate_principal_control_realm_binding(operation: &Operation) -> Result<(),
     }
 }
 
-/// Compare two realm identifiers tolerating the `ck:realm:` / `ck:space:`
-/// alias soland uses interchangeably for a Realm's id.
 fn realm_ids_match(a: &str, b: &str) -> bool {
-    fn canonical(id: &str) -> &str {
-        id.strip_prefix("ck:realm:")
-            .or_else(|| id.strip_prefix("ck:space:"))
-            .unwrap_or(id)
-    }
-    a == b || canonical(a) == canonical(b)
+    a == b
 }
 
 /// constraint-schema.md §14.2 — enforce the message edit / redact temporal
@@ -2850,11 +2841,11 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
         || operation.payload.get("encrypted_content").is_some()
 }
 
-pub async fn known_space_denies_plaintext_service(state: &AppState, space_id: &str) -> bool {
+pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
@@ -3576,25 +3567,28 @@ mod flow_tracks_update_tests {
     }
 
     #[test]
-    fn canonical_space_update_accepts_target_ref_and_patch() {
+    fn canonical_space_update_requires_space_id_and_patch() {
         let schema = operation_schema_for_kind(kinds::CK_SPACE_CONTAINER_UPDATE).unwrap();
         let operation = space_container_op(
-            kinds::CK_SPACE_CONTAINER_UPDATE,
-            json!({
-                "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
-                "patch": {"title": "Launch v2"}
-            }),
-        );
-        assert!(validate_operation_schema(&operation, schema).is_ok());
-
-        let legacy_space_id = space_container_op(
             kinds::CK_SPACE_CONTAINER_UPDATE,
             json!({
                 "space_id": "ck:space:01904100-0000-7000-8000-000000000003",
                 "patch": {"title": "Launch v2"}
             }),
         );
-        assert!(validate_operation_schema(&legacy_space_id, schema).is_ok());
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+
+        let legacy_target_ref = space_container_op(
+            kinds::CK_SPACE_CONTAINER_UPDATE,
+            json!({
+                "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
+                "patch": {"title": "Launch v2"}
+            }),
+        );
+        assert_eq!(
+            validate_operation_schema(&legacy_target_ref, schema),
+            Err("space update operation requires space_id")
+        );
 
         let missing_space_id = space_container_op(
             kinds::CK_SPACE_CONTAINER_UPDATE,
@@ -3602,7 +3596,7 @@ mod flow_tracks_update_tests {
         );
         assert_eq!(
             validate_operation_schema(&missing_space_id, schema),
-            Err("space update operation requires target_ref")
+            Err("space update operation requires space_id")
         );
     }
 

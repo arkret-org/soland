@@ -8,7 +8,7 @@
 //! Two entry points:
 //!   - [`scan_gc_candidates`] — pure function over an [`AppState`], used by both the admin endpoint
 //!     and the cargo-runnable bin.
-//!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- \ --space-id <id> --dry-run`.
+//!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- --realm-id <id> --dry-run`.
 
 use cokret_sdk::state_res::{AnchorStore, MoveStore};
 use cokret_sdk::{Move, MoveId, RealmId};
@@ -20,14 +20,14 @@ use crate::state::AppState;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidate {
     pub move_id: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub issuer: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Reason this Move is GC-eligible, e.g. "not_in_any_anchor_frontier".
     pub reason: String,
 }
 
-/// Scan one space's Move + Anchor stores and emit GC candidates.
+/// Scan one Realm's Move + Anchor stores and emit GC candidates.
 ///
 /// A Move is a candidate when ALL hold:
 ///   - It is in the anchored-Move log (`list_anchored`) — i.e. it was part of some Anchor's
@@ -36,20 +36,20 @@ pub struct GcCandidate {
 ///   - The Move is NOT in any current leaf's frontier (transitively, we compute the union of
 ///     leaf-Anchor frontiers).
 ///   - The Move is NOT in the pending pool (`list_pending_for_anchorer`).
-pub fn scan_gc_candidates(state: &AppState, space_id: &RealmId) -> Vec<GcCandidate> {
+pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
     let move_store = state.move_store.as_ref();
     let anchor_store = state.anchor_store.as_ref();
 
     // 1) Pending Move IDs — never GC.
     let pending: Vec<Move> = move_store
-        .list_pending_for_anchorer(space_id, None, 4096)
+        .list_pending_for_anchorer(realm_id, None, 4096)
         .unwrap_or_default();
     let pending_ids: std::collections::HashSet<String> =
         pending.iter().map(|m| m.id.to_string()).collect();
 
     // 2) Union of current leaf-Anchor frontiers. Moves still on the live frontier are also out of
     //    scope for GC.
-    let leaves = anchor_store.list_leaves(space_id).unwrap_or_default();
+    let leaves = anchor_store.list_leaves(realm_id).unwrap_or_default();
     let mut live_frontier: std::collections::HashSet<String> = std::collections::HashSet::new();
     for leaf_id in &leaves {
         if let Ok(Some(anchor)) = anchor_store.get(leaf_id) {
@@ -63,7 +63,7 @@ pub fn scan_gc_candidates(state: &AppState, space_id: &RealmId) -> Vec<GcCandida
     let mut candidates: Vec<GcCandidate> = Vec::new();
     let mut cursor: Option<MoveId> = None;
     loop {
-        let page = match move_store.list_anchored(space_id, cursor.as_ref(), 256) {
+        let page = match move_store.list_anchored(realm_id, cursor.as_ref(), 256) {
             Ok(page) if !page.is_empty() => page,
             _ => break,
         };
@@ -78,7 +78,7 @@ pub fn scan_gc_candidates(state: &AppState, space_id: &RealmId) -> Vec<GcCandida
             }
             candidates.push(GcCandidate {
                 move_id: id,
-                space_id: space_id.to_string(),
+                realm_id: realm_id.to_string(),
                 issuer: record.move_value.issuer.to_string(),
                 created_at: record.move_value.sig.created_at,
                 reason: "not_in_any_anchor_frontier".to_owned(),
@@ -94,18 +94,18 @@ pub fn scan_gc_candidates(state: &AppState, space_id: &RealmId) -> Vec<GcCandida
     candidates
 }
 
-/// Scan every Space we know about. Used by the admin endpoint when no
-/// `space_id` is provided.
-pub fn scan_all_spaces(state: &AppState) -> Vec<GcCandidate> {
-    let space_ids: Vec<RealmId> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+/// Scan every Realm we know about. Used by the admin endpoint when no
+/// `realm_id` is provided.
+pub fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
+    let realm_ids: Vec<RealmId> = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
             .collect()
     };
-    space_ids
+    realm_ids
         .iter()
         .flat_map(|id| scan_gc_candidates(state, id))
         .collect()

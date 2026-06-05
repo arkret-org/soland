@@ -5,19 +5,16 @@
 //!
 //! Endpoints:
 //! - `GET /_soland/admin/cells/{cell_id}` — return one cell's resolved state.
-//! - `GET /_soland/admin/cells?space_id=...&prefix=ck.component.consent.` — list matching cells
+//! - `GET /_soland/admin/cells?realm_id=...&prefix=ck.component.consent.` — list matching cells
 //!   (paginated; `limit`/`offset` query params).
 //!
 //! Both endpoints are auth-gated via the existing `AuthArgs` bearer-session
 //! check; rate limiting comes from the global RateLimiter middleware.
 //!
 //! The lattice + bottom_policy resolution is delegated to
-//! `state.cell_registry.resolve(space_id, &cell)`. When `space_id` is
-//! omitted (single-cell GET) we synthesise it from the cell's subject for
-//! space-scoped families and fall back to a sentinel scope for actor /
-//! grant-keyed cells (the registry currently treats all spaces uniformly,
-//! so the sentinel only affects diagnostic logging — TODO: thread real
-//! space_id through once cell_registry per-Space scoping lands).
+//! `state.cell_registry.resolve(realm_id, &cell)`. Both single-cell and
+//! list reads require an explicit Realm scope so product Space subjects are
+//! never mistaken for security boundaries.
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::state_res::{CellRegistry, CellStore};
@@ -38,12 +35,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("admin/cells").get(admin_list_cells))
         .push(Router::with_path("admin/cells/{cell_id}").get(admin_get_cell))
 }
-
-/// Sentinel space scope used when the caller hasn't provided one and the
-/// cell subject doesn't carry a recognisable space id. The MemoryCellRegistry
-/// resolves families uniformly across spaces; the scope only affects the
-/// per-Space lookup hook (currently inert for the in-memory backend).
-const SENTINEL_SPACE_SCOPE: &str = "ck:space:00000000-0000-7000-8000-000000000000";
 
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -106,34 +97,25 @@ fn state_response_from(
     }
 }
 
-/// Synthesise a RealmId for cell-registry resolution. If the cell's subject
-/// looks like a `ck:space:...` id (space-scoped families: `ck.component.space.*`)
-/// we use it; otherwise we fall back to a sentinel scope. The MemoryCellRegistry
-/// is space-agnostic today so this only affects future per-Space scoping.
-fn resolve_space_for_cell(explicit: Option<&str>, cell_id: &CellRef) -> Result<RealmId, AppError> {
-    if let Some(explicit) = explicit {
-        return RealmId::new(explicit.to_owned()).map_err(|e| {
-            AppError::new(
-                ErrorCode::InvalidParam,
-                format!("invalid space_id `{explicit}`: {e}"),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        });
-    }
-    // Best-effort: subject of `ck.component.space.*` cells is the space id.
-    if let Ok(parsed) = cokret_sdk::CellId::parse(cell_id.as_str())
-        && parsed.subject().starts_with("ck:space:")
-    {
-        if let Ok(space) = RealmId::new(parsed.subject().to_owned()) {
-            return Ok(space);
-        }
-    }
-    RealmId::new(SENTINEL_SPACE_SCOPE.to_owned()).map_err(|e| {
+fn parse_realm_scope(realm_str: &str) -> Result<RealmId, AppError> {
+    RealmId::new(realm_str.to_owned()).map_err(|e| {
         AppError::new(
-            ErrorCode::InternalError,
-            format!("sentinel space_id failed to parse: {e}"),
+            ErrorCode::InvalidParam,
+            format!("invalid realm_id `{realm_str}`: {e}"),
         )
+        .with_status(StatusCode::BAD_REQUEST)
     })
+}
+
+fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
+    let Some(realm_str) = query_param(req, "realm_id") else {
+        return Err(AppError::new(
+            ErrorCode::MissingParam,
+            "realm_id query parameter is required".to_owned(),
+        )
+        .with_status(StatusCode::BAD_REQUEST));
+    };
+    parse_realm_scope(&realm_str)
 }
 
 /// `GET /_soland/admin/cells/{cell_id}` — fetch one cell's state.
@@ -182,12 +164,11 @@ async fn admin_get_cell(
         .with_status(StatusCode::BAD_REQUEST)
     })?;
 
-    let space_q = query_param(req, "space_id");
-    let space = resolve_space_for_cell(space_q.as_deref(), &cell_ref)?;
+    let realm = required_realm_scope(req)?;
 
     let binding = state
         .cell_registry
-        .resolve(&space, &cell_ref)
+        .resolve(&realm, &cell_ref)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::NotFound,
@@ -228,12 +209,12 @@ async fn admin_get_cell(
     ))
 }
 
-/// `GET /_soland/admin/cells?space_id=...&prefix=...&limit=...&offset=...`
+/// `GET /_soland/admin/cells?realm_id=...&prefix=...&limit=...&offset=...`
 /// — list cells matching the filter.
 ///
 /// Filters:
-/// - `space_id` (required) — the RealmId scope. Cells are scoped per Space in the underlying
-///   CellStore; we walk `cell_store.list_cells(space_id)` for the canonical set then read each
+/// - `realm_id` (required) — the RealmId scope. Cells are scoped per Realm in the underlying
+///   CellStore; we walk `cell_store.list_cells(realm_id)` for the canonical set then read each
 ///   cell's effective state from `ProjectionState::cells`.
 /// - `prefix` (optional) — filter to cells whose `<family>` (component) starts with this prefix
 ///   (e.g. `ck.component.consent.`).
@@ -244,7 +225,7 @@ async fn admin_get_cell(
 #[endpoint(
     operation_id = "ck.extension.soland.admin.cells.list",
     tags("admin", "cells"),
-    summary = "List cells matching a space + family prefix filter"
+    summary = "List cells matching a Realm + family prefix filter"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.cells.list"))]
 async fn admin_list_cells(
@@ -255,20 +236,7 @@ async fn admin_list_cells(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
-    let Some(space_str) = query_param(req, "space_id") else {
-        return Err(AppError::new(
-            ErrorCode::MissingParam,
-            "space_id query parameter is required".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
-    };
-    let space = RealmId::new(space_str.clone()).map_err(|e| {
-        AppError::new(
-            ErrorCode::InvalidParam,
-            format!("invalid space_id `{space_str}`: {e}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let realm = required_realm_scope(req)?;
     let prefix = query_param(req, "prefix");
     let default_limit = state.config.admin_default_page_limit;
     let max_limit = state.config.admin_max_page_limit;
@@ -281,7 +249,7 @@ async fn admin_list_cells(
         .unwrap_or(0);
 
     let cell_refs = state.cell_store.as_ref();
-    let all_cells = cell_refs.list_cells(&space).map_err(|e| {
+    let all_cells = cell_refs.list_cells(&realm).map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
             format!("cell_store list_cells failed: {e}"),
@@ -325,7 +293,7 @@ async fn admin_list_cells(
 
     let mut cells_out = Vec::with_capacity(cell_states.len());
     for (cell, cell_state) in cell_states {
-        let binding = match state.cell_registry.resolve(&space, &cell) {
+        let binding = match state.cell_registry.resolve(&realm, &cell) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(cell = %cell.as_str(), error = %e, "cell_registry.resolve failed during list; skipping");
@@ -387,25 +355,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_space_extracts_space_subject_when_no_explicit() {
-        let cell = CellRef::new(
-            "ck:cell:ck.component.space.create.v1:ck:space:0196419b-0000-7000-8000-00000000014a"
-                .to_owned(),
-        )
-        .unwrap();
-        let space = resolve_space_for_cell(None, &cell).unwrap();
+    fn parse_realm_scope_accepts_realm_id() {
+        let realm =
+            parse_realm_scope("ck:realm:0196419b-0000-7000-8000-00000000014a").unwrap();
         assert_eq!(
-            space.as_str(),
-            "ck:space:0196419b-0000-7000-8000-00000000014a"
+            realm.as_str(),
+            "ck:realm:0196419b-0000-7000-8000-00000000014a"
         );
-    }
-
-    #[test]
-    fn resolve_space_uses_sentinel_for_actor_keyed_cell_when_no_explicit() {
-        let cell =
-            CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned())
-                .unwrap();
-        let space = resolve_space_for_cell(None, &cell).unwrap();
-        assert_eq!(space.as_str(), SENTINEL_SPACE_SCOPE);
     }
 }

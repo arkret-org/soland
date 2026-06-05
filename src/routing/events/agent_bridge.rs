@@ -176,7 +176,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     // event when the upstream replies (or fails). When no
     // endpoint_url is registered, fall back to the in-process echo
     // path.
-    let space_id_str = operation.realm_id.to_string();
+    let realm_id_string = operation.realm_id.to_string();
     let echo_value = params.clone();
     if let Some(endpoint_url) = agent_endpoint_url.clone() {
         // Outbound HTTP path. Clone what the spawned task needs and
@@ -185,7 +185,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         let session_id_clone = session_id.clone();
         let agent_principal_id_clone = agent_principal_id.clone();
         let origin_clone = origin.to_owned();
-        let space_clone = space_id_str.clone();
+        let realm_clone = realm_id_string.clone();
         let agent_protocol_clone = agent_protocol.clone();
         let endpoint_url_for_detail = endpoint_url.clone();
         let development_mode = state.config.development_mode;
@@ -200,7 +200,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
             .await;
             emit_agent_result_envelope(
                 &state_clone,
-                &space_clone,
+                &realm_clone,
                 &session_id_clone,
                 &agent_principal_id_clone,
                 &agent_protocol_clone,
@@ -216,7 +216,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     // No endpoint_url -> in-process echo synchronous path.
     emit_agent_result_envelope(
         state,
-        &space_id_str,
+        &realm_id_string,
         &session_id,
         &agent_principal_id,
         &agent_protocol,
@@ -482,7 +482,7 @@ mod tests {
 
             compaction_prune_walk_interval_seconds: 0,
 
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,

@@ -2,10 +2,10 @@
 //!
 //! A tokio background task that wakes every
 //! [`AppConfig::compaction_prune_walk_interval_seconds`] seconds, walks
-//! every live Space's anchor DAG, evaluates each candidate Anchor against
+//! every live Realm's anchor DAG, evaluates each candidate Anchor against
 //! [`cokret_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
-//! ones via [`AnchorStore::prune_predecessor`]. Bounded per-Space by
-//! [`AppConfig::compaction_prune_walk_per_space_limit`] so a single tick
+//! ones via [`AnchorStore::prune_predecessor`]. Bounded per-Realm by
+//! [`AppConfig::compaction_prune_walk_per_realm_limit`] so a single tick
 //! never tries to prune a huge backlog at once — further candidates land
 //! on the next pass.
 //!
@@ -29,7 +29,7 @@
 //! - **No metrics surface**. The pass returns a [`CompactorPassReport`] so tests + callers can
 //!   inspect outcomes; a `tracing::info!` line is logged when anything was pruned or rejected.
 //! - **No back-pressure on Pg**. The walk just iterates and prunes; for very large DAGs the
-//!   operator should bound the per-Space limit conservatively (default 50/pass) and accept that
+//!   operator should bound the per-Realm limit conservatively (default 50/pass) and accept that
 //!   catching up takes multiple passes.
 
 use std::collections::{BTreeSet, VecDeque};
@@ -41,20 +41,20 @@ use cokret_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, RealmId};
 
 use crate::state::AppState;
 
-/// Outcome of one prune-walk pass. Tracks every Space visited + the
+/// Outcome of one prune-walk pass. Tracks every Realm visited + the
 /// per-candidate verdicts so tests can assert deterministic behavior.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompactorPassReport {
-    /// Number of Spaces inspected this pass.
-    pub spaces_scanned: usize,
-    /// Number of candidate Anchors evaluated (across all Spaces).
+    /// Number of Realms inspected this pass.
+    pub realms_scanned: usize,
+    /// Number of candidate Anchors evaluated (across all Realms).
     pub candidates_evaluated: usize,
     /// Anchor ids that were successfully pruned this pass.
     pub pruned: Vec<String>,
     /// Anchor ids that the store rejected (e.g. not-found because another
     /// pass already pruned them).
     pub prune_errors: Vec<(String, String)>,
-    /// Per-Space candidates that the policy rejected (kept for tests; not
+    /// Per-Realm candidates that the policy rejected (kept for tests; not
     /// every reject is interesting — `TooYoung` will be the common case
     /// when the worker first turns on).
     pub policy_rejects: Vec<(String, &'static str)>,
@@ -73,7 +73,7 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
         return None;
     }
     let interval = Duration::from_secs(interval_secs);
-    let per_space_limit = state.config.compaction_prune_walk_per_space_limit.max(1);
+    let per_realm_limit = state.config.compaction_prune_walk_per_realm_limit.max(1);
     let task = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         // Skip the immediate first tick so we don't fire mid-boot before
@@ -81,11 +81,11 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let report = run_compactor_pass(&state, per_space_limit);
+            let report = run_compactor_pass(&state, per_realm_limit);
             if !report.pruned.is_empty() || !report.prune_errors.is_empty() {
                 tracing::info!(
                     worker = "compactor",
-                    spaces_scanned = report.spaces_scanned,
+                    realms_scanned = report.realms_scanned,
                     candidates_evaluated = report.candidates_evaluated,
                     pruned = report.pruned.len(),
                     rejected = report.prune_errors.len(),
@@ -100,44 +100,44 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 /// Run one synchronous prune-walk pass. Pulled out of [`spawn`] so unit
 /// tests can drive deterministic single-tick behavior without a running
 /// tokio runtime.
-pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> CompactorPassReport {
+pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> CompactorPassReport {
     let mut report = CompactorPassReport::default();
-    let spaces: Vec<RealmId> = {
-        let registry = state.realms.lock().expect("spaces lock");
+    let realms: Vec<RealmId> = {
+        let registry = state.realms.lock().expect("realms lock");
         registry
             .search(Default::default())
             .into_iter()
-            .filter_map(|space| RealmId::new(space.realm_id.to_string()).ok())
+            .filter_map(|realm| RealmId::new(realm.realm_id.to_string()).ok())
             .collect()
     };
-    report.spaces_scanned = spaces.len();
+    report.realms_scanned = realms.len();
     let policy = state.config.compaction_policy();
     let anchor_store = state.anchor_store.as_ref();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    for space_id in &spaces {
-        let candidates = match collect_candidate_anchors(anchor_store, space_id, per_space_limit) {
+    for realm_id in &realms {
+        let candidates = match collect_candidate_anchors(anchor_store, realm_id, per_realm_limit) {
             Ok(c) => c,
             Err(error) => {
                 tracing::warn!(
                     %error,
                     worker = "compactor",
-                    space_id = %space_id,
+                    realm_id = %realm_id,
                     "compactor: failed to enumerate candidate anchors",
                 );
                 continue;
             }
         };
-        let mut pruned_this_space = 0usize;
+        let mut pruned_this_realm = 0usize;
         for candidate_id in candidates {
-            if pruned_this_space >= per_space_limit {
+            if pruned_this_realm >= per_realm_limit {
                 break;
             }
             let Ok(Some(candidate)) = anchor_store.get(&candidate_id) else {
                 continue;
             };
             report.candidates_evaluated += 1;
-            let diagnostics = evaluate_candidate(anchor_store, space_id, &candidate, now_ms);
+            let diagnostics = evaluate_candidate(anchor_store, realm_id, &candidate, now_ms);
             let prune_candidate = PruneCandidate {
                 candidate: &candidate,
                 age_seconds: diagnostics.age_seconds,
@@ -147,10 +147,10 @@ pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> Compactor
             };
             match policy.is_eligible(&prune_candidate) {
                 PruneEligibility::Eligible => {
-                    match anchor_store.prune_predecessor(space_id, &candidate_id) {
+                    match anchor_store.prune_predecessor(realm_id, &candidate_id) {
                         Ok(_) => {
                             report.pruned.push(candidate_id.as_str().to_owned());
-                            pruned_this_space += 1;
+                            pruned_this_realm += 1;
                         }
                         Err(error) => {
                             report
@@ -173,7 +173,7 @@ pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> Compactor
 /// Collect candidate anchor ids by walking backward from each leaf via
 /// `predecessor_refs`. Leaves are excluded (we never prune a leaf — there
 /// would be nothing to rewire its successor pointer through), and we
-/// short-circuit once we have ~ `per_space_limit * 3` candidates so very
+/// short-circuit once we have ~ `per_realm_limit * 3` candidates so very
 /// deep DAGs don't allocate unboundedly per pass. Excess candidates land
 /// on the next tick.
 ///
@@ -181,11 +181,11 @@ pub fn run_compactor_pass(state: &AppState, per_space_limit: usize) -> Compactor
 /// traversal that doesn't favor any particular fork.
 fn collect_candidate_anchors(
     anchor_store: &dyn AnchorStore,
-    space_id: &RealmId,
-    per_space_limit: usize,
+    realm_id: &RealmId,
+    per_realm_limit: usize,
 ) -> Result<Vec<AnchorId>, String> {
     let leaves = anchor_store
-        .list_leaves(space_id)
+        .list_leaves(realm_id)
         .map_err(|e| e.to_string())?;
     let mut visited: BTreeSet<String> = BTreeSet::new();
     // Initialize visited with leaves so we don't propose them as
@@ -199,7 +199,7 @@ fn collect_candidate_anchors(
     let mut candidates: Vec<AnchorId> = Vec::new();
     // Soft cap so a deep DAG doesn't allocate unboundedly. Excess
     // candidates are picked up on the next pass.
-    let soft_cap = per_space_limit.saturating_mul(3).max(64);
+    let soft_cap = per_realm_limit.saturating_mul(3).max(64);
     while let Some(next) = queue.pop_front() {
         if candidates.len() >= soft_cap {
             break;
@@ -233,13 +233,13 @@ struct CandidateDiagnostics {
 
 fn evaluate_candidate(
     anchor_store: &dyn AnchorStore,
-    space_id: &RealmId,
+    realm_id: &RealmId,
     candidate: &Anchor,
     now_ms: i64,
 ) -> CandidateDiagnostics {
     let candidate_id = candidate.id.clone();
     let successors = anchor_store
-        .successors(space_id, &candidate_id)
+        .successors(realm_id, &candidate_id)
         .unwrap_or_default();
     let successor_count = successors.len();
     let mut compaction_witnesses: u32 = 0;
@@ -253,12 +253,12 @@ fn evaluate_candidate(
             if succ_anchor.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = anchor_store.successors(space_id, &next_id) {
+            if let Ok(next_succs) = anchor_store.successors(realm_id, &next_id) {
                 stack.extend(next_succs);
             }
         }
     }
-    let is_genesis = match anchor_store.genesis(space_id) {
+    let is_genesis = match anchor_store.genesis(realm_id) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };
@@ -339,7 +339,7 @@ mod tests {
             compaction_preserve_genesis: false,
             compaction_prune_only_singleton_successors: false,
             compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn fresh_state_produces_zero_prunes() {
-        // `AppState::new` seeds a demo Space (so `spaces_scanned` may be
+        // `AppState::new` seeds a demo Realm (so `realms_scanned` may be
         // 1 here, not 0), but a freshly-built state has zero Anchors in
         // the in-memory anchor_store, so the walk produces no candidates
         // and no prunes.

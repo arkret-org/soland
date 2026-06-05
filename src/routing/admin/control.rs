@@ -1,4 +1,4 @@
-//! Admin mid-stream control-frame triggers for `ck.events.subscribe`.
+//! Admin mid-stream control-frame triggers for `ck.self.events.subscribe`.
 //!
 //! `events.subscribe` already dispatches five `EventNotificationKind`
 //! variants — `Event` / `EpochRotation` / `Frontier` / `ResyncRequired` /

@@ -68,7 +68,7 @@ impl AuthzEngine {
     /// when the issuer is a non-owner re-delegating a capability they hold.
     pub fn create_grant(
         &self,
-        space_id: String,
+        realm_id: String,
         issuer: String,
         subject: String,
         resource: String,
@@ -76,7 +76,7 @@ impl AuthzEngine {
         constraints: Vec<Constraint>,
     ) -> Grant {
         self.create_grant_with_options(
-            space_id,
+            realm_id,
             issuer,
             subject,
             resource,
@@ -94,7 +94,7 @@ impl AuthzEngine {
     #[allow(clippy::too_many_arguments)]
     pub fn create_grant_with_options(
         &self,
-        space_id: String,
+        realm_id: String,
         issuer: String,
         subject: String,
         resource: String,
@@ -105,7 +105,7 @@ impl AuthzEngine {
     ) -> Grant {
         let grant = Grant {
             grant_id: ids::generate_grant_id(),
-            space_id,
+            realm_id,
             issuer,
             subject,
             resource,
@@ -145,11 +145,11 @@ impl AuthzEngine {
         constraints: Vec<Constraint>,
         expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Grant, DelegationError> {
-        let parent_space_id = {
+        let parent_realm_id = {
             let grants = self.grants.lock().expect("grants lock");
             grants
                 .get(parent_grant_id)
-                .map(|g| g.space_id.clone())
+                .map(|g| g.realm_id.clone())
                 .ok_or(DelegationError::ParentNotFound)?
         };
         let snapshot: Vec<Grant> = self
@@ -160,11 +160,11 @@ impl AuthzEngine {
             .cloned()
             .collect();
         let request = GrantReqBody {
-            // Parent's space_id is authoritative for delegated children
-            // (the wire `space_id` argument is informational only; the SDK
+            // Parent's realm_id is authoritative for delegated children
+            // (the wire `realm_id` argument is informational only; the SDK
             // helper does not check it). Use the parent's so persisted
             // child matches.
-            space_id: parent_space_id,
+            realm_id: parent_realm_id,
             issuer,
             subject,
             resource,
@@ -226,7 +226,7 @@ impl AuthzEngine {
     /// Get all grants for a subject in a space. Filters out revoked,
     /// expired, and cascade-broken grants so callers see only the
     /// *effective* set (capabilities.md §11).
-    pub fn grants_for_subject(&self, subject: &str, space_id: &str) -> Vec<Grant> {
+    pub fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
@@ -239,7 +239,7 @@ impl AuthzEngine {
             .iter()
             .filter(|g| {
                 g.subject == subject
-                    && g.space_id == space_id
+                    && g.realm_id == realm_id
                     && !g.revoked
                     && !is_grant_expired(g, now)
                     && delegation_chain_intact(&snapshot, &g.grant_id, now)
@@ -249,7 +249,7 @@ impl AuthzEngine {
     }
 
     /// Get all (non-revoked, non-expired, chain-intact) grants in a space.
-    pub fn grants_in_space(&self, space_id: &str) -> Vec<Grant> {
+    pub fn grants_in_realm(&self, realm_id: &str) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self
             .grants
             .lock()
@@ -261,7 +261,7 @@ impl AuthzEngine {
         snapshot
             .iter()
             .filter(|g| {
-                g.space_id == space_id
+                g.realm_id == realm_id
                     && !g.revoked
                     && !is_grant_expired(g, now)
                     && delegation_chain_intact(&snapshot, &g.grant_id, now)
@@ -273,8 +273,8 @@ impl AuthzEngine {
     /// Check if an actor can perform an action on a resource.
     ///
     /// Default rules (when no explicit grants exist):
-    /// - Owner of the space → all actions allowed
-    /// - Member of the space → read, send, react, edit_own allowed
+    /// - Owner of the realm → all actions allowed
+    /// - Member of the realm → read, send, react, edit_own allowed
     /// - Everyone else → denied
     #[allow(clippy::too_many_arguments)]
     pub fn check(
@@ -282,7 +282,7 @@ impl AuthzEngine {
         actor: &str,
         action: &str,
         resource: &str,
-        space_id: &str,
+        realm_id: &str,
         owner: Option<&str>,
         members: &[String],
         resource_facets: &[String],
@@ -302,7 +302,7 @@ impl AuthzEngine {
             .iter()
             .filter(|g| {
                 !g.revoked
-                    && g.space_id == space_id
+                    && g.realm_id == realm_id
                     && g.subject == actor
                     && g.actions.iter().any(|a| a == action || a == "*")
                     && resource_matches(&g.resource, resource)
@@ -687,11 +687,10 @@ pub async fn check_with_policy_server(
     actor: &str,
     action: &str,
     resource: &str,
-    space_id: &str,
+    realm_id: &str,
     owner: Option<&str>,
     members: &[String],
     resource_facets: &[String],
-    realm_id: &str,
     policy_client: Option<&policy_client::PolicyClient>,
     realm_config: Option<crate::reducer::RealmPolicyServerConfig>,
     policy_request: Option<policy_client::PolicyCheckRequestInput>,
@@ -702,7 +701,7 @@ pub async fn check_with_policy_server(
         actor,
         action,
         resource,
-        space_id,
+        realm_id,
         owner,
         members,
         resource_facets,
@@ -720,10 +719,6 @@ pub async fn check_with_policy_server(
             remote: None,
         };
     };
-    // `realm_id` is informational here — the client resolves config
-    // strictly via the closure we pass.
-    let _ = realm_id;
-
     let config_clone = config.clone();
     let remote = match client.check(input, move |_| Some(config_clone)).await {
         Ok(r) => r,

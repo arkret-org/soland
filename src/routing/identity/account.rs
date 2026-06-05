@@ -71,7 +71,7 @@ pub(super) fn router() -> Router {
                 .push(Router::with_path("export").post(export_account))
                 .push(Router::with_path("deactivate").post(deactivate_account))
                 .push(Router::with_path("erase").post(erase_account))
-                .push(Router::with_path("{did}/principal-space").get(account_principal_space)),
+                .push(Router::with_path("{did}/principal-realm").get(account_principal_realm)),
         )
         .push(
             Router::with_path("contacts")
@@ -1893,112 +1893,70 @@ async fn list_contacts(
     json_ok(ContactsResponse { contacts: result })
 }
 
-/// `GET /_soland/self/account/{did}/principal-space` response.
+/// `GET /_soland/self/account/{did}/principal-realm` response.
 ///
-/// **Wire shape (locked for coauth integration)**:
+/// **Wire shape**:
 /// ```json
 /// {
 ///   "did": "did:web:alice.example",
-///   "space_id": "ck:space:01904100-0000-7000-8000-...",
+///   "realm_id": "ck:realm:01904100-0000-7000-8000-...",
 ///   "mapping_kind": "deterministic",
 ///   "stashed": true
 /// }
 /// ```
 ///
 /// `mapping_kind` is one of:
-/// - `"deterministic"` — the response was computed via the SHA-256 mapping (current behavior;
-///   matches `coauth::holder_principal_space_for_did`).
-/// - `"custom"` — a future override (admin-set or onboarding-time pinned) was applied. v1 only
-///   emits `"deterministic"`; the field is reserved so coauth can swap the mapping later without a
-///   wire bump.
+/// - `"deterministic"` — the response was computed via the SHA-256 principal-control Realm
+///   mapping.
 ///
 /// `stashed` indicates the result was persisted to the audit log as a
-/// follow-up hook so future custom-mapping overrides can write to the same
-/// table and the deterministic mapping stays as the offline fallback.
+/// follow-up hook.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PrincipalSpaceResponse {
+pub struct PrincipalRealmResponse {
     pub did: String,
-    pub space_id: String,
+    pub realm_id: String,
     pub mapping_kind: String,
     pub stashed: bool,
 }
 
-/// `GET /_soland/self/account/{did}/principal-space`.
+/// `GET /_soland/self/account/{did}/principal-realm`.
 ///
-/// Returns the deterministic principal-control Space id for `did`,
-/// matching the `sha256(did) → UUIDv7` convention coauth currently mirrors
-/// at `coauth::handlers::account::anchor_view_query::holder_principal_space_for_did`.
-/// The deterministic mapping is the v1 contract; a custom override layer
-/// is reserved for round-25+ when admins can pin a non-default Space.
+/// Returns the deterministic principal-control Realm id for `did`.
 ///
-/// Side-effect: appends an audit-log entry (`account.principal_space.lookup`)
-/// so a future `principal_space_overrides` table can backfill from the audit
-/// trail and the deterministic mapping stays the offline default.
+/// Side-effect: appends an audit-log entry (`account.principal_realm.lookup`).
 #[endpoint(
-    operation_id = "ck.extension.soland.account.principal_space",
+    operation_id = "ck.extension.soland.account.principal_realm",
     tags("account"),
-    summary = "Resolve the principal control Space for a DID"
+    summary = "Resolve the principal control Realm for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.principal_space"))]
-async fn account_principal_space(
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.principal_realm"))]
+async fn account_principal_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     did: PathParam<String>,
-) -> JsonResult<PrincipalSpaceResponse> {
+) -> JsonResult<PrincipalRealmResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let space_id = principal_space_for_did(&did);
+    let realm_id = super::recovery::principal_control_realm_for_did(&did);
     super::append_audit_log(
         state,
         Some(&did),
-        "account.principal_space.lookup",
-        json!({"space_id": space_id, "mapping_kind": "deterministic"}),
+        "account.principal_realm.lookup",
+        json!({"realm_id": realm_id, "mapping_kind": "deterministic"}),
         "accepted",
     )
     .await;
-    json_ok(PrincipalSpaceResponse {
+    json_ok(PrincipalRealmResponse {
         did,
-        space_id,
+        realm_id,
         mapping_kind: "deterministic".to_owned(),
         stashed: true,
     })
-}
-
-/// Deterministic DID → principal-control Space mapping.
-///
-/// Mirrors `coauth::holder_principal_space_for_did` exactly (same domain
-/// separator, same UUIDv7 version/variant rewrite). When/if coauth swaps
-/// to an HTTP call against this endpoint, both sides MUST stay in lockstep
-/// or the offline fallback diverges. The bytes-level test
-/// `principal_space_for_did_matches_coauth_convention` below pins the
-/// shape so accidental drift fails CI.
-pub fn principal_space_for_did(holder_did: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"ck:space:principal-control:v1:");
-    hasher.update(holder_did.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    // Force UUIDv7 version (top nibble of byte 6 = 0x7) and RFC-9562
-    // variant (top two bits of byte 8 = 0b10).
-    bytes[6] = (bytes[6] & 0x0F) | 0x70;
-    bytes[8] = (bytes[8] & 0x3F) | 0x80;
-    let h = |b: u8| -> String { format!("{b:02x}") };
-    let group = |slice: &[u8]| -> String { slice.iter().copied().map(h).collect::<String>() };
-    format!(
-        "ck:space:{}-{}-{}-{}-{}",
-        group(&bytes[0..4]),
-        group(&bytes[4..6]),
-        group(&bytes[6..8]),
-        group(&bytes[8..10]),
-        group(&bytes[10..16]),
-    )
 }
 
 fn account_response(account: AccountRecord, state: &AppState) -> AccountResponse {
@@ -2028,30 +1986,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn principal_space_for_did_is_deterministic() {
-        let a = principal_space_for_did("did:web:alice.example");
-        let b = principal_space_for_did("did:web:alice.example");
+    fn principal_realm_for_did_is_deterministic() {
+        let a = super::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let b = super::recovery::principal_control_realm_for_did("did:web:alice.example");
         assert_eq!(a, b);
     }
 
     #[test]
-    fn principal_space_for_did_diverges_per_did() {
-        let a = principal_space_for_did("did:web:alice.example");
-        let c = principal_space_for_did("did:web:bob.example");
+    fn principal_realm_for_did_diverges_per_did() {
+        let a = super::recovery::principal_control_realm_for_did("did:web:alice.example");
+        let c = super::recovery::principal_control_realm_for_did("did:web:bob.example");
         assert_ne!(a, c);
     }
 
     #[test]
-    fn principal_space_for_did_matches_coauth_convention() {
-        // Locks the shape against accidental drift from
-        // `coauth::handlers::account::anchor_view_query::holder_principal_space_for_did`.
-        // Same domain separator (`ck:space:principal-control:v1:`),
-        // same UUIDv7 version/variant rewrite — verified by checking the
-        // post-bitmask invariants (byte 6 high-nibble = 0x7, byte 8 top
-        // two bits = 0b10).
-        let s = principal_space_for_did("did:web:alice.example");
-        assert!(s.starts_with("ck:space:"), "got {s}");
-        let uuid_segment = s.strip_prefix("ck:space:").unwrap();
+    fn principal_realm_for_did_is_realm_uuid7() {
+        let s = super::recovery::principal_control_realm_for_did("did:web:alice.example");
+        assert!(s.starts_with("ck:realm:"), "got {s}");
+        let uuid_segment = s.strip_prefix("ck:realm:").unwrap();
         // Sections separated by '-'.
         let parts: Vec<&str> = uuid_segment.split('-').collect();
         assert_eq!(parts.len(), 5, "uuid has 5 dash-separated groups");

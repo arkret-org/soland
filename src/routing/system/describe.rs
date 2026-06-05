@@ -536,7 +536,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_request_example": {
             "actor": "did:web:alice.example",
-            "action": "ck.keys.backups.get",
+            "action": "ck.self.keys.backups.get",
             "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
@@ -584,10 +584,10 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "ck.keys.backups.get",
+            "policy_type": "ck.self.keys.backups.get",
             "effect": "require_review",
             "payload": {
-                "actions": ["ck.keys.backups.get"],
+                "actions": ["ck.self.keys.backups.get"],
                 "resource": {
                     "kind": "blob",
                     "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
@@ -665,10 +665,10 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
         "item_path": "/_cokret/self/keys/backups/{backup_id}",
         "schema": "ck.schema.key_backup.v1",
         "operations": [
-            "ck.keys.backups.put",
-            "ck.keys.backups.list",
-            "ck.keys.backups.get",
-            "ck.keys.backups.delete"
+            "ck.self.keys.backups.put",
+            "ck.self.keys.backups.list",
+            "ck.self.keys.backups.get",
+            "ck.self.keys.backups.delete"
         ]
     }))
 }
@@ -796,7 +796,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_cokret/gate/account/agent-key-pair".to_owned(),
-                contract: "ck.account.agent_key_pair".to_owned(),
+                contract: "ck.gate.account.agent_key_pair".to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
@@ -828,7 +828,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_cokret/self/blob/presign".to_owned(),
-                contract: "ck.blob.presign".to_owned(),
+                contract: "ck.self.blob.presign".to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },

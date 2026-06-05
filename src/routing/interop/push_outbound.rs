@@ -19,7 +19,7 @@
 //! Trust + freshness:
 //! - **TTL freshness**: cache_hit reads check `freshness_at + push_bridge_cache_ttl_seconds`
 //!   (default 900s). Stale entries are downgraded to `trust_level=stale` and surface
-//!   `fetch_state=cache_hit_stale`, so downstream `ck.push.notify` never delivers off a stale
+//!   `fetch_state=cache_hit_stale`, so downstream `ck.edge.push.notify` never delivers off a stale
 //!   snapshot without an explicit operator action (force_refresh on /fetch, or import).
 //! - **Signed-service-DID trust**: snapshot imports / live fetches only promote
 //!   `trust_level=trusted` when the upstream contract's `service_did` matches
@@ -27,7 +27,7 @@
 //!   lands at `trust_level=pending` and outbound delivery treats it as unsigned-only.
 //! - **Auth modes / privacy descriptors**: `OutboundPushResolvedContract` surfaces the upstream
 //!   `auth_modes[]` and `privacy.*` fields so the delivery layer can bind outbound signing to
-//!   whatever the gateway advertised (instead of the fixed `ck.push.notify` defaults). Stays
+//!   whatever the gateway advertised (instead of the fixed `ck.edge.push.notify` defaults). Stays
 //!   read-only here — the actual binding lives in the delivery loop.
 
 use std::time::Duration;
@@ -103,7 +103,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
             snapshot_store_mode: "durable_export_import_with_freshness_and_trust_level".to_owned(),
         },
         delivery: OutboundPushDeliveryDescriptor {
-            operation_id: "ck.push.notify".to_owned(),
+            operation_id: "ck.edge.push.notify".to_owned(),
             origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
             destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
             request_id_header: "X-Cokret-Request-Id".to_owned(),
@@ -142,7 +142,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                         "contract": "ck.push.bridge.describe",
                         "delivery": {
                             "notify_path": "/_cokret/edge/push/notify",
-                            "operation_id": "ck.push.notify"
+                            "operation_id": "ck.edge.push.notify"
                         }
                     }
                 }]
@@ -573,7 +573,7 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
         contract: "ck.push.bridge.describe".to_owned(),
         expected_notify_path: "/_cokret/edge/push/notify".to_owned(),
-        expected_operation_id: "ck.push.notify".to_owned(),
+        expected_operation_id: "ck.edge.push.notify".to_owned(),
         expected_origin_service_did_header: "X-Cokret-Origin-Service-Did".to_owned(),
         expected_destination_service_did_header: "X-Cokret-Destination-Service-Did".to_owned(),
         expected_request_id_header: "X-Cokret-Request-Id".to_owned(),

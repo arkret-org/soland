@@ -1037,7 +1037,7 @@ pub(super) async fn federation_pull_operations(
                 "service_type": "principal_server",
                 "role": "primary",
                 "endpoint": state.config.public_base_url.clone(),
-                "operations": ["ck.events.submit"],
+                "operations": ["ck.self.events.submit"],
                 "join_methods": ["invite_accept", "member_join", "knock", "application"],
                 "priority": 0,
                 "source": "directory_ingest",
@@ -1997,7 +1997,7 @@ async fn pull_operations_page(
     state: &AppState,
     client: &reqwest::Client,
     peer: &FederationPeerTarget,
-    space_id: &str,
+    realm_id: &str,
     after_cursor: Option<&str>,
     limit: usize,
 ) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
@@ -2005,7 +2005,7 @@ async fn pull_operations_page(
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
         let mut query = url.query_pairs_mut();
-        query.append_pair("space_id", space_id);
+        query.append_pair("realm_id", realm_id);
         query.append_pair("limit", &limit.to_string());
         if let Some(after_cursor) = after_cursor.filter(|value| !value.is_empty()) {
             query.append_pair("after_cursor", after_cursor);
@@ -2820,7 +2820,7 @@ pub(crate) fn test_app_state_with_peers(
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
         compaction_prune_walk_interval_seconds: 0,
-        compaction_prune_walk_per_space_limit: 50,
+        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: false,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
@@ -2884,7 +2884,7 @@ mod tests {
 
             compaction_prune_walk_interval_seconds: 0,
 
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,
@@ -2905,7 +2905,7 @@ mod tests {
                 "sig": "test-signature"
             }),
             purpose: "federation.verify_actor".to_owned(),
-            space_id: None,
+            realm_id: None,
         }
     }
 
@@ -3196,7 +3196,7 @@ mod tests {
                 .iter()
                 .all(|body| body["origin"] == "did:web:test.local"
                     && body["destination"] == "did:web:peer.example"
-                    && body["space_id"] == "ck:realm:01904100-0000-7000-8000-000000000051")
+                    && body["realm_id"] == "ck:realm:01904100-0000-7000-8000-000000000051")
         );
         let pushed_ids = payloads
             .iter()

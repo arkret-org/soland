@@ -52,7 +52,7 @@ struct Args {
     service_did: String,
     target_url: Option<String>,
     bearer: Option<String>,
-    space_id: Option<String>,
+    realm_id: Option<String>,
     output: Option<String>,
     input: Option<String>,
 }
@@ -68,7 +68,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut bearer = std::env::var("PASION_SESSION_TOKEN")
         .ok()
         .or_else(|| std::env::var("SERVERX_ADMIN_BEARER").ok());
-    let mut space_id: Option<String> = None;
+    let mut realm_id: Option<String> = None;
     let mut output = None;
     let mut input = None;
     let mut explicit_mode = false;
@@ -112,12 +112,12 @@ fn parse_args() -> anyhow::Result<Args> {
                         .ok_or_else(|| anyhow::anyhow!("--bearer needs a value"))?,
                 );
             }
-            "--space-id" => {
+            "--realm-id" => {
                 i += 1;
-                space_id = Some(
+                realm_id = Some(
                     raw.get(i)
                         .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("--space-id needs a value"))?,
+                        .ok_or_else(|| anyhow::anyhow!("--realm-id needs a value"))?,
                 );
             }
             "--output" => {
@@ -149,7 +149,7 @@ fn parse_args() -> anyhow::Result<Args> {
                        --service-did <did>     SERVERX_SERVICE_DID (default: did:web:soland.local)\n\
                        --target <url>          base URL of running soland (rotate-drill mode)\n\
                        --bearer <token>        admin session token (rotate-drill mode)\n\
-                       --space-id <id>         space id for the rotate endpoint path (required in rotate-drill mode)\n\
+                       --realm-id <id>         Realm id for the rotate endpoint path (required in rotate-drill mode)\n\
                        --output <path>         destination JSON for --export-only\n\
                        --input <path>          source JSON for --import-only\n\
                     "
@@ -166,7 +166,7 @@ fn parse_args() -> anyhow::Result<Args> {
         service_did,
         target_url,
         bearer,
-        space_id,
+        realm_id,
         output,
         input,
     })
@@ -307,9 +307,9 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
                 .to_owned(),
         )
     })?;
-    let space_id = args.space_id.as_deref().ok_or_else(|| {
+    let realm_id = args.realm_id.as_deref().ok_or_else(|| {
         DrillError::Io(
-            "rotate-drill requires --space-id (the Space whose anchorer key is being rotated)"
+            "rotate-drill requires --realm-id (the Realm whose anchorer key is being rotated)"
                 .to_owned(),
         )
     })?;
@@ -341,7 +341,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     let url = format!(
         "{}/_soland/admin/realms/{}/anchorer/rotate-signing-key",
         target.trim_end_matches('/'),
-        space_id
+        realm_id
     );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

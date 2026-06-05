@@ -1749,7 +1749,7 @@ pub async fn persist_projected_operation(
 /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
 /// This unifies the read path with the Move/Anchor pipeline: both durable-
 /// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
-/// map, so `routing::events::effective_read_receipt_policy_for_space`
+/// map, so `routing::events::effective_read_receipt_policy_for_realm`
 /// queries one source.
 ///
 /// Cas-register semantics: the projection writer wins-by-arrival here

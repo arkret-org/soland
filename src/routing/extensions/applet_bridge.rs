@@ -124,11 +124,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.ping",
+    operation_id = "ck.edge.applet.ping",
     tags("applet"),
     summary = "Applet service liveness probe"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.ping"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.ping"))]
 async fn protocol_ping_endpoint() -> JsonResult<Value> {
     json_ok(json!({
         "ok": true,
@@ -138,11 +138,11 @@ async fn protocol_ping_endpoint() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.describe",
+    operation_id = "ck.edge.applet.describe",
     tags("applet"),
     summary = "Describe soland's applet protocol support"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "ck.applet.v1",
@@ -157,12 +157,12 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.install.preview",
+    operation_id = "ck.self.applet.install.preview",
     tags("applet"),
     summary = "Preview a canonical applet install plan",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.install.preview"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -187,12 +187,12 @@ async fn install_preview_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.applet.install",
+    operation_id = "ck.self.applet.install",
     tags("applet"),
     summary = "Commit a canonical applet install",
     status_codes(200, 201, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.install"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -243,12 +243,12 @@ async fn install_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.applet.revoke",
+    operation_id = "ck.self.applet.revoke",
     tags("applet"),
     summary = "Revoke a canonical applet install",
     status_codes(200, 400, 401, 403, 404, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -283,12 +283,12 @@ async fn revoke_install_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.applet.transaction",
+    operation_id = "ck.edge.applet.transaction",
     tags("applet"),
     summary = "Receive an applet transaction",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.transaction"))]
 async fn transaction_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -308,7 +308,6 @@ async fn transaction_endpoint(
     let applet_id = string_field(&body, "applet_id")
         .ok_or_else(|| AppError::missing_param("applet_id is required"))?;
     let realm_id = string_field(&body, "realm_id")
-        .or_else(|| string_field(&body, "space_id"))
         .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let payload = body.get("payload").cloned().unwrap_or(Value::Null);
     let content = portal_message_payload(&payload)?.ok_or_else(|| {
@@ -347,11 +346,11 @@ async fn transaction_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.applet.resolve_actor",
+    operation_id = "ck.edge.applet.resolve_actor",
     tags("applet"),
     summary = "Resolve an applet actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.resolve_actor"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.resolve_actor"))]
 async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
     let actor_id = req
         .param::<String>("actor_id")
@@ -371,11 +370,11 @@ async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.resolve_realm",
+    operation_id = "ck.edge.applet.resolve_realm",
     tags("applet"),
     summary = "Resolve an applet realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.resolve_realm"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.resolve_realm"))]
 async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
     let realm_id_or_alias = req
         .param::<String>("realm_id_or_alias")
@@ -402,11 +401,11 @@ async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.protocol_metadata",
+    operation_id = "ck.edge.applet.protocol_metadata",
     tags("applet"),
     summary = "Read applet protocol metadata"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.protocol_metadata"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.protocol_metadata"))]
 async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
     let protocol = req
         .param::<String>("protocol")
@@ -434,11 +433,11 @@ async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.third_party_users",
+    operation_id = "ck.edge.applet.third_party_users",
     tags("applet"),
     summary = "Resolve a third-party applet user"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.third_party_users"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_users"))]
 async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
     let external_id = query_value(req, "user")
         .or_else(|| query_value(req, "user_id"))
@@ -465,11 +464,11 @@ async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.applet.third_party_locations",
+    operation_id = "ck.edge.applet.third_party_locations",
     tags("applet"),
     summary = "Resolve a third-party applet location"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.applet.third_party_locations"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_locations"))]
 async fn third_party_locations_endpoint(req: &mut Request) -> JsonResult<Value> {
     let location = query_value(req, "location")
         .or_else(|| query_value(req, "channel"))
@@ -560,7 +559,7 @@ async fn ghost_endpoint(
     let body = body.into_inner();
     let (external_id, display_name) = external_user_from_body(&body)?;
     let payload = body.get("payload").cloned().unwrap_or(Value::Null);
-    let realm_id = string_field(&body, "space_id").map(str::to_owned);
+    let realm_id = string_field(&body, "realm_id").map(str::to_owned);
 
     let (record, ghost) = provision_ghost(&applet_id, &external_id, display_name)?;
     let mut response = json!({
@@ -603,7 +602,7 @@ async fn bot_message_endpoint(
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("bot_actor_revoked")
     })?;
-    let realm_id = string_field(&body, "space_id")
+    let realm_id = string_field(&body, "realm_id")
         .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let payload = body.get("payload").cloned().unwrap_or_else(|| body.clone());
     let content = portal_message_payload(&payload)?.ok_or_else(|| {

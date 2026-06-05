@@ -619,7 +619,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(first_transition["actor"], "did:web:alice.example");
     assert_eq!(first_transition["flow_id"], task_flow_id);
     assert_eq!(first_transition["incident_id"], task_flow_id);
-    assert_eq!(first_transition["space_id"], DEMO_REALM_ID);
+    assert_eq!(first_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(first_transition["from"], "todo");
     assert_eq!(first_transition["to"], "in_progress");
     assert_eq!(first_transition["timestamp"], "2026-05-17T00:00:00+00:00");
@@ -628,7 +628,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(second_transition["actor"], "did:web:alice.example");
     assert_eq!(second_transition["flow_id"], task_flow_id);
     assert_eq!(second_transition["incident_id"], task_flow_id);
-    assert_eq!(second_transition["space_id"], DEMO_REALM_ID);
+    assert_eq!(second_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(second_transition["from"], "in_progress");
     assert_eq!(second_transition["to"], "done");
     assert_eq!(second_transition["timestamp"], "2026-05-17T00:00:00+00:00");

@@ -189,7 +189,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.events.submit batch/federation request uses events[], not envelopes[]",
+            "ck.self.events.submit batch/federation request uses events[], not envelopes[]",
         );
         return;
     }
@@ -276,11 +276,11 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.events.get",
+    operation_id = "ck.self.events.get",
     tags("events"),
     summary = "Fetch one canonical Event Envelope by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.get"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -305,11 +305,11 @@ async fn get_event(
 }
 
 #[endpoint(
-    operation_id = "ck.events.resolve",
+    operation_id = "ck.self.events.resolve",
     tags("events"),
     summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventResolveRequest>,
@@ -346,7 +346,7 @@ async fn resolve_events(
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
 /// that bypass the projection layer. Not wired to a public route in the
 /// current API shape —
-/// the canonical `ck.events.query` path at `GET /_cokret/self/events` goes to the
+/// the canonical `ck.self.events.query` path at `GET /_cokret/self/events` goes to the
 /// projection-aware handler in `routing/sync.rs::events_query` so message
 /// timeline reads work through `POST /_cokret/self/events` → `events_query`
 /// round-trips.
@@ -501,11 +501,11 @@ async fn events_query_durable_scope(
 }
 
 #[endpoint(
-    operation_id = "ck.events.frontier",
+    operation_id = "ck.self.events.frontier",
     tags("events"),
     summary = "Per-actor + per-realm frontier (highest accepted actor_seq / latest event)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.frontier"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -1629,7 +1629,7 @@ async fn validate_event_envelope(
     let realm_terminal = state
         .projection
         .lock()
-        .map(|proj| proj.space_is_in_terminal_state(&realm_id))
+        .map(|proj| proj.realm_is_in_terminal_state(&realm_id))
         .unwrap_or(false);
     if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
@@ -1649,7 +1649,7 @@ async fn validate_event_envelope(
     // session naturally passes the regular realm_has_member check.
     let is_realm_create_bootstrap = kind == "ck.realm.create"
         && realm_create_actor_is_creator(object, &session.actor)
-        && !space_exists_in_index(state, &realm_id);
+        && !realm_exists_in_index(state, &realm_id);
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
     if !is_realm_create_bootstrap
@@ -1926,12 +1926,13 @@ fn payload_mls_governance_policy_root(payload: &Value) -> Option<&str> {
 }
 
 fn value_targets_realm(value: &Value, realm_id: &str) -> bool {
-    ["realm_id", "space_id"].iter().all(|field| {
-        value
-            .get(*field)
-            .and_then(Value::as_str)
-            .is_none_or(|value| value == realm_id)
-    })
+    if value.get("space_id").is_some() {
+        return false;
+    }
+    value
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .is_none_or(|value| value == realm_id)
 }
 
 fn mls_governance_value_covers_policy_root(
@@ -3224,7 +3225,7 @@ async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     actor: &str,
-    space_id: &str,
+    realm_id: &str,
 ) -> bool {
     if object.get("kind").and_then(Value::as_str) != Some(kinds::CK_MEMBER_STATE) {
         return false;
@@ -3265,21 +3266,21 @@ async fn member_join_accepts_pending_invite(
     {
         return false;
     }
-    invite.realm_id == space_id
+    invite.realm_id == realm_id
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used
 /// by the regular `realm_has_member` check. Used to gate the
 /// `ck.realm.create` bootstrap path so a duplicate-create attempt (where
 /// the Realm already has members) falls back to the normal member check.
-fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
-    let Ok(space_id_typed) = cokret_sdk::RealmId::new(space_id.to_owned()) else {
+fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
+    let Ok(realm_id_typed) = cokret_sdk::RealmId::new(realm_id.to_owned()) else {
         return false;
     };
     state
         .realms
         .lock()
-        .map(|spaces| spaces.get(&space_id_typed).is_some())
+        .map(|realms| realms.get(&realm_id_typed).is_some())
         .unwrap_or(false)
 }
 
@@ -3295,12 +3296,12 @@ fn space_exists_in_index(state: &AppState, space_id: &str) -> bool {
 /// Envelope path owns Realm bootstrap state.
 async fn bootstrap_realm_member_index(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
     object: &serde_json::Map<String, Value>,
 ) {
-    let Ok(space_id_typed) = cokret_sdk::RealmId::new(space_id.to_owned()) else {
-        tracing::warn!(%space_id, "bootstrap_realm_member_index: invalid realm_id shape");
+    let Ok(realm_id_typed) = cokret_sdk::RealmId::new(realm_id.to_owned()) else {
+        tracing::warn!(%realm_id, "bootstrap_realm_member_index: invalid realm_id shape");
         return;
     };
     let Ok(actor_typed) = cokret_sdk::Did::new(actor.to_owned()) else {
@@ -3358,12 +3359,12 @@ async fn bootstrap_realm_member_index(
         .unwrap_or_default();
     let minimal_metadata_realm =
         payload_object.is_some_and(crate::kinds::payload_declares_minimal_metadata_realm);
-    let mut entry = crate::state::RealmDirectoryEntry::new(space_id_typed.clone(), title);
+    let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
     entry.description = summary.clone();
     entry.public = discoverability == "public";
     entry.members.insert(actor_typed);
-    if let Ok(mut spaces) = state.realms.lock() {
-        spaces.upsert(entry);
+    if let Ok(mut realms) = state.realms.lock() {
+        realms.upsert(entry);
     }
     let meta = crate::state::RealmMetaRecord {
         owner: actor.to_owned(),
@@ -3380,8 +3381,8 @@ async fn bootstrap_realm_member_index(
         created_at: super::now(),
         updated_at: super::now(),
     };
-    if let Err(error) = state.persistence.realm_meta().put(space_id, &meta).await {
-        tracing::error!(%error, %space_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
+    if let Err(error) = state.persistence.realm_meta().put(realm_id, &meta).await {
+        tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
 }
 
@@ -3810,11 +3811,6 @@ fn projection_operation_from_event(
                 .entry("flow_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
-        if target_ref.starts_with("ck:space:") {
-            payload_object
-                .entry("space_id".to_owned())
-                .or_insert_with(|| Value::String(target_ref.clone()));
-        }
         if target_ref.starts_with("ck:morph:") {
             payload_object
                 .entry("morph_id".to_owned())
@@ -4144,9 +4140,9 @@ fn circle_event_visible_to_session(
 }
 
 /// Scan the durable Event store for the most
-/// recent `ck.realm.read_receipt_policy` event in `space_id` and return
+/// recent `ck.realm.read_receipt_policy` event in `realm_id` and return
 /// `(disclosure, visibility, scope_overrides_allowed)` from its payload.
-/// Returns `None` when no policy event has been written for this Space —
+/// Returns `None` when no policy event has been written for this Realm —
 /// caller treats that as the spec default `Optional` / `Members` /
 /// `scope_overrides_allowed=true`.
 ///
@@ -4158,9 +4154,9 @@ fn circle_event_visible_to_session(
 /// **Note**: this is a linear scan of the durable event store. For the
 /// production fanout path it should be projected into `AppState` once the
 /// reducer kind delegates from `Ignored` to a real projection.
-pub async fn effective_read_receipt_policy_for_space(
+pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
 ) -> Option<(String, String, bool)> {
     // Cell-keyed fast path. The Move/Anchor pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
@@ -4170,7 +4166,7 @@ pub async fn effective_read_receipt_policy_for_space(
     // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.read_receipt_policy.v1:{space_id}"
+            "ck:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         if let Some(value) = proj.cell_value(&cell_id) {
@@ -4202,7 +4198,7 @@ pub async fn effective_read_receipt_policy_for_space(
         if record.kind != "ck.realm.read_receipt_policy" {
             continue;
         }
-        if canonical_realm_id_for_record(record).as_deref() != Some(space_id) {
+        if canonical_realm_id_for_record(record).as_deref() != Some(realm_id) {
             continue;
         }
         match latest {
@@ -4309,7 +4305,7 @@ impl EventsSubmitRequest {
 }
 
 /// Reject any event kind that is ephemeral or receipt-object-only at the
-/// `ck.events.submit` entrypoint. Spec T02 + T23.
+/// `ck.self.events.submit` entrypoint. Spec T02 + T23.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the
@@ -4320,7 +4316,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via ck.schema.ephemeral_envelope.v1 \
              (broadcast forms) or ck.schema.device_message.v1 \
-             (ck.key.verification.* to-device); not durable ck.events.submit",
+             (ck.key.verification.* to-device); not durable ck.self.events.submit",
         ));
     }
     if cokret_sdk::events::is_receipt_object_only(kind) {
@@ -4854,7 +4850,7 @@ mod proof_strictness_tests {
 
             compaction_prune_walk_interval_seconds: 0,
 
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,

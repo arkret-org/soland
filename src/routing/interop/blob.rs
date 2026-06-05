@@ -479,11 +479,11 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "ck.blob.presign",
+    operation_id = "ck.self.blob.presign",
     tags("blob"),
     summary = "Issue a short-lived presigned blob download URL"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.blob.presign"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.blob.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<Value>,

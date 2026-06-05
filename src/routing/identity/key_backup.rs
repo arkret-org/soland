@@ -1296,11 +1296,11 @@ async fn ensure_key_backup_delete_is_series_tail(
 }
 
 #[endpoint(
-    operation_id = "ck.keys.backups.put",
+    operation_id = "ck.self.keys.backups.put",
     tags("keys"),
     summary = "Store an encrypted key backup payload by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.put"))]
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -1342,7 +1342,7 @@ async fn put_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.keys.backups.list",
+    operation_id = "ck.self.keys.backups.list",
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
@@ -1351,7 +1351,7 @@ async fn put_key_backup(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.list"))]
 async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
@@ -1410,11 +1410,11 @@ async fn list_key_backups(
 }
 
 #[endpoint(
-    operation_id = "ck.keys.backups.get",
+    operation_id = "ck.self.keys.backups.get",
     tags("keys"),
     summary = "Read a single encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.get"))]
 async fn get_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -1442,11 +1442,11 @@ async fn get_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.keys.backups.delete",
+    operation_id = "ck.self.keys.backups.delete",
     tags("keys"),
     summary = "Delete an encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.keys.backups.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.delete"))]
 async fn delete_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,

@@ -75,7 +75,7 @@ pub(crate) fn test_config() -> AppConfig {
 
         compaction_prune_walk_interval_seconds: 0,
 
-        compaction_prune_walk_per_space_limit: 50,
+        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,

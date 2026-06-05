@@ -1,4 +1,4 @@
-//! `cargo run --bin soland-gc-scan -- --space-id <id> [--dry-run]`
+//! `cargo run --bin soland-gc-scan -- --realm-id <id> [--dry-run]`
 //!
 //! Walks the durable Move + Anchor stores and emits the list of
 //! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
@@ -12,7 +12,7 @@ use soland::state::AppState;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let space_id = arg_value(&args, "--space-id");
+    let realm_id = arg_value(&args, "--realm-id");
     let dry_run = args.iter().any(|a| a == "--dry-run");
 
     if !dry_run {
@@ -26,17 +26,17 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(config, db);
     state.hydrate().await;
 
-    let candidates = match space_id.as_deref() {
+    let candidates = match realm_id.as_deref() {
         Some(id) => {
-            let space = cokret_sdk::RealmId::new(id.to_owned())
-                .map_err(|e| anyhow::anyhow!("invalid --space-id: {e}"))?;
-            gc::scan_gc_candidates(&state, &space)
+            let realm = cokret_sdk::RealmId::new(id.to_owned())
+                .map_err(|e| anyhow::anyhow!("invalid --realm-id: {e}"))?;
+            gc::scan_gc_candidates(&state, &realm)
         }
-        None => gc::scan_all_spaces(&state),
+        None => gc::scan_all_realms(&state),
     };
 
     let report = serde_json::json!({
-        "space_id": space_id,
+        "realm_id": realm_id,
         "dry_run": true,
         "total": candidates.len(),
         "candidates": candidates,

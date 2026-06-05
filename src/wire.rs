@@ -347,7 +347,7 @@ pub struct ClientSyncRequest {
 }
 
 /// `POST /_cokret/self/account/cursor/revoke` request body
-/// (`ck.account.cursor_revoke`).
+/// (`ck.self.account.cursor_revoke`).
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CursorRevokeRequest {
     /// The cursor authority to revoke (`ck:cursor:<...>`).
@@ -442,8 +442,6 @@ pub struct ResolveOrganizationRequest {
 pub struct SearchActorsRequest {
     pub query: Option<String>,
     pub organization_id: Option<String>,
-    #[serde(default)]
-    pub space_id: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -452,11 +450,9 @@ pub struct SearchUsersRequest {
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
-    pub space_id: Option<String>,
-    #[serde(default)]
     pub limit: Option<usize>,
     /// Why the requester wants to enumerate users — gates anti-enumeration
-    /// filtering. Spec 0a5ab85: `ck.directory.search_users` adds `intent`.
+    /// filtering. Spec 0a5ab85: `ck.find.directory.search_users` adds `intent`.
     #[serde(default)]
     pub intent: Option<String>,
 }
@@ -1162,7 +1158,7 @@ pub struct RealmLifecycleResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SendMessageRequest {
-    pub space_id: String,
+    pub realm_id: String,
     #[serde(default)]
     pub thread_id: Option<String>,
     pub content: Value,
@@ -1635,17 +1631,17 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "ck.directory.describe",
-    "ck.directory.search_realms",
-    "ck.directory.resolve_realm",
-    "ck.directory.resolve_target",
-    "ck.blob.upload",
-    "ck.blob.head",
-    "ck.blob.get",
-    "ck.keys.backups.put",
-    "ck.keys.backups.list",
-    "ck.keys.backups.get",
-    "ck.keys.backups.delete",
+    "ck.find.directory.describe",
+    "ck.find.directory.search_realms",
+    "ck.find.directory.resolve_realm",
+    "ck.find.directory.resolve_target",
+    "ck.self.blob.upload",
+    "ck.self.blob.head",
+    "ck.self.blob.get",
+    "ck.self.keys.backups.put",
+    "ck.self.keys.backups.list",
+    "ck.self.keys.backups.get",
+    "ck.self.keys.backups.delete",
 ];
 
 fn canonical_supported_operations() -> Vec<String> {
@@ -1856,7 +1852,7 @@ pub fn describe(
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
-            // server exposes the `ck.call.media.token_exchange` handler.
+            // server exposes the `ck.self.call.media.token_exchange` handler.
             // soland mounts the handler unconditionally (see
             // `routing::interop::webrtc::router` — `/_cokret/self/rtc/token`),
             // so the claim is unconditional too.

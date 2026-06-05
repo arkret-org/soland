@@ -340,7 +340,7 @@ async fn submit_anchor(
         .collect();
 
     // Refresh ProjectionState::cells from CellStore
-    // for the anchored Space so cell-keyed read paths
+    // for the anchored Realm so cell-keyed read paths
     // (read_receipt_policy / member.state / etc.) see the new effective
     // state immediately. Lock failures are non-fatal — read paths fall
     // back to the durable-event scan.
@@ -410,8 +410,8 @@ async fn submit_anchor(
 /// Request body for `POST /_soland/admin/anchors/sign`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SignAnchorRequest {
-    /// Space whose pending Moves should be batch-anchored.
-    pub space_id: String,
+    /// Realm whose pending Moves should be batch-anchored.
+    pub realm_id: String,
     /// Maximum number of pending Moves to consume in this pass.
     /// Default 100 if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -442,7 +442,7 @@ pub struct SignAnchorResponse {
 #[endpoint(
     operation_id = "ck.extension.soland.admin.anchors.sign",
     tags("admin", "anchors"),
-    summary = "Trigger one anchorer signing pass for a Space"
+    summary = "Trigger one anchorer signing pass for a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.anchors.sign"))]
 async fn admin_sign_anchor(
@@ -454,16 +454,16 @@ async fn admin_sign_anchor(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let SignAnchorRequest {
-        space_id,
+        realm_id,
         max_moves,
     } = body.into_inner();
-    let space = RealmId::new(space_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::SchemaViolation, format!("invalid space_id: {e}"))
+    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
+        AppError::new(ErrorCode::SchemaViolation, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let limit = max_moves.unwrap_or(100).min(1000);
 
-    match crate::anchorer::run_one_signing_pass(state, &space, limit) {
+    match crate::anchorer::run_one_signing_pass(state, &realm, limit) {
         Ok(Some(outcome)) => {
             super::federation::broadcast_anchor_to_peers(state, outcome.anchor_id.as_str()).await;
             let rejected = outcome
@@ -495,7 +495,7 @@ async fn admin_sign_anchor(
         }),
         Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => Err(AppError::new(
             ErrorCode::PolicyViolation,
-            "not authorized to sign anchors for this space".to_owned(),
+            "not authorized to sign anchors for this realm".to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN)),
         Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())

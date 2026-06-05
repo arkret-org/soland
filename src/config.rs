@@ -71,7 +71,7 @@ pub struct AppConfig {
     pub jws_replay_window_seconds: u64,
     /// Per-cell-family replay-window overrides.
     /// Some cell families have different freshness requirements than the
-    /// global default — e.g. `ck.component.anchorer.v1` (Space-wide
+    /// global default — e.g. `ck.component.anchorer.v1` (Realm-wide
     /// authority cell) needs a much tighter window than chat messages.
     /// When a Move's `effects[]` touch any cell whose family appears in
     /// this map, the **minimum** override across touched families wins
@@ -79,7 +79,7 @@ pub struct AppConfig {
     /// families without an override.
     ///
     /// Production default (built by [`AppConfig::default_replay_overrides`]):
-    /// - `ck.component.anchorer.v1` → 60s (very fresh — Space-wide pause risk)
+    /// - `ck.component.anchorer.v1` → 60s (very fresh — Realm-wide pause risk)
     /// - `ck.component.mls.epoch.v1` → 60s (E2EE fork risk)
     /// - `ck.component.consent.grant.v1` → 120s (capability-equivalent)
     /// - `ck.component.capability.grant.v1` → 120s
@@ -192,17 +192,17 @@ pub struct AppConfig {
     /// passes, in seconds. Zero (or unset) disables the worker entirely —
     /// MAL-11 prune then runs only via the explicit
     /// `POST /_soland/admin/realms/{realm_id}/anchor-dag/prune?anchor_id=...`
-    /// endpoint. When enabled, the worker walks every live Space's
+    /// endpoint. When enabled, the worker walks every live Realm's
     /// anchor DAG, evaluates each candidate against
     /// [`compaction_policy`], and prunes eligible Anchors up to
-    /// `compaction_prune_walk_per_space_limit` per Space per pass.
+    /// `compaction_prune_walk_per_realm_limit` per Realm per pass.
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS` (default 0 = disabled).
     pub compaction_prune_walk_interval_seconds: u64,
     /// MAL-11 compaction prune walk: maximum number of prunes the worker
-    /// will perform per Space per pass. Bounds I/O against very large
+    /// will perform per Realm per pass. Bounds I/O against very large
     /// DAGs; further candidates are picked up on subsequent ticks.
-    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT` (default 50).
-    pub compaction_prune_walk_per_space_limit: usize,
+    /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` (default 50).
+    pub compaction_prune_walk_per_realm_limit: usize,
     /// Round R2/R3 (T08) — deployment trust domain id, used to bind
     /// `ck.cross_signing.reset` events to this Principal Server so the
     /// same proof bytes cannot be replayed cross-domain. Loaded from
@@ -210,10 +210,10 @@ pub struct AppConfig {
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
     /// Defaults to `ck:trust_domain:<host_of_service_did>`.
     pub trust_domain: String,
-    /// When true, `AppState::new` seeds a deterministic demo Space
-    /// (`ck:space:0196419b-...`), demo account (`did:web:alice.example`),
+    /// When true, `AppState::new` seeds a deterministic demo Realm
+    /// (`ck:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
-    /// production deployments don't ship a globally-shared "demo" Space
+    /// production deployments don't ship a globally-shared demo Realm
     /// that collides across federated peers. Test harnesses opt in via
     /// `test_config()` to keep their fixture IDs stable.
     /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
@@ -535,8 +535,8 @@ impl AppConfig {
                 .ok()
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .unwrap_or(0);
-        let compaction_prune_walk_per_space_limit =
-            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_PER_SPACE_LIMIT")
+        let compaction_prune_walk_per_realm_limit =
+            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
                 .ok()
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .unwrap_or(50)
@@ -604,7 +604,7 @@ impl AppConfig {
             compaction_preserve_genesis,
             compaction_prune_only_singleton_successors,
             compaction_prune_walk_interval_seconds,
-            compaction_prune_walk_per_space_limit,
+            compaction_prune_walk_per_realm_limit,
             seed_demo_data,
             trust_domain,
             sovereign_enclave_enabled,

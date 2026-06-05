@@ -113,7 +113,6 @@ pub(crate) async fn enforce_operation_policy_server(
         Some(actor_did),
         &[],
         &[],
-        realm_id,
         Some(&policy_client),
         Some(realm_config),
         Some(policy_request),

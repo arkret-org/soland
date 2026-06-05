@@ -3,12 +3,12 @@
 //!
 //! Surfaces for the current sync/event wire layout:
 //! - `GET  /_cokret/self/account/describe`
-//! - `GET  /_cokret/self/account/subscribe`       — `ck.account.subscribe` (account-aggregate
+//! - `GET  /_cokret/self/account/subscribe`       — `ck.self.account.subscribe` (account-aggregate
 //!   NDJSON: timeline, presence, typing, to_device).
-//! - `POST /_cokret/self/ephemeral`               — `ck.ephemeral.send` (broadcast ephemeral)
-//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-Realm /
+//! - `POST /_cokret/self/ephemeral`               — `ck.self.ephemeral.send` (broadcast ephemeral)
+//! - `GET  /_cokret/self/events/subscribe`        — `ck.self.events.subscribe`. Multi-Realm /
 //!   multi-actor stream; frame `kind` field replaces `type`.
-//! - `GET  /_cokret/self/events`                  — `ck.events.query` (replaces `ck.events.list` +
+//! - `GET  /_cokret/self/events`                  — `ck.self.events.query` (replaces `ck.events.list` +
 //!   `ck.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /_cokret/self/sync/backfill/gap`       — `ck.sync.backfill_gap` (deployment-local; not
 //!   in spec)
@@ -152,11 +152,11 @@ const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
 const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
 
 #[endpoint(
-    operation_id = "ck.account.subscribe",
+    operation_id = "ck.self.account.subscribe",
     tags("sync"),
     summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.account.subscribe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.account.subscribe"))]
 async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
@@ -326,7 +326,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     res.stream(body_stream.boxed());
 }
 
-/// `POST /_cokret/self/account/cursor/revoke` — `ck.account.cursor_revoke`.
+/// `POST /_cokret/self/account/cursor/revoke` — `ck.self.account.cursor_revoke`.
 ///
 /// High-assurance optional endpoint: record a previously issued cursor
 /// authority in the revocation set until its maximum TTL would have elapsed.
@@ -336,12 +336,12 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
 #[endpoint(
-    operation_id = "ck.account.cursor_revoke",
+    operation_id = "ck.self.account.cursor_revoke",
     tags("sync"),
     summary = "Revoke a previously issued cursor authority",
     status_codes(200, 400, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.account.cursor_revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.account.cursor_revoke"))]
 async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<crate::wire::CursorRevokeRequest>,
@@ -499,7 +499,7 @@ fn account_subscribe_scope_key(
     body: &ClientSyncRequest,
 ) -> String {
     format!(
-        "ck.account.subscribe|{}|filter={}",
+        "ck.self.account.subscribe|{}|filter={}",
         subscribe_subject(req, session),
         sync_filter_digest(body.filter.as_ref())
     )
@@ -549,7 +549,7 @@ fn presence_sync_event_json(record: PresenceRecord) -> Value {
 }
 
 /// Build one snapshot of the account-aggregate sync response for the next
-/// `ck.account.subscribe` delta frame.
+/// `ck.self.account.subscribe` delta frame.
 async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -1052,7 +1052,7 @@ async fn timeline_events_for_space(
     let mut newest_position = after_position;
     let mut timeline_entries = Vec::new();
 
-    for message in projection.messages_for_space(realm_id) {
+    for message in projection.messages_for_realm(realm_id) {
         let position = timeline_event_position(state, &message.event_id, message.created_at).await;
         newest_position = newest_position.max(position);
         if position <= after_position || !seen.insert(message.event_id.clone()) {
@@ -1531,7 +1531,7 @@ pub enum SyncCursorError {
     Mismatch(&'static str),
     Integrity(&'static str),
     Expired,
-    /// The cursor authority was revoked via `ck.account.cursor_revoke`.
+    /// The cursor authority was revoked via `ck.self.account.cursor_revoke`.
     /// Surfaced as `cursor_revoked`; MUST be raised before any server-side
     /// state advancement (to-device ack, account-subscribe resume, wait-for
     /// barrier release, dropped/resync recovery).
@@ -2159,7 +2159,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     let projected_messages: Vec<(String, DateTime<Utc>)> = {
         let projection = state.projection.lock().expect("projection lock");
         projection
-            .messages_for_space(realm_id)
+            .messages_for_realm(realm_id)
             .into_iter()
             .map(|message| (message.event_id.clone(), message.created_at))
             .collect()
@@ -2201,11 +2201,11 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 }
 
 #[endpoint(
-    operation_id = "ck.ephemeral.send",
+    operation_id = "ck.self.ephemeral.send",
     tags("sync"),
     summary = "Send a broadcast ephemeral signal"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.ephemeral.send"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.ephemeral.send"))]
 async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
     body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
@@ -2366,7 +2366,7 @@ async fn admit_ephemeral_read_receipt(
     }
 
     let (disclosure, _visibility, _scope_overrides_allowed) =
-        super::event_log::effective_read_receipt_policy_for_space(state, realm_id)
+        super::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
             .await
             .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
     if disclosure == "disabled" {
@@ -2381,7 +2381,7 @@ async fn admit_ephemeral_read_receipt(
     Ok(())
 }
 
-/// `ck.events.subscribe` at `GET /_cokret/self/events/subscribe`. NDJSON
+/// `ck.self.events.subscribe` at `GET /_cokret/self/events/subscribe`. NDJSON
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
@@ -2712,7 +2712,7 @@ fn events_subscribe_scope_key(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "ck.events.subscribe|{}|realms={realms}",
+        "ck.self.events.subscribe|{}|realms={realms}",
         subscribe_subject(req, session)
     )
 }
@@ -2817,7 +2817,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `ck.events.query` at `GET /_cokret/self/events`.
+/// `ck.self.events.query` at `GET /_cokret/self/events`.
 /// Reads from the projection layer so callers writing through
 /// `POST /_cokret/self/events` see their messages here.
 ///
@@ -2830,11 +2830,11 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
 #[endpoint(
-    operation_id = "ck.events.query",
+    operation_id = "ck.self.events.query",
     tags("events"),
     summary = "Projection-aware events query (single- or multi-Realm merge; backward / forward direction)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.query"))]
 pub(super) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -2856,11 +2856,11 @@ pub(super) async fn events_query(
 }
 
 #[endpoint(
-    operation_id = "ck.events.query_post",
+    operation_id = "ck.self.events.query_post",
     tags("events"),
     summary = "Body-based projection-aware events query for large selectors"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.query_post"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.query_post"))]
 pub(super) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequest>,
     depot: &mut Depot,
@@ -3180,11 +3180,11 @@ async fn sync_gap_backfill(
 }
 
 #[endpoint(
-    operation_id = "ck.snapshot.head",
+    operation_id = "ck.self.snapshot.head",
     tags("sync"),
     summary = "Read the snapshot-v1 head (manifest + chunk descriptors + merkle_root) for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.snapshot.head"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.snapshot.head"))]
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -3389,7 +3389,7 @@ mod tests {
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
             compaction_prune_walk_interval_seconds: 0,
-            compaction_prune_walk_per_space_limit: 50,
+            compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: true,
             trust_domain: "ck:trust_domain:soland.local".to_owned(),
             sovereign_enclave_enabled: false,

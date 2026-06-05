@@ -73,11 +73,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.media.ice_config",
+    operation_id = "ck.self.media.ice_config",
     tags("media"),
     summary = "Issue signed ICE config"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.media.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.media.ice_config"))]
 async fn cokret_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -1379,12 +1379,12 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ck.call.media.token_exchange",
+    operation_id = "ck.self.call.media.token_exchange",
     tags("media", "calls"),
     summary = "Exchange a session-focus for a backend media token + participant_binding (CKP-0010)",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.call.media.token_exchange"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.call.media.token_exchange"))]
 async fn cokret_rtc_token(
     aa: AuthArgs,
     body: JsonBody<MediaTokenExchangeReqBody>,

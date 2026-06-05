@@ -56,7 +56,7 @@ fn test_config() -> AppConfig {
 
         compaction_prune_walk_interval_seconds: 0,
 
-        compaction_prune_walk_per_space_limit: 50,
+        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: true,
         trust_domain: "ck:trust_domain:soland.local".to_owned(),
         sovereign_enclave_enabled: false,
@@ -190,7 +190,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — access/authz typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.authz.get_invites", "ck.authz.get_effective_grants"] {
+    for operation_id in ["ck.self.authz.get_invites", "ck.self.authz.get_effective_grants"] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15g typed conversion"
@@ -226,7 +226,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.extension.soland.federation.pull_operations",
         "ck.extension.soland.federation.space_members",
         "ck.extension.soland.federation.verify_actor",
-        "ck.events.frontier",
+        "ck.self.events.frontier",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -259,10 +259,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.moderation.report",
-        "ck.push.unregister_device",
+        "ck.self.moderation.report",
+        "ck.edge.push.unregister_device",
         "ck.push.delete_rule",
-        "ck.push.notify",
+        "ck.edge.push.notify",
         "ck.extension.soland.webrtc.create_session",
         "ck.extension.soland.webrtc.send_signal",
         "ck.extension.soland.webrtc.get_signals",
@@ -299,8 +299,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.extension.soland.policies.get",
         "ck.extension.soland.policies.upsert",
         "ck.extension.soland.policies.delete",
-        "ck.policy.check",
-        "ck.authz.check",
+        "ck.self.policy.check",
+        "ck.self.authz.check",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -326,10 +326,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.keys.backups.put",
-        "ck.keys.backups.list",
-        "ck.keys.backups.get",
-        "ck.keys.backups.delete",
+        "ck.self.keys.backups.put",
+        "ck.self.keys.backups.list",
+        "ck.self.keys.backups.get",
+        "ck.self.keys.backups.delete",
         "ck.profile.presence",
     ] {
         assert!(
@@ -351,7 +351,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15n typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.device_messages.put", "ck.device_messages.get"] {
+    for operation_id in ["ck.self.device_messages.put", "ck.self.device_messages.get"] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15n typed conversion"
@@ -372,7 +372,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15o typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.keys.upload", "ck.keys.query", "ck.keys.claim"] {
+    for operation_id in ["ck.self.keys.upload", "ck.self.keys.query", "ck.self.keys.claim"] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15o typed conversion"
@@ -394,11 +394,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.identity.resolve",
-        "ck.identity.get_document",
-        "ck.identity.get_log",
-        "ck.identity.submit_did_operation",
-        "ck.identity.get_receipts",
+        "ck.root.identity.resolve",
+        "ck.root.identity.get_document",
+        "ck.root.identity.get_log",
+        "ck.root.identity.submit_did_operation",
+        "ck.root.identity.get_receipts",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -423,17 +423,17 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.directory.search_realms",
-        "ck.directory.resolve_realm",
-        "ck.directory.search_organizations",
-        "ck.directory.resolve_organization",
-        "ck.directory.search_actors",
-        "ck.directory.search_users",
-        "ck.directory.resolve_handle",
-        "ck.directory.private_contact_discovery",
-        "ck.directory.announce",
-        "ck.directory.withdraw",
-        "ck.directory.push.register",
+        "ck.find.directory.search_realms",
+        "ck.find.directory.resolve_realm",
+        "ck.find.directory.search_organizations",
+        "ck.find.directory.resolve_organization",
+        "ck.find.directory.search_actors",
+        "ck.find.directory.search_users",
+        "ck.find.directory.resolve_handle",
+        "ck.find.directory.private_contact_discovery",
+        "ck.find.directory.announce",
+        "ck.find.directory.withdraw",
+        "ck.find.directory.push.register",
         "ck.relation.create",
         "ck.relation.tombstone",
         "ck.relation.list",
@@ -444,7 +444,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.extension.soland.index.space_hierarchy",
         "ck.extension.soland.index.query",
         "ck.extension.soland.index.debug_reducer",
-        "ck.push.register_device",
+        "ck.edge.push.register_device",
         "ck.push.rules",
         "ck.push.upsert_rule",
         "ck.extension.soland.push.outbound_bridge_resolve",
@@ -463,33 +463,33 @@ async fn typed_describe_handlers_publish_response_schemas() {
 
     // Round 15z — events/sync.rs typed canonical ephemeral send.
     assert!(
-        body.contains("operationId: ck.ephemeral.send"),
-        "missing operationId ck.ephemeral.send from canonical ephemeral endpoint"
+        body.contains("operationId: ck.self.ephemeral.send"),
+        "missing operationId ck.self.ephemeral.send from canonical ephemeral endpoint"
     );
     assert!(
         body.contains("EphemeralSubmitResBody"),
         "EphemeralSubmitResBody missing — canonical ephemeral endpoint did not publish its schema"
     );
     assert!(
-        body.contains("operationId: ck.events.query_post"),
-        "missing operationId ck.events.query_post from canonical body-query endpoint"
+        body.contains("operationId: ck.self.events.query_post"),
+        "missing operationId ck.self.events.query_post from canonical body-query endpoint"
     );
 
     // Round 15ab — interop/mimi.rs typed batch. All response shapes are `Value`,
     // so no schema names assert;
     // we lock the operation_ids instead.
     for operation_id in [
-        "ck.mimi.provider_directory",
-        "ck.mimi.key_material",
-        "ck.mimi.room_update",
+        "ck.open.mimi.provider_directory",
+        "ck.open.mimi.key_material",
+        "ck.open.mimi.room_update",
         "ck.mimi.room_notify",
-        "ck.mimi.submit_message",
-        "ck.mimi.group_info",
-        "ck.mimi.request_consent",
-        "ck.mimi.update_consent",
-        "ck.mimi.identifier_query",
-        "ck.mimi.report_abuse",
-        "ck.mimi.proxy_download",
+        "ck.open.mimi.submit_message",
+        "ck.open.mimi.group_info",
+        "ck.open.mimi.request_consent",
+        "ck.open.mimi.update_consent",
+        "ck.open.mimi.identifier_query",
+        "ck.open.mimi.report_abuse",
+        "ck.open.mimi.proxy_download",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -498,9 +498,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     for operation_id in [
-        "ck.blob.presign",
-        "ck.keys.keypackages.consume",
-        "ck.keys.keypackages.revoke",
+        "ck.self.blob.presign",
+        "ck.self.keys.keypackages.consume",
+        "ck.self.keys.keypackages.revoke",
         "ck.admin.get_server_status",
         "ck.admin.update_account_status",
         "ck.admin.revoke_device",
@@ -539,15 +539,15 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Skip its operation_id assertion accordingly.
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
-    // the SOLAND_EXTENSION_OPERATIONS registry (`ck.snapshot.head`
+    // the SOLAND_EXTENSION_OPERATIONS registry (`ck.self.snapshot.head`
     // / `ck.extension.soland.sync.snapshot_chunk`), not from my handler annotation.
     for operation_id in [
-        "ck.events.get",
-        "ck.events.resolve",
-        "ck.account.subscribe",
-        "ck.events.query",
+        "ck.self.events.get",
+        "ck.self.events.resolve",
+        "ck.self.account.subscribe",
+        "ck.self.events.query",
         "ck.extension.soland.sync.backfill_gap",
-        "ck.snapshot.head",
+        "ck.self.snapshot.head",
         "ck.extension.soland.sync.snapshot_chunk",
     ] {
         assert!(

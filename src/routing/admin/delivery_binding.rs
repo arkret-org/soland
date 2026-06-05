@@ -9,7 +9,7 @@
 //!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
 //!
 //! The cell value itself is read off the in-process reducer via
-//! [`crate::reducer::ProjectionState::delivery_binding_policy_cell_value`]
+//! [`crate::reducer::ProjectionState::realm_delivery_binding_policy_cell_value`]
 //! (keyed by the Realm boundary id). Operator mutation (PATCH / PUT) is
 //! intentionally not exposed here yet; policy changes flow through the
 //! regular `ck.realm.delivery_binding_policy` event submit path.
@@ -127,6 +127,6 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
         .projection
         .lock()
         .ok()
-        .and_then(|proj| proj.delivery_binding_policy_cell_value(&realm_id).cloned());
+        .and_then(|proj| proj.realm_delivery_binding_policy_cell_value(&realm_id).cloned());
     json_ok(response_from_cell(&realm_id, value.as_ref()))
 }

@@ -165,7 +165,7 @@ async fn list_relations(
     let kind = kind.into_inner();
     let relations = {
         let proj = state.projection.lock().expect("projection lock");
-        proj.relations_for_space(&realm_id, kind.as_deref())
+        proj.relations_for_realm(&realm_id, kind.as_deref())
             .into_iter()
             .map(|r| RelationResponse {
                 relation_id: r.relation_id.clone(),

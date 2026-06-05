@@ -300,7 +300,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     );
     assert_eq!(
         resolved["join_candidates"][0]["operations"],
-        serde_json::json!(["ck.events.submit"])
+        serde_json::json!(["ck.self.events.submit"])
     );
 
     let index: Value = TestClient::get("http://server/_soland/self/index/describe")

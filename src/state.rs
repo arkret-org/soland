@@ -122,8 +122,8 @@ impl EventNotification {
     }
 }
 
-/// In-process reconnect gate for `ck.events.subscribe` and
-/// `ck.account.subscribe`. Keys are operation + caller identity + selector
+/// In-process reconnect gate for `ck.self.events.subscribe` and
+/// `ck.self.account.subscribe`. Keys are operation + caller identity + selector
 /// scope, and values are the earliest accepted reconnect time.
 #[derive(Clone, Debug, Default)]
 pub struct SubscribeReconnectGate {
@@ -164,11 +164,11 @@ mod subscribe_reconnect_gate_tests {
     fn reports_remaining_window_and_expires() {
         let mut gate = SubscribeReconnectGate::default();
         let now = Utc::now();
-        gate.arm("ck.events.subscribe|alice|realm-a", now, 10_000);
+        gate.arm("ck.self.events.subscribe|alice|realm-a", now, 10_000);
 
         let retry_after = gate
             .retry_after_ms(
-                "ck.events.subscribe|alice|realm-a",
+                "ck.self.events.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(2_500),
             )
             .expect("cooldown active");
@@ -176,7 +176,7 @@ mod subscribe_reconnect_gate_tests {
 
         assert!(
             gate.retry_after_ms(
-                "ck.events.subscribe|alice|realm-a",
+                "ck.self.events.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(10_000),
             )
             .is_none()
@@ -888,7 +888,7 @@ pub struct AppState {
     /// stream positions. Durable storage can replace it without changing the
     /// account subscribe API.
     pub sync_cursor_handles: Arc<Mutex<BTreeMap<String, Value>>>,
-    /// Revoked cursor authorities (`ck.account.cursor_revoke`). High-assurance
+    /// Revoked cursor authorities (`ck.self.account.cursor_revoke`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
@@ -949,7 +949,7 @@ pub struct AppState {
     pub anchor_store: Arc<cokret_sdk::state_res::MemoryAnchorStore>,
     pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
-    /// Live event notification channel for `ck.events.subscribe`
+    /// Live event notification channel for `ck.self.events.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
     /// `routing::federation::move_anchor::submit_anchor`,
@@ -1046,7 +1046,7 @@ pub struct AccountRecord {
     pub handle: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_soland/self/account/profile` (operationId `ck.account.update_profile`);
+    /// `POST /_soland/self/account/profile` (operationId `ck.self.account.update_profile`);
     /// rendered by `demo_actors` in directory search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
@@ -1186,7 +1186,7 @@ pub const PSI_PROBE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
 /// [`PSI_PROBE_WINDOW`] before further probes are rate-limited. SEC-09.
 pub const PSI_PROBE_MAX_PER_WINDOW: u32 = 20;
 
-/// A revoked cursor authority recorded by `ck.account.cursor_revoke`.
+/// A revoked cursor authority recorded by `ck.self.account.cursor_revoke`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that
@@ -2029,7 +2029,7 @@ impl AppState {
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
-            // Live event broadcast for ck.events.subscribe streaming.
+            // Live event broadcast for ck.self.events.subscribe streaming.
             // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,

@@ -70,7 +70,7 @@ fn test_config() -> AppConfig {
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
         compaction_prune_walk_interval_seconds: 0,
-        compaction_prune_walk_per_space_limit: 50,
+        compaction_prune_walk_per_realm_limit: 50,
         seed_demo_data: false,
         trust_domain: "ck:trust_domain:soland-mls-test.local".to_owned(),
         sovereign_enclave_enabled: false,
@@ -163,7 +163,7 @@ async fn mls_lifecycle_end_to_end() {
     let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
 
-    // ── 1. upload a KeyPackage (W1C: ck.keys.keypackages.upload) ──
+    // ── 1. upload a KeyPackage (W1C: ck.self.keys.keypackages.upload) ──
     let keypackage_id = "ck:mls_keypackage:t-01";
     let publish_body = json!({
         "keypackage_id": keypackage_id,
@@ -193,7 +193,7 @@ async fn mls_lifecycle_end_to_end() {
         "publish must mirror into the store"
     );
 
-    // ── 2a. atomic claim wins (W1C: ck.keys.keypackages.claim) ───
+    // ── 2a. atomic claim wins (W1C: ck.self.keys.keypackages.claim) ───
     // keypackage_id is now carried in the body, not the URL.
     let claim_url = "http://server/_cokret/self/keys/keypackages/claim".to_owned();
     let claim_resp = TestClient::post(&claim_url)
@@ -463,7 +463,7 @@ async fn mls_lifecycle_end_to_end() {
     // ── 5. MLS commits no longer have a dedicated REST surface ──
     // The dedicated `POST /_cokret/self/mls/commits` endpoint was removed in
     // W1C; clients now submit `ck.mls.commit` events via the canonical
-    // `POST /_cokret/self/events` pipeline (ck.events.submit of the registered
+    // `POST /_cokret/self/events` pipeline (ck.self.events.submit of the registered
     // durable `ck.mls.commit` kind). The reducer-level epoch-bump path is
     // covered by unit tests in `reducer::mls`. We deliberately do not
     // re-exercise it here from the HTTP layer.

@@ -329,11 +329,11 @@ async fn delete_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.policy.check",
+    operation_id = "ck.self.policy.check",
     tags("policy"),
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.policy.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy.check"))]
 async fn policy_check(
     aa: AuthArgs,
     body: JsonBody<PolicyCheckReqBody>,

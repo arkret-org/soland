@@ -1,7 +1,7 @@
 //! Anchorer signing worker.
 //!
 //! Per spec `event-auth-state-resolution.md` §3-§4: when this node is the
-//! authoritative anchorer for a Space, it periodically takes pending Move
+//! authoritative anchorer for a Realm, it periodically takes pending Move
 //! batches, verifies each against the current effective Anchor view's
 //! pre-state, accepts those that pass, computes the post-state's
 //! `state_root` (canonical Merkle, §4.2), signs an Anchor over the result,
@@ -65,7 +65,7 @@ pub struct AnchorerOutcome {
 /// All the ways the anchorer can fail to make progress.
 #[derive(Debug, thiserror::Error)]
 pub enum AnchorerError {
-    #[error("not authorized to sign anchors for space {0}")]
+    #[error("not authorized to sign anchors for realm {0}")]
     NotAuthorized(String),
     #[error("store error: {0}")]
     Store(String),
@@ -94,20 +94,20 @@ impl AnchorerWorker {
         }
     }
 
-    /// Run one signing pass for the given Space. Returns:
+    /// Run one signing pass for the given Realm. Returns:
     ///
     /// - `Ok(Some(outcome))` when an Anchor was published
     /// - `Ok(None)` when there were no pending Moves to anchor (or none that passed verify)
     /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_anchor rejection that
     ///   wasn't `StateRootMismatch`)
-    pub fn sign_pending_for_space(
+    pub fn sign_pending_for_realm(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         max_moves: usize,
     ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
         // Step 1: authorization. v1 single-DID mode — accept if anchorer
-        // cell is unset (genesis Space) OR set to our service DID. Anything
+        // cell is unset (genesis Realm) OR set to our service DID. Anything
         // else is "not our turn to sign".
         if !self.is_authorized_for(state, realm_id)? {
             return Err(AnchorerError::NotAuthorized(realm_id.to_string()));
@@ -335,7 +335,7 @@ impl AnchorerWorker {
     /// Profile dispatch:
     ///
     /// - **Genesis** (no anchorer cell yet) — implicit `service_did` is the anchorer.
-    /// - **Bottom** on the anchorer cell — Space-wide pause; not authorized.
+    /// - **Bottom** on the anchorer cell — Realm-wide pause; not authorized.
     /// - **single_did** — DID match against `service_did`.
     /// - **threshold(k, members)** / **open_set(members)** — leader election: among `members`, the
     ///   lex-smallest DID is the round leader; if it matches `service_did`, this node signs;
@@ -346,31 +346,31 @@ impl AnchorerWorker {
     fn is_authorized_for(
         &self,
         state: &AppState,
-        space_id: &RealmId,
+        realm_id: &RealmId,
     ) -> Result<bool, AnchorerError> {
         let anchorer_cell = match CellRef::new(format!(
             "ck:cell:ck.component.anchorer.v1:{}",
-            space_id.as_str()
+            realm_id.as_str()
         )) {
             Ok(c) => c,
             Err(_) => return Ok(true),
         };
         let ops = state
             .cell_store
-            .anchored_ops_for_cell(space_id, &anchorer_cell)?;
+            .anchored_ops_for_cell(realm_id, &anchorer_cell)?;
         if ops.is_empty() {
-            // Genesis Space — no anchorer cell yet. Implicit "service_did is
+            // Genesis Realm — no anchorer cell yet. Implicit "service_did is
             // anchorer" applies until the first Move sets the cell.
             return Ok(true);
         }
         // Resolve via cell registry to get the lattice, then join.
         let binding = state
             .cell_registry
-            .resolve(space_id, &anchorer_cell)
+            .resolve(realm_id, &anchorer_cell)
             .map_err(|e| AnchorerError::Store(format!("anchorer cell resolve: {e}")))?;
         let resolved = binding.lattice.join(&anchorer_cell, &ops);
         let CellState::Value(value) = resolved else {
-            // Bottom on anchorer cell = Space-wide pause; the anchorer is
+            // Bottom on anchorer cell = Realm-wide pause; the anchorer is
             // not authorized to advance until recovery.
             return Ok(false);
         };
@@ -424,7 +424,7 @@ impl AnchorerWorker {
                 // older than `staleness_ms` AND this node is the lex-smallest
                 // recovery member.
                 if recovery.iter().any(|d| d == &self.service_did)
-                    && self.frontier_is_stale(state, space_id, staleness_ms)?
+                    && self.frontier_is_stale(state, realm_id, staleness_ms)?
                 {
                     Ok(self.is_round_leader(&recovery))
                 } else {
@@ -451,10 +451,10 @@ impl AnchorerWorker {
     fn frontier_is_stale(
         &self,
         state: &AppState,
-        space_id: &RealmId,
+        realm_id: &RealmId,
         staleness_ms: u64,
     ) -> Result<bool, AnchorerError> {
-        let leaves = state.anchor_store.list_leaves(space_id)?;
+        let leaves = state.anchor_store.list_leaves(realm_id)?;
         let Some(leaf_id) = leaves.first() else {
             return Ok(false);
         };
@@ -479,15 +479,15 @@ impl AnchorerWorker {
     fn read_effective_state(
         &self,
         state: &AppState,
-        space_id: &RealmId,
+        realm_id: &RealmId,
     ) -> Result<BTreeMap<CellRef, CellState>, AnchorerError> {
         let mut out = BTreeMap::new();
-        let cells = state.cell_store.list_cells(space_id)?;
+        let cells = state.cell_store.list_cells(realm_id)?;
         for cell in cells {
-            let ops = state.cell_store.anchored_ops_for_cell(space_id, &cell)?;
+            let ops = state.cell_store.anchored_ops_for_cell(realm_id, &cell)?;
             let binding = state
                 .cell_registry
-                .resolve(space_id, &cell)
+                .resolve(realm_id, &cell)
                 .map_err(|e| AnchorerError::Store(format!("cell registry resolve: {e}")))?;
             let resolved = binding.lattice.join(&cell, &ops);
             out.insert(cell, resolved);
@@ -501,15 +501,15 @@ impl AnchorerWorker {
     fn predict_post_state_root(
         &self,
         state: &AppState,
-        space_id: &RealmId,
+        realm_id: &RealmId,
         _pre_state: &BTreeMap<CellRef, CellState>,
         accepted: &[Move],
     ) -> Result<Hash, AnchorerError> {
         // Build per-cell list of (current ops ++ new ops).
         let mut ops_by_cell: BTreeMap<CellRef, Vec<AnchoredOp>> = BTreeMap::new();
         // Seed with all currently-known cells.
-        for cell in state.cell_store.list_cells(space_id)? {
-            let ops = state.cell_store.anchored_ops_for_cell(space_id, &cell)?;
+        for cell in state.cell_store.list_cells(realm_id)? {
+            let ops = state.cell_store.anchored_ops_for_cell(realm_id, &cell)?;
             ops_by_cell.insert(cell, ops);
         }
         // Layer on the new accepted Moves' effects.
@@ -527,7 +527,7 @@ impl AnchorerWorker {
         for (cell, ops) in ops_by_cell {
             let binding = state
                 .cell_registry
-                .resolve(space_id, &cell)
+                .resolve(realm_id, &cell)
                 .map_err(|e| AnchorerError::Store(format!("predict cell resolve: {e}")))?;
             let resolved = binding.lattice.join(&cell, &ops);
             post_state.insert(cell, resolved);
@@ -623,7 +623,7 @@ impl AnchorerWorker {
 /// Build a 64-zero-byte signature placeholder used purely as a typed
 /// stand-in for `Anchor.anchorer_signature` while we compute
 /// `canonical_bytes_for_id` (which excludes `anchorer_signature` entirely).
-/// The value never reaches the wire — `sign_pending_for_space` overwrites
+/// The value never reaches the wire — `sign_pending_for_realm` overwrites
 /// `anchor.anchorer_signature` with the real signature after deriving the
 /// canonical bytes and the id.
 fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
@@ -689,11 +689,11 @@ fn read_did_list(value: &serde_json::Value, candidates: &[&str]) -> Vec<String> 
 /// summary — used by the admin endpoint.
 pub fn run_one_signing_pass(
     state: &AppState,
-    space_id: &RealmId,
+    realm_id: &RealmId,
     max_moves: usize,
 ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
     let worker = AnchorerWorker::for_service(state.config.service_did.clone());
-    worker.sign_pending_for_space(state, space_id, max_moves)
+    worker.sign_pending_for_realm(state, realm_id, max_moves)
 }
 
 #[cfg(test)]

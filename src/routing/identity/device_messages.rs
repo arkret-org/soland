@@ -54,11 +54,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.device_messages.put",
+    operation_id = "ck.self.device_messages.put",
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.device_messages.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.put"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesSendReqBody>,
@@ -179,11 +179,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ck.device_messages.get",
+    operation_id = "ck.self.device_messages.get",
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.device_messages.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.get"))]
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,
