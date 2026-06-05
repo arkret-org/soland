@@ -16,9 +16,10 @@ pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 
 use super::system::util;
 use super::{
-    AuthArgs, demo_actors, device_inventory_to_json, discussion_track_for_projection_event,
-    flow_id_for_projection_event, flow_id_from_space_id, flow_projection_for_space, now,
-    policy_document_to_response, projection_event_from_operation, sha256_hex, space_has_member,
+    AuthArgs, accept_local_operations, demo_actors, device_inventory_to_json,
+    discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
+    flow_projection_for_realm, now, policy_document_to_response, projection_event_from_operation,
+    sha256_hex, realm_has_member,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord};
@@ -117,7 +118,9 @@ pub fn spec_router() -> Router {
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
     // namespace (anchorer / anchor-DAG / bottom repair / multisig /
-    // gc-candidates / delivery-binding / moderation). Per cokret-spec
+    // gc-candidates / delivery-binding / moderation). Realm-scoped
+    // operations use `/admin/realms/{realm_id}`; Space containers are
+    // reserved for `/admin/spaces/*`. Per cokret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
     // deployment-local and MUST NOT carry the `/_cokret/...` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection
@@ -125,54 +128,55 @@ pub fn admin_router() -> Router {
     Router::with_path("admin")
         .oapi_tag("admin")
         .hoop(RequireAdmin::scope(cokret_sdk::admin_scopes::ADMIN_READ))
-        .push(Router::with_path("spaces/{space_id}/anchorer").get(anchor::admin_get_anchorer))
+        .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(
-            Router::with_path("spaces/{space_id}/anchorer/reconfigure")
+            Router::with_path("realms/{realm_id}")
+                .get(collection::admin_get_realm)
+                .delete(collection::admin_delete_realm),
+        )
+        .push(
+            Router::with_path("realms/{realm_id}/members")
+                .get(collection::admin_list_realm_members),
+        )
+        .push(Router::with_path("realms/{realm_id}/anchorer").get(anchor::admin_get_anchorer))
+        .push(
+            Router::with_path("realms/{realm_id}/anchorer/reconfigure")
                 .post(anchor::admin_reconfigure_anchorer),
         )
         .push(
-            Router::with_path("spaces/{space_id}/anchorer/rotate-signing-key")
+            Router::with_path("realms/{realm_id}/anchorer/rotate-signing-key")
                 .post(anchor::admin_rotate_signing_key),
         )
-        .push(Router::with_path("spaces/{space_id}/bottom").get(anchor::admin_list_space_bottom))
+        .push(Router::with_path("realms/{realm_id}/bottom").get(anchor::admin_list_realm_bottom))
         .push(Router::with_path("bottom").get(anchor::admin_list_bottom_global))
         .push(
-            Router::with_path("spaces/{space_id}/bottom/{cell_id}/repair")
+            Router::with_path("realms/{realm_id}/bottom/{cell_id}/repair")
                 .post(anchor::admin_repair_bottom),
         )
-        .push(Router::with_path("spaces/{space_id}/anchor-dag").get(anchor::admin_get_anchor_dag))
+        .push(Router::with_path("realms/{realm_id}/anchor-dag").get(anchor::admin_get_anchor_dag))
         .push(
-            Router::with_path("spaces/{space_id}/anchor-dag/compact")
+            Router::with_path("realms/{realm_id}/anchor-dag/compact")
                 .post(anchor::admin_compact_anchor_dag),
         )
         .push(
-            Router::with_path("spaces/{space_id}/anchor-dag/prune")
+            Router::with_path("realms/{realm_id}/anchor-dag/prune")
                 .post(anchor::admin_prune_anchor_dag),
         )
         .push(
-            Router::with_path("spaces/{space_id}/multisig/pending")
+            Router::with_path("realms/{realm_id}/multisig/pending")
                 .get(anchor::admin_list_multisig_pending),
         )
         .push(
-            Router::with_path("spaces/{space_id}/multisig/{anchor_id}/partial")
+            Router::with_path("realms/{realm_id}/multisig/{anchor_id}/partial")
                 .post(anchor::admin_submit_multisig_partial),
         )
         .push(
-            Router::with_path("spaces/{space_id}/gc-candidates")
+            Router::with_path("realms/{realm_id}/gc-candidates")
                 .get(anchor::admin_list_gc_candidates),
         )
-        // R2.2 — Realm delivery-binding-policy admin surface (post
-        // Realm/Space reversal). Aggressive-mode v1: the old
-        // `/spaces/{id}/delivery-binding-policy` path returns 410 Gone
-        // so callers fail loudly instead of silently reading a stale
-        // shape.
         .push(
             Router::with_path("realms/{realm_id}/delivery-binding-policy")
                 .get(delivery_binding::admin_get_realm_delivery_binding_policy),
-        )
-        .push(
-            Router::with_path("spaces/{space_id}/delivery-binding-policy")
-                .get(delivery_binding::admin_legacy_space_delivery_binding_policy_gone),
         )
         .push(moderation::router())
 }

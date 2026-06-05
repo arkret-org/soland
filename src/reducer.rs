@@ -90,7 +90,7 @@ pub struct ProjectionState {
     /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
-    /// `ck:cell:ck.component.space.read_receipt_policy.v1:<space_id>`).
+    /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`).
     /// Each successful apply_anchor (`routing::federation::move_anchor::submit_anchor` or
     /// `crate::anchorer::AnchorerWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -4841,7 +4841,7 @@ impl ProjectionState {
     /// + the `realm_audit_downgrades` audit cache.
     ///
     /// Full audit closure (notify `ck.realm.notification.audit` holder,
-    /// trigger UI banner) is TODO(realm-rework) — see
+    /// trigger UI banner) is pending — see
     /// `kinds.rs::CK_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
     /// attestation-chain pipeline that drives this downgrade.
     fn apply_realm_audit_policy_downgrade(
@@ -7927,13 +7927,13 @@ impl ProjectionState {
 
     // ── Cell-keyed query helpers ──
 
-    /// Read the effective `ck.space.read_receipt_policy` value out of the
+    /// Read the effective `ck.realm.read_receipt_policy` value out of the
     /// cells map. Returns `None` when:
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
-    pub fn read_receipt_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
+    pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.space.read_receipt_policy.v1:{space_id}"
+            "ck:cell:ck.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)
@@ -8006,7 +8006,7 @@ impl ProjectionState {
     /// cas-register value, if any. R1.2 introduced a structured cache
     /// for this cell so the wire-validation path in
     /// `apply_membership` can fail-closed on routable joins when policy
-    /// is unset. TODO(realm-rework): once the projection mirror table
+    /// is unset. Once the projection mirror table
     /// for delivery_binding_policy lands, switch this from the generic
     /// cells map to the structured cache.
     pub fn delivery_binding_policy_cell_value(&self, space_id: &str) -> Option<&Value> {
@@ -8018,8 +8018,8 @@ impl ProjectionState {
     }
 
     /// Read the `policy_frontier` declared on the most recent
-    /// `ck.realm.delivery_binding_policy` event for this realm. TODO
-    /// (realm-rework): wire this up to a structured cache so the
+    /// `ck.realm.delivery_binding_policy` event for this realm. Wire
+    /// this up to a structured cache so the
     /// reducer can emit `delivery_binding_stale` rejections.
     pub fn delivery_binding_policy_frontier(&self, space_id: &str) -> Option<&str> {
         self.delivery_binding_policy_cell_value(space_id)?
@@ -8626,7 +8626,7 @@ mod tests {
     fn cell_value_returns_none_for_unwritten_cell() {
         let state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:ck.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         assert!(state.cell(&cell_id).is_none());
@@ -8638,7 +8638,7 @@ mod tests {
         use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:ck.component.space.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
+            "ck:cell:ck.component.realm.policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036"
                 .to_owned(),
         )
         .unwrap();
@@ -9158,7 +9158,7 @@ mod tests {
         use cokret_sdk::lattice::CellState;
         let mut state = ProjectionState::new();
         let cell_id = cokret_sdk::CellRef::new(
-            "ck:cell:ck.component.space.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            "ck:cell:ck.component.realm.read_receipt_policy.v1:ck:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
         )
         .unwrap();
         state.cells.insert(

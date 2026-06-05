@@ -1246,7 +1246,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     // escalation primitive and should be rejected by the endpoint —
     // but we want a successful reconfigure here, so pick external DIDs).
     let url = format!(
-        "http://server/_soland/admin/spaces/{}/anchorer/reconfigure",
+        "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
         space_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
@@ -1288,7 +1288,7 @@ async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
     let app = service(state.clone());
 
     let url = format!(
-        "http://server/_soland/admin/spaces/{}/anchorer/reconfigure",
+        "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
         space_id().as_str()
     );
     let response = TestClient::post(&url)
@@ -1620,7 +1620,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     let pre = state.anchorer_signing_key().to_bytes();
 
     let url = format!(
-        "http://server/_soland/admin/spaces/{}/anchorer/rotate-signing-key",
+        "http://server/_soland/admin/realms/{}/anchorer/rotate-signing-key",
         space_id().as_str()
     );
     let resp: Value = TestClient::post(&url)

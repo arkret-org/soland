@@ -32,10 +32,10 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_space,
-    invite_token_space_id, is_space_deleted, normalize_handle, now, space_discoverability,
-    space_history_visibility, space_resolvable_to, space_search_discoverability,
-    space_search_visible_to,
+    authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
+    invite_token_realm_id, is_realm_deleted, normalize_handle, now, realm_discoverability,
+    realm_history_visibility, realm_resolvable_to, realm_search_discoverability,
+    realm_search_visible_to,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -66,7 +66,7 @@ async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     };
     let mut live = Vec::new();
     for space in candidates {
-        if !is_space_deleted(state, space.realm_id.as_str()).await {
+        if !is_realm_deleted(state, space.realm_id.as_str()).await {
             live.push(space);
         }
     }
@@ -154,7 +154,7 @@ async fn search_realms(
     };
     let mut results = Vec::new();
     for space in candidates {
-        if space_search_visible_to(state, &space, session.as_ref()).await {
+        if realm_search_visible_to(state, &space, session.as_ref()).await {
             results.push(space);
         }
     }
@@ -189,7 +189,7 @@ async fn resolve_realm(
 
     let session = authenticated_session(state, req).await.ok();
     let invite_space_id = match body.invite_token.as_deref() {
-        Some(token) => invite_token_space_id(state, token).await,
+        Some(token) => invite_token_realm_id(state, token).await,
         None => None,
     };
     let candidates: Vec<RealmDirectoryEntry> = {
@@ -214,7 +214,7 @@ async fn resolve_realm(
                 .as_deref()
                 .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name));
         if matches_query
-            && space_resolvable_to(
+            && realm_resolvable_to(
                 state,
                 &entry,
                 session.as_ref(),
@@ -229,8 +229,8 @@ async fn resolve_realm(
     }
     match space {
         Some(space) => {
-            let discoverability = space_discoverability(state, space.realm_id.as_str()).await;
-            let searchable = space_search_discoverability(state, space.realm_id.as_str()).await;
+            let discoverability = realm_discoverability(state, space.realm_id.as_str()).await;
+            let searchable = realm_search_discoverability(state, space.realm_id.as_str()).await;
             json_ok(ResolveRealmResponse {
                 realm_preview: space.clone(),
                 stripped_state: vec![json!({
@@ -292,14 +292,14 @@ async fn resolve_target(
     let Some(space) = resolve_space_for_address(state, &parsed).await else {
         return Err(AppError::not_found("not found"));
     };
-    if is_space_deleted(state, space.realm_id.as_str()).await {
+    if is_realm_deleted(state, space.realm_id.as_str()).await {
         return Err(AppError::not_found("not found"));
     }
 
     let mut include_join_candidates = false;
     match parsed.link_type {
         LinkType::Reference => {
-            if !space_resolvable_to(state, &space, session.as_ref(), None, None).await {
+            if !realm_resolvable_to(state, &space, session.as_ref(), None, None).await {
                 return Err(AppError::not_found("not found"));
             }
             include_join_candidates = true;
@@ -308,7 +308,7 @@ async fn resolve_target(
             let Some(token) = token else {
                 return Err(AppError::not_found("not found"));
             };
-            if !invite_token_matches_space(state, space.realm_id.as_str(), token).await {
+            if !invite_token_matches_realm(state, space.realm_id.as_str(), token).await {
                 return Err(AppError::not_found("not found"));
             }
             if parsed.flow.is_some()
@@ -341,7 +341,7 @@ async fn resolve_target(
         }
     }
 
-    let discoverability = space_discoverability(state, space.realm_id.as_str()).await;
+    let discoverability = realm_discoverability(state, space.realm_id.as_str()).await;
     let join_rule = join_rule_for_discoverability(&discoverability);
     let target_kind = target_kind_for_address(&parsed);
     let realm_preview = realm_preview_for_policy(state, &space).await;
@@ -441,7 +441,7 @@ async fn realm_preview_for_policy(state: &AppState, space: &RealmDirectoryEntry)
         preview.insert("summary".to_owned(), json!(space.description));
     }
     if fields.contains(&"join_rule") {
-        let discoverability = space_discoverability(state, space.realm_id.as_str()).await;
+        let discoverability = realm_discoverability(state, space.realm_id.as_str()).await;
         preview.insert(
             "join_rule".to_owned(),
             json!(join_rule_for_discoverability(&discoverability)),
@@ -450,7 +450,7 @@ async fn realm_preview_for_policy(state: &AppState, space: &RealmDirectoryEntry)
     if fields.contains(&"history_visibility") {
         preview.insert(
             "history_visibility".to_owned(),
-            json!(space_history_visibility(state, space.realm_id.as_str()).await),
+            json!(realm_history_visibility(state, space.realm_id.as_str()).await),
         );
     }
     if fields.contains(&"member_count_bucket") {
@@ -1338,7 +1338,7 @@ async fn directory_announce(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::missing_param("resource_id is required"))?;
     if resource_kind == "realm"
-        && !super::space_has_member(state, resource_id, &session.actor).await
+        && !super::realm_has_member(state, resource_id, &session.actor).await
     {
         return Err(AppError::capability_denied(
             "directory announcement requires realm membership",

@@ -9,10 +9,10 @@ pub(super) mod space;
 
 use super::{
     AuthArgs, accept_local_operations, authenticated_session, default_discussion_track,
-    device_inventory_to_json, flow_id_from_space_id, handle_for_did, invite_token_matches_space,
-    invite_token_space_id, is_space_deleted, normalize_handle, now, sha256_hex,
-    space_discoverability, space_has_member, space_history_visibility, space_resolvable_to,
-    space_search_discoverability, space_search_visible_to, validate_space_id,
+    device_inventory_to_json, flow_id_from_realm_id, handle_for_did, invite_token_matches_realm,
+    invite_token_realm_id, is_realm_deleted, normalize_handle, now, sha256_hex,
+    realm_discoverability, realm_has_member, realm_history_visibility, realm_resolvable_to,
+    realm_search_discoverability, realm_search_visible_to, validate_space_id,
 };
 
 /// `self`-segment spaces surface (spaces, reactions, read-cursors,

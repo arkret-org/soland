@@ -911,7 +911,6 @@ pub struct OkResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationReportReqBody {
-    #[serde(alias = "space_id")]
     pub realm_id: String,
     pub target_ref: String,
     pub reason: String,
@@ -1152,92 +1151,10 @@ pub struct ContactsResponse {
     pub contacts: Vec<ContactResponse>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateSpaceRequest {
-    pub title: String,
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub public: bool,
-    #[serde(default)]
-    pub discoverability: Option<String>,
-    /// One of `shared` / `joined` / `invited` / `world_readable`. Defaults to
-    /// `shared` for public spaces, `joined` otherwise.
-    #[serde(default)]
-    pub history_visibility: Option<String>,
-    /// One of `plaintext` / `mls_rfc9420`. When `mls_rfc9420` the space
-    /// CANNOT be `world_readable` (space-and-place.md §3.1.3).
-    #[serde(default)]
-    pub encryption_profile: Option<String>,
-    #[serde(default)]
-    pub plaintext_visible_services: Vec<String>,
-    #[serde(default)]
-    pub invitees: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpdateSpaceRequest {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub public: Option<bool>,
-    #[serde(default)]
-    pub discoverability: Option<String>,
-    #[serde(default)]
-    pub plaintext_visible_services: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SetSpacePolicyRequest {
-    pub join_rule: String,
-    pub history_visibility: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AddSpaceMemberRequest {
-    pub member: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AcceptSpaceInviteRequest {
-    pub invite_id: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateSpaceInviteRequest {
-    pub target: String,
-    #[serde(default)]
-    pub role: Option<String>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SpaceInviteResponse {
+pub struct RealmLifecycleResponse {
     pub ok: bool,
-    pub invite_id: String,
-    pub space_id: String,
-    pub target: String,
-    pub state: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct UpdateSpaceResponse {
-    pub ok: bool,
-    pub space_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SpacePolicyResponse {
-    pub ok: bool,
-    pub space_id: String,
-    pub join_rule: String,
-    pub history_visibility: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SpaceLifecycleResponse {
-    pub ok: bool,
-    pub space_id: String,
+    pub realm_id: String,
     pub owner: String,
     pub members: Vec<String>,
     pub deleted: bool,
@@ -1645,7 +1562,6 @@ pub struct DeviceMessagesReceiveResBody {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateWebrtcSessionRequest {
-    #[serde(alias = "space_id")]
     pub realm_id: String,
     #[serde(default)]
     pub participants: Vec<String>,
@@ -2156,7 +2072,6 @@ pub struct RedactMessageResponse {
 pub struct AddReactionRequest {
     pub event_id: String,
     pub key: String,
-    #[serde(alias = "space_id")]
     pub realm_id: String,
 }
 
@@ -2172,7 +2087,6 @@ pub struct ReactionResponse {
 pub struct RemoveReactionRequest {
     pub event_id: String,
     pub key: String,
-    #[serde(alias = "space_id")]
     pub realm_id: String,
 }
 
@@ -2220,7 +2134,7 @@ pub struct ReadMarkerResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetReadMarkersRequest {
-    pub space_id: String,
+    pub realm_id: String,
 }
 
 // ── Relation DTOs ──
@@ -2230,7 +2144,6 @@ pub struct GetReadMarkersRequest {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateRelationRequest {
-    #[serde(alias = "space_id")]
     pub realm_id: String,
     pub relation_kind: String,
     pub from: Option<String>,
@@ -2253,7 +2166,6 @@ pub struct RelationResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ListRelationsRequest {
-    #[serde(alias = "space_id")]
     pub realm_id: String,
     pub relation_kind: Option<String>,
 }
@@ -2300,7 +2212,6 @@ pub struct RevokeGrantResponse {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateGrantRequest {
-    #[serde(alias = "space_id")]
     pub realm_id: String,
     pub subject: String,
     pub resource: String,

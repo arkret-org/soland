@@ -1,7 +1,7 @@
 //! Projection writers + read-side helpers.
 //!
 //! This is the in-process projection layer: ingestion of accepted operations
-//! (local service writes + federation push), per-space lifecycle materialization, the
+//! (local service writes + federation push), per-Realm lifecycle materialization, the
 //! `state.projection_events` log, redaction tombstones, gap/backfill helpers,
 //! and the deterministic reducer fan-out (`state.projection.lock().apply(op)`).
 //!
@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use super::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_space_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
+    flow_id_from_realm_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
@@ -82,7 +82,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
     let mut value = json!({
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
-        "space_id": event.realm_id,
+        "realm_id": event.realm_id,
         "event_kind": event.event_kind,
         "operation_type": event.operation_type,
         "operation_id": event.operation_id,
@@ -346,14 +346,14 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     // path. The legacy top-level `branch` object was removed in revision
     // 0a5ab85 (forbidden-wire-fields entry "branch") — only `track` is
     // emitted on v1 wire.
-    let flow_id = flow_id_from_space_id(&message.realm_id);
+    let flow_id = flow_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
-        "space_id": message.realm_id,
+        "realm_id": message.realm_id,
         "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
@@ -605,7 +605,6 @@ pub fn actor_erased_in_space(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    let realm_id = normalize_realm_scope(realm_id);
     projection.erasure_receipts.iter().any(|receipt| {
         receipt.outcome == "completed"
             && receipt.subject_kind.as_deref() == Some("principal")
@@ -613,7 +612,7 @@ pub fn actor_erased_in_space(
             && receipt
                 .scope_realm_id
                 .as_deref()
-                .is_some_and(|scope| normalize_realm_scope(scope) == realm_id)
+                .is_some_and(|scope| scope == realm_id)
     })
 }
 
@@ -802,10 +801,6 @@ fn tombstone_payload_value(payload: &Value) -> Value {
     );
     object.insert("encrypted".to_owned(), json!(false));
     value
-}
-
-fn normalize_realm_scope(value: &str) -> String {
-    value.replacen("ck:space:", "ck:realm:", 1)
 }
 
 pub async fn append_projection_event(state: &AppState, event: ProjectionEventRecord) {
@@ -1483,7 +1478,6 @@ async fn project_accepted_operations_inner(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    crate::routing::federation::fanout_accepted_operations_to_peers(state, operations).await;
     for operation in operations {
         tracing::debug!(
             kind = ?crate::kinds::canonical_kind_for_operation(operation),
@@ -1551,24 +1545,6 @@ async fn project_accepted_operations_inner(
         if let Some(effect) = reducer_effect {
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, operation, &effect).await;
-        }
-        // Stream-F (Wave 2C) — `ck.audit.erasure_receipt` federation
-        // fanout. The reducer has already pushed the receipt into the
-        // `erasure_receipts` projection; the fanout helper looks it up
-        // by `receipt_id`, enqueues one outbox row per federation peer,
-        // and seeds the per-peer `peer_status` map.
-        // Spec realm-and-space.md §2.5.2.
-        if kinds::canonical_kind_string(operation) == kinds::CK_AUDIT_ERASURE_RECEIPT
-            && operation
-                .payload
-                .get("receipt_id")
-                .and_then(|v| v.as_str())
-                .is_some()
-        {
-            crate::routing::federation::erasure_fanout::fanout_erasure_receipt_operation(
-                state, operation,
-            )
-            .await;
         }
         // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot

@@ -2323,11 +2323,11 @@ fn validate_realm_moderation_policy(
         return Ok(());
     }
     let realm_id = operation.realm_id.as_str();
-    if crate::routing::organizations::space_policy_override_requires_approval(
+    if crate::routing::organizations::realm_policy_override_requires_approval(
         state,
         realm_id,
         &operation.payload,
-    ) && !crate::routing::organizations::space_policy_override_has_approval(
+    ) && !crate::routing::organizations::realm_policy_override_has_approval(
         state,
         realm_id,
         &operation.payload,
@@ -2443,26 +2443,13 @@ async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
-    let mut meta = state
+    let meta = state
         .persistence
         .realm_meta()
         .get(realm_id)
         .await
         .ok()
         .flatten();
-    if meta.is_none()
-        && let Some(space_id) = realm_id
-            .strip_prefix("ck:realm:")
-            .map(|suffix| format!("ck:space:{suffix}"))
-    {
-        meta = state
-            .persistence
-            .realm_meta()
-            .get(&space_id)
-            .await
-            .ok()
-            .flatten();
-    }
     let owner = meta.map(|meta| meta.owner);
     let members = state
         .realms
@@ -2475,12 +2462,7 @@ async fn realm_owner_and_members(
             {
                 return realm.members.iter().map(ToString::to_string).collect();
             }
-            realm_id
-                .strip_prefix("ck:realm:")
-                .and_then(|suffix| cokret_sdk::RealmId::new(format!("ck:space:{suffix}")).ok())
-                .and_then(|id| realms.get(&id))
-                .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-                .unwrap_or_default()
+            Vec::new()
         })
         .unwrap_or_default();
     (owner, members)
@@ -2511,16 +2493,12 @@ async fn effective_audience_mention_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<Value> {
-    let mut candidates = vec![realm_id.to_owned()];
-    if let Some(suffix) = realm_id.strip_prefix("ck:realm:") {
-        candidates.push(format!("ck:space:{suffix}"));
-    }
     let events = state.persistence.events().snapshot_all().await.ok()?;
     events.into_iter().rev().find_map(|record| {
         if !record
             .realm_id
             .as_deref()
-            .is_some_and(|space_id| candidates.iter().any(|candidate| candidate == space_id))
+            .is_some_and(|record_realm_id| record_realm_id == realm_id)
         {
             return None;
         }
@@ -2660,14 +2638,7 @@ fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(),
 
 async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
     let store = state.persistence.realm_meta();
-    let mut realm_meta = store.get(realm_id).await.ok().flatten();
-    if realm_meta.is_none()
-        && let Some(space_id) = realm_id
-            .strip_prefix("ck:realm:")
-            .map(|suffix| format!("ck:space:{suffix}"))
-    {
-        realm_meta = store.get(&space_id).await.ok().flatten();
-    }
+    let realm_meta = store.get(realm_id).await.ok().flatten();
     realm_meta.is_some_and(|record| {
         encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
     })

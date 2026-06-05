@@ -123,21 +123,18 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
-    /// Federation routing policy. The on-the-wire
-    /// shape is identical for both variants (Move broadcast push / Anchor
-    /// pull-push under `/_soland/peer/federation/{push-operations,anchors,...}`);
-    /// the policy only changes which set of peer endpoints we talk to.
+    /// Federation routing policy. The on-the-wire shape is `ck.peer.events.submit`
+    /// under `/_cokret/peer/events`; the policy only changes which peer set
+    /// receives accepted Event fanout.
     ///
-    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Move to every known peer
-    ///   (gossip-like). Anchors are replicated via pull-push when peer pressure spikes. Default.
+    /// - [`FederationPolicy::Mesh`] — broadcast each accepted Event to every known peer.
     /// - [`FederationPolicy::Hub`] — push only to a single configured upstream hub; rely on the
     ///   hub for outbound dissemination.
     pub federation_policy: FederationPolicy,
     /// Federation peers the outbound layer considers as broadcast targets
-    /// (mesh) or hub upstream (hub). Entries may be plain base URLs for
-    /// legacy Move/Anchor replication, or `base_url|service_did` when
-    /// operation push needs a DID-bound destination body/header. Empty
-    /// disables federation outbound.
+    /// (mesh) or hub upstream (hub). Entries must be `base_url|service_did`
+    /// so peer requests can bind destination-service-did. Empty disables
+    /// federation outbound.
     pub federation_peers: Vec<String>,
     /// G3.S0 — when true (default), `main.rs` spawns the
     /// `FederationDispatcher` background worker that drains the
@@ -194,7 +191,7 @@ pub struct AppConfig {
     /// MAL-11 compaction prune walk: interval between background prune
     /// passes, in seconds. Zero (or unset) disables the worker entirely —
     /// MAL-11 prune then runs only via the explicit
-    /// `POST /_soland/admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+    /// `POST /_soland/admin/realms/{realm_id}/anchor-dag/prune?anchor_id=...`
     /// endpoint. When enabled, the worker walks every live Space's
     /// anchor DAG, evaluates each candidate against
     /// [`compaction_policy`], and prunes eligible Anchors up to
@@ -344,7 +341,7 @@ impl ObjectStorageConfig {
 /// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FederationPolicy {
-    /// Default — broadcast every accepted Move to every peer in
+    /// Default — broadcast every accepted Event to every peer in
     /// [`AppConfig::federation_peers`].
     Mesh,
     /// Push to a single upstream hub. The first entry in

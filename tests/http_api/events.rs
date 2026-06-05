@@ -257,46 +257,6 @@ async fn events_describe_and_single_event_submit_work() {
         "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
-    let federation_frontier: Value =
-        TestClient::get("http://server/_cokret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-000000000000&peer_role=federation_peer")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let legacy_frontier = &federation_frontier["frontier"];
-    let frontier_root = legacy_frontier["frontier_root"]
-        .as_str()
-        .expect("federation frontier_root");
-    assert!(frontier_root.starts_with("sha256:"));
-    assert_ne!(
-        frontier_root,
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    );
-    assert_eq!(
-        legacy_frontier["events_frontier"]["frontier_root"],
-        frontier_root
-    );
-    assert_eq!(
-        legacy_frontier["events_frontier"]["signatures"][0]["payload_digest"],
-        legacy_frontier["signature"]["payload_digest"]
-    );
-    assert_eq!(legacy_frontier["signature"]["alg"], "EdDSA");
-    assert_eq!(
-        legacy_frontier["signature"]["verification_method"],
-        "did:web:soland.local#frontier-key"
-    );
-    assert_eq!(
-        legacy_frontier["signature"]["signed_payload"]["frontier_root"],
-        frontier_root
-    );
-    assert!(
-        legacy_frontier["signature"]["jws"]
-            .as_str()
-            .is_some_and(|jws| jws.contains(".."))
-    );
-
     let mut conflicting = signed_event_envelope(
         "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
         4,

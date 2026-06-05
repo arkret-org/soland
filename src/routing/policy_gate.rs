@@ -17,7 +17,6 @@ use crate::{ids, kinds};
 pub(crate) enum PolicyGateSurface {
     LocalSubmit,
     FederationInbound { origin_service_did: String },
-    FederationOutbound { destination_service_did: String },
 }
 
 #[derive(Clone, Debug)]
@@ -196,11 +195,6 @@ fn policy_request_for_operation(
         PolicyGateSurface::LocalSubmit => json!({"surface": "local_submit"}),
         PolicyGateSurface::FederationInbound { origin_service_did } => {
             json!({"surface": "federation_inbound", "origin_service_did": origin_service_did})
-        }
-        PolicyGateSurface::FederationOutbound {
-            destination_service_did,
-        } => {
-            json!({"surface": "federation_outbound", "destination_service_did": destination_service_did})
         }
     };
 

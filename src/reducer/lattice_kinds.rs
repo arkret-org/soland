@@ -16,17 +16,17 @@
 // comments) continues to compile.
 pub use cokret_sdk::lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, AnchorerCell, CapabilityDelegate, CapabilityDerived,
-    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, CoveredFrontier,
-    CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, FlowPosition,
-    FlowStage, KeyBackupActiveSeries, MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch,
-    MorphStage, PolicyRule, ProfileCreate, RealmPreviewPolicy, SessionGrant, SpaceArchive,
-    SpaceAssetPrivacyPolicy, SpaceChild, SpaceCreate, SpaceDestroy, SpaceDiscovery, SpaceFreeze,
-    SpaceHistorySharingPolicy, SpaceHistoryVisibility, SpaceInheritancePolicy, SpaceJoinRule,
-    SpaceMediaService, SpaceModerationPolicy, SpaceOrganization, SpaceParent,
-    SpacePlaintextVisibleServices, SpacePolicy, SpacePolicyComponents, SpacePolicyServer,
-    SpaceReadReceiptPolicyLattice, SpaceSchema, SpaceTombstone, SpaceUpgrade, ViewCreate,
-    ViewReconcile, ViewUpdate, build_sdk_cell_registry, default_lattice_registry,
-    lattice_bindings_for_sdk_registry,
+    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog,
+    CoveredFrontier, CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate,
+    DevicePushRoute, DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
+    MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PolicyRule, ProfileCreate,
+    RealmArchive, RealmAssetPrivacyPolicy, RealmCreate, RealmDeliveryBindingPolicy, RealmDestroy,
+    RealmDiscovery, RealmFreeze, RealmHistorySharingPolicy, RealmHistoryVisibility,
+    RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService, RealmModerationPolicy,
+    RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyComponents,
+    RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema, RealmTombstone,
+    RealmUpgrade, SessionGrant, SpaceParent, ViewCreate, ViewReconcile, ViewUpdate,
+    build_sdk_cell_registry, default_lattice_registry, lattice_bindings_for_sdk_registry,
 };
 
 #[cfg(test)]

@@ -26,8 +26,8 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{
-    now, sha256_hex, space_has_member, validate_canonical_json_value, validate_device_id,
-    validate_did, validate_space_id,
+    now, sha256_hex, realm_has_member, validate_canonical_json_value, validate_device_id,
+    validate_did,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
@@ -140,9 +140,8 @@ async fn issue_ice_config(
 ) -> JsonResult<Value> {
     let realm_id = body
         .get("realm_id")
-        .or_else(|| body.get("space_id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("realm_id or space_id is required"))?;
+        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
     let call_id = path_call_id
         .as_deref()
         .or_else(|| body.get("call_id").and_then(Value::as_str))
@@ -172,7 +171,7 @@ async fn issue_ice_config(
             "device_id must match the authenticated device",
         ));
     }
-    if !space_has_member(state, realm_id, actor_id).await {
+    if !realm_has_member(state, realm_id, actor_id).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -321,7 +320,7 @@ async fn create_webrtc_session(
     if RealmId::new(body.realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
-    if !space_has_member(state, &body.realm_id, &session.actor).await {
+    if !realm_has_member(state, &body.realm_id, &session.actor).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -335,7 +334,7 @@ async fn create_webrtc_session(
         if validate_did(&participant).is_err() {
             return Err(AppError::invalid_param("invalid participant did"));
         }
-        if !space_has_member(state, &body.realm_id, &participant).await {
+        if !realm_has_member(state, &body.realm_id, &participant).await {
             return Err(AppError::capability_denied(
                 "participant is not a joined member of the realm",
             ));
@@ -627,10 +626,7 @@ async fn start_recording(
         ));
     }
     let body = body.into_inner();
-    if let Some(realm_id) = body
-        .get("realm_id")
-        .or_else(|| body.get("space_id"))
-        .and_then(Value::as_str)
+    if let Some(realm_id) = body.get("realm_id").and_then(Value::as_str)
         && realm_id != record.realm_id
     {
         return Err(AppError::invalid_param(
@@ -822,7 +818,7 @@ async fn handle_rtc_token(
 ) -> JsonResult<MediaTokenExchangeResBody> {
     use crate::error::ErrorCode;
 
-    if validate_space_id(&body.realm_id).is_err() {
+    if RealmId::new(body.realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     if !is_valid_webrtc_session_id(&body.call_id) {
@@ -841,7 +837,7 @@ async fn handle_rtc_token(
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
-    if !space_has_member(state, &body.realm_id, &body.actor_id).await {
+    if !realm_has_member(state, &body.realm_id, &body.actor_id).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));

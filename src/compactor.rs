@@ -14,7 +14,7 @@
 //! Disabled by default (`SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0`).
 //! Enable when the deployment observes anchor-DAG growth or Pg dead-tuple
 //! pressure on the `anchors` table; the explicit `POST
-//! /_soland/admin/spaces/{space_id}/anchor-dag/prune?anchor_id=...`
+//! /_soland/admin/realms/{realm_id}/anchor-dag/prune?anchor_id=...`
 //! endpoint remains the operator-driven path either way and continues to
 //! work whether or not the worker is running.
 //!

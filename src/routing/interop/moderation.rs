@@ -17,7 +17,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{append_audit_log, now, query_param, space_has_member, validate_did};
+use super::{append_audit_log, now, query_param, realm_has_member, validate_did};
 use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -39,7 +39,7 @@ pub(super) fn legacy_router() -> Router {
 #[endpoint(
     operation_id = "ck.moderation.report",
     tags("moderation"),
-    summary = "File a moderation report for content in a federated space"
+    summary = "File a moderation report for content in a federated Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.moderation.report"))]
 async fn moderation_report(
@@ -59,7 +59,7 @@ async fn moderation_report(
             "reporter must match authenticated actor",
         ));
     }
-    if !space_has_member(state, &body.realm_id, &session.actor).await {
+    if !realm_has_member(state, &body.realm_id, &session.actor).await {
         return Err(AppError::capability_denied(
             "reporter cannot see the target realm",
         ));
@@ -157,7 +157,7 @@ async fn moderation_reports(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_id = query_param(req, "realm_id").or_else(|| query_param(req, "space_id"));
+    let realm_id = query_param(req, "realm_id");
     if let Some(realm_id) = realm_id.as_deref()
         && RealmId::new(realm_id.to_owned()).is_err()
     {
@@ -215,10 +215,7 @@ pub(crate) async fn moderation_report_visible_to_actor(
 }
 
 fn report_realm_id(report: &Value) -> Option<&str> {
-    report
-        .get("realm_id")
-        .or_else(|| report.get("space_id"))
-        .and_then(Value::as_str)
+    report.get("realm_id").and_then(Value::as_str)
 }
 
 async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
@@ -434,7 +431,7 @@ async fn append_audit_agent_invite_log(
         "ck.audit.agent_invite",
         json!({
             "kind": "ck.audit.agent_invite",
-            "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
             "audit_agent_principal_id": audit_agent_principal_id,
@@ -460,7 +457,7 @@ async fn append_agent_accessed_if_present(
         "ck.audit.accessed",
         json!({
             "kind": "ck.audit.accessed",
-            "space_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
+            "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),
             "audit_agent_principal_id": audit_agent_principal_id,

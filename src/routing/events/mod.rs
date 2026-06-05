@@ -4,6 +4,7 @@ pub(crate) mod agent_bridge;
 pub(super) mod applet_bridge;
 pub(super) mod event_log;
 pub(super) mod frontier;
+pub(super) mod peer;
 // Flow + projection helpers are `pub(crate)` so the MIMI interop
 // facade can reuse the canonical space→flow mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Cokret timeline.
@@ -15,7 +16,7 @@ pub(super) mod sync;
 
 use flow::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_space_id, flow_projection_for_space, message_id_from_event_id,
+    flow_id_from_realm_id, flow_projection_for_realm, message_id_from_event_id,
 };
 use operations::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
@@ -31,8 +32,8 @@ use super::{
     parse_snapshot_ref, prune_acked_device_messages, prune_expired_typing, query_param,
     query_param_all, realm_allows_plaintext_service, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_space,
-    touch_realm, typing_ephemeral_for_space, validate_did, validate_space_id,
+    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_realm,
+    touch_realm, typing_ephemeral_for_realm, validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {
@@ -40,6 +41,10 @@ pub fn router() -> Router {
         .push(sync::protocol_router())
         .push(event_log::router())
         .push(projection_query::protocol_router())
+}
+
+pub fn peer_router() -> Router {
+    peer::router()
 }
 
 pub fn legacy_router() -> Router {

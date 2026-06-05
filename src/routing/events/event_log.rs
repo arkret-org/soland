@@ -3,8 +3,8 @@
 //! Surfaces:
 //! - `GET  /_cokret/self/events/describe`  — declare the active event registry, schema/reducer
 //!   profiles, and limits.
-//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope, an `events[]`
-//!   batch, or a federation `service_binding_ref` + `events[]` batch.
+//! - `POST /_cokret/self/events`           — submit one canonical Event Envelope or an `events[]`
+//!   account-client batch.
 //! - `GET  /_cokret/self/events/{event_id}` — fetch one envelope.
 //! - `POST /_cokret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /_cokret/self/events`            — paginated list (filtered by actor / realm).
@@ -133,7 +133,7 @@ async fn events_describe(depot: &mut Depot, res: &mut Response) {
         capabilities: json!({
             "single_event_submit": true,
             "batch_submit": true,
-            "federation_submit": true,
+            "federation_submit": false,
             "batch_receipt": false,
             "read_by_event_id": true,
             "resolve": true,
@@ -173,7 +173,12 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         }
     };
     if envelope.get("service_binding_ref").is_some() {
-        submit_federation_events(state, req, envelope, res).await;
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "federation peer event submission uses /_cokret/peer/events",
+        );
         return;
     }
     let Some(session) = auth_or_render(state, req, res).await else {
@@ -520,21 +525,6 @@ async fn events_frontier(
         Some(_) => return Err(AppError::invalid_param("invalid realm_id")),
         None => None,
     };
-    // Round C47 (spec e10b6ad): `peer_role` ∈ {account_client,
-    // federation_peer, anonymous_health}; default `account_client`.
-    // federation_peer additionally returns `frontier_root`, per-actor
-    // `actor_seq_upper_bounds`, and a service signature; anonymous_health
-    // returns only the frontier_root summary.
-    // Round 4 (B1.4) — peer_role routes to one of three typed response
-    // variants. The legacy single-shape response is wire-broken. We parse
-    // via the SDK helper so unknown values surface as invalid_param.
-    let peer_role_raw = query_param(req, "peer_role");
-    let peer_role = match super::frontier::parse_peer_role(peer_role_raw.as_deref()) {
-        Ok(pr) => pr,
-        Err(msg) => {
-            return Err(AppError::invalid_param(msg));
-        }
-    };
     let events = state
         .persistence
         .events()
@@ -583,125 +573,15 @@ async fn events_frontier(
         }
     }
 
-    // Round 4 (B1.4) — build the typed SDK response variant. The legacy
-    // `frontier` JSON envelope is retained alongside for the existing
-    // ResBody wire shape (consumers that haven't migrated to the typed
-    // `events_frontier` field yet), but the typed variant is the
-    // canonical shape per spec a77b995.
-    use cokret_sdk::Did as SdkDid;
-    let service_did = SdkDid::new(state.config.service_did.clone())
-        .unwrap_or_else(|_| SdkDid::new("did:web:soland.local".to_owned()).unwrap());
-    let latest_realm_event_ids = realm_frontier.iter().filter_map(|(realm, entry)| {
-        entry
-            .get("event_id")
-            .and_then(Value::as_str)
-            .map(|event_id| (realm.clone(), vec![event_id.to_owned()]))
-    });
-    let typed_realm_frontier = super::frontier::typed_realm_frontier(latest_realm_event_ids);
-    let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let generated_at = now();
-    let selected_realm_id = realm_selector
-        .as_deref()
-        .and_then(|value| RealmId::new(value.to_owned()).ok());
-    let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
-        .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let federation_signature = if matches!(peer_role, cokret_sdk::FrontierPeerRole::FederationPeer)
-    {
-        let signing_key = state.anchorer_signing_key();
-        Some(
-            super::frontier::sign_frontier_root(
-                &service_did,
-                selected_realm_id.as_ref(),
-                generated_at,
-                &frontier_root,
-                signing_key.as_ref(),
-            )
-            .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?,
-        )
-    } else {
-        None
-    };
-    let federation_binding = if matches!(peer_role, cokret_sdk::FrontierPeerRole::FederationPeer) {
-        let binding_realm = selected_realm_id.clone().unwrap_or_else(|| {
-            RealmId::new("ck:realm:00000000-0000-7000-8000-000000000000".to_owned())
-                .expect("built-in fallback realm id is valid")
-        });
-        let service_binding_ref = super::frontier::frontier_service_binding_ref(
-            &binding_realm,
-            &typed_realm_frontier,
-            &typed_actor_bounds,
-        )
-        .map_err(|error| AppError::internal(format!("frontier service binding: {error}")))?;
-        Some(super::frontier::FederationFrontierBinding {
-            service_binding_ref,
-            frontier_root: frontier_root.clone(),
-            receipts: Vec::new(),
-            signatures: federation_signature.iter().cloned().collect::<Vec<Value>>(),
-        })
-    } else {
-        None
-    };
-    let typed_response = super::frontier::build_typed_frontier_response(
-        peer_role,
-        &service_did,
-        typed_realm_frontier,
-        typed_actor_bounds,
-        federation_binding,
-    );
-    // Render the JSON wire envelope. anonymous_health MUST strip
-    // receipts / actor_seq_upper_bounds / per-space frontier — the
-    // typed builder already does this; we mirror it onto the legacy
-    // `frontier` envelope for back-compat.
-    let peer_role_str = match peer_role {
-        cokret_sdk::FrontierPeerRole::AccountClient => "account_client",
-        cokret_sdk::FrontierPeerRole::FederationPeer => "federation_peer",
-        cokret_sdk::FrontierPeerRole::AnonymousHealth => "anonymous_health",
-    };
-    let mut frontier = json!({
+    let frontier = json!({
         "storage": state.db.mode(),
         "generated_at": generated_at,
-        "peer_role": peer_role_str,
-        "events_frontier": serde_json::to_value(&typed_response).unwrap_or(Value::Null),
+        "events_frontier": {
+            "frontier": realm_frontier.clone(),
+            "actor_seq_upper_bounds": actor_frontier.clone(),
+        },
     });
-    match peer_role {
-        cokret_sdk::FrontierPeerRole::FederationPeer => {
-            if let Some(obj) = frontier.as_object_mut() {
-                obj.insert(
-                    "frontier_root".to_owned(),
-                    Value::String(frontier_root.as_str().to_owned()),
-                );
-                obj.insert(
-                    "actor_seq_upper_bounds".to_owned(),
-                    serde_json::to_value(&actor_frontier).unwrap_or(Value::Null),
-                );
-                obj.insert(
-                    "signature".to_owned(),
-                    federation_signature.unwrap_or(Value::Null),
-                );
-            }
-        }
-        cokret_sdk::FrontierPeerRole::AnonymousHealth => {
-            // Strip everything that would leak per-tenant state.
-            if let Some(obj) = frontier.as_object_mut() {
-                obj.insert(
-                    "frontier_root".to_owned(),
-                    Value::String(frontier_root.as_str().to_owned()),
-                );
-                obj.insert("retry_after_ms".to_owned(), Value::from(60_000));
-                obj.insert(
-                    "cache_expires_at".to_owned(),
-                    Value::String((generated_at + Duration::seconds(60)).to_rfc3339()),
-                );
-            }
-            // Clear actor_frontier + realm/space frontier in the legacy envelope.
-            return crate::result::json_ok(EventsFrontierResBody {
-                actor_frontier: BTreeMap::new(),
-                realm_frontier: BTreeMap::new(),
-                frontier,
-            });
-        }
-        cokret_sdk::FrontierPeerRole::AccountClient => {}
-    }
     crate::result::json_ok(EventsFrontierResBody {
         actor_frontier,
         realm_frontier,
@@ -844,7 +724,7 @@ async fn submit_event_batch(
     })));
 }
 
-async fn submit_federation_events(
+pub(super) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
     body: Value,
@@ -855,7 +735,7 @@ async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "federation ck.events.submit body must be an object",
+            "ck.peer.events.submit body must be an object",
         );
         return;
     };
@@ -868,7 +748,7 @@ async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "federation ck.events.submit permits only service_binding_ref, events, and idempotency_key",
+                "ck.peer.events.submit permits only service_binding_ref, events, and idempotency_key",
             );
             return;
         }
@@ -921,7 +801,7 @@ async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("federation request body is not canonical-hashable: {error}"),
+                &format!("ck.peer.events.submit body is not canonical-hashable: {error}"),
             );
             return;
         }
@@ -944,7 +824,7 @@ async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("invalid federation ck.events.submit shape: {error}"),
+                &format!("invalid ck.peer.events.submit shape: {error}"),
             );
             return;
         }
@@ -958,7 +838,7 @@ async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "federation ck.events.submit must contain at least one event",
+            "ck.peer.events.submit must contain at least one event",
         );
         return;
     }
@@ -967,7 +847,7 @@ async fn submit_federation_events(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
-            "federation ck.events.submit exceeds max batch size",
+            "ck.peer.events.submit exceeds max batch size",
         );
         return;
     }
@@ -1007,10 +887,12 @@ async fn submit_federation_events(
             }));
             continue;
         }
+        let device_id = event_string_field_from_value(&envelope, "device_id")
+            .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
             actor,
-            device_id: format!("federation:{source_trust_domain}"),
+            device_id,
             audience: state.config.service_did.clone(),
             expires_at: created_at + Duration::minutes(5),
             created_at,
@@ -1041,7 +923,7 @@ async fn submit_federation_events(
     append_audit_log(
         state,
         None,
-        "events.submit.federation",
+        "peer.events.submit",
         json!({
             "realm_id": binding_realm,
             "source_trust_domain": source_trust_domain,
@@ -1326,6 +1208,9 @@ async fn submit_event_value(
         )
         .await;
     }
+    if !session.token_hash.starts_with("federation:") {
+        enqueue_peer_event_fanout(state, &parsed, &envelope_for_bootstrap).await;
+    }
     if let Some(payload) = flow_status_audit_payload {
         append_audit_log(
             state,
@@ -1369,6 +1254,114 @@ async fn submit_event_value(
         received_at,
         false,
     ))
+}
+
+async fn enqueue_peer_event_fanout(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) {
+    let peers = configured_peer_event_targets(state);
+    if peers.is_empty() {
+        return;
+    }
+    let event_id = parsed.event_id.as_str();
+    let binding_payload = json!({
+        "domain": "ck.peer.events.submit.service_binding.v1",
+        "realm_id": parsed.realm_id,
+        "event_id": event_id,
+        "canonical_digest": parsed.canonical_digest,
+    });
+    let service_binding_ref = json!({
+        "realm_id": parsed.realm_id,
+        "space_policy_hash": canonical_json_hash(&binding_payload),
+        "membership_frontier": [event_id],
+        "delivery_binding_frontier": [event_id],
+        "destination_service_type": "principal_server",
+        "reducer_profile_digest": canonical_json_hash(&json!({
+            "domain": "ck.peer.events.submit.reducer_profile.v1",
+            "profile": "ck.reducer.v1",
+        })),
+    });
+    let mut hasher_input = Vec::new();
+    hasher_input.extend_from_slice(state.config.service_did.as_bytes());
+    hasher_input.extend_from_slice(b"|");
+    hasher_input.extend_from_slice(event_id.as_bytes());
+    hasher_input.extend_from_slice(b"|");
+    hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
+    let idempotency_key = format!("ck:outbox:event:{}", sha256_hex(&hasher_input));
+    let body = json!({
+        "service_binding_ref": service_binding_ref,
+        "events": [envelope],
+        "idempotency_key": idempotency_key,
+    });
+    let payload = match canonical::canonical_json_bytes(&body)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        Some(payload) => payload,
+        None => {
+            tracing::warn!(event_id, "failed to encode ck.peer.events.submit body");
+            return;
+        }
+    };
+    for (peer_url, peer_did) in peers {
+        if peer_did == state.config.service_did {
+            continue;
+        }
+        if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
+            state,
+            peer_url.as_str(),
+            peer_did.as_str(),
+            "/_cokret/peer/events",
+            &idempotency_key,
+            &payload,
+        )
+        .await
+        {
+            tracing::warn!(
+                %error,
+                event_id,
+                peer = %peer_url,
+                peer_did = %peer_did,
+                "failed to enqueue ck.peer.events.submit fanout"
+            );
+        }
+    }
+}
+
+fn configured_peer_event_targets(state: &AppState) -> Vec<(String, String)> {
+    let entries = match state.config.federation_policy {
+        crate::config::FederationPolicy::Mesh => state.config.federation_peers.clone(),
+        crate::config::FederationPolicy::Hub => state
+            .config
+            .federation_peers
+            .first()
+            .cloned()
+            .into_iter()
+            .collect(),
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            let (url, did) = trimmed.split_once('|')?;
+            let url = url.trim().trim_end_matches('/').to_owned();
+            let did = did.trim().to_owned();
+            if url.is_empty() || validate_did(&did).is_err() {
+                None
+            } else {
+                Some((url, did))
+            }
+        })
+        .collect()
+}
+
+fn canonical_json_hash(value: &Value) -> String {
+    canonical::canonical_sha256(value).unwrap_or_else(|_| {
+        let bytes = serde_json::to_vec(value).unwrap_or_default();
+        format!("sha256:{}", sha256_hex(&bytes))
+    })
 }
 
 fn preflight_mls_projection_reject(
@@ -3272,8 +3265,7 @@ async fn member_join_accepts_pending_invite(
     {
         return false;
     }
-    invite.realm_id.replacen("ck:space:", "ck:realm:", 1)
-        == space_id.replacen("ck:space:", "ck:realm:", 1)
+    invite.realm_id == space_id
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used
@@ -4092,7 +4084,7 @@ fn frontier_entry_is_newer(
     })
 }
 
-fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String> {
+pub(super) fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String> {
     record
         .envelope
         .get("realm_id")
@@ -4174,7 +4166,7 @@ pub async fn effective_read_receipt_policy_for_space(
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
     // value into `ProjectionState::cells` after every apply_anchor; we
     // read directly from there. (R1.2 renamed the cell family from
-    // `ck.component.space.read_receipt_policy.v1` along with the event
+    // `ck.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
     if let Ok(proj) = state.projection.lock() {
         let cell_id = cokret_sdk::CellRef::new(format!(

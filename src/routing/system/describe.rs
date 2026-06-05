@@ -771,7 +771,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
             IntegrationSurfaceDescriptor {
                 name: "admin_bottom_manual_repair".to_owned(),
                 method: "POST".to_owned(),
-                path: "/_soland/admin/spaces/{space_id}/bottom/{cell_id}/repair".to_owned(),
+                path: "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair".to_owned(),
                 contract: "cokret.rest.admin.bottom_repair.v1".to_owned(),
                 stability: "unsupported_signing_path".to_owned(),
                 todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),

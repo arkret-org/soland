@@ -24,7 +24,7 @@ use crate::{JsonResult, ids, json_ok, kinds};
 #[endpoint(
     operation_id = "ck.read_cursors.set",
     tags("read_cursors"),
-    summary = "Set the authenticated actor's read marker for a Space"
+    summary = "Set the authenticated actor's read marker for a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.read_cursors.set"))]
 pub(super) async fn set_read_cursor(
@@ -94,20 +94,18 @@ pub(super) async fn set_read_cursor(
 #[endpoint(
     operation_id = "ck.read_cursors.list",
     tags("read_cursors"),
-    summary = "List the authenticated actor's read markers, optionally filtered by space"
+    summary = "List the authenticated actor's read markers, optionally filtered by Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.read_cursors.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: QueryParam<String, false>,
     realm_id: QueryParam<String, false>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner().or_else(|| space_id.into_inner());
-    let realm_id = realm_id.unwrap_or_default();
+    let realm_id = realm_id.into_inner().unwrap_or_default();
     let markers = {
         let proj = state.projection.lock().expect("projection lock");
         proj.read_cursors

@@ -1,20 +1,22 @@
 //! Space read + visibility surface.
 //!
 //! The lifecycle / membership mutation REST endpoints that previously lived
-//! here (POST/PATCH/PUT/DELETE on `/_soland/self/spaces/*`) bypassed canonical
+//! here bypassed canonical
 //! Event Envelope construction and maintained Realm-level state outside the
 //! event log. They have been removed (see `_spec_report_claude.md` §2.5 and
 //! `realm-and-space.md:140`); Realm state mutations MUST flow through the
 //! canonical operation pipeline (`POST /_cokret/self/operations`).
 //!
 //! Surfaces that remain:
-//! - `GET    /_soland/self/spaces/{space_id}` — read a Space's lifecycle response
-//! - `GET    /_soland/self/spaces/{space_id}/export` — full event log + projection dump
+//! - `GET    /_soland/self/realms/{realm_id}` — read a Realm lifecycle response.
+//! - `GET    /_soland/self/realms/{realm_id}/export` — full event log + projection dump.
+//! - `GET    /_soland/self/spaces/{space_id}/cells/{cell_family}` — projected Space-container
+//!   child-order cell.
 //!
 //! Everything else in this module is the visibility / membership / typing
 //! query helper surface that every other domain (federation, message, blob,
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
-//! write to this Space?".
+//! write in this Realm?".
 
 use chrono::{DateTime, Utc};
 use cokret_sdk::{Did, RealmId};
@@ -27,91 +29,95 @@ use crate::error::AppError;
 use crate::reducer::CHILD_ORDER_CELL_FAMILY;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
-use crate::wire::{SpaceLifecycleResponse, now};
+use crate::wire::{RealmLifecycleResponse, now};
 use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
-    Router::with_path("spaces").push(
-        Router::with_path("{space_id}")
-            .get(get_space)
-            .push(Router::with_path("cells/{cell_family}").get(get_space_cell))
-            .push(Router::with_path("effective-policy").get(get_space_effective_policy))
-            .push(Router::with_path("moderation-policy").post(upsert_space_moderation_policy))
-            .push(Router::with_path("export").get(export_space)),
-    )
+    Router::new()
+        .push(
+            Router::with_path("realms/{realm_id}")
+                .get(get_realm)
+                .push(
+                    Router::with_path("moderation-policy/effective")
+                        .get(get_realm_effective_moderation_policy),
+                )
+                .push(Router::with_path("moderation-policy").post(upsert_realm_moderation_policy))
+                .push(Router::with_path("export").get(export_realm)),
+        )
+        .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.spaces.get",
-    tags("spaces"),
-    summary = "Get a Space's lifecycle response (owner + members)"
+    operation_id = "ck.extension.soland.realms.get",
+    tags("realms"),
+    summary = "Get a Realm lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.get"))]
-async fn get_space(
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.realms.get"))]
+async fn get_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
-) -> JsonResult<SpaceLifecycleResponse> {
+    realm_id: PathParam<String>,
+) -> JsonResult<RealmLifecycleResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    space_lifecycle_response(state, &space_id)
+    let realm_id = realm_id.into_inner();
+    realm_lifecycle_response(state, &realm_id)
         .await
         .map(salvo::prelude::Json)
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.spaces.effective_policy.get",
-    tags("spaces", "policy"),
+    operation_id = "ck.extension.soland.realms.moderation_policy.effective.get",
+    tags("realms", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.spaces.effective_policy.get")
+    fields(op = "ck.extension.soland.realms.moderation_policy.effective.get")
 )]
-async fn get_space_effective_policy(
+async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    if !space_id_accessible(state, &space_id, Some(&session)).await {
+    let realm_id = realm_id.into_inner();
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
-    json_ok(organizations::effective_policy_for_space_json(
-        state, &space_id,
+    json_ok(organizations::effective_policy_for_realm_json(
+        state, &realm_id,
     ))
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.spaces.moderation_policy.upsert",
-    tags("spaces", "policy"),
-    summary = "Set a Space moderation-policy override"
+    operation_id = "ck.extension.soland.realms.moderation_policy.upsert",
+    tags("realms", "policy"),
+    summary = "Set a Realm moderation-policy override"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.spaces.moderation_policy.upsert")
+    fields(op = "ck.extension.soland.realms.moderation_policy.upsert")
 )]
-async fn upsert_space_moderation_policy(
+async fn upsert_realm_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
     body: JsonBody<Value>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    let realm_id = realm_id.into_inner();
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let record = state
         .persistence
         .realm_meta()
-        .get(&space_id)
+        .get(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -119,16 +125,16 @@ async fn upsert_space_moderation_policy(
         return Err(AppError::capability_denied("missing_capability"));
     }
     let payload = body.into_inner();
-    if organizations::space_policy_override_requires_approval(state, &space_id, &payload)
-        && !organizations::space_policy_override_has_approval(state, &space_id, &payload)
+    if organizations::realm_policy_override_requires_approval(state, &realm_id, &payload)
+        && !organizations::realm_policy_override_has_approval(state, &realm_id, &payload)
     {
         return Err(organizations::requires_organization_approval_error());
     }
     let policy =
-        organizations::persist_space_moderation_policy(state, &space_id, payload, &session.actor);
+        organizations::persist_realm_moderation_policy(state, &realm_id, payload, &session.actor);
     json_ok(json!({
         "kind": "ck.realm.moderation_policy",
-        "space_id": policy.realm_id,
+        "realm_id": policy.realm_id,
         "policy": policy.payload,
         "updated_by": policy.updated_by,
         "updated_at": policy.updated_at.to_rfc3339(),
@@ -172,7 +178,7 @@ async fn get_space_cell(
         let value = proj.child_order_cell_value(&space_id);
         (realm_id, value)
     };
-    if !space_id_accessible(state, &realm_id, Some(&session)).await {
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
     let total = value
@@ -193,22 +199,22 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.spaces.export",
-    tags("spaces"),
-    summary = "Full event log + projection dump for a Space"
+    operation_id = "ck.extension.soland.realms.export",
+    tags("realms"),
+    summary = "Full event log + projection dump for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.export"))]
-async fn export_space(
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.realms.export"))]
+async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
+    realm_id: PathParam<String>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    RealmId::new(space_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    if !space_id_accessible(state, &space_id, Some(&session)).await {
+    let realm_id = realm_id.into_inner();
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
     let events = state
@@ -218,7 +224,7 @@ async fn export_space(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|event| event.realm_id == space_id)
+        .filter(|event| event.realm_id == realm_id)
         .map(|event| {
             json!({
                 "event_id": event.event_id,
@@ -247,8 +253,8 @@ async fn export_space(
         })
         .collect::<Vec<_>>();
     json_ok(json!({
-        "schema": "ck.export.space.v1",
-        "realm_id": space_id,
+        "schema": "ck.export.realm.v1",
+        "realm_id": realm_id,
         "generated_at": now(),
         "operations": operations,
         "events": events,
@@ -270,43 +276,43 @@ fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
 // Each is re-exported from `crate::routing::*` so sibling modules use the
 // same Realm metadata and membership checks.
 
-pub async fn space_lifecycle_response(
+pub async fn realm_lifecycle_response(
     state: &AppState,
-    space_id: &str,
-) -> Result<SpaceLifecycleResponse, AppError> {
-    let space_id_value = RealmId::new(space_id.to_owned())
+    realm_id: &str,
+) -> Result<RealmLifecycleResponse, AppError> {
+    let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
     let members: Vec<String> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
-            .get(&space_id_value)
-            .map(|space| space.members.iter().map(ToString::to_string).collect())
+        let realms = state.realms.lock().expect("realms lock");
+        realms
+            .get(&realm_id_value)
+            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
             .unwrap_or_default()
     };
     let record = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    Ok(SpaceLifecycleResponse {
+    Ok(RealmLifecycleResponse {
         ok: true,
-        space_id: space_id.to_owned(),
+        realm_id: realm_id.to_owned(),
         owner: record.owner.clone(),
         members,
         deleted: record.deleted,
     })
 }
 
-pub async fn touch_space(state: &AppState, space_id: &str) {
+pub async fn touch_realm_meta(state: &AppState, realm_id: &str) {
     let store = state.persistence.realm_meta();
-    if let Ok(Some(mut record)) = store.get(space_id).await {
+    if let Ok(Some(mut record)) = store.get(realm_id).await {
         record.updated_at = now();
-        if let Err(error) = store.put(space_id, &record).await {
-            tracing::warn!(%error, "failed to touch space meta");
+        if let Err(error) = store.put(realm_id, &record).await {
+            tracing::warn!(%error, "failed to touch realm meta");
         }
     }
 }
@@ -321,27 +327,27 @@ pub fn realm_scope_to_realm_id(scope_id: &str) -> Option<String> {
 
 pub async fn touch_realm(state: &AppState, realm_or_internal_id: &str) {
     if let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) {
-        touch_space(state, &realm_id).await;
+        touch_realm_meta(state, &realm_id).await;
     }
 }
 
 pub async fn is_realm_deleted(state: &AppState, realm_or_internal_id: &str) -> bool {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => is_space_deleted(state, &realm_id).await,
+        Some(realm_id) => realm_meta_deleted(state, &realm_id).await,
         None => false,
     }
 }
 
 pub async fn realm_discoverability(state: &AppState, realm_or_internal_id: &str) -> String {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_discoverability(state, &realm_id).await,
+        Some(realm_id) => realm_discoverability_for_id(state, &realm_id).await,
         None => "invite_only".to_owned(),
     }
 }
 
 pub async fn realm_has_member(state: &AppState, realm_or_internal_id: &str, actor: &str) -> bool {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_has_member(state, &realm_id, actor).await,
+        Some(realm_id) => realm_has_member_by_id(state, &realm_id, actor).await,
         None => false,
     }
 }
@@ -352,22 +358,22 @@ pub async fn realm_id_accessible(
     session: Option<&SessionRecord>,
 ) -> bool {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_id_accessible(state, &realm_id, session).await,
+        Some(realm_id) => realm_id_accessible_for_id(state, &realm_id, session).await,
         None => false,
     }
 }
 
 pub async fn realm_visible_to(
     state: &AppState,
-    space: &RealmDirectoryEntry,
+    realm: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> bool {
-    space_visible_to(state, space, session).await
+    realm_visible_to_for_entry(state, realm, session).await
 }
 
 pub async fn realm_history_visibility(state: &AppState, realm_or_internal_id: &str) -> String {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_history_visibility(state, &realm_id).await,
+        Some(realm_id) => realm_history_visibility_for_id(state, &realm_id).await,
         None => "joined".to_owned(),
     }
 }
@@ -378,7 +384,7 @@ pub async fn realm_member_joined_at(
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_member_joined_at(state, &realm_id, actor).await,
+        Some(realm_id) => realm_member_joined_at_for_id(state, &realm_id, actor).await,
         None => None,
     }
 }
@@ -444,33 +450,33 @@ pub async fn realm_event_visible_to_session(
 
 pub async fn realm_allows_plaintext_service(state: &AppState, realm_or_internal_id: &str) -> bool {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_allows_plaintext_service(state, &realm_id).await,
+        Some(realm_id) => realm_allows_plaintext_service_for_id(state, &realm_id).await,
         None => false,
     }
 }
 
-pub async fn is_space_deleted(state: &AppState, space_id: &str) -> bool {
+pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
         .is_some_and(|record| record.deleted)
 }
 
-pub async fn space_discoverability(state: &AppState, space_id: &str) -> String {
+pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> String {
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
         .map(|record| record.discoverability)
         .unwrap_or_else(|| {
-            if directory_realm_is_public(state, space_id) {
+            if directory_realm_is_public(state, realm_id) {
                 "public".to_owned()
             } else {
                 "invite_only".to_owned()
@@ -478,49 +484,49 @@ pub async fn space_discoverability(state: &AppState, space_id: &str) -> String {
         })
 }
 
-pub async fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> bool {
-    if is_space_deleted(state, space_id).await {
-        tracing::warn!(%space_id, %actor, "space_has_member: space marked deleted");
+pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &str) -> bool {
+    if realm_meta_deleted(state, realm_id).await {
+        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: realm marked deleted");
         return false;
     }
-    let Ok(space_id_typed) = RealmId::new(space_id.to_owned()) else {
-        tracing::warn!(%space_id, %actor, "space_has_member: invalid realm_id shape");
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid realm_id shape");
         return false;
     };
     let Ok(actor_typed) = Did::new(actor.to_owned()) else {
-        tracing::warn!(%space_id, %actor, "space_has_member: invalid actor DID shape");
+        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
         return false;
     };
-    let spaces = state.realms.lock().expect("spaces lock");
-    match spaces.get(&space_id_typed) {
+    let realms = state.realms.lock().expect("realms lock");
+    match realms.get(&realm_id_typed) {
         None => {
-            let known: Vec<String> = spaces
+            let known: Vec<String> = realms
                 .search_by_text("")
                 .into_iter()
                 .map(|entry| entry.realm_id.as_str().to_owned())
                 .collect();
             tracing::warn!(
-                %space_id,
+                %realm_id,
                 %actor,
-                known_spaces = ?known,
-                "space_has_member: space not present in in-memory index"
+                known_realms = ?known,
+                "realm_has_member_by_id: realm not present in in-memory index"
             );
             false
         }
-        Some(space) => {
-            if space.members.contains(&actor_typed) {
+        Some(realm) => {
+            if realm.members.contains(&actor_typed) {
                 true
             } else {
-                let members: Vec<String> = space
+                let members: Vec<String> = realm
                     .members
                     .iter()
                     .map(|did| did.as_str().to_owned())
                     .collect();
                 tracing::warn!(
-                    %space_id,
+                    %realm_id,
                     %actor,
-                    space_members = ?members,
-                    "space_has_member: actor not in space members"
+                    realm_members = ?members,
+                    "realm_has_member_by_id: actor not in realm members"
                 );
                 false
             }
@@ -528,65 +534,65 @@ pub async fn space_has_member(state: &AppState, space_id: &str, actor: &str) -> 
     }
 }
 
-pub async fn space_visible_to(
+pub async fn realm_visible_to_for_entry(
     state: &AppState,
-    space: &RealmDirectoryEntry,
+    realm: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if is_space_deleted(state, space.realm_id.as_str()).await {
+    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
         return false;
     }
-    if space_discoverability(state, space.realm_id.as_str()).await == "public" {
+    if realm_discoverability_for_id(state, realm.realm_id.as_str()).await == "public" {
         return true;
     }
     session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
     })
 }
 
-pub async fn space_search_visible_to(
+pub async fn realm_search_visible_to(
     state: &AppState,
-    space: &RealmDirectoryEntry,
+    realm: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
 ) -> bool {
-    if is_space_deleted(state, space.realm_id.as_str()).await {
+    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
         return false;
     }
     if session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
     }) {
         return true;
     }
     matches!(
-        space_discoverability(state, space.realm_id.as_str())
+        realm_discoverability_for_id(state, realm.realm_id.as_str())
             .await
             .as_str(),
         "public" | "listed" | "restricted"
     )
 }
 
-pub async fn space_resolvable_to(
+pub async fn realm_resolvable_to(
     state: &AppState,
-    space: &RealmDirectoryEntry,
+    realm: &RealmDirectoryEntry,
     session: Option<&SessionRecord>,
     invite_token: Option<&str>,
     signed_link: Option<&str>,
 ) -> bool {
-    if is_space_deleted(state, space.realm_id.as_str()).await {
+    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
         return false;
     }
     if session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| space.members.contains(&actor))
+        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
     }) {
         return true;
     }
-    match space_discoverability(state, space.realm_id.as_str())
+    match realm_discoverability_for_id(state, realm.realm_id.as_str())
         .await
         .as_str()
     {
         "public" | "listed" | "restricted" | "unlisted" => true,
         "invite_only" => match invite_token {
-            Some(token) => invite_token_matches_space(state, space.realm_id.as_str(), token).await,
+            Some(token) => invite_token_matches_realm(state, realm.realm_id.as_str(), token).await,
             None => false,
         },
         "secret" => signed_link.is_some_and(|link| !link.trim().is_empty()),
@@ -594,13 +600,13 @@ pub async fn space_resolvable_to(
     }
 }
 
-pub async fn invite_token_matches_space(state: &AppState, space_id: &str, token: &str) -> bool {
-    invite_token_space_id(state, token)
+pub async fn invite_token_matches_realm(state: &AppState, realm_id: &str, token: &str) -> bool {
+    invite_token_realm_id(state, token)
         .await
-        .is_some_and(|resolved_space_id| resolved_space_id == space_id)
+        .is_some_and(|resolved_realm_id| resolved_realm_id == realm_id)
 }
 
-pub async fn invite_token_space_id(state: &AppState, token: &str) -> Option<String> {
+pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<String> {
     let token = token.trim();
     if token.is_empty() {
         return None;
@@ -621,45 +627,45 @@ pub async fn invite_token_space_id(state: &AppState, token: &str) -> Option<Stri
         .map(|invite| invite.realm_id)
 }
 
-pub async fn space_search_discoverability(state: &AppState, space_id: &str) -> bool {
+pub async fn realm_search_discoverability(state: &AppState, realm_id: &str) -> bool {
     matches!(
-        space_discoverability(state, space_id).await.as_str(),
+        realm_discoverability_for_id(state, realm_id).await.as_str(),
         "public" | "listed" | "restricted"
     )
 }
 
-// `space_id_accessible` is the visibility path with looser semantics
-// for the backfill / subscribe edge (delete-tolerant for members).
+// `realm_id_accessible_for_id` is the visibility path with looser semantics
+// for the backfill / subscribe edge.
 
-/// Check if a space is accessible for backfill/subscribe (allows deleted spaces for members).
+/// Check if a Realm is accessible for backfill/subscribe.
 ///
-/// Read-side authorization rules (space-and-place.md §3.4 + §3.7):
+/// Read-side authorization rules:
 /// 1. `discoverability=public` → anyone.
 /// 2. `history_visibility=world_readable` → anyone (including anonymous / non-member registered
-///    actors). MLS-encrypted Spaces are explicitly forbidden from this state
+///    actors). MLS-encrypted Realms are explicitly forbidden from this state
 ///    (`incompatible_history_with_encryption`).
 /// 3. Otherwise → caller MUST be an authenticated member.
-pub async fn space_id_accessible(
+pub async fn realm_id_accessible_for_id(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Ok(sid) = RealmId::new(space_id.to_owned()) else {
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return false;
     };
     // Snapshot the membership/realm_id off the in-memory index before any
     // `.await` so we never hold the std::sync Mutex guard across a suspension.
     let (realm_id, members) = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        let Some(space) = spaces.get(&sid) else {
+        let realms = state.realms.lock().expect("realms lock");
+        let Some(realm) = realms.get(&realm_id_typed) else {
             return false;
         };
-        (space.realm_id.as_str().to_owned(), space.members.clone())
+        (realm.realm_id.as_str().to_owned(), realm.members.clone())
     };
-    if space_discoverability(state, &realm_id).await == "public" {
+    if realm_discoverability_for_id(state, &realm_id).await == "public" {
         return true;
     }
-    if space_history_visibility(state, &realm_id).await == "world_readable" {
+    if realm_history_visibility_for_id(state, &realm_id).await == "world_readable" {
         return true;
     }
     session.is_some_and(|session| {
@@ -667,19 +673,19 @@ pub async fn space_id_accessible(
     })
 }
 
-/// Look up the persisted `history_visibility` for a Space, defaulting to
+/// Look up the persisted `history_visibility` for a Realm, defaulting to
 /// `joined` when no meta record exists (matches the spec default).
-pub async fn space_history_visibility(state: &AppState, space_id: &str) -> String {
+pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -> String {
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
         .map(|record| record.history_visibility.clone())
         .unwrap_or_else(|| {
-            if directory_realm_is_public(state, space_id) {
+            if directory_realm_is_public(state, realm_id) {
                 "shared".to_owned()
             } else {
                 "joined".to_owned()
@@ -687,14 +693,14 @@ pub async fn space_history_visibility(state: &AppState, space_id: &str) -> Strin
         })
 }
 
-fn directory_realm_is_public(state: &AppState, space_id: &str) -> bool {
-    let Ok(realm_id) = RealmId::new(space_id.to_owned()) else {
+fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
         return false;
     };
     state
         .realms
         .lock()
-        .expect("spaces lock")
+        .expect("realms lock")
         .get(&realm_id)
         .is_some_and(|entry| entry.public)
 }
@@ -703,15 +709,15 @@ fn directory_realm_is_public(state: &AppState, space_id: &str) -> bool {
 ///
 /// The reducer's member projection is authoritative when present. Bootstrap
 /// owners predate that side-band cache, so only the owner falls back to the
-/// Space creation time. Non-owner members without joined_at are hidden by
+/// Realm creation time. Non-owner members without joined_at are hidden by
 /// `history_visibility=joined` instead of leaking pre-join history.
-pub async fn space_member_joined_at(
+pub async fn realm_member_joined_at_for_id(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(space_id, actor)
+        && let Some(member) = projection.member(realm_id, actor)
         && member.state == "join"
     {
         return Some(member.joined_at);
@@ -719,7 +725,7 @@ pub async fn space_member_joined_at(
     let meta = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten();
@@ -735,18 +741,18 @@ pub async fn realm_member_invited_or_joined_at(
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => space_member_invited_or_joined_at(state, &realm_id, actor).await,
+        Some(realm_id) => realm_member_invited_or_joined_at_for_id(state, &realm_id, actor).await,
         None => None,
     }
 }
 
-pub async fn space_member_invited_or_joined_at(
+pub async fn realm_member_invited_or_joined_at_for_id(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     if let Ok(projection) = state.projection.lock()
-        && let Some(member) = projection.member(space_id, actor)
+        && let Some(member) = projection.member(realm_id, actor)
     {
         if let Some(invited_at) = member.invited_at {
             return Some(invited_at);
@@ -755,7 +761,7 @@ pub async fn space_member_invited_or_joined_at(
             return Some(member.updated_at);
         }
     }
-    space_member_joined_at(state, space_id, actor).await
+    realm_member_joined_at_for_id(state, realm_id, actor).await
 }
 
 async fn realm_active_member_at_read_time(
@@ -770,7 +776,7 @@ async fn realm_active_member_at_read_time(
             {
                 return member.state == "join";
             }
-            space_has_member(state, &realm_id, actor).await
+            realm_has_member_by_id(state, &realm_id, actor).await
         }
         None => false,
     }
@@ -802,8 +808,8 @@ async fn realm_restricted_history_policy_allows(
         return false;
     };
     let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;
-    let joined_at = space_member_joined_at(state, &realm_id, actor).await;
-    let invited_at = space_member_invited_or_joined_at(state, &realm_id, actor).await;
+    let joined_at = realm_member_joined_at_for_id(state, &realm_id, actor).await;
+    let invited_at = realm_member_invited_or_joined_at_for_id(state, &realm_id, actor).await;
     rules.iter().any(|rule| {
         restricted_rule_matches_actor(rule, actor, active_member)
             && restricted_rule_matches_range(rule, event_created_at, invited_at, joined_at)
@@ -848,25 +854,25 @@ fn restricted_rule_matches_range(
     }
 }
 
-pub async fn space_allows_plaintext_service(state: &AppState, space_id: &str) -> bool {
-    let Ok(sid) = RealmId::new(space_id.to_owned()) else {
+pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &str) -> bool {
+    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return false;
     };
-    let realm_id = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
-            .get(&sid)
-            .map(|space| space.realm_id.as_str().to_owned())
+    let directory_realm_id = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
+            .get(&realm_id_typed)
+            .map(|realm| realm.realm_id.as_str().to_owned())
     };
-    if let Some(realm_id) = realm_id {
-        if space_discoverability(state, &realm_id).await == "public" {
+    if let Some(directory_realm_id) = directory_realm_id {
+        if realm_discoverability_for_id(state, &directory_realm_id).await == "public" {
             return true;
         }
     }
     state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten()
@@ -883,9 +889,9 @@ pub async fn prune_expired_typing(state: &AppState) {
     }
 }
 
-pub async fn typing_ephemeral_for_space(
+pub async fn typing_ephemeral_for_realm(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     session: Option<&SessionRecord>,
 ) -> Vec<serde_json::Value> {
     if session.is_none() {
@@ -895,7 +901,7 @@ pub async fn typing_ephemeral_for_space(
     let typing_records = state
         .persistence
         .typing()
-        .list_for_space(space_id)
+        .list_for_space(realm_id)
         .await
         .unwrap_or_default();
     for record in &typing_records {
@@ -914,7 +920,7 @@ pub async fn typing_ephemeral_for_space(
         .map(|(scope_id, actors)| {
             json!({
                 "type": "ck.typing",
-                "space_id": space_id,
+                "realm_id": realm_id,
                 "scope_id": scope_id,
                 "actors": actors,
             })

@@ -1,18 +1,12 @@
-//! Federation endpoint stubs for the B.3 outbound surface.
+//! Federation discovery for the peer service surface.
 //!
 //! - `GET /.well-known/cokret` — server description. Spec-aligned shape so peers can discover the
 //!   service DID, trust domain, public base URL, and federation policy without an auth round-trip.
 //!   The body is built from the live `AppConfig`; the route is unauthenticated.
-//! - `POST /_soland/peer/federation/send-event` — outbound federation send-event stub. Returns 501
-//!   `unsupported_feature` until the active path lands; the route is mounted today so peers can
-//!   probe support and the OpenAPI doc carries the operation id.
 
-use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
@@ -53,37 +47,19 @@ async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
                 "{}/.well-known/cokret/openapi.json",
                 state.config.public_base_url.trim_end_matches('/')
             ),
-            "federation_transaction": format!(
-                "{}/_soland/peer/federation/transactions/{{txn_id}}",
+            "peer_events": format!(
+                "{}/_cokret/peer/events",
                 state.config.public_base_url.trim_end_matches('/')
             ),
-            "federation_pull_operations": format!(
-                "{}/_soland/peer/federation/pull-operations",
+            "peer_events_frontier": format!(
+                "{}/_cokret/peer/events/frontier",
+                state.config.public_base_url.trim_end_matches('/')
+            ),
+            "peer_snapshot_head": format!(
+                "{}/_cokret/peer/snapshot/head",
                 state.config.public_base_url.trim_end_matches('/')
             ),
         },
         "version": env!("CARGO_PKG_VERSION"),
     }))
-}
-
-#[endpoint(
-    operation_id = "ck.extension.soland.federation.send_event",
-    tags("federation"),
-    summary = "Outbound federation send-event (stub; returns 501)"
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.send_event"))]
-pub(super) async fn federation_send_event(body: JsonBody<Value>) -> JsonResult<Value> {
-    // Spec: B.3 — outbound federation send-event endpoint. The active
-    // path lands with the federation outbox v2 rewrite; today this
-    // returns 501 `unsupported_feature` so peers can probe support
-    // without depending on a 404 fallback. The body is consumed
-    // (and immediately dropped) so request-size limits + content-type
-    // negotiation still execute on the request path.
-    let _ = body.into_inner();
-    Err(AppError::unsupported_feature(
-        "outbound federation send-event is not yet implemented; \
-         see soland roadmap B.3",
-    )
-    .with_status(StatusCode::NOT_IMPLEMENTED)
-    .with_wire_code("unsupported_feature"))
 }

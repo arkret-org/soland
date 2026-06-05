@@ -208,9 +208,9 @@ async fn effective_grants(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
-    let space_id = query_param(req, "space_id").unwrap_or_else(|| "*".to_owned());
-    let grants = if space_id == "*" {
-        // Return grants across all spaces
+    let realm_id = query_param(req, "realm_id").unwrap_or_else(|| "*".to_owned());
+    let grants = if realm_id == "*" {
+        // Return grants across all Realms.
         state
             .persistence
             .realm_meta()
@@ -224,31 +224,31 @@ async fn effective_grants(
                     "grant_id": g.grant_id,
                     "subject": g.subject,
                     "actions": g.actions,
-                    "resources": [{"kind": "space", "space_id": g.space_id}]
+                    "resources": [{"kind": "realm", "realm_id": g.space_id}]
                 })
             })
             .collect::<Vec<_>>()
     } else {
         state
             .authz
-            .grants_for_subject(&subject, &space_id)
+            .grants_for_subject(&subject, &realm_id)
             .iter()
             .map(|g| {
                 json!({
                     "grant_id": g.grant_id,
                     "subject": g.subject,
                     "actions": g.actions,
-                    "resources": [{"kind": "space", "space_id": g.space_id}]
+                    "resources": [{"kind": "realm", "realm_id": g.space_id}]
                 })
             })
             .collect::<Vec<_>>()
     };
-    // Include default member grants if the user is a member of any space
+    // Include default member grants if the user is a member of any Realm.
     let default_grants = if grants.is_empty() {
         vec![json!({
             "subject": subject,
-            "actions": ["space.read", "directory.search"],
-            "resources": [{"kind": "space", "space_id": "*"}]
+            "actions": ["realm.read", "directory.search"],
+            "resources": [{"kind": "realm", "realm_id": "*"}]
         })]
     } else {
         Vec::new()

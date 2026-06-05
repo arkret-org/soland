@@ -9,8 +9,8 @@
 //!   `ck.audit.erasure_receipt` lands. Looks up the federation peer set for the affected Realm
 //!   (currently `config.federation_peers` — the full peer set acts as the conservative super-set of
 //!   "peers that have received content from the Realm"; once per-Realm membership tracking ships
-//!   this scopes down), enqueues one outbound `ck.audit.erasure_receipt` envelope per peer into the
-//!   federation outbox, and seeds the receipt's `peer_status` map.
+//!   this scopes down), seeds the receipt's `peer_status` map, and lets the canonical Event fanout
+//!   path deliver the accepted receipt envelope to peers.
 //! - [`sweep_erasure_fanout_timeouts`] — called from the periodic timeout job
 //!   (`crate::routing::federation::erasure_fanout_worker`). Scans
 //!   `state.projection.erasure_receipts`; for each receipt that has any peer with
@@ -21,9 +21,8 @@
 //!
 //! ## What this lands
 //!
-//! Real outbox enqueue per peer. Real per-peer `sent_at` stamping.
-//! Real 7-day default timeout window with `incomplete` flip. The peer
-//! ACK path (inbound `ck.audit.erasure_receipt` referencing the same
+//! Real per-peer `sent_at` stamping. Real 7-day default timeout window with `incomplete` flip. The
+//! peer ACK path (inbound `ck.audit.erasure_receipt` referencing the same
 //! `receipt_id`) is wired up but currently relies on the reducer
 //! observing a follow-up receipt — full inbound-ACK correlation lands
 //! when the federation inbound handler grows a typed
@@ -45,12 +44,8 @@ use crate::state::AppState;
 /// `incomplete` flip by a few minutes, not days.
 pub const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 
-/// Outbox endpoint used for federated erasure-receipt envelopes. Peers
-/// accept these via the same `push-operations` ingest used for any
-/// other audit event; the receiving reducer dispatches on the canonical
-/// kind string and lands the receipt in its own `erasure_receipts`
-/// projection.
-const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_soland/peer/federation/push-operations";
+/// Outbox endpoint for canonical peer Event fanout.
+const ERASURE_RECEIPT_OUTBOX_ENDPOINT: &str = "/_cokret/peer/events";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ErasurePeerTarget {
@@ -251,11 +246,11 @@ fn erasure_push_payload(
 ) -> Option<String> {
     let origin = Did::new(state.config.service_did.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
-    let space_id = RealmId::new(operation.realm_id.to_string()).ok()?;
+    let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
     let body = cokret_sdk::FederationPushOperationsReqBody {
         origin,
         destination,
-        space_id,
+        realm_id,
         service_binding_ref: format!(
             "{}#federation-erasure-receipt:{}",
             state.config.service_did,

@@ -143,7 +143,7 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
             json!({
                 "event_id": message.event_id,
                 "kind": "ck.message.create",
-                "space_id": message.realm_id,
+                "realm_id": message.realm_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
                 "content": message.content,
@@ -206,7 +206,7 @@ async fn index_notifications(
             notifications.push(json!({
                 "kind": "message",
                 "event_ref": message.event_id,
-                "space_id": message.realm_id,
+                "realm_id": message.realm_id,
                 "thread_id": message.thread_id,
                 "sender": message.sender,
                 "encrypted": message.encrypted,
@@ -299,7 +299,7 @@ fn value_is_sender(value: &Value, sender: &str) -> bool {
 #[tracing::instrument(skip_all, fields(op = "index_inbox"))]
 async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let flow_id = super::flow_id_from_space_id(DEMO_REALM_ID);
+    let flow_id = super::flow_id_from_realm_id(DEMO_REALM_ID);
     res.render(Json(json!({
         "service_did": state.config.service_did.clone(),
         "flows": [{
@@ -317,7 +317,7 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
 #[endpoint(
     operation_id = "ck.extension.soland.index.search",
     tags("index"),
-    summary = "Substring-search messages + spaces for a query string"
+    summary = "Substring-search messages + Realms for a query string"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.index.search"))]
 async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
@@ -340,8 +340,8 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let space_id_filter: std::collections::BTreeSet<String> = body
-        .get("space_ids")
+    let realm_id_filter: std::collections::BTreeSet<String> = body
+        .get("realm_ids")
         .and_then(Value::as_array)
         .map(|values| {
             values
@@ -351,10 +351,10 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
                 .collect()
         })
         .unwrap_or_default();
-    let include_space = object_kinds.is_empty()
+    let include_realm = object_kinds.is_empty()
         || object_kinds
             .iter()
-            .any(|kind| kind.as_str() == Some("space"));
+            .any(|kind| kind.as_str() == Some("realm"));
     let include_message = object_kinds
         .iter()
         .any(|kind| kind.as_str() == Some("message"));
@@ -362,16 +362,16 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
     let mut results: Vec<Value> = Vec::new();
 
     if include_message || object_kinds.is_empty() {
-        let candidate_spaces: Vec<String> = if space_id_filter.is_empty() {
+        let candidate_realms: Vec<String> = if realm_id_filter.is_empty() {
             vec![DEMO_REALM_ID.to_owned()]
         } else {
-            space_id_filter.iter().cloned().collect()
+            realm_id_filter.iter().cloned().collect()
         };
-        for space_id in candidate_spaces {
+        for realm_id in candidate_realms {
             let messages = state
                 .persistence
                 .messages()
-                .list_for_space(&space_id, 500)
+                .list_for_space(&realm_id, 500)
                 .await
                 .unwrap_or_default();
             for message in messages {
@@ -391,7 +391,7 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
                     "kind": "message",
                     "object_id": message.event_id.clone(),
                     "event_id": message.event_id.clone(),
-                    "space_id": message.realm_id,
+                    "realm_id": message.realm_id,
                     "thread_id": message.thread_id,
                     "sender": message.sender,
                     "content": message.content,
@@ -406,12 +406,12 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
             }
         }
     }
-    if include_space && results.len() < limit {
+    if include_realm && results.len() < limit {
         results.push(json!({
-            "kind": "space",
+            "kind": "realm",
             "object_id": DEMO_REALM_ID,
             "realm_id": DEMO_REALM_ID,
-            "title": "Demo Space",
+            "title": "Demo Realm",
             "summary": format!("matched query `{query}`"),
             "score": 1.0,
         }));
@@ -448,7 +448,7 @@ async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonR
 async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let space_ids = body
+    let realm_ids = body
         .get("realm_ids")
         .and_then(Value::as_array)
         .cloned()
@@ -504,9 +504,9 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         0
     };
 
-    let space_snapshot: Vec<RealmDirectoryEntry> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+    let realm_snapshot: Vec<RealmDirectoryEntry> = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .cloned()
@@ -517,52 +517,52 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         .get("text")
         .and_then(Value::as_str)
         .map(|value| value.to_lowercase());
-    let space_id_filter: std::collections::BTreeSet<String> = space_ids
+    let realm_id_filter: std::collections::BTreeSet<String> = realm_ids
         .iter()
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
         .collect();
 
     let mut results: Vec<Value> = Vec::new();
-    for space in space_snapshot {
-        if super::is_space_deleted(state, space.realm_id.as_str()).await {
+    for realm in realm_snapshot {
+        if super::is_realm_deleted(state, realm.realm_id.as_str()).await {
             continue;
         }
-        if !space_id_filter.is_empty() && !space_id_filter.contains(space.realm_id.as_str()) {
+        if !realm_id_filter.is_empty() && !realm_id_filter.contains(realm.realm_id.as_str()) {
             continue;
         }
         if let Some(text) = filter_text.as_deref() {
             let haystack = format!(
                 "{} {}",
-                space.name.to_lowercase(),
-                space.description.as_deref().unwrap_or("").to_lowercase()
+                realm.name.to_lowercase(),
+                realm.description.as_deref().unwrap_or("").to_lowercase()
             );
             if !haystack.contains(text) {
                 continue;
             }
         }
         results.push(json!({
-            "kind": "space",
-            "object_id": space.realm_id.as_str(),
-            "realm_id": space.realm_id.as_str(),
-            "title": space.name,
-            "summary": space.description,
-            "tags": space.tags.iter().cloned().collect::<Vec<_>>(),
-            "public": space.public,
+            "kind": "realm",
+            "object_id": realm.realm_id.as_str(),
+            "realm_id": realm.realm_id.as_str(),
+            "title": realm.name,
+            "summary": realm.description,
+            "tags": realm.tags.iter().cloned().collect::<Vec<_>>(),
+            "public": realm.public,
             "renderer": renderer,
             "facets": facets,
             "sort": sort_value,
         }));
     }
 
-    if results.is_empty() && !space_id_filter.is_empty() {
-        for space_id in &space_id_filter {
-            if super::is_space_deleted(state, space_id).await {
+    if results.is_empty() && !realm_id_filter.is_empty() {
+        for realm_id in &realm_id_filter {
+            if super::is_realm_deleted(state, realm_id).await {
                 continue;
             }
             let registry_known = {
-                let registry = state.realms.lock().expect("spaces lock");
-                cokret_sdk::RealmId::new(space_id.clone())
+                let registry = state.realms.lock().expect("realms lock");
+                cokret_sdk::RealmId::new(realm_id.clone())
                     .ok()
                     .and_then(|id| registry.get(&id).cloned())
                     .is_some()
@@ -571,22 +571,22 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
                 continue;
             }
             results.push(json!({
-                "kind": "space",
-                "object_id": space_id,
-                "space_id": space_id,
-                "title": format!("Space {}", &space_id[..space_id.len().min(24)]),
+                "kind": "realm",
+                "object_id": realm_id,
+                "realm_id": realm_id,
+                "title": format!("Realm {}", &realm_id[..realm_id.len().min(24)]),
                 "renderer": renderer,
                 "facets": facets,
                 "sort": sort_value,
             }));
         }
     }
-    if results.is_empty() && space_id_filter.is_empty() && filter_text.is_none() {
+    if results.is_empty() && realm_id_filter.is_empty() && filter_text.is_none() {
         results.push(json!({
-            "kind": "space",
+            "kind": "realm",
             "object_id": DEMO_REALM_ID,
             "realm_id": DEMO_REALM_ID,
-            "title": "Demo Space",
+            "title": "Demo Realm",
             "renderer": renderer,
             "facets": facets,
             "sort": sort_value,

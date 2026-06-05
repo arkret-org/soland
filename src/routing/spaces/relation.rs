@@ -39,7 +39,7 @@ pub(super) fn router() -> Router {
 #[endpoint(
     operation_id = "ck.relation.create",
     tags("relations"),
-    summary = "Create a relation between two refs in a Space"
+    summary = "Create a relation between two refs in a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.relation.create"))]
 async fn create_relation(
@@ -55,8 +55,8 @@ async fn create_relation(
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     // Spec: models/relation.md §3.2 — structural relations (`contains`,
-    // `parent_of`) MUST stay within a single Space. When `from` / `to`
-    // refs resolve to known Flow projections from a *different* space
+    // `parent_of`) MUST stay within a single Realm. When `from` / `to`
+    // refs resolve to known Flow projections from a different Realm
     // than the relation's `realm_id`, reject up front.
     let structural_kinds: &[&str] = &["contains", "parent_of", "child_of"];
     if structural_kinds.contains(&body.relation_kind.as_str()) {
@@ -70,7 +70,7 @@ async fn create_relation(
                 && flow.realm_id != body.realm_id
             {
                 return Err(AppError::invalid_param(
-                    "structural relation refs MUST belong to the same Space as the relation",
+                    "structural relation refs MUST belong to the same Realm as the relation",
                 )
                 .with_wire_code("cross_space_structural_relation"));
             }
@@ -150,7 +150,7 @@ async fn tombstone_relation(
 #[endpoint(
     operation_id = "ck.relation.list",
     tags("relations"),
-    summary = "List relations for a space, optionally filtered by `kind`"
+    summary = "List relations for a Realm, optionally filtered by `kind`"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.relation.list"))]
 async fn list_relations(
@@ -161,9 +161,7 @@ async fn list_relations(
 ) -> JsonResult<ListRelationsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
-    let realm_id = query_param(req, "realm_id")
-        .or_else(|| query_param(req, "space_id"))
-        .unwrap_or_default();
+    let realm_id = query_param(req, "realm_id").unwrap_or_default();
     let kind = kind.into_inner();
     let relations = {
         let proj = state.projection.lock().expect("projection lock");

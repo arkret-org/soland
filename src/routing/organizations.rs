@@ -2,7 +2,7 @@
 //!
 //! This is the local P2 governance surface for organization-owned Realms:
 //! org policies are stored once, Realm create links fan out through an index,
-//! and Space-level overrides are accepted only when the organization has
+//! and Realm-level overrides are accepted only when the organization has
 //! explicitly approved the exception.
 
 use std::collections::BTreeSet;
@@ -19,7 +19,7 @@ use crate::error::AppError;
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::validate_did;
 use crate::state::{
-    AppState, OrganizationPolicyRecord, OrganizationRecord, SpaceModerationPolicyRecord,
+    AppState, OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
 };
 use crate::{JsonResult, json_ok};
 
@@ -41,8 +41,7 @@ struct UpsertOrganizationRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct LinkOrganizationSpaceRequest {
-    #[serde(alias = "space_id")]
+struct LinkOrganizationRealmRequest {
     realm_id: String,
 }
 
@@ -55,7 +54,7 @@ pub(crate) fn router() -> Router {
                 .get(get_organization)
                 .push(Router::with_path("policy").get(get_organization_policy))
                 .push(Router::with_path("policy").post(upsert_organization_policy))
-                .push(Router::with_path("spaces").post(link_organization_space)),
+                .push(Router::with_path("realms").post(link_organization_realm)),
         )
 }
 
@@ -273,24 +272,24 @@ async fn upsert_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.spaces.link",
-    tags("organizations", "spaces"),
+    operation_id = "ck.extension.soland.organizations.realms.link",
+    tags("organizations", "realms"),
     summary = "Link a Realm to an organization policy source"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.spaces.link"))]
-async fn link_organization_space(
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.realms.link"))]
+async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     organization_id: PathParam<String>,
-    body: JsonBody<LinkOrganizationSpaceRequest>,
+    body: JsonBody<LinkOrganizationRealmRequest>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor);
-    link_space_to_organization(state, &body.realm_id, &organization_id);
+    link_realm_to_organization(state, &body.realm_id, &organization_id);
     json_ok(json!({
         "organization_id": organization_id,
         "realm_id": body.realm_id,
@@ -328,47 +327,47 @@ pub(crate) fn record_realm_organizations_from_event(
             continue;
         };
         ensure_organization_placeholder(state, &org_id, "realm_create");
-        link_space_to_organization(state, realm_id, &org_id);
+        link_realm_to_organization(state, realm_id, &org_id);
     }
 }
 
-pub(crate) fn link_space_to_organization(state: &AppState, space_id: &str, organization_id: &str) {
+pub(crate) fn link_realm_to_organization(state: &AppState, realm_id: &str, organization_id: &str) {
     state
-        .space_organizations
+        .realm_organizations
         .lock()
-        .expect("space organizations lock")
-        .entry(space_id.to_owned())
+        .expect("realm organizations lock")
+        .entry(realm_id.to_owned())
         .or_default()
         .insert(organization_id.to_owned());
     state
-        .organization_spaces
+        .organization_realms
         .lock()
-        .expect("organization spaces lock")
+        .expect("organization realms lock")
         .entry(organization_id.to_owned())
         .or_default()
-        .insert(space_id.to_owned());
+        .insert(realm_id.to_owned());
 }
 
-pub(crate) fn space_organization_ids(state: &AppState, space_id: &str) -> Vec<String> {
+pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
     state
-        .space_organizations
+        .realm_organizations
         .lock()
-        .expect("space organizations lock")
-        .get(space_id)
+        .expect("realm organizations lock")
+        .get(realm_id)
         .map(|set| set.iter().cloned().collect())
         .unwrap_or_default()
 }
 
-pub(crate) fn effective_policy_for_space_json(state: &AppState, space_id: &str) -> Value {
-    let org_ids = space_organization_ids(state, space_id);
+pub(crate) fn effective_policy_for_realm_json(state: &AppState, realm_id: &str) -> Value {
+    let org_ids = realm_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
         .lock()
         .expect("organization policies lock");
     let links = state
-        .organization_spaces
+        .organization_realms
         .lock()
-        .expect("organization spaces lock");
+        .expect("organization realms lock");
     let org_layers = org_ids
         .iter()
         .filter_map(|org_id| policies.get(org_id).map(|policy| (org_id, policy)))
@@ -379,7 +378,7 @@ pub(crate) fn effective_policy_for_space_json(state: &AppState, space_id: &str) 
                 "policy_id": policy.policy_id,
                 "version": policy.version,
                 "policy": policy.payload,
-                "applies_to_spaces": links
+                "applies_to_realms": links
                     .get(org_id)
                     .map(|set| set.iter().cloned().collect::<Vec<_>>())
                     .unwrap_or_default(),
@@ -389,36 +388,36 @@ pub(crate) fn effective_policy_for_space_json(state: &AppState, space_id: &str) 
     drop(links);
     drop(policies);
 
-    let space_policy = state
-        .space_moderation_policies
+    let realm_policy = state
+        .realm_moderation_policies
         .lock()
-        .expect("space moderation policies lock")
-        .get(space_id)
-        .map(space_policy_record_json);
+        .expect("realm moderation policies lock")
+        .get(realm_id)
+        .map(realm_policy_record_json);
     json!({
-        "space_id": space_id,
+        "realm_id": realm_id,
         "inheritance_mode": if org_ids.is_empty() { "none" } else { "organization" },
         "inheritance_chain": org_ids,
         "organization_policy_layers": org_layers,
-        "space_policy": space_policy,
-        "effective_rules": effective_rules(state, space_id),
-        "override_requires_organization_approval": !space_organization_ids(state, space_id).is_empty(),
+        "realm_policy": realm_policy,
+        "effective_rules": effective_rules(state, realm_id),
+        "override_requires_organization_approval": !realm_organization_ids(state, realm_id).is_empty(),
         "fanout": {
             "source": "organization_policy",
-            "rewrites_space_policy": false,
+            "rewrites_realm_policy": false,
         }
     })
 }
 
 pub(crate) fn organization_policy_blocks_join(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     actor: &str,
 ) -> bool {
-    if accepted_space_override_allows_join(state, space_id, actor) {
+    if accepted_realm_override_allows_join(state, realm_id, actor) {
         return false;
     }
-    let org_ids = space_organization_ids(state, space_id);
+    let org_ids = realm_organization_ids(state, realm_id);
     if org_ids.is_empty() {
         return false;
     }
@@ -433,16 +432,16 @@ pub(crate) fn organization_policy_blocks_join(
     })
 }
 
-pub(crate) fn space_policy_override_requires_approval(
+pub(crate) fn realm_policy_override_requires_approval(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     payload: &Value,
 ) -> bool {
     let targets = allow_join_override_targets(payload);
     if targets.is_empty() {
         return false;
     }
-    let org_ids = space_organization_ids(state, space_id);
+    let org_ids = realm_organization_ids(state, realm_id);
     if org_ids.is_empty() {
         return false;
     }
@@ -459,15 +458,15 @@ pub(crate) fn space_policy_override_requires_approval(
     })
 }
 
-pub(crate) fn space_policy_override_has_approval(
+pub(crate) fn realm_policy_override_has_approval(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     payload: &Value,
 ) -> bool {
-    if !space_policy_override_requires_approval(state, space_id, payload) {
+    if !realm_policy_override_requires_approval(state, realm_id, payload) {
         return true;
     }
-    let org_ids = space_organization_ids(state, space_id)
+    let org_ids = realm_organization_ids(state, realm_id)
         .into_iter()
         .collect::<BTreeSet<_>>();
     approvals_from_payload(payload)
@@ -475,22 +474,22 @@ pub(crate) fn space_policy_override_has_approval(
         .any(|approval| approval_matches(approval, &org_ids))
 }
 
-pub(crate) fn persist_space_moderation_policy(
+pub(crate) fn persist_realm_moderation_policy(
     state: &AppState,
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> SpaceModerationPolicyRecord {
-    let record = SpaceModerationPolicyRecord {
+) -> RealmModerationPolicyRecord {
+    let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
         updated_by: actor.to_owned(),
         updated_at: Utc::now(),
     };
     state
-        .space_moderation_policies
+        .realm_moderation_policies
         .lock()
-        .expect("space moderation policies lock")
+        .expect("realm moderation policies lock")
         .insert(realm_id.to_owned(), record.clone());
     record
 }
@@ -529,14 +528,14 @@ fn ensure_organization_placeholder(state: &AppState, organization_id: &str, acto
 }
 
 fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Value {
-    let spaces = state
-        .organization_spaces
+    let realms = state
+        .organization_realms
         .lock()
-        .expect("organization spaces lock")
+        .expect("organization realms lock")
         .get(&record.organization_id)
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    let space_count = spaces.len();
+    let realm_count = realms.len();
     json!({
         "organization_id": record.organization_id.clone(),
         "organization_did": record.organization_did.clone(),
@@ -547,8 +546,8 @@ fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Va
         "verified_badge": record.verified,
         "members": record.members.iter().cloned().collect::<Vec<_>>(),
         "member_count": record.member_count.max(record.members.len()),
-        "spaces": spaces,
-        "space_count": space_count,
+        "realms": realms,
+        "realm_count": realm_count,
         "created_by": record.created_by.clone(),
         "created_at": record.created_at.to_rfc3339(),
         "updated_at": record.updated_at.to_rfc3339(),
@@ -556,10 +555,10 @@ fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Va
 }
 
 fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicyRecord) -> Value {
-    let applies_to_spaces = state
-        .organization_spaces
+    let applies_to_realms = state
+        .organization_realms
         .lock()
-        .expect("organization spaces lock")
+        .expect("organization realms lock")
         .get(&record.organization_id)
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
@@ -569,13 +568,13 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
         "policy_id": record.policy_id.clone(),
         "version": record.version,
         "policy": record.payload.clone(),
-        "applies_to_spaces": applies_to_spaces,
+        "applies_to_realms": applies_to_realms,
         "updated_by": record.updated_by.clone(),
         "updated_at": record.updated_at.to_rfc3339(),
     })
 }
 
-fn space_policy_record_json(record: &SpaceModerationPolicyRecord) -> Value {
+fn realm_policy_record_json(record: &RealmModerationPolicyRecord) -> Value {
     json!({
         "kind": "ck.realm.moderation_policy",
         "realm_id": record.realm_id.clone(),
@@ -585,8 +584,8 @@ fn space_policy_record_json(record: &SpaceModerationPolicyRecord) -> Value {
     })
 }
 
-fn effective_rules(state: &AppState, space_id: &str) -> Vec<Value> {
-    let org_ids = space_organization_ids(state, space_id);
+fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
+    let org_ids = realm_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
         .lock()
@@ -598,19 +597,19 @@ fn effective_rules(state: &AppState, space_id: &str) -> Vec<Value> {
         }
     }
     drop(policies);
-    if let Some(space_policy) = state
-        .space_moderation_policies
+    if let Some(realm_policy) = state
+        .realm_moderation_policies
         .lock()
-        .expect("space moderation policies lock")
-        .get(space_id)
+        .expect("realm moderation policies lock")
+        .get(realm_id)
         .cloned()
     {
         rules.extend(
-            allow_join_override_targets(&space_policy.payload)
+            allow_join_override_targets(&realm_policy.payload)
                 .into_iter()
                 .map(|target| {
                     json!({
-                        "source": "space_override",
+                        "source": "realm_override",
                         "target": { "kind": "actor", "did": target },
                         "action": "allow_join",
                     })
@@ -660,12 +659,12 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
     })
 }
 
-fn accepted_space_override_allows_join(state: &AppState, space_id: &str, actor: &str) -> bool {
+fn accepted_realm_override_allows_join(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
-        .space_moderation_policies
+        .realm_moderation_policies
         .lock()
-        .expect("space moderation policies lock")
-        .get(space_id)
+        .expect("realm moderation policies lock")
+        .get(realm_id)
         .is_some_and(|record| allow_join_override_targets(&record.payload).contains(actor))
 }
 

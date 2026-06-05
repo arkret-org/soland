@@ -932,14 +932,14 @@ pub struct AppState {
     pub organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     /// Current organization moderation policy per organization.
     pub organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
-    /// Space -> organizations declared by `ck.realm.create.owning_organizations`
+    /// Realm -> organizations declared by `ck.realm.create.owning_organizations`
     /// or the local organization link endpoint.
-    pub space_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    pub realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     /// Organization -> member Realm ids. This is the read-side fanout index:
-    /// policy updates do not rewrite per-space rows.
-    pub organization_spaces: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
-    /// Accepted Space-level moderation-policy overrides keyed by Realm id.
-    pub space_moderation_policies: Arc<Mutex<BTreeMap<String, SpaceModerationPolicyRecord>>>,
+    /// policy updates do not rewrite per-Realm rows.
+    pub organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
+    pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
     /// Move/Anchor/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
@@ -977,7 +977,7 @@ pub struct AppState {
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
     /// Swapped lock-free via [`ArcSwap`] so
-    /// the `POST /_soland/admin/spaces/{id}/anchorer/rotate-signing-key`
+    /// the `POST /_soland/admin/realms/{realm_id}/anchorer/rotate-signing-key`
     /// endpoint can publish a fresh ed25519 seed without tearing concurrent
     /// signing passes. Readers acquire the current key via `load_full()`
     /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
@@ -1451,16 +1451,12 @@ pub struct FederationTransactionRecord {
 pub struct FederationOutboxRecord {
     /// ULID/UUID — primary key.
     pub id: String,
-    /// Peer DID (mirrors `federation_peers[i]`; today we treat the
-    /// configured peer URL as both did + url because the discovery layer
-    /// resolving DID → service endpoints lands in a later milestone).
+    /// Peer service DID from the `base_url|service_did` federation peer entry.
     pub peer_did: String,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
     pub peer_url: String,
-    /// Endpoint path on the peer, e.g.
-    /// `/_soland/peer/federation/push-operations` or
-    /// `/_soland/peer/federation/anchors`.
+    /// Endpoint path on the peer, e.g. `/_cokret/peer/events`.
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
     /// deterministically from `(origin, resource_kind, resource_id)` so
@@ -1654,7 +1650,7 @@ pub struct OrganizationPolicyRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct SpaceModerationPolicyRecord {
+pub struct RealmModerationPolicyRecord {
     pub realm_id: String,
     pub payload: Value,
     pub updated_by: String,
@@ -2020,9 +2016,9 @@ impl AppState {
             federation_block_hints: Arc::new(Mutex::new(BTreeMap::new())),
             organizations: Arc::new(Mutex::new(BTreeMap::new())),
             organization_policies: Arc::new(Mutex::new(BTreeMap::new())),
-            space_organizations: Arc::new(Mutex::new(BTreeMap::new())),
-            organization_spaces: Arc::new(Mutex::new(BTreeMap::new())),
-            space_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
+            realm_organizations: Arc::new(Mutex::new(BTreeMap::new())),
+            organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
+            realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(cokret_sdk::state_res::MemoryMoveStore::default()),
             anchor_store: Arc::new(cokret_sdk::state_res::MemoryAnchorStore::default()),

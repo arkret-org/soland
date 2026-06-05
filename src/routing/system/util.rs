@@ -6,7 +6,7 @@
 //! - and reusable across at least two domains.
 //!
 //! Domain-specific helpers (`auth_or_render`, `append_audit_log`,
-//! `space_has_member`, the blob/MIME helpers, the proof verifiers, etc.) stay
+//! `realm_has_member`, the blob/MIME helpers, the proof verifiers, etc.) stay
 //! in their owning module so they can carry their own invariants. They will
 //! land here only if they outgrow that scope.
 

@@ -492,6 +492,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
 
     let collections = [
         ("actors", "actors"),
+        ("realms", "realms"),
         ("spaces", "spaces"),
         ("devices", "devices"),
         ("capabilities", "capabilities"),
@@ -514,6 +515,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
                 .await
                 .unwrap();
         assert_eq!(body["resource"], resource);
+        assert!(body["data"].is_array(), "admin {resource} missing data");
         assert!(body["items"].is_array(), "admin {resource} missing items");
         assert!(
             body[field].is_array(),

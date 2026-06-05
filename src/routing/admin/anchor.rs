@@ -1,19 +1,19 @@
 //! Stream H' admin surface — anchorer cell, Bottom diagnostics, Anchor DAG.
 //!
 //! Endpoints:
-//! - `GET  /_soland/admin/spaces/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
+//! - `GET  /_soland/admin/realms/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
-//! - `POST /_soland/admin/spaces/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
+//! - `POST /_soland/admin/realms/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
 //!   writes the new anchorer cell value (cas-register on
 //!   `ck:cell:ck.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
-//! - `GET  /_soland/admin/spaces/{realm_id}/bottom` — list cells whose join produced a `Bottom`
+//! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-space list.
-//! - `POST /_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
+//! - `POST /_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
 //!   manual) repair Move.
-//! - `GET  /_soland/admin/spaces/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
-//! - `POST /_soland/admin/spaces/{realm_id}/anchor-dag/compact` — trigger a signed compaction
+//! - `GET  /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
+//! - `POST /_soland/admin/realms/{realm_id}/anchor-dag/compact` — trigger a signed compaction
 //!   Anchor.
 //!
 //! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
@@ -31,7 +31,7 @@
 //!   work.
 //! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual` repair (free-form effects), and
 //!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
-//!   per-Space leader election that lands under `_todos.md` MAL-3 / MAL-11.
+//!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
 use std::collections::BTreeSet;
 
@@ -55,7 +55,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 // ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
 
-/// `GET /_soland/admin/spaces/{realm_id}/anchorer` response.
+/// `GET /_soland/admin/realms/{realm_id}/anchorer` response.
 ///
 /// Shape mirrors sodmin's `AnchorerValue`. `kind_raw` is one of
 /// `single_did|threshold|open_set|mixed`; only the fields relevant to
@@ -603,7 +603,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
 
 /// Walk the projection cell map for one Space, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
-fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
+fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
     let Ok(space) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
@@ -638,7 +638,7 @@ fn collect_bottom_entries_for_space(state: &AppState, realm_id: &str) -> Vec<Bot
 
 // ── Endpoints ────────────────────────────────────────────────────────────
 
-/// `GET /_soland/admin/spaces/{realm_id}/anchorer` — read current
+/// `GET /_soland/admin/realms/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
     operation_id = "ck.extension.soland.admin.spaces.anchorer.get",
@@ -667,7 +667,7 @@ pub(super) async fn admin_get_anchorer(
     ))
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/anchorer/reconfigure` —
+/// `POST /_soland/admin/realms/{realm_id}/anchorer/reconfigure` —
 /// submit a reconfig Move that writes the new anchorer cell value.
 ///
 /// Builds a Move signed by the service admin signer
@@ -831,7 +831,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     }
 }
 
-/// `GET /_soland/admin/spaces/{realm_id}/bottom` — list bottom cells in
+/// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
 /// this Space.
 #[endpoint(
     operation_id = "ck.extension.soland.admin.spaces.bottom.list",
@@ -839,7 +839,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     summary = "List Bottom cells in a Space"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.spaces.bottom.list"))]
-pub(super) async fn admin_list_space_bottom(
+pub(super) async fn admin_list_realm_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -851,7 +851,7 @@ pub(super) async fn admin_list_space_bottom(
     let _ = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
-    json_ok(collect_bottom_entries_for_space(state, &realm_id))
+    json_ok(collect_bottom_entries_for_realm(state, &realm_id))
 }
 
 /// `GET /_soland/admin/bottom` — global cross-space bottom entries.
@@ -869,7 +869,7 @@ pub(super) async fn admin_list_bottom_global(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
-    let space_ids: Vec<String> = {
+    let realm_ids: Vec<String> = {
         let spaces = state.realms.lock().expect("spaces lock");
         spaces
             .search(Default::default())
@@ -877,13 +877,13 @@ pub(super) async fn admin_list_bottom_global(
             .map(|s| s.realm_id.as_str().to_owned())
             .collect()
     };
-    for realm_id in space_ids {
-        out.extend(collect_bottom_entries_for_space(state, &realm_id));
+    for realm_id in realm_ids {
+        out.extend(collect_bottom_entries_for_realm(state, &realm_id));
     }
     json_ok(out)
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair` —
+/// `POST /_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair` —
 /// submit a repair Move.
 ///
 /// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
@@ -1103,7 +1103,7 @@ pub(super) async fn admin_repair_bottom(
     }
 }
 
-/// `GET /_soland/admin/spaces/{realm_id}/anchor-dag` — leaves + frontier
+/// `GET /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
     operation_id = "ck.extension.soland.admin.spaces.anchor_dag.get",
@@ -1187,7 +1187,7 @@ pub(super) async fn admin_get_anchor_dag(
     })
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/anchor-dag/compact` — trigger
+/// `POST /_soland/admin/realms/{realm_id}/anchor-dag/compact` — trigger
 /// a signed compaction Anchor.
 ///
 /// v1 implementation: reuse the in-process anchorer worker to fold any
@@ -1320,7 +1320,7 @@ pub(super) async fn admin_compact_anchor_dag(
     })
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/anchor-dag/prune` — evaluate a
+/// `POST /_soland/admin/realms/{realm_id}/anchor-dag/prune` — evaluate a
 /// historical Anchor for prune-eligibility against
 /// [`cokret_sdk::CompactionPolicy`] and, when eligible, remove it via
 /// [`AnchorStore::prune_predecessor`].
@@ -1529,11 +1529,11 @@ pub(super) async fn admin_prune_anchor_dag(
 
 // ── Multi-sig coordinator ────────────────────────────────────────────────
 //
-// `POST /_soland/admin/spaces/{realm_id}/multisig/{anchor_id}/partial` accepts
+// `POST /_soland/admin/realms/{realm_id}/multisig/{anchor_id}/partial` accepts
 // partial Anchor signatures from peer anchorers; once the threshold is
 // reached, the aggregated `Anchor` is published.
 //
-// `GET /_soland/admin/spaces/{realm_id}/multisig/pending` lists the in-flight
+// `GET /_soland/admin/realms/{realm_id}/multisig/pending` lists the in-flight
 // anchors awaiting threshold so the admin UI can render them.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -1567,7 +1567,7 @@ pub struct MultisigPendingResponse {
     pub entries: Vec<MultisigPendingEntry>,
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/multisig/{anchor_id}/partial`.
+/// `POST /_soland/admin/realms/{realm_id}/multisig/{anchor_id}/partial`.
 ///
 /// MAL-11: persistent multisig buffer wire-in. Stores each partial in the
 /// `multisig_pending` Postgres table (or in-memory equivalent). When the
@@ -1694,7 +1694,7 @@ pub(super) async fn admin_submit_multisig_partial(
     })
 }
 
-/// `GET /_soland/admin/spaces/{realm_id}/multisig/pending`.
+/// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
     operation_id = "ck.extension.soland.admin.multisig.pending",
     tags("admin", "multisig")
@@ -1745,7 +1745,7 @@ pub(super) async fn admin_list_multisig_pending(
     json_ok(MultisigPendingResponse { entries })
 }
 
-/// `POST /_soland/admin/spaces/{realm_id}/anchorer/rotate-signing-key` —
+/// `POST /_soland/admin/realms/{realm_id}/anchorer/rotate-signing-key` —
 /// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
 /// `state.config.use_keystore` is true), hot-swap the AnchorerWorker key
 /// via `AppState::rotate_anchorer_signing_key`, return `{kid, did, rotated_at}`.
@@ -1763,8 +1763,8 @@ pub(super) async fn admin_list_multisig_pending(
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
 /// realm_id path param is required for symmetry with the other
-/// per-space anchorer endpoints; the signing key itself is process-wide,
-/// not Space-scoped.
+/// per-Realm anchorer endpoints; the signing key itself is process-wide,
+/// not Realm-scoped.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RotateSigningKeyResponse {
     pub kid: String,
@@ -1935,7 +1935,7 @@ fn sha256_hex_for(bytes: &[u8]) -> String {
 
 // ── MAL-13 GC candidates admin endpoint ──────────────────────────────────
 
-/// `GET /_soland/admin/spaces/{realm_id}/gc-candidates` response.
+/// `GET /_soland/admin/realms/{realm_id}/gc-candidates` response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidatesResponse {
     pub realm_id: String,
@@ -1943,7 +1943,7 @@ pub struct GcCandidatesResponse {
     pub total: usize,
 }
 
-/// `GET /_soland/admin/spaces/{realm_id}/gc-candidates` — list Moves that
+/// `GET /_soland/admin/realms/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
     operation_id = "ck.extension.soland.admin.spaces.gc_candidates",

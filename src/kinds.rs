@@ -235,8 +235,7 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // `ck.realm.link` (realm / reducer_input): typed link between Realm
 // boundaries. Canonical `link_kind` parsing + cycle/self-reference
 // rejection runs in `reducer::realm_links::check_realm_link_admissible`
-// (R3.1). The CKP-0007 P2A.4 pass lifts the previous TODO(realm-rework)
-// marker: the canonical link kinds (`governed_by`, `inherits_policy_from`,
+// (R3.1). The canonical link kinds (`governed_by`, `inherits_policy_from`,
 // `mirror_of`, `references`, `audited_by`) all evaluate, and the
 // `/_soland/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
@@ -452,9 +451,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // push registration plumbing.
         CK_REALM_DELIVERY_BINDING_POLICY => Some(CK_REALM_DELIVERY_BINDING_POLICY),
         CK_DEVICE_PUSH_ROUTE => Some(CK_DEVICE_PUSH_ROUTE),
-        // Realm graph — schema-level accept; reducer projection is
-        // TODO(realm-rework) for link_kind / inheritance / capability
-        // derive semantics.
+        // Realm graph — schema-level accept; reducer projection handles
+        // link_kind / inheritance / capability derive semantics.
         CK_REALM_LINK => Some(CK_REALM_LINK),
         CK_REALM_INHERITANCE_POLICY => Some(CK_REALM_INHERITANCE_POLICY),
         CK_CAPABILITY_DERIVED => Some(CK_CAPABILITY_DERIVED),

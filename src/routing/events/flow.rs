@@ -1,6 +1,6 @@
 //! Flow ID derivation + discussion-track projection helpers.
 //!
-//! Flow IDs are derived from Realm/Space IDs via typed-id → `ck:flow:` re-tagging
+//! Flow IDs are derived from Realm IDs via typed-id → `ck:flow:` re-tagging
 //! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
 //! discussion track as the const string `discussion`.
 //!
@@ -25,10 +25,9 @@ pub fn derived_flow_id(seed: &str) -> String {
     format!("ck:flow:{}", &digest[..26])
 }
 
-pub fn flow_id_from_space_id(space_id: &str) -> String {
-    retag_typed_id(space_id, "ck:realm:", "ck:flow:")
-        .or_else(|| retag_typed_id(space_id, "ck:space:", "ck:flow:"))
-        .unwrap_or_else(|| derived_flow_id(space_id))
+pub fn flow_id_from_realm_id(realm_id: &str) -> String {
+    retag_typed_id(realm_id, "ck:realm:", "ck:flow:")
+        .unwrap_or_else(|| derived_flow_id(realm_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {
@@ -46,7 +45,7 @@ pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<Str
         .get("flow_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .or_else(|| Some(flow_id_from_space_id(&event.realm_id)))
+        .or_else(|| Some(flow_id_from_realm_id(&event.realm_id)))
 }
 
 pub fn discussion_track_for_projection_event(
@@ -62,24 +61,24 @@ pub fn discussion_track_for_projection_event(
     Some(default_discussion_track(flow_id, track_id))
 }
 
-pub async fn flow_history_visibility_for_space(state: &AppState, space_id: &str) -> &'static str {
-    if realm_discoverability(state, space_id).await == "public" {
+pub async fn flow_history_visibility_for_realm(state: &AppState, realm_id: &str) -> &'static str {
+    if realm_discoverability(state, realm_id).await == "public" {
         "shared"
     } else {
         "joined"
     }
 }
 
-pub async fn flow_projection_for_space(
+pub async fn flow_projection_for_realm(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
     let meta = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten();
@@ -96,17 +95,17 @@ pub async fn flow_projection_for_space(
         .map(|meta| meta.updated_at)
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
-    let history_visibility = flow_history_visibility_for_space(state, space_id).await;
+    let history_visibility = flow_history_visibility_for_realm(state, realm_id).await;
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
     // (see cokret-spec `artifacts/registry/forbidden-wire-fields.json`
-    // entries `kind=room` and `room_kind`); Space is the v1 boundary and
+    // entries `kind=room` and `room_kind`); Realm is the v1 boundary and
     // the Flow.kind discriminator MUST be a v1 value (e.g. "discussion").
     json!({
-        "id": flow_id_from_space_id(space_id),
-        "flow_id": flow_id_from_space_id(space_id),
+        "id": flow_id_from_realm_id(realm_id),
+        "flow_id": flow_id_from_realm_id(realm_id),
         "type": "flow",
         "schema": "ck.schema.flow.v1",
-        "space_id": space_id,
+        "realm_id": realm_id,
         "kind": "discussion",
         "title": title,
         "description": summary,
@@ -121,7 +120,7 @@ pub async fn flow_projection_for_space(
                 "enabled": true,
                 "track_kind": "discussion",
                 "history_visibility": history_visibility,
-                "encryption_profile": if realm_allows_plaintext_service(state, space_id).await { "none" } else { "mls_rfc9420" },
+                "encryption_profile": if realm_allows_plaintext_service(state, realm_id).await { "none" } else { "mls_rfc9420" },
                 "fields": {}
             }
         },

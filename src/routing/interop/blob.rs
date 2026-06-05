@@ -2,8 +2,8 @@
 //!
 //! Surfaces:
 //! - `POST /_cokret/self/blob/upload`         — multipart-or-raw upload, normalises MIME /
-//!   filename, enforces per-actor / per-space / per-upload quotas, rejects plaintext blobs in
-//!   private Spaces unless this service is in `plaintext_visible_services`.
+//!   filename, enforces per-actor / per-Realm / per-upload quotas, rejects plaintext blobs in
+//!   private Realms unless this service is in `plaintext_visible_services`.
 //! - `HEAD /_cokret/self/blob/get`            — metadata + size for range planning
 //! - `GET  /_cokret/self/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
@@ -22,8 +22,9 @@ use serde_json::{Value, json};
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
     is_valid_sha256_hex, now, query_param, render_error, sha256_hex,
-    space_allows_plaintext_service, space_has_member, validate_space_id,
+    realm_allows_plaintext_service, realm_has_member,
 };
+use cokret_sdk::RealmId;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, BlobRecord, SessionRecord};
@@ -70,12 +71,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     let realm_id = match req
         .headers()
-        .get("x-cokret-space-id")
+        .get("x-cokret-realm-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
     {
         Some(realm_id) => {
-            if validate_space_id(&realm_id).is_err() {
+            if RealmId::new(realm_id.clone()).is_err() {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
@@ -84,12 +85,12 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 );
                 return;
             }
-            if !space_has_member(state, &realm_id, &session.actor).await {
+            if !realm_has_member(state, &realm_id, &session.actor).await {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,
                     "capability_denied",
-                    "uploader is not a joined member of the blob space",
+                    "uploader is not a joined member of the blob Realm",
                 );
                 return;
             }
@@ -159,7 +160,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let plaintext_denied = if encrypted {
         false
     } else if let Some(realm_id) = realm_id.as_deref() {
-        !space_allows_plaintext_service(state, realm_id).await
+        !realm_allows_plaintext_service(state, realm_id).await
     } else {
         false
     };
@@ -322,7 +323,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     state,
                     blob,
                     session,
-                    query_param(req, "space_id").as_deref(),
+                    query_param(req, "realm_id").as_deref(),
                 )
                 .await
             } else {
@@ -430,7 +431,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     "blob_ref": blob_ref.clone(),
                     "device_id": session.as_ref().map(|session| session.device_id.clone()),
                     "purpose": purpose,
-                    "space_id": blob.realm_id.clone(),
+                    "realm_id": blob.realm_id.clone(),
                     "presigned": session.is_none(),
                     "status": status.as_u16()
                 }),
@@ -515,7 +516,7 @@ async fn blob_presign(
         state,
         &blob,
         &session,
-        body.get("space_id").and_then(Value::as_str),
+        body.get("realm_id").and_then(Value::as_str),
     )
     .await
     {
@@ -732,7 +733,7 @@ fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize),
 
 const MAX_BLOB_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const MAX_BLOB_ACCOUNT_BYTES: usize = 50 * 1024 * 1024;
-const MAX_BLOB_SPACE_BYTES: usize = 100 * 1024 * 1024;
+const MAX_BLOB_REALM_BYTES: usize = 100 * 1024 * 1024;
 
 fn sanitize_media_type(raw: &str) -> Option<String> {
     let media_type = raw.split(';').next()?.trim().to_ascii_lowercase();
@@ -836,13 +837,13 @@ async fn enforce_blob_quota(
         return Err("account blob quota exceeded");
     }
     if let Some(realm_id) = realm_id {
-        let space_bytes: usize = blobs
+        let realm_bytes: usize = blobs
             .iter()
             .filter(|blob| blob.realm_id.as_deref() == Some(realm_id))
             .map(|blob| blob.size_bytes.max(0) as usize)
             .sum();
-        if space_bytes.saturating_add(size) > MAX_BLOB_SPACE_BYTES {
-            return Err("space blob quota exceeded");
+        if realm_bytes.saturating_add(size) > MAX_BLOB_REALM_BYTES {
+            return Err("realm blob quota exceeded");
         }
     }
     Ok(())
@@ -861,21 +862,21 @@ async fn blob_visible_to_session(
     state: &AppState,
     blob: &BlobRecord,
     session: &SessionRecord,
-    requested_space_id: Option<&str>,
+    requested_realm_id: Option<&str>,
 ) -> bool {
     if blob.uploaded_by == session.actor {
         return blob.realm_id.as_deref().is_none_or(|realm_id| {
-            requested_space_id.is_none_or(|requested| requested == realm_id)
+            requested_realm_id.is_none_or(|requested| requested == realm_id)
         });
     }
 
     let Some(realm_id) = blob.realm_id.as_deref() else {
         return false;
     };
-    if requested_space_id.is_some_and(|requested| requested != realm_id) {
+    if requested_realm_id.is_some_and(|requested| requested != realm_id) {
         return false;
     }
-    space_has_member(state, realm_id, &session.actor).await
+    realm_has_member(state, realm_id, &session.actor).await
 }
 
 // ────────────────────────────────────────────────────────────────────────

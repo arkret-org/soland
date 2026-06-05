@@ -290,7 +290,7 @@ async fn mimi_room_message(
         .get("thread_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| crate::routing::events::flow::flow_id_from_space_id(&realm_id));
+        .unwrap_or_else(|| crate::routing::events::flow::flow_id_from_realm_id(&realm_id));
     let created_at = chrono::Utc::now();
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",

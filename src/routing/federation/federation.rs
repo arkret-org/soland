@@ -1,16 +1,7 @@
-//! Server-to-server federation handlers.
+//! Internal federation helpers.
 //!
-//! Surfaces:
-//! - `PUT /_soland/peer/federation/transactions/{txn_id}` (idempotent inbound txn)
-//! - `POST /_soland/peer/federation/push-operations`
-//! - `GET /_soland/peer/federation/pull-operations`
-//! - `GET /_soland/peer/federation/space-members`
-//! - `POST /_soland/peer/federation/verify-actor`
-//! - `GET /_soland/peer/federation/anchors?space_id=...` (peer-pull: list locally-held Anchors for
-//!   a Space) + `POST /_soland/peer/federation/anchors` (peer-push: accept Anchor envelopes for
-//!   replication). The wire path is identical for both [`crate::config::FederationPolicy::Mesh`]
-//!   and [`crate::config::FederationPolicy::Hub`]; only the outbound routing decision (broadcast vs
-//!   hub-only) differs.
+//! The formal server-to-server HTTP surface is `/_cokret/peer/*`. This module keeps
+//! trust-header utilities and local migration helpers that are not mounted as peer routes.
 //!
 //! Production gaps: `validation_class` instead of bool, reducer-profile
 //! digest enforcement, revocation fanout, and a long-running retry daemon.
@@ -35,13 +26,15 @@ use sha2::{Digest, Sha256};
 
 use super::{
     ingest_federation_operations, now, operation_is_visible, redaction_targets_from_operations,
-    sha256_hex, sync_token, validate_did, validate_space_id,
+    sha256_hex, sync_token, validate_did,
 };
 use crate::error::AppError;
+use crate::ids;
+#[cfg(test)]
+use crate::kinds;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::state::{AppState, FederationBlockHintRecord, FederationTransactionRecord};
-use crate::{ids, kinds};
 
 const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
@@ -573,7 +566,7 @@ fn spawn_block_hint_push(
     });
     tokio::spawn(async move {
         let target = format!(
-            "{}/_soland/peer/federation/block-hint",
+            "{}/_cokret/peer/events/frontier",
             peer_url.trim_end_matches('/')
         );
         let target_url = match crate::security::validate_http_url_for_egress(
@@ -739,36 +732,6 @@ fn projection_event_matches_actor(
             == Some(actor)
 }
 
-/// Fan out locally-accepted timeline / membership operations to configured
-/// federation peers. Each operation is persisted in the local federation log
-/// first, so peer pull/backfill can replay the same item if the live push path
-/// is partitioned. Outbox rows are deterministic on `(origin, destination,
-/// operation_id)`, making restart-time replays idempotent.
-pub(crate) async fn fanout_accepted_operations_to_peers(
-    state: &AppState,
-    operations: &[Operation],
-) {
-    if operations.is_empty() || state.config.federation_peers.is_empty() {
-        return;
-    }
-    let peers = configured_peer_targets(state);
-    if peers.is_empty() {
-        return;
-    }
-
-    for operation in operations
-        .iter()
-        .filter(|operation| operation_should_fanout(operation))
-    {
-        persist_local_federation_operation(state, operation).await;
-        for peer in peers.clone() {
-            if outbound_operation_allowed(state, operation, &peer).await {
-                enqueue_operation_push(state, operation, &peer).await;
-            }
-        }
-    }
-}
-
 async fn enforce_inbound_operation_batch_policy(
     state: &AppState,
     origin_service_did: &str,
@@ -813,53 +776,6 @@ async fn enforce_inbound_operation_batch_policy(
         .map_err(app_error_from_policy_gate)?;
     }
     Ok(())
-}
-
-async fn outbound_operation_allowed(
-    state: &AppState,
-    operation: &Operation,
-    peer: &FederationPeerTarget,
-) -> bool {
-    let result = async {
-        enforce_realm_federation_policy(
-            state,
-            operation.realm_id.as_str(),
-            peer.did.as_str(),
-            Some(peer.url.as_str()),
-            FederationDirection::Outbound,
-        )?;
-        enforce_realm_moderation_federation_policy(
-            state,
-            operation.realm_id.as_str(),
-            peer.did.as_str(),
-            Some(peer.url.as_str()),
-            FederationDirection::Outbound,
-        )?;
-        policy_gate::enforce_operation_policy_server(
-            state,
-            operation_actor_did(operation).unwrap_or(state.config.service_did.as_str()),
-            operation,
-            PolicyGateSurface::FederationOutbound {
-                destination_service_did: peer.did.clone(),
-            },
-        )
-        .await
-        .map_err(app_error_from_policy_gate)
-    }
-    .await;
-
-    if let Err(error) = result {
-        tracing::warn!(
-            error_code = %error.wire_code(),
-            message = %error.message,
-            peer = %peer.url,
-            peer_did = %peer.did,
-            operation_id = %operation.operation_id,
-            "federation operation fanout suppressed by realm policy"
-        );
-        return false;
-    }
-    true
 }
 
 fn app_error_from_policy_gate(rejection: policy_gate::PolicyGateRejection) -> AppError {
@@ -924,9 +840,9 @@ fn enforce_realm_moderation_federation_policy(
     direction: FederationDirection,
 ) -> Result<(), AppError> {
     let record = state
-        .space_moderation_policies
+        .realm_moderation_policies
         .lock()
-        .expect("space moderation policies lock")
+        .expect("realm moderation policies lock")
         .get(realm_id)
         .cloned();
     let Some(record) = record else {
@@ -1074,28 +990,27 @@ fn operation_actor_did(operation: &Operation) -> Option<&str> {
 #[endpoint(
     operation_id = "ck.extension.soland.federation.pull_operations",
     tags("federation"),
-    summary = "Pull a page of operations for a federated space, with optional snapshot bootstrap"
+    summary = "Pull a page of operations for a federated Realm, with optional snapshot bootstrap"
 )]
 #[tracing::instrument(
     skip_all,
     fields(op = "ck.extension.soland.federation.pull_operations")
 )]
 pub(super) async fn federation_pull_operations(
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
     after_cursor: QueryParam<String, false>,
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationPullOperationsResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    let realm_id = realm_id.into_inner();
+    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
     let after_cursor: Option<String> = after_cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
-    let realm_id = space_id.replacen("ck:space:", "ck:realm:", 1);
     let space_operations = state
         .persistence
         .federation_operations()
@@ -1106,7 +1021,7 @@ pub(super) async fn federation_pull_operations(
     let snapshot_bootstrap = want_snapshot_bootstrap.then(|| {
         let manifest = json!({
             "type": "snapshot_bootstrap",
-            "space_id": space_id,
+            "realm_id": realm_id,
             "snapshot_ref": ids::generate_snapshot_id(),
             "operation_count": space_operations.len(),
             "created_at": now(),
@@ -1177,9 +1092,9 @@ pub(super) async fn federation_backfill_operations(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let space_id = required_json_string(&body, "space_id")?;
-    if validate_space_id(space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    let realm_id = required_json_string(&body, "realm_id")?;
+    if cokret_sdk::RealmId::new(realm_id.to_owned()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
     let peer = configured_peer_from_backfill_body(state, &body)?;
     let limit = body
@@ -1196,7 +1111,7 @@ pub(super) async fn federation_backfill_operations(
         .get("after_cursor")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let frontier_before = operation_frontier_value(state, space_id).await;
+    let frontier_before = operation_frontier_value(state, realm_id).await;
     let client = crate::security::build_egress_http_client(
         crate::routing::federation::outbox::CONNECT_TIMEOUT,
         crate::routing::federation::outbox::REQUEST_TIMEOUT,
@@ -1215,7 +1130,7 @@ pub(super) async fn federation_backfill_operations(
             state,
             &client,
             &peer,
-            space_id,
+            realm_id,
             after_cursor.as_deref(),
             limit,
         )
@@ -1236,11 +1151,11 @@ pub(super) async fn federation_backfill_operations(
             break;
         }
     }
-    let frontier_after = operation_frontier_value(state, space_id).await;
+    let frontier_after = operation_frontier_value(state, realm_id).await;
     json_ok(json!({
         "peer_url": peer.url,
         "peer_did": peer.did,
-        "space_id": space_id,
+        "realm_id": realm_id,
         "pulled": pulled,
         "accepted": accepted,
         "rejected": rejected,
@@ -1262,37 +1177,37 @@ pub(super) async fn federation_backfill_operations(
     fields(op = "ck.extension.soland.federation.operation_frontier")
 )]
 pub(super) async fn federation_operation_frontier(
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    let realm_id = realm_id.into_inner();
+    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
-    json_ok(operation_frontier_value(state, &space_id).await)
+    json_ok(operation_frontier_value(state, &realm_id).await)
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.space_members",
+    operation_id = "ck.extension.soland.federation.realm_members",
     tags("federation"),
-    summary = "List space memberships for a federated space"
+    summary = "List Realm memberships for a federated Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.space_members"))]
-pub(super) async fn federation_space_members(
-    space_id: QueryParam<String, true>,
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.realm_members"))]
+pub(super) async fn federation_realm_members(
+    realm_id: QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<cokret_sdk::FederationRealmMembersResBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id_value = RealmId::new(space_id.into_inner())
+    let realm_id_value = RealmId::new(realm_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let members = state
         .realms
         .lock()
         .expect("spaces lock")
-        .get(&space_id_value)
-        .map(|space| {
-            space
+        .get(&realm_id_value)
+        .map(|realm| {
+            realm
                 .members
                 .iter()
                 .map(|principal_id| cokret_sdk::MemberRef {
@@ -1891,7 +1806,7 @@ fn federation_verify_actor_signature_transcript(
     body: &cokret_sdk::FederationVerifyActorReqBody,
     unsigned_request_digest: &str,
 ) -> Value {
-    let scope_id = body.space_id.as_ref().map(|value| value.as_str());
+    let scope_id = body.realm_id.as_ref().map(|value| value.as_str());
     json!({
         "type": "ck.federation.verify_actor.signature.v1",
         "actor_id": body.actor_id.as_str(),
@@ -2086,11 +2001,8 @@ async fn pull_operations_page(
     after_cursor: Option<&str>,
     limit: usize,
 ) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
-    let mut url = reqwest::Url::parse(&format!(
-        "{}/_soland/peer/federation/pull-operations",
-        peer.url
-    ))
-    .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
+    let mut url = reqwest::Url::parse(&format!("{}/_cokret/peer/events", peer.url))
+        .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
         let mut query = url.query_pairs_mut();
         query.append_pair("space_id", space_id);
@@ -2101,7 +2013,7 @@ async fn pull_operations_page(
     }
     let url = crate::security::validate_http_url_for_egress(
         url.as_str(),
-        "federation pull-operations",
+        "peer events query",
         state.config.development_mode,
     )
     .map_err(AppError::capability_denied)?;
@@ -2124,8 +2036,7 @@ async fn pull_operations_page(
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
-async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
-    let realm_id = space_id.replacen("ck:space:", "ck:realm:", 1);
+async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
     let operations = state
         .persistence
         .federation_operations()
@@ -2163,127 +2074,6 @@ async fn operation_frontier_value(state: &AppState, space_id: &str) -> Value {
         "latest_operation_id": latest_operation_id,
         "frontier_digest": frontier_digest,
     })
-}
-
-fn operation_should_fanout(operation: &Operation) -> bool {
-    kinds::operation_is_message_create(operation)
-        || kinds::operation_is_invite(operation)
-        || kinds::operation_is_membership(operation)
-        || kinds::operation_is_realm_lifecycle(operation)
-}
-
-async fn persist_local_federation_operation(state: &AppState, operation: &Operation) {
-    let store = state.persistence.federation_operations();
-    match store.contains(operation.operation_id.as_str()).await {
-        Ok(true) => {}
-        Ok(false) => {
-            if let Err(error) = store.append(operation.clone()).await {
-                tracing::warn!(
-                    %error,
-                    operation_id = %operation.operation_id,
-                    "failed to persist local federation operation"
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                operation_id = %operation.operation_id,
-                "failed to check local federation operation log"
-            );
-        }
-    }
-}
-
-async fn enqueue_operation_push(
-    state: &AppState,
-    operation: &Operation,
-    peer: &FederationPeerTarget,
-) {
-    let Ok(origin) = Did::new(state.config.service_did.clone()) else {
-        tracing::warn!(
-            service_did = %state.config.service_did,
-            "local service_did is not a DID; skipping federation operation fanout"
-        );
-        return;
-    };
-    let Ok(destination) = Did::new(peer.did.clone()) else {
-        tracing::warn!(
-            peer = %peer.url,
-            peer_did = %peer.did,
-            operation_id = %operation.operation_id,
-            "federation peer entry lacks a valid destination DID; use base_url|did"
-        );
-        return;
-    };
-    let Ok(space_id) = RealmId::new(operation.realm_id.to_string()) else {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            realm_id = %operation.realm_id,
-            "operation realm_id is not federation-addressable"
-        );
-        return;
-    };
-
-    let body = cokret_sdk::FederationPushOperationsReqBody {
-        origin,
-        destination,
-        space_id,
-        service_binding_ref: format!(
-            "{}#federation-push-operations:{}",
-            state.config.service_did,
-            operation.operation_id.as_str()
-        ),
-        operations: vec![operation.clone()],
-    };
-    let payload = match serde_json::to_value(&body)
-        .ok()
-        .and_then(|value| cokret_sdk::canonical::canonical_json_bytes(&value).ok())
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-    {
-        Some(payload) => payload,
-        None => {
-            tracing::warn!(
-                operation_id = %operation.operation_id,
-                "failed to encode federation operation push body"
-            );
-            return;
-        }
-    };
-
-    let mut hasher = Sha256::new();
-    hasher.update(state.config.service_did.as_bytes());
-    hasher.update(b"|");
-    hasher.update(peer.did.as_bytes());
-    hasher.update(b"|operation|");
-    hasher.update(operation.operation_id.as_str().as_bytes());
-    let idempotency_key = format!("ck:outbox:operation:{:x}", hasher.finalize());
-
-    record_outbound_fanout_attempt(
-        state,
-        "operation",
-        operation.operation_id.as_str(),
-        peer.url.as_str(),
-    )
-    .await;
-    if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
-        state,
-        peer.url.as_str(),
-        peer.did.as_str(),
-        "/_soland/peer/federation/push-operations",
-        &idempotency_key,
-        &payload,
-    )
-    .await
-    {
-        tracing::warn!(
-            %error,
-            peer = %peer.url,
-            peer_did = %peer.did,
-            operation_id = %operation.operation_id,
-            "failed to enqueue federation operation push"
-        );
-    }
 }
 
 fn is_valid_federation_txn_id(value: &str) -> bool {
@@ -2330,20 +2120,20 @@ pub struct FederationAnchorsPushResponse {
 #[endpoint(
     operation_id = "ck.extension.soland.federation.anchors.pull",
     tags("federation"),
-    summary = "Pull locally-held Anchors for a Space (federation peer-pull)"
+    summary = "Pull locally-held Anchors for a Realm (federation peer-pull)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.pull"))]
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
-    space_id: QueryParam<String, true>,
+    realm_id: QueryParam<String, true>,
 ) -> JsonResult<FederationAnchorsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let space_id = space_id.into_inner();
-    if validate_space_id(&space_id).is_err() {
-        return Err(AppError::invalid_param("invalid space_id"));
+    let realm_id = realm_id.into_inner();
+    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid realm_id"));
     }
-    let space = RealmId::new(space_id).map_err(|_| AppError::invalid_param("invalid space_id"))?;
-    let leaves = state.anchor_store.list_leaves(&space).unwrap_or_default();
+    let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    let leaves = state.anchor_store.list_leaves(&realm).unwrap_or_default();
     let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
         if let Ok(Some(a)) = state.anchor_store.get(leaf) {
@@ -2518,8 +2308,8 @@ async fn enqueue_outbound_for(
     peer: &FederationPeerTarget,
 ) {
     let endpoint = match resource_kind {
-        "anchor" => "/_soland/peer/federation/anchors",
-        _ => "/_soland/peer/federation/push-operations",
+        "anchor" => "/_cokret/peer/events",
+        _ => "/_cokret/peer/events",
     };
     let payload = json!({
         "schema": format!("ck.federation.outbound.{resource_kind}.v1"),
@@ -2595,8 +2385,8 @@ async fn record_outbound_fanout_attempt(
     });
     let next_retry_at = attempted_at + Duration::seconds(30);
     let target_path = match resource_kind {
-        "anchor" => "/_soland/peer/federation/anchors",
-        _ => "/_soland/peer/federation/push-operations",
+        "anchor" => "/_cokret/peer/events",
+        _ => "/_cokret/peer/events",
     };
     let intent = json!({
         "schema": "ck.federation.outbound_fanout.intent.v1",
@@ -3396,7 +3186,7 @@ mod tests {
         assert_eq!(outbox.len(), 3);
         assert!(outbox.iter().all(|row| row.peer_url == "http://127.0.0.1:9"
             && row.peer_did == "did:web:peer.example"
-            && row.endpoint == "/_soland/peer/federation/push-operations"));
+            && row.endpoint == "/_cokret/peer/events"));
         let payloads = outbox
             .iter()
             .map(|row| serde_json::from_str::<Value>(&row.payload_json).unwrap())
@@ -3545,10 +3335,7 @@ mod tests {
             .await
             .unwrap()
             .expect("outbound anchor transcript persisted");
-        assert_eq!(
-            transcript.response["target_path"],
-            "/_soland/peer/federation/anchors"
-        );
+        assert_eq!(transcript.response["target_path"], "/_cokret/peer/events");
         assert_eq!(transcript.response["intent"]["resource_kind"], "anchor");
         assert_eq!(
             transcript.response["retry"]["policy"]["initial_backoff_ms"],

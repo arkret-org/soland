@@ -6,7 +6,7 @@
 //! - `GET  /_cokret/self/account/subscribe`       — `ck.account.subscribe` (account-aggregate
 //!   NDJSON: timeline, presence, typing, to_device).
 //! - `POST /_cokret/self/ephemeral`               — `ck.ephemeral.send` (broadcast ephemeral)
-//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-space /
+//! - `GET  /_cokret/self/events/subscribe`        — `ck.events.subscribe`. Multi-Realm /
 //!   multi-actor stream; frame `kind` field replaces `type`.
 //! - `GET  /_cokret/self/events`                  — `ck.events.query` (replaces `ck.events.list` +
 //!   `ck.sync.backfill` via `direction=forward|backward`).
@@ -42,13 +42,13 @@ use super::projection::{
 };
 use super::{
     augment_timeline_message_json, authenticated_session, backfill_gap_events,
-    default_discussion_track, device_message_events_after, flow_id_from_space_id,
-    flow_projection_for_space, is_realm_deleted, now, parse_snapshot_ref, projected_event_page,
+    default_discussion_track, device_message_events_after, flow_id_from_realm_id,
+    flow_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref, projected_event_page,
     projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_bundle_for_space, sync_timeline_message_json_with_projection, truncate_gap_events,
-    typing_ephemeral_for_space, validate_did,
+    snapshot_bundle_for_realm, sync_timeline_message_json_with_projection, truncate_gap_events,
+    typing_ephemeral_for_realm, validate_did,
 };
 use crate::ids;
 use crate::reducer::ProjectionState;
@@ -125,11 +125,11 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
         service_did: state.config.service_did.clone(),
         supported_sync_profiles,
         limits: json!({
-            "max_spaces": 50,
+            "max_realms": 50,
             "max_timeline_events": 100,
             "offline_flush_endpoint": "/_cokret/self/events",
             "backfill_endpoint": "/_cokret/self/sync/backfill/gap",
-            "bottom_repair_endpoint": "/_soland/admin/spaces/{realm_id}/bottom/{cell_id}/repair"
+            "bottom_repair_endpoint": "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair"
         }),
         frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
     }));
@@ -443,8 +443,8 @@ fn parse_max_wait_ms(req: &mut Request) -> u64 {
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
 fn delta_is_empty(response: &cokret_sdk::model::SyncResBody) -> bool {
-    response.spaces.is_empty()
-        && response.left_spaces.is_empty()
+    response.realms.is_empty()
+        && response.left_realms.is_empty()
         && response.to_device.is_empty()
         && response.presence.is_empty()
 }
@@ -462,7 +462,7 @@ fn account_delta_frame(response: cokret_sdk::model::SyncResBody) -> Value {
     json!({
         "kind": "delta",
         "cursor": response.cursor,
-        "realms": response.spaces,
+        "realms": response.realms,
         "to_device": {"messages": response.to_device},
         "device_lists": response.device_lists,
         "account_data": {"events": response.account_data},
@@ -567,20 +567,20 @@ async fn build_sync_snapshot(
     // `ck.member.identity.update` event log; servers that lack the events for
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
-    let candidate_spaces: Vec<RealmDirectoryEntry> = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        spaces
+    let candidate_realms: Vec<RealmDirectoryEntry> = {
+        let realms = state.realms.lock().expect("realms lock");
+        realms
             .search(Default::default())
             .into_iter()
             .cloned()
             .collect()
     };
-    let mut visible_spaces: Vec<(String, String, Option<String>, _, Option<String>, _)> =
+    let mut visible_realms: Vec<(String, String, Option<String>, _, Option<String>, _)> =
         Vec::new();
-    for space in &candidate_spaces {
+    for space in &candidate_realms {
         if realm_visible_to(state, space, session).await {
             let members = roster_members_for_realm(state, space, session, body);
-            visible_spaces.push((
+            visible_realms.push((
                 space.realm_id.to_string(),
                 space.name.clone(),
                 space.description.clone(),
@@ -594,23 +594,23 @@ async fn build_sync_snapshot(
     // client-side caches without forcing a full account baseline.
     // On full sync (no `after` cursor -> empty `after_cursor.positions`)
     // there is nothing to compare against; the client already treats
-    // omission from `spaces` as authoritative there.
-    let visible_space_ids: BTreeSet<&str> =
-        visible_spaces.iter().map(|(id, ..)| id.as_str()).collect();
-    let left_spaces: Vec<String> = if body.after.is_some() {
+    // omission from `realms` as authoritative there.
+    let visible_realm_ids: BTreeSet<&str> =
+        visible_realms.iter().map(|(id, ..)| id.as_str()).collect();
+    let left_realms: Vec<String> = if body.after.is_some() {
         after_cursor
             .positions
             .keys()
-            .filter(|id| !visible_space_ids.contains(id.as_str()))
+            .filter(|id| !visible_realm_ids.contains(id.as_str()))
             .cloned()
             .collect()
     } else {
         Vec::new()
     };
-    drop(visible_space_ids);
+    drop(visible_realm_ids);
 
     let mut presence_actors = BTreeSet::new();
-    for (_, _, _, _, _, members) in &visible_spaces {
+    for (_, _, _, _, _, members) in &visible_realms {
         for member in members {
             if let Some(actor) = roster_member_actor_id(member) {
                 presence_actors.insert(actor);
@@ -623,18 +623,18 @@ async fn build_sync_snapshot(
         Vec::new()
     };
 
-    // Clone the projection so the per-space loop below can `.await` async
+    // Clone the projection so the per-Realm loop below can `.await` async
     // visibility/timeline helpers without holding the (non-Send) lock guard
     // across a suspension point.
     let projection = state.projection.lock().expect("projection lock").clone();
-    let mut sync_spaces = std::collections::BTreeMap::new();
+    let mut sync_realms = std::collections::BTreeMap::new();
     let mut positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
     let cursor_issued_at = after_cursor
         .issued_at_ms
         .and_then(chrono::DateTime::<Utc>::from_timestamp_millis);
-    for (realm_id, title, summary, tags, category, members) in visible_spaces {
-        let flow = flow_projection_for_space(state, &realm_id, &title, summary.as_deref()).await;
+    for (realm_id, title, summary, tags, category, members) in visible_realms {
+        let flow = flow_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
         let flow_state_after = flow.clone();
         let flow_list_item = flow.clone();
         let summary_members = members.clone();
@@ -689,8 +689,8 @@ async fn build_sync_snapshot(
         }
         let bottom_cells = bottom_cells_for_space(&projection, &realm_id);
         let anchor_view = anchor_view_for_space(&bottom_cells);
-        let ephemeral = typing_ephemeral_for_space(state, &realm_id, session).await;
-        sync_spaces.insert(
+        let ephemeral = typing_ephemeral_for_realm(state, &realm_id, session).await;
+        sync_realms.insert(
             realm_id.clone(),
             json!({
                 "summary": {
@@ -786,8 +786,8 @@ async fn build_sync_snapshot(
             positions,
             to_device_position,
         ),
-        spaces: sync_spaces,
-        left_spaces,
+        realms: sync_realms,
+        left_realms,
         to_device,
         device_lists: json!({"changed": [], "left": []}),
         account_data,
@@ -1325,7 +1325,7 @@ async fn projection_event_value_visible_to_session(
     event: &Value,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Some(realm_id) = event.get("space_id").and_then(Value::as_str) else {
+    let Some(realm_id) = event.get("realm_id").and_then(Value::as_str) else {
         return false;
     };
     let Some(created_at) = event
@@ -1477,20 +1477,20 @@ fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    // flow_id is always derived from realm_id (one flow per space for
+    // flow_id is always derived from realm_id (one flow per Realm for
     // the message timeline) — thread_id is the discussion *track* within
     // that flow, NOT the flow itself. The legacy top-level `branch` object
     // was removed in revision 0a5ab85 (see cokret-spec
     // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
     // `track_name` is the concrete v1 wire field.
-    let flow_id = flow_id_from_space_id(&message.realm_id);
+    let flow_id = flow_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": super::message_id_from_event_id(&message.event_id),
         "flow_id": flow_id,
-        "space_id": message.realm_id,
+        "realm_id": message.realm_id,
         "track_name": default_discussion_track(&flow_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
@@ -1542,7 +1542,7 @@ pub fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionRecord>,
     filter: Option<&serde_json::Value>,
-    spaces_positions: BTreeMap<String, i64>,
+    realms_positions: BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
@@ -1558,7 +1558,7 @@ pub fn sync_token_for_client_sync(
     let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
     let positions = json!({
-        "spaces": spaces_positions,
+        "realms": realms_positions,
         "devices": device_positions,
         "to_device": to_device_position
     });
@@ -1622,7 +1622,7 @@ pub(crate) fn sync_token_for_state(state: &AppState) -> String {
                 "issued_at_ms": issued_at.timestamp_millis()
             },
             "positions": {
-                "spaces": {},
+                "realms": {},
                 "devices": {},
                 "to_device": 0
             },
@@ -1899,10 +1899,10 @@ fn sync_cursor_from_stateless_value(
         "stateless cursor missing positions",
     ))?;
     let positions = positions_value
-        .get("spaces")
+        .get("realms")
         .and_then(Value::as_object)
         .ok_or(SyncCursorError::Integrity(
-            "stateless cursor missing positions.spaces",
+            "stateless cursor missing positions.realms",
         ))?
         .iter()
         .filter_map(|(realm_id, position)| {
@@ -2064,10 +2064,10 @@ pub fn parse_and_validate_sync_cursor(
         "cursor handle is missing positions",
     ))?;
     let positions = positions_value
-        .get("spaces")
-        .and_then(|spaces| spaces.as_object())
+        .get("realms")
+        .and_then(|realms| realms.as_object())
         .ok_or(SyncCursorError::Integrity(
-            "cursor handle is missing positions.spaces",
+            "cursor handle is missing positions.realms",
         ))?
         .iter()
         .filter_map(|(realm_id, position)| {
@@ -2137,14 +2137,14 @@ pub async fn resolve_sync_cursor_to_event_id(
             .map_err(|_| "sync cursor handle is unknown")?;
         stored
             .get("positions")
-            .and_then(|positions| positions.get("spaces"))
-            .and_then(|spaces| spaces.get(realm_id))
+            .and_then(|positions| positions.get("realms"))
+            .and_then(|realms| realms.get(realm_id))
             .and_then(|position| position.as_i64())
     } else if has_stateless_marker {
         value
             .get("positions")
-            .and_then(|positions| positions.get("spaces"))
-            .and_then(|spaces| spaces.get(realm_id))
+            .and_then(|positions| positions.get("realms"))
+            .and_then(|realms| realms.get(realm_id))
             .and_then(|position| position.as_i64())
     } else {
         return Err("sync cursor is missing stateful handle");
@@ -2385,10 +2385,10 @@ async fn admit_ephemeral_read_receipt(
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
-/// Selector: repeated `spaces[]` query args (multi-value).
+/// Selector: repeated `realms[]` query args (multi-value).
 ///
 /// Lifecycle:
-///   1. Validate inputs (spaces, accessibility).
+///   1. Validate inputs (realms, accessibility).
 ///   2. Subscribe to the live event broadcast BEFORE serving history so no events are missed in the
 ///      history-vs-live window.
 ///   3. Build an async stream that yields: a) historical event frames (if `include_history=true`,
@@ -2403,12 +2403,8 @@ async fn admit_ephemeral_read_receipt(
 #[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
 pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected").clone();
-    // Spec-canonical param is `realms=` (ck.events.subscribe). Legacy
-    // `spaces=` is accepted as an alias through the Realm/Space rename
-    // window so older clients don't break.
-    let mut spaces = super::query_param_all(req, "realms");
-    spaces.extend(super::query_param_all(req, "spaces"));
-    if spaces.is_empty() {
+    let realms = super::query_param_all(req, "realms");
+    if realms.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -2417,8 +2413,8 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         );
         return;
     }
-    let spaces = match normalize_scope_selectors(spaces) {
-        Ok(spaces) => spaces,
+    let realms = match normalize_scope_selectors(realms) {
+        Ok(realms) => realms,
         Err(error) => {
             let message = error.to_string();
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", &message);
@@ -2426,13 +2422,13 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         }
     };
     let session = authenticated_session(&state, req).await.ok();
-    let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
-    for space in spaces {
-        if realm_id_accessible(&state, &space, session.as_ref()).await {
-            accessible_spaces.push(space);
+    let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
+    for realm in realms {
+        if realm_id_accessible(&state, &realm, session.as_ref()).await {
+            accessible_realms.push(realm);
         }
     }
-    if accessible_spaces.is_empty() {
+    if accessible_realms.is_empty() {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
@@ -2440,14 +2436,12 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .min(100);
-    // `after` is the canonical subscribe resume parameter. `from` remains
-    // accepted for older clients.
-    let cursor = query_param(req, "after").or_else(|| query_param(req, "from"));
+    let cursor = query_param(req, "after");
     let include_history = query_param(req, "include_history")
         .as_deref()
         .map(|value| matches!(value, "true" | "1" | "yes"))
         .unwrap_or(true);
-    let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &accessible_spaces);
+    let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &accessible_realms);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
     }
@@ -2477,7 +2471,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     let mut last_cursor: Option<String> = None;
 
     if include_history {
-        for realm_id in &accessible_spaces {
+        for realm_id in &accessible_realms {
             match projected_event_page(&state, realm_id, cursor.as_deref(), limit).await {
                 Ok(Some(page)) => {
                     for event in page.items {
@@ -2502,7 +2496,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    if error.to_string().contains("invalid_cursor") && accessible_spaces.len() == 1
+                    if error.to_string().contains("invalid_cursor") && accessible_realms.len() == 1
                     {
                         render_error(
                             res,
@@ -2518,7 +2512,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     }
 
     let catchup_cursor = last_cursor.unwrap_or_else(|| sync_token_for_state(&state));
-    let space_filter: BTreeSet<String> = accessible_spaces.iter().cloned().collect();
+    let realm_filter: BTreeSet<String> = accessible_realms.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
     let session_for_stream = session.clone();
     let subscribe_scope_key_for_stream = subscribe_scope_key.clone();
@@ -2558,7 +2552,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 recv = rx.recv() => {
                     match recv {
                         Ok(notification) => {
-                            if !space_filter.contains(&notification.realm_id) {
+                            if !realm_filter.contains(&notification.realm_id) {
                                 continue;
                             }
                             // Dispatch on notification.kind to
@@ -2585,7 +2579,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
                                     json!({
                                         "kind": "epoch_rotation",
-                                        "space_id": notification.realm_id,
+                                        "realm_id": notification.realm_id,
                                         "previous_epoch": previous_epoch,
                                         "new_epoch": new_epoch,
                                     })
@@ -2593,7 +2587,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::Frontier { state_root, anchor_id } => {
                                     json!({
                                         "kind": "frontier",
-                                        "space_id": notification.realm_id,
+                                        "realm_id": notification.realm_id,
                                         "state_root": state_root,
                                         "anchor_id": anchor_id,
                                     })
@@ -2611,7 +2605,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     terminal = true;
                                     json!({
                                         "kind": "resync_required",
-                                        "space_id": notification.realm_id,
+                                        "realm_id": notification.realm_id,
                                         "reason": reason,
                                         "reconnect_after_ms": reconnect_after_ms,
                                     })
@@ -2619,7 +2613,7 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 EventNotificationKind::Unauthorized { reason } => {
                                     json!({
                                         "kind": "unauthorized",
-                                        "space_id": notification.realm_id,
+                                        "realm_id": notification.realm_id,
                                         "reason": reason,
                                     })
                                 }
@@ -2708,9 +2702,9 @@ fn subscribe_subject(req: &Request, session: Option<&SessionRecord>) -> String {
 fn events_subscribe_scope_key(
     req: &Request,
     session: Option<&SessionRecord>,
-    accessible_spaces: &[String],
+    accessible_realms: &[String],
 ) -> String {
-    let realms = accessible_spaces
+    let realms = accessible_realms
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>()
@@ -2827,8 +2821,8 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// Reads from the projection layer so callers writing through
 /// `POST /_cokret/self/events` see their messages here.
 ///
-/// Selector: `spaces[]` ∪ `actors[]` repeated query args (multi-value).
-/// Multi-space queries call `projected_event_page` per space and merge sorted
+/// Selector: `realms[]` plus optional `actors[]` repeated query args.
+/// Multi-Realm queries call `projected_event_page` per Realm and merge sorted
 /// by HLC; the result paginates as a single stream.
 /// `actors[]`-only queries dispatch to the durable Event-store reader.
 ///
@@ -2838,7 +2832,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 #[endpoint(
     operation_id = "ck.events.query",
     tags("events"),
-    summary = "Projection-aware events query (single- or multi-space merge; backward / forward direction)"
+    summary = "Projection-aware events query (single- or multi-Realm merge; backward / forward direction)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.events.query"))]
 pub(super) async fn events_query(
@@ -2896,7 +2890,7 @@ async fn events_query_impl(
             "events.query requires at least one of realms[] / actors[]",
         ));
     }
-    let spaces = normalize_scope_selectors(parts.realms.clone())?;
+    let realms = normalize_scope_selectors(parts.realms.clone())?;
     for actor in &parts.actors {
         if validate_did(actor).is_err() {
             return Err(crate::error::AppError::invalid_param(format!(
@@ -2904,10 +2898,10 @@ async fn events_query_impl(
             )));
         }
     }
-    // Dispatch: if no spaces (actor-scoped query), forward to the durable
+    // Dispatch: if no Realms (actor-scoped query), forward to the durable
     // Event-store reader in routing/events.rs which builds an actor-keyed
-    // `frontier.actors` map. The projection-aware path below is space-keyed.
-    if spaces.is_empty() {
+    // `frontier.actors` map. The projection-aware path below is Realm-keyed.
+    if realms.is_empty() {
         let session =
             authenticated_session(state, req)
                 .await
@@ -2920,22 +2914,22 @@ async fn events_query_impl(
         return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
     }
     let session = authenticated_session(state, req).await.ok();
-    let mut accessible_spaces: Vec<String> = Vec::with_capacity(spaces.len());
-    for space in spaces {
-        if realm_id_accessible(state, &space, session.as_ref()).await {
-            accessible_spaces.push(space);
+    let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
+    for realm in realms {
+        if realm_id_accessible(state, &realm, session.as_ref()).await {
+            accessible_realms.push(realm);
         }
     }
-    if accessible_spaces.is_empty() {
+    if accessible_realms.is_empty() {
         return Err(crate::error::AppError::not_found("not found"));
     }
     let limit = parts.limit;
     let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
-    // Single-space fast path preserves the original `BackfillResBody` shape
+    // Single-Realm fast path preserves the original `BackfillResBody` shape
     // for soland's existing test surface (ck.sync.backfill behavior).
-    if accessible_spaces.len() == 1 {
-        let realm_id = &accessible_spaces[0];
+    if accessible_realms.len() == 1 {
+        let realm_id = &accessible_realms[0];
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 let mut events: Vec<Value> = Vec::new();
@@ -2980,11 +2974,11 @@ async fn events_query_impl(
         );
     }
 
-    // Multi-space merge path: call `projected_event_page` per space, merge
+    // Multi-Realm merge path: call `projected_event_page` per Realm, merge
     // by `received_at`, then paginate.
     let mut merged: Vec<serde_json::Value> = Vec::new();
     let mut any_has_more = false;
-    for realm_id in &accessible_spaces {
+    for realm_id in &accessible_realms {
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
             Ok(Some(page)) => {
                 if page.has_more {
@@ -3047,7 +3041,7 @@ async fn durable_events_query_from_parts(
     parts: &EventsQueryParts,
 ) -> crate::wire::EventsPageResponse {
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
-    let spaces_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
+    let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
     let all_records = state
         .persistence
         .events()
@@ -3060,7 +3054,7 @@ async fn durable_events_query_from_parts(
         let space_match = record
             .realm_id
             .as_deref()
-            .is_some_and(|s| spaces_set.contains(s));
+            .is_some_and(|s| realms_set.contains(s));
         if !(actor_match || space_match) {
             continue;
         }
@@ -3203,15 +3197,15 @@ async fn snapshot_head(
     if is_realm_deleted(state, &realm_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let space_id_value = RealmId::new(realm_id.clone())
+    let realm_id_value = RealmId::new(realm_id.clone())
         .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
     {
-        let spaces = state.realms.lock().expect("spaces lock");
-        if spaces.get(&space_id_value).is_none() {
+        let realms = state.realms.lock().expect("realms lock");
+        if realms.get(&realm_id_value).is_none() {
             return Err(crate::error::AppError::not_found("not found"));
         }
     }
-    let bundle = snapshot_bundle_for_space(state, &realm_id)
+    let bundle = snapshot_bundle_for_realm(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     // Snapshot v1: the manifest already lists per-chunk digests, so
@@ -3275,7 +3269,7 @@ async fn snapshot_chunk(
     if is_realm_deleted(state, &realm_id).await {
         return Err(crate::error::AppError::not_found("not found"));
     }
-    let bundle = snapshot_bundle_for_space(state, &realm_id)
+    let bundle = snapshot_bundle_for_realm(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
     if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {
@@ -3930,7 +3924,7 @@ mod tests {
                     "filter_digest": sync_filter_digest(None)
                 },
                 "positions": {
-                    "spaces": {},
+                    "realms": {},
                     "devices": {},
                     "to_device": 0
                 },
@@ -3953,12 +3947,12 @@ mod tests {
 
 /// Spec B1.5 — wrap a typed `EventsSubscribeFrameBody` in the envelope
 /// shape soland emits on the wire (kept distinct from the SDK body type so
-/// the per-frame `seq` / `space_id` envelope can evolve independently of
+/// the per-frame `seq` / `realm_id` envelope can evolve independently of
 /// the SDK's `kind`-tagged body).
 ///
 /// The envelope serialises a flattened body via `#[serde(flatten)]` so
 /// downstream consumers see exactly the SDK `EventsSubscribeFrameBody`
-/// fields plus the wrapper's `seq` / `space_id` / `cursor` fields at the
+/// fields plus the wrapper's `seq` / `realm_id` / `cursor` fields at the
 /// top level.
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -3966,10 +3960,10 @@ pub struct SubscribeFrameEnvelope {
     /// Monotonic per-connection sequence (matches the legacy `seq` field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
-    /// Originating space (for fan-out frames). Optional; absent on
+    /// Originating Realm (for fan-out frames). Optional; absent on
     /// `heartbeat`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub space_id: Option<String>,
+    pub realm_id: Option<String>,
     /// Cursor for the frame, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,

@@ -39,7 +39,7 @@ use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
 use events::flow::{
     default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_space_id, flow_projection_for_space,
+    flow_id_from_realm_id, flow_projection_for_realm,
 };
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
@@ -55,12 +55,11 @@ use identity::device_messages::{device_message_events_after, prune_acked_device_
 use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;
 use spaces::space::{
-    invite_token_matches_space, invite_token_space_id, is_realm_deleted, is_space_deleted,
-    prune_expired_typing, realm_allows_plaintext_service, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, space_allows_plaintext_service, space_discoverability,
-    space_has_member, space_history_visibility, space_resolvable_to, space_search_discoverability,
-    space_search_visible_to, touch_realm, typing_ephemeral_for_space,
+    invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, prune_expired_typing,
+    realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
+    realm_has_member, realm_history_visibility, realm_id_accessible, realm_resolvable_to,
+    realm_search_discoverability, realm_search_visible_to, realm_visible_to, touch_realm,
+    typing_ephemeral_for_realm,
 };
 use system::extract::AuthArgs;
 use system::util::{
@@ -129,8 +128,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         //      cells, control-frames, retention.
         //   4. `admin_anchor_sign_router` — `POST /_soland/admin/anchors/sign`
         //      operator anchor-signing trigger, detached from the
-        //      `/_soland/peer/federation` router so it sits in the admin
-        //      namespace.
+        //      peer federation router so it sits in the admin namespace.
         .push(
             Router::with_path("_soland")
                 .push(admin::spec_router())
@@ -186,6 +184,8 @@ fn api_v1_router() -> Router {
                 // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
                 .push(mls::router()),
         )
+        // `peer` — service-to-service federation surface.
+        .push(Router::with_path("peer").push(events::peer_router()))
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
@@ -546,39 +546,53 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "list invites",
     ),
     (
-        "/_soland/peer/federation/transactions/{txn_id}",
-        PathItemType::Put,
-        "federation",
-        "ck.extension.soland.federation.transaction",
-        "submit federation transaction",
-    ),
-    (
-        "/_soland/peer/federation/push-operations",
-        PathItemType::Post,
-        "federation",
-        "ck.extension.soland.federation.push_operations",
-        "push federation operations",
-    ),
-    (
-        "/_soland/peer/federation/pull-operations",
+        "/_cokret/peer/events/describe",
         PathItemType::Get,
-        "federation",
-        "ck.extension.soland.federation.pull_operations",
-        "pull federation operations",
+        "peer",
+        "ck.peer.events.describe",
+        "describe federation peer Events API",
     ),
     (
-        "/_soland/peer/federation/space-members",
-        PathItemType::Get,
-        "federation",
-        "ck.extension.soland.federation.space_members",
-        "list space memberships",
-    ),
-    (
-        "/_soland/peer/federation/verify-actor",
+        "/_cokret/peer/events",
         PathItemType::Post,
-        "federation",
-        "ck.extension.soland.federation.verify_actor",
-        "verify federation actor",
+        "peer",
+        "ck.peer.events.submit",
+        "submit federation peer Events",
+    ),
+    (
+        "/_cokret/peer/events",
+        PathItemType::Get,
+        "peer",
+        "ck.peer.events.query",
+        "query federation peer Events",
+    ),
+    (
+        "/_cokret/peer/events/query",
+        PathItemType::Post,
+        "peer",
+        "ck.peer.events.query_post",
+        "query federation peer Events with body parameters",
+    ),
+    (
+        "/_cokret/peer/events/resolve",
+        PathItemType::Post,
+        "peer",
+        "ck.peer.events.resolve",
+        "resolve federation peer Events",
+    ),
+    (
+        "/_cokret/peer/events/frontier",
+        PathItemType::Get,
+        "peer",
+        "ck.peer.events.frontier",
+        "read federation peer Event frontier",
+    ),
+    (
+        "/_cokret/peer/snapshot/head",
+        PathItemType::Get,
+        "peer",
+        "ck.peer.snapshot.head",
+        "read federation peer snapshot head",
     ),
     (
         "/_cokret/self/account/subscribe",
@@ -644,11 +658,18 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "admin actor snapshot",
     ),
     (
+        "/_soland/admin/realms",
+        PathItemType::Get,
+        "admin",
+        "ck.extension.soland.admin.realms",
+        "admin realm snapshot",
+    ),
+    (
         "/_soland/admin/spaces",
         PathItemType::Get,
         "admin",
-        "ck.extension.soland.admin.spaces",
-        "admin space snapshot",
+        "ck.extension.soland.admin.space_containers",
+        "admin space container snapshot",
     ),
     (
         "/_soland/admin/devices",
@@ -1394,36 +1415,36 @@ pub(crate) struct SnapshotBundle {
     pub generator_proof: Value,
 }
 
-pub(crate) async fn snapshot_bundle_for_space(
+pub(crate) async fn snapshot_bundle_for_realm(
     state: &AppState,
-    space_id: &str,
+    realm_id: &str,
 ) -> Option<SnapshotBundle> {
-    let space_id_value = RealmId::new(space_id.to_owned()).ok()?;
+    let realm_id_value = RealmId::new(realm_id.to_owned()).ok()?;
     let (title, members, category, tags) = {
-        let spaces = state.realms.lock().expect("spaces lock");
-        let space = spaces.get(&space_id_value)?;
+        let realms = state.realms.lock().expect("realms lock");
+        let realm = realms.get(&realm_id_value)?;
         (
-            space.name.clone(),
-            space
+            realm.name.clone(),
+            realm
                 .members
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
-            space.category.clone(),
-            space.tags.iter().cloned().collect::<Vec<_>>(),
+            realm.category.clone(),
+            realm.tags.iter().cloned().collect::<Vec<_>>(),
         )
     };
     let meta = state
         .persistence
         .realm_meta()
-        .get(space_id)
+        .get(realm_id)
         .await
         .ok()
         .flatten();
     let messages = state
         .persistence
         .messages()
-        .list_for_space(space_id, 1024)
+        .list_for_space(realm_id, 1024)
         .await
         .unwrap_or_default();
     let generated_at = messages
@@ -1437,7 +1458,7 @@ pub(crate) async fn snapshot_bundle_for_space(
         "type": "ck.snapshot.realm_state.v1",
         "schema_profiles": ["ck.schema.core.v1"],
         "reducer_profile": "ck.reducer.v1",
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "title": title,
         "category": category,
         "tags": tags,
@@ -1450,14 +1471,14 @@ pub(crate) async fn snapshot_bundle_for_space(
     let state_digest = format!("sha256:{}", sha256_hex(&chunk_bytes));
     let snapshot_ref = format!(
         "ck:snapshot:{}:{}",
-        space_id,
+        realm_id,
         state_digest.trim_start_matches("sha256:")
     );
 
     // Snapshot v1: deterministically chunk the state-document
     // bytes via the SDK chunker, build a Merkle tree over the chunk
     // digests, and sign a GeneratorProof binding the tree root to
-    // (generator_did, space_id, state_root). Receivers verify the proof
+    // (generator_did, realm_id, state_root). Receivers verify the proof
     // first, then fetch chunks lazily.
     let chunker = cokret_sdk::SnapshotChunker::default();
     let chunks = chunker.chunk(&chunk_bytes);
@@ -1471,7 +1492,7 @@ pub(crate) async fn snapshot_bundle_for_space(
 
     let proof_body = json!({
         "generator_did": generator_did.to_string(),
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "state_root": state_root_hash.as_str(),
         "merkle_root": merkle_root.as_str(),
         "chunk_count": chunk_count,
@@ -1488,7 +1509,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     let signature = cokret_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
     let generator_proof = json!({
         "generator_did": generator_did.to_string(),
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "state_root": state_root_hash.as_str(),
         "merkle_root": merkle_root.as_str(),
         "chunk_count": chunk_count,
@@ -1498,7 +1519,7 @@ pub(crate) async fn snapshot_bundle_for_space(
     });
 
     let frontier = json!({
-        "realm_id": space_id,
+        "realm_id": realm_id,
         "generated_at": generated_at,
         "message_count": state_document["message_count"],
         "state_digest": state_digest,
@@ -1560,7 +1581,7 @@ fn message_event(message: &MessageRecord) -> serde_json::Value {
     json!({
         "kind": "message",
         "event_id": message.event_id,
-        "space_id": message.realm_id,
+        "realm_id": message.realm_id,
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,

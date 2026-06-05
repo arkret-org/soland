@@ -3,7 +3,7 @@
 //! - `GET /_soland/self/audit/events` — actor-scoped audit query (cursor-paginated).
 //!   Auth-restricted to the authenticated actor (no cross-actor reads).
 //! - `append_audit_log` — internal helper used everywhere a side-effect needs to be recorded (auth,
-//!   space lifecycle, message send, federation, etc.).
+//!   Realm lifecycle, message send, federation, etc.).
 //!
 //! Both back onto `state.persistence.audit()`.
 
@@ -11,7 +11,7 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{now, sha256_hex, space_has_member};
+use super::{now, sha256_hex, realm_has_member};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -205,13 +205,13 @@ async fn audit_events(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let space_id_filter = query_param(req, "space_id");
+    let realm_id_filter = query_param(req, "realm_id");
     let kind_filter = query_param(req, "kind");
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
     let cursor = query_param(req, "cursor").or_else(|| cursor.into_inner());
-    let mut events = if let Some(space_id) = space_id_filter.as_deref() {
-        if !space_has_member(state, space_id, &session.actor).await {
-            return Err(AppError::not_found("audit space not found"));
+    let mut events = if let Some(realm_id) = realm_id_filter.as_deref() {
+        if !realm_has_member(state, realm_id, &session.actor).await {
+            return Err(AppError::not_found("audit realm not found"));
         }
         state
             .persistence
@@ -223,7 +223,7 @@ async fn audit_events(
                 AppError::internal("audit store unavailable")
             })?
             .into_iter()
-            .filter(|event| audit_event_matches_space(event, space_id))
+            .filter(|event| audit_event_matches_realm(event, realm_id))
             .collect()
     } else {
         let actor = query_param(req, "actor")
@@ -277,17 +277,14 @@ async fn audit_events(
     }))
 }
 
-fn audit_event_matches_space(event: &Value, space_id: &str) -> bool {
+fn audit_event_matches_realm(event: &Value, realm_id: &str) -> bool {
     [
-        event.get("space_id"),
-        event.pointer("/payload/space_id"),
         event.pointer("/payload/realm_id"),
-        event.pointer("/target/space_id"),
-        event.pointer("/target/realm_id"),
+        event.get("realm_id"),
     ]
     .into_iter()
     .flatten()
-    .any(|value| value.as_str() == Some(space_id))
+    .any(|value| value.as_str() == Some(realm_id))
 }
 
 fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
@@ -296,8 +293,6 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
         event.get("kind"),
         event.pointer("/payload/kind"),
         event.pointer("/payload/type"),
-        event.pointer("/target/kind"),
-        event.pointer("/target/type"),
     ]
     .into_iter()
     .flatten()
@@ -324,19 +319,12 @@ pub async fn append_audit_log(
     payload: Value,
     outcome: &str,
 ) {
-    // Audit entry envelope follows the spec convention from
-    // `identity/account-lifecycle.md` §8 and `models/flow-and-message.md`
-    // §watch_audit_read, which both refer to the action-specific body of an
-    // audit event as `payload`. soland historically labelled this column
-    // `target`; the JSON output now exposes it as `payload` (the
-    // spec-aligned name) while retaining a copy under `target` for in-process
-    // consumers that have not yet migrated.
     let device_id = payload
         .get("device_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
-    let space_id = payload
-        .get("space_id")
+    let realm_id = payload
+        .get("realm_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
     let operation_id = payload
@@ -348,13 +336,10 @@ pub async fn append_audit_log(
         "request_id": ids::generate_request_id(),
         "actor": actor,
         "device_id": device_id,
-        "space_id": space_id,
+        "realm_id": realm_id,
         "operation_id": operation_id,
         "action": action,
         "payload": payload.clone(),
-        // `target` is a legacy alias preserved for in-tree readers; new
-        // consumers MUST use `payload`. Remove once internal callers migrate.
-        "target": payload,
         "outcome": outcome,
         "created_at": now(),
     });
