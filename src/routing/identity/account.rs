@@ -3,13 +3,17 @@
 //! Surfaces:
 //! - `POST /_soland/self/account/register` — create the account record
 //! - `GET  /_soland/self/account/me` — return the authenticated principal's account
-//! - `POST /_soland/self/contacts/request` — open a pending contact relationship
-//! - `POST /_soland/self/contacts/respond` — accept or reject a pending request
-//! - `GET  /_soland/self/contacts` — list contacts visible to the actor
+//! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
+//! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
+//! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
+//! - `POST /_cokret/self/direct-conversations/resolve` — resolve/create the canonical 1:1 DM binding
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
+use cokret_sdk::ErrorCode;
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -18,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
-use super::consent::{has_active_consent_for_scope, normalize_scope, record_pending_request};
+use super::consent::{
+    grant_contact_managed_consent, has_active_consent_for_scope, normalize_scope,
+    record_pending_request,
+};
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
     AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_handle, now, sha256_hex,
@@ -28,11 +35,14 @@ use crate::error::AppError;
 use crate::routing::spaces::space::realm_has_member;
 use crate::state::{
     AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
+    DirectConversationBindingRecord, RealmDirectoryEntry,
 };
 use crate::wire::{
-    AccountResponse, ClaimHandleRequest, ClaimHandleResponse, ContactRequestRequest,
-    ContactRespondRequest, ContactResponse, ContactsResponse, RegisterAccountRequest,
-    TransferHandleRequest, TransferHandleResponse, UpdateProfileRequest, UpdateProfileResponse,
+    AccountResponse, ClaimHandleRequest, ClaimHandleResponse, ContactListRow,
+    ContactRequestRequest, ContactRespondRequest, ContactResponse, ContactsResponse,
+    DirectConversationResolveRequest, DirectConversationResolveResponse, DirectConversationSummary,
+    RegisterAccountRequest, TransferHandleRequest, TransferHandleResponse, UpdateProfileRequest,
+    UpdateProfileResponse,
 };
 
 /// Grace period after a handle is released before another actor may claim
@@ -59,6 +69,12 @@ fn record_handle_release(state: &AppState, handle: &str) {
 }
 use crate::{JsonResult, json_ok};
 
+pub(super) fn protocol_router() -> Router {
+    Router::new()
+        .push(contact_routes())
+        .push(direct_conversation_routes())
+}
+
 pub(super) fn router() -> Router {
     Router::new()
         .push(
@@ -73,17 +89,24 @@ pub(super) fn router() -> Router {
                 .push(Router::with_path("erase").post(erase_account))
                 .push(Router::with_path("{did}/principal-realm").get(account_principal_realm)),
         )
-        .push(
-            Router::with_path("contacts")
-                .get(list_contacts)
-                .push(Router::with_path("request").post(contact_request))
-                .push(Router::with_path("respond").post(contact_respond)),
-        )
+        .push(contact_routes())
         .push(
             Router::with_path("notifications")
                 .get(list_notifications)
                 .push(Router::with_path("mark-all-read").post(notifications_mark_all_read)),
         )
+}
+
+fn contact_routes() -> Router {
+    Router::with_path("contacts")
+        .get(list_contacts)
+        .push(Router::with_path("request").post(contact_request))
+        .push(Router::with_path("respond").post(contact_respond))
+}
+
+fn direct_conversation_routes() -> Router {
+    Router::with_path("direct-conversations")
+        .push(Router::with_path("resolve").post(direct_conversation_resolve))
 }
 
 #[endpoint(
@@ -1761,7 +1784,8 @@ async fn contact_request(
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
     }
-    let scope = normalize_scope(body.scope.as_deref())?;
+    let scope = contact_request_scope(&body)?;
+    grant_contact_managed_consent(state, &session.actor, &body.target, &scope, now());
     let contact_status =
         if has_active_consent_for_scope(state, &body.target, &session.actor, &scope, now()) {
             "accepted"
@@ -1856,6 +1880,10 @@ async fn contact_respond(
         ));
     }
     contact.status = if body.action == "accept" {
+        let scopes = contact_respond_scopes(&body, &contact.scope)?;
+        for scope in scopes {
+            grant_contact_managed_consent(state, &session.actor, &contact.requester, &scope, now());
+        }
         "accepted".to_owned()
     } else {
         "rejected".to_owned()
@@ -1881,16 +1909,77 @@ async fn list_contacts(
 ) -> JsonResult<ContactsResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let result = state
+    let records = state
         .persistence
         .contacts()
         .list_for_actor(&session.actor)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .into_iter()
-        .map(contact_response)
-        .collect();
-    json_ok(ContactsResponse { contacts: result })
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let contacts = contact_list_rows(state, &session.actor, records);
+    json_ok(ContactsResponse {
+        contacts,
+        has_more: false,
+        next_cursor: None,
+    })
+}
+
+#[endpoint(
+    operation_id = "ck.self.direct_conversation.resolve",
+    tags("contacts"),
+    summary = "Resolve or create the canonical 1:1 direct conversation binding"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.direct_conversation.resolve"))]
+async fn direct_conversation_resolve(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<DirectConversationResolveRequest>,
+) -> JsonResult<DirectConversationResolveResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    if validate_did(&body.peer).is_err() || body.peer == session.actor {
+        return Err(AppError::invalid_param("invalid direct conversation peer"));
+    }
+    let peer_account = state
+        .persistence
+        .accounts()
+        .get(&body.peer)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if peer_account.is_none() {
+        return Err(AppError::not_found("peer account not found"));
+    }
+    let scope = normalize_scope(Some("direct_message"))?;
+    let Some(_contact) =
+        accepted_contact_for_pair(state, &session.actor, &body.peer, &scope).await?
+    else {
+        return Err(direct_resolve_precondition(
+            crate::error::reasons::CONTACT_NOT_ACCEPTED,
+            "direct conversation requires an accepted contact",
+        ));
+    };
+    if !has_active_consent_for_scope(state, &body.peer, &session.actor, &scope, now()) {
+        return Err(direct_resolve_precondition(
+            crate::error::reasons::CONTACT_CONSENT_MISSING,
+            "direct conversation requires peer direct_message consent",
+        ));
+    }
+    let pair_key = direct_pair_key(&session.actor, &body.peer);
+    if let Some(binding) = active_direct_binding(state, &pair_key) {
+        return json_ok(direct_resolve_response(binding, false, "found"));
+    }
+    if !body.create {
+        return json_ok(DirectConversationResolveResponse {
+            state: "not_found".to_owned(),
+            realm_id: None,
+            main_flow_id: None,
+            binding_event_ref: None,
+            created: false,
+        });
+    }
+    let binding = create_direct_binding(state, &pair_key, &session.actor, &body.peer)?;
+    json_ok(direct_resolve_response(binding, true, "created"))
 }
 
 /// `GET /_soland/self/account/{did}/principal-realm` response.
@@ -1969,6 +2058,33 @@ fn account_response(account: AccountRecord, state: &AppState) -> AccountResponse
     }
 }
 
+fn contact_request_scope(body: &ContactRequestRequest) -> Result<String, AppError> {
+    let candidate = body
+        .requested_scopes
+        .first()
+        .map(String::as_str)
+        .or(body.scope.as_deref())
+        .unwrap_or("direct_message");
+    normalize_scope(Some(candidate))
+}
+
+fn contact_respond_scopes(
+    body: &ContactRespondRequest,
+    fallback_scope: &str,
+) -> Result<Vec<String>, AppError> {
+    if body.granted_scopes.is_empty() {
+        return Ok(vec![normalize_scope(Some(fallback_scope))?]);
+    }
+    let mut scopes = Vec::new();
+    for scope in &body.granted_scopes {
+        let normalized = normalize_scope(Some(scope))?;
+        if !scopes.contains(&normalized) {
+            scopes.push(normalized);
+        }
+    }
+    Ok(scopes)
+}
+
 fn contact_response(contact: ContactRecord) -> ContactResponse {
     ContactResponse {
         requester: contact.requester,
@@ -1977,6 +2093,221 @@ fn contact_response(contact: ContactRecord) -> ContactResponse {
         status: contact.status,
         created_at: contact.created_at,
         updated_at: contact.updated_at,
+    }
+}
+
+fn contact_list_rows(
+    state: &AppState,
+    actor: &str,
+    records: Vec<ContactRecord>,
+) -> Vec<ContactListRow> {
+    let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
+    for record in records {
+        let peer = if record.requester == actor {
+            record.target.clone()
+        } else {
+            record.requester.clone()
+        };
+        let row_state = directional_contact_state(actor, &record);
+        let entry = rows.entry(peer.clone()).or_insert_with(|| ContactListRow {
+            peer: peer.clone(),
+            state: row_state.clone(),
+            request_event_ref: None,
+            response_event_ref: None,
+            tombstone_event_ref: None,
+            granted_by_me: Vec::new(),
+            granted_to_me: Vec::new(),
+            bidirectional_scopes: Vec::new(),
+            effective_scopes: Vec::new(),
+            direct_conversation: None,
+        });
+        if contact_state_rank(&row_state) > contact_state_rank(&entry.state) {
+            entry.state = row_state;
+        }
+    }
+    let mut out = rows
+        .into_values()
+        .map(|mut row| {
+            row.granted_by_me = active_scopes(state, actor, &row.peer);
+            row.granted_to_me = active_scopes(state, &row.peer, actor);
+            row.bidirectional_scopes = intersection(&row.granted_by_me, &row.granted_to_me);
+            row.effective_scopes = row.bidirectional_scopes.clone();
+            row.direct_conversation =
+                active_direct_binding(state, &direct_pair_key(actor, &row.peer))
+                    .map(direct_summary);
+            row
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|left, right| left.peer.cmp(&right.peer));
+    out
+}
+
+fn directional_contact_state(actor: &str, record: &ContactRecord) -> String {
+    match record.status.as_str() {
+        "pending" if record.requester == actor => "pending_outgoing".to_owned(),
+        "pending" => "pending_incoming".to_owned(),
+        "accepted" | "rejected" | "tombstoned" => record.status.clone(),
+        other => other.to_owned(),
+    }
+}
+
+fn contact_state_rank(state: &str) -> u8 {
+    match state {
+        "accepted" => 5,
+        "pending_incoming" => 4,
+        "pending_outgoing" => 3,
+        "rejected" => 2,
+        "tombstoned" => 1,
+        _ => 0,
+    }
+}
+
+fn active_scopes(state: &AppState, holder: &str, peer: &str) -> Vec<String> {
+    ["message", "invite", "call", "presence", "any"]
+        .into_iter()
+        .filter(|scope| has_active_consent_for_scope(state, holder, peer, scope, now()))
+        .map(contact_scope_wire)
+        .collect()
+}
+
+fn contact_scope_wire(scope: &str) -> String {
+    match scope {
+        "message" => "direct_message",
+        "call" => "voice_call",
+        other => other,
+    }
+    .to_owned()
+}
+
+fn intersection(left: &[String], right: &[String]) -> Vec<String> {
+    let right = right.iter().collect::<BTreeSet<_>>();
+    left.iter()
+        .filter(|scope| right.contains(scope))
+        .cloned()
+        .collect()
+}
+
+async fn accepted_contact_for_pair(
+    state: &AppState,
+    actor: &str,
+    peer: &str,
+    scope: &str,
+) -> Result<Option<ContactRecord>, AppError> {
+    let store = state.persistence.contacts();
+    for (requester, target) in [(actor, peer), (peer, actor)] {
+        if let Some(contact) = store
+            .get_scoped(requester, target, scope)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            && contact.status == "accepted"
+        {
+            return Ok(Some(contact));
+        }
+    }
+    Ok(None)
+}
+
+fn direct_resolve_precondition(reason: &'static str, message: &'static str) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason)
+}
+
+fn direct_pair_key(left: &str, right: &str) -> String {
+    let mut participants = [left.to_owned(), right.to_owned()];
+    participants.sort();
+    participants.join("\0")
+}
+
+fn active_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+) -> Option<DirectConversationBindingRecord> {
+    state
+        .direct_conversation_bindings
+        .lock()
+        .expect("direct_conversation_bindings lock")
+        .get(pair_key)
+        .filter(|binding| binding.state == "active")
+        .cloned()
+}
+
+fn create_direct_binding(
+    state: &AppState,
+    pair_key: &str,
+    actor: &str,
+    peer: &str,
+) -> Result<DirectConversationBindingRecord, AppError> {
+    let mut guard = state
+        .direct_conversation_bindings
+        .lock()
+        .expect("direct_conversation_bindings lock");
+    if let Some(existing) = guard
+        .get(pair_key)
+        .filter(|binding| binding.state == "active")
+    {
+        return Ok(existing.clone());
+    }
+    let realm_id = crate::ids::generate_realm_id();
+    let main_flow_id = crate::ids::generate("flow");
+    let binding = DirectConversationBindingRecord {
+        participants_unordered: sorted_participants(actor, peer),
+        realm_id: realm_id.clone(),
+        main_flow_id,
+        binding_event_ref: crate::ids::generate_event_id(),
+        state: "active".to_owned(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    guard.insert(pair_key.to_owned(), binding.clone());
+    drop(guard);
+    materialize_direct_realm_index(state, &binding)?;
+    Ok(binding)
+}
+
+fn sorted_participants(actor: &str, peer: &str) -> Vec<String> {
+    let mut participants = vec![actor.to_owned(), peer.to_owned()];
+    participants.sort();
+    participants
+}
+
+fn materialize_direct_realm_index(
+    state: &AppState,
+    binding: &DirectConversationBindingRecord,
+) -> Result<(), AppError> {
+    let realm_id = cokret_sdk::RealmId::new(binding.realm_id.clone())
+        .map_err(|error| AppError::internal(format!("generated invalid realm id: {error}")))?;
+    let mut entry = RealmDirectoryEntry::new(realm_id, "Direct conversation");
+    entry.description = Some("Canonical 1:1 direct conversation".to_owned());
+    entry.public = false;
+    entry.category = Some("direct_conversation".to_owned());
+    for participant in &binding.participants_unordered {
+        let did = cokret_sdk::Did::new(participant.clone())
+            .map_err(|error| AppError::internal(format!("invalid participant DID: {error}")))?;
+        entry.members.insert(did);
+    }
+    state.realms.lock().expect("realms lock").upsert(entry);
+    Ok(())
+}
+
+fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversationSummary {
+    DirectConversationSummary {
+        realm_id: binding.realm_id,
+        main_flow_id: binding.main_flow_id,
+        binding_event_ref: Some(binding.binding_event_ref),
+        state: binding.state,
+    }
+}
+
+fn direct_resolve_response(
+    binding: DirectConversationBindingRecord,
+    created: bool,
+    state_name: &str,
+) -> DirectConversationResolveResponse {
+    DirectConversationResolveResponse {
+        state: state_name.to_owned(),
+        realm_id: Some(binding.realm_id),
+        main_flow_id: Some(binding.main_flow_id),
+        binding_event_ref: Some(binding.binding_event_ref),
+        created,
     }
 }
 

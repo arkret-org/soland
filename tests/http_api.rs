@@ -23,6 +23,8 @@ mod auth;
 mod cors_config;
 #[path = "http_api/devices_webrtc.rs"]
 mod devices_webrtc;
+#[path = "http_api/direct_conversations.rs"]
+mod direct_conversations;
 #[path = "http_api/directory_index.rs"]
 mod directory_index;
 #[path = "http_api/events.rs"]

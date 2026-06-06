@@ -205,6 +205,31 @@ const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirem
     "value",
     "realm policy event requires value",
 )];
+const REALM_DISAPPEARING_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("enabled", "ck.realm.disappearing_policy requires enabled"),
+    PayloadRequirement::Required(
+        "max_ttl_ms",
+        "ck.realm.disappearing_policy requires max_ttl_ms",
+    ),
+    PayloadRequirement::Required(
+        "allowed_triggers",
+        "ck.realm.disappearing_policy requires allowed_triggers",
+    ),
+];
+const REALM_SEARCH_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required(
+        "enabled_profile_refs",
+        "ck.realm.search_policy requires enabled_profile_refs",
+    ),
+    PayloadRequirement::Required(
+        "allowed_service_dids",
+        "ck.realm.search_policy requires allowed_service_dids",
+    ),
+    PayloadRequirement::Required(
+        "data_classes",
+        "ck.realm.search_policy requires data_classes",
+    ),
+];
 const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("cell_id", "conflict repair requires cell_id"),
     PayloadRequirement::Required("conflict_heads", "conflict repair requires conflict_heads"),
@@ -551,6 +576,25 @@ const ACCOUNT_DATA_SET_REQUIREMENTS: &[PayloadRequirement] = &[
         ACCOUNT_DATA_VALUE_FIELDS,
         "account_data.set requires body, encrypted_payload, or tombstone",
     ),
+];
+const RSVP_SET_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("event_ref", "ck.rsvp.set requires event_ref"),
+    PayloadRequirement::Required("status", "ck.rsvp.set requires status"),
+    PayloadRequirement::Required("occurrence", "ck.rsvp.set requires occurrence"),
+];
+const PIN_ADD_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("pin_scope", "ck.pin.add requires pin_scope"),
+    PayloadRequirement::Required("target_ref", "ck.pin.add requires target_ref"),
+    PayloadRequirement::Required("rank", "ck.pin.add requires rank"),
+];
+const PIN_REMOVE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("pin_scope", "ck.pin.remove requires pin_scope"),
+    PayloadRequirement::Required("target_ref", "ck.pin.remove requires target_ref"),
+];
+const PIN_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("pin_scope", "ck.pin.reorder requires pin_scope"),
+    PayloadRequirement::Required("target_ref", "ck.pin.reorder requires target_ref"),
+    PayloadRequirement::Required("rank", "ck.pin.reorder requires rank"),
 ];
 const CONSENT_GRANT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("consent_id", "consent grant requires consent_id"),
@@ -950,6 +994,15 @@ fn validate_operation_schema_from_sdk_artifact(
         .map_err(|_| "operation payload violates SDK artifact schema")
 }
 
+fn validate_operation_payload_against_sdk_artifact(
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Err("unregistered operation kind");
+    };
+    validate_operation_schema_from_sdk_artifact(kind, operation)
+}
+
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
     let schema = match kind {
         kinds::CK_MESSAGE_CREATE => OperationPayloadSchema {
@@ -1020,7 +1073,23 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_ACCOUNT_DATA_SET => OperationPayloadSchema {
             requirements: ACCOUNT_DATA_SET_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_account_data_set_payload),
+        },
+        kinds::CK_RSVP_SET => OperationPayloadSchema {
+            requirements: RSVP_SET_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        kinds::CK_PIN_ADD => OperationPayloadSchema {
+            requirements: PIN_ADD_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        kinds::CK_PIN_REMOVE => OperationPayloadSchema {
+            requirements: PIN_REMOVE_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
+        kinds::CK_PIN_REORDER => OperationPayloadSchema {
+            requirements: PIN_REORDER_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         "ck.consent.grant" => OperationPayloadSchema {
             requirements: CONSENT_GRANT_REQUIREMENTS,
@@ -1080,9 +1149,17 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_MODERATION_POLICY_REQUIREMENTS,
             validate: None,
         },
+        kinds::CK_REALM_DISAPPEARING_POLICY => OperationPayloadSchema {
+            requirements: REALM_DISAPPEARING_POLICY_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
+        },
         kinds::CK_REALM_HISTORY_VISIBILITY => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: Some(validate_history_visibility_payload),
+        },
+        kinds::CK_REALM_SEARCH_POLICY => OperationPayloadSchema {
+            requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
+            validate: Some(validate_operation_payload_against_sdk_artifact),
         },
         kinds::CK_REALM_HISTORY_SHARING_POLICY | kinds::CK_REALM_PREVIEW_POLICY => {
             OperationPayloadSchema {
@@ -1317,6 +1394,7 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
             .and_then(Value::as_str)
             .ok_or("message create requires track_name")?;
         validate_read_scope_track(track_name)?;
+        validate_message_expiry_payload(operation)?;
     }
     let encrypted = operation
         .payload
@@ -1342,6 +1420,97 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         validate_audience_mentions(content)?;
     }
     Ok(())
+}
+
+fn validate_message_expiry_payload(operation: &Operation) -> Result<(), &'static str> {
+    let Some(expiry) = operation.payload.get("expiry") else {
+        return Ok(());
+    };
+    let Some(object) = expiry.as_object() else {
+        return Err("ck.message.create.payload.expiry must be an object");
+    };
+    for key in object.keys() {
+        if !["ttl_ms", "trigger", "anchor_hlc", "grace_ms"].contains(&key.as_str()) {
+            return Err("ck.message.create.payload.expiry has unknown field");
+        }
+    }
+    if object
+        .get("ttl_ms")
+        .and_then(Value::as_u64)
+        .is_none_or(|value| value == 0)
+    {
+        return Err("ck.message.create.payload.expiry requires positive ttl_ms");
+    }
+    match object.get("trigger").and_then(Value::as_str) {
+        Some("on_send" | "on_first_read" | "on_last_read") => {}
+        _ => return Err("ck.message.create.payload.expiry trigger is invalid"),
+    }
+    if object
+        .get("anchor_hlc")
+        .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
+    {
+        return Err("ck.message.create.payload.expiry anchor_hlc must be non-empty");
+    }
+    if object
+        .get("grace_ms")
+        .is_some_and(|value| value.as_u64().is_none())
+    {
+        return Err("ck.message.create.payload.expiry grace_ms must be an integer");
+    }
+    Ok(())
+}
+
+fn validate_account_data_set_payload(operation: &Operation) -> Result<(), &'static str> {
+    let key = operation
+        .payload
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or("account_data.set requires key")?;
+    if private_account_data_key_prefix(key).is_none() {
+        return Ok(());
+    }
+    cokret_sdk::validate_private_account_data_key(key)
+        .map_err(|_| "account_data.set key must use registered private key pattern")?;
+    if operation.payload.get("tombstone").is_some() {
+        return Ok(());
+    }
+    for forbidden in [
+        "body",
+        "target_ref",
+        "collection_title",
+        "note",
+        "message_payload",
+        "content",
+        "blind_tokens",
+        "shard_key",
+    ] {
+        if operation.payload.get(forbidden).is_some() {
+            return Err("account_data.set private payload leaks plaintext field");
+        }
+    }
+    if operation.payload.get("encrypted_payload").is_some()
+        || operation.payload.get("encrypted_content").is_some()
+    {
+        Ok(())
+    } else {
+        Err("account_data.set private payload requires encrypted_payload or encrypted_content")
+    }
+}
+
+fn private_account_data_key_prefix(key: &str) -> Option<&'static str> {
+    [
+        cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+        cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+        cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+        cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+        cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+        cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+    ]
+    .into_iter()
+    .find(|prefix| {
+        key.strip_prefix(*prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+    })
 }
 
 fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static str> {
@@ -1757,6 +1926,8 @@ fn validate_cross_signing_reset_replay_batch(operations: &[Operation]) -> Result
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
     if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
+        || message.starts_with("disappearing_")
+        || message.starts_with("direct_conversation_")
         || message == cokret_sdk::error::REASON_REACTION_SCOPE_MISMATCH
     {
         (
@@ -1816,6 +1987,7 @@ pub async fn validate_operation_policy(
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;
         validate_minimal_metadata_aad_policy(state, operation).await?;
+        validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())
 }
@@ -1884,6 +2056,69 @@ async fn validate_minimal_metadata_aad_policy(
 /// envelope to the SDK [`cokret_sdk::mls::AadVisibility`] enum. Returns `None`
 /// when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
+fn validate_disappearing_message_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !kinds::operation_is_message_create(operation) || operation.payload.get("expiry").is_none() {
+        return Ok(());
+    }
+    validate_message_expiry_payload(operation)?;
+    let expiry = operation
+        .payload
+        .get("expiry")
+        .and_then(Value::as_object)
+        .ok_or("disappearing_expiry_invalid")?;
+    let ttl_ms = expiry
+        .get("ttl_ms")
+        .and_then(Value::as_u64)
+        .ok_or("disappearing_expiry_ttl_missing")?;
+    let trigger = expiry
+        .get("trigger")
+        .and_then(Value::as_str)
+        .ok_or("disappearing_expiry_trigger_missing")?;
+    let policy = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| {
+            projection
+                .realm_disappearing_policy_cell_value(operation.realm_id.as_str())
+                .cloned()
+        })
+        .ok_or("disappearing_policy_unset")?;
+    if !policy
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("disappearing_policy_disabled");
+    }
+    let max_ttl_ms = policy
+        .get("max_ttl_ms")
+        .and_then(Value::as_u64)
+        .ok_or("disappearing_policy_max_ttl_missing")?;
+    if ttl_ms > max_ttl_ms {
+        return Err("disappearing_ttl_exceeds_policy");
+    }
+    let trigger_allowed = policy
+        .get("allowed_triggers")
+        .and_then(Value::as_array)
+        .is_some_and(|triggers| triggers.iter().any(|value| value.as_str() == Some(trigger)));
+    if !trigger_allowed {
+        return Err("disappearing_trigger_not_allowed");
+    }
+    if !message_operation_is_encrypted(operation)
+        && !policy
+            .get("allow_plaintext_realms")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return Err("disappearing_plaintext_realm_not_allowed");
+    }
+    Ok(())
+}
+
 fn minimal_metadata_aad_visibility(envelope: &Value) -> Option<cokret_sdk::mls::AadVisibility> {
     use cokret_sdk::mls::AadVisibility;
     // The discriminator lives at the envelope root; tolerate a nested
@@ -2193,6 +2428,9 @@ async fn validate_member_state_policy(
     if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_MEMBER_STATE) {
         return Ok(());
     }
+    if let Some(reason) = direct_conversation_member_state_guard(state, operation) {
+        return Err(reason);
+    }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
         if let Some(member) = membership_target(operation)
             && crate::routing::organizations::organization_policy_blocks_join(
@@ -2218,6 +2456,41 @@ async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+fn direct_conversation_member_state_guard(
+    state: &AppState,
+    operation: &Operation,
+) -> Option<&'static str> {
+    let membership = operation
+        .payload
+        .get("membership")
+        .and_then(Value::as_str)?;
+    let binding = state
+        .direct_conversation_bindings
+        .lock()
+        .expect("direct_conversation_bindings lock")
+        .values()
+        .find(|binding| {
+            binding.state == "active" && binding.realm_id == operation.realm_id.as_str()
+        })
+        .cloned()?;
+    if binding.participants_unordered.len() != 2 {
+        return Some("direct_conversation_member_count_invalid");
+    }
+    if !matches!(membership, "invite" | "join") {
+        return None;
+    }
+    let target = membership_target(operation)?;
+    if binding
+        .participants_unordered
+        .iter()
+        .any(|participant| participant == target)
+    {
+        None
+    } else {
+        Some("direct_conversation_third_party_member_forbidden")
+    }
 }
 
 async fn validate_history_visibility_policy(

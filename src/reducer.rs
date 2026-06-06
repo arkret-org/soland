@@ -53,6 +53,14 @@ pub struct ProjectionState {
     pub messages: BTreeMap<String, MessageState>,
     /// Reactions keyed by (event_id, actor, reaction_key). OR-Set.
     pub reactions: BTreeMap<String, BTreeMap<String, BTreeMap<String, ReactionState>>>,
+    /// Calendar RSVP projection keyed by `(event_ref, occurrence, actor_id)`.
+    /// The event has no spec-declared cell family; this is a durable-event
+    /// side-band cache for agenda/detail views.
+    pub rsvps: BTreeMap<(String, String, String), RsvpProjection>,
+    /// Shared pin projection keyed by `(pin_scope_key, target_ref)`.
+    /// Saved items remain holder-private account-data and never enter this
+    /// shared Realm cache.
+    pub pins: BTreeMap<(String, String), PinProjection>,
     /// Read markers keyed by (realm_id, actor, scope_id). LWW.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
     /// Relations keyed by relation_id. LWW by HLC.
@@ -813,6 +821,7 @@ pub struct MessageState {
     pub sender: String,
     pub thread_id: String,
     pub content: Value,
+    pub expiry: Option<Value>,
     pub encrypted: bool,
     pub operation_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -828,6 +837,27 @@ pub struct ReactionState {
     pub key: String,
     pub active: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RsvpProjection {
+    pub event_ref: String,
+    pub status: String,
+    pub occurrence: Option<String>,
+    pub comment: Option<Value>,
+    pub actor_id: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinProjection {
+    pub pin_scope: Value,
+    pub target_ref: String,
+    pub rank: Option<String>,
+    pub note: Option<Value>,
+    pub actor_id: String,
+    pub active: bool,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -875,6 +905,32 @@ fn reaction_target_event_id(operation: &Operation) -> Option<String> {
             .filter(|value| !value.is_empty())
             .map(message_event_id_from_ref)
     })
+}
+
+fn operation_actor_id(operation: &Operation) -> String {
+    operation
+        .payload
+        .get("actor_id")
+        .or_else(|| operation.payload.get("sender"))
+        .or_else(|| operation.payload.get("created_by"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| operation.operation_id.to_string())
+}
+
+fn occurrence_key(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("series")
+        .to_owned()
+}
+
+fn pin_scope_key(pin_scope: &Value) -> Option<String> {
+    let kind = pin_scope.get("kind").and_then(Value::as_str)?;
+    let id = pin_scope.get("id").and_then(Value::as_str)?;
+    Some(format!("{kind}:{id}"))
 }
 
 /// Build the stored message content. `scope_circle_id` is the Flow-derived
@@ -1133,6 +1189,17 @@ pub enum ProjectionEffect {
         key: String,
         active: bool,
     },
+    RsvpProjected {
+        event_ref: String,
+        actor_id: String,
+        occurrence: Option<String>,
+        status: String,
+    },
+    PinProjected {
+        pin_scope_key: String,
+        target_ref: String,
+        active: bool,
+    },
     ReadMarkerUpdated(ReadMarkerState),
     RelationCreated(RelationState),
     RelationUpdated(RelationState),
@@ -1205,6 +1272,12 @@ pub enum ProjectionEffect {
     /// into the canonical `ck.component.realm.delivery_binding_policy.v1`
     /// cas-register cell.
     DeliveryBindingPolicyProjected {
+        realm_id: String,
+    },
+    RealmDisappearingPolicyProjected {
+        realm_id: String,
+    },
+    RealmSearchPolicyProjected {
         realm_id: String,
     },
     /// R3.1 — `ck.realm.link` event was projected into the
@@ -1430,6 +1503,20 @@ fn apply_reaction_remove_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_reaction_remove(op)
+}
+fn apply_rsvp_set_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_rsvp_set(op, op.created_at)
+}
+fn apply_pin_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_pin(op, op.created_at)
 }
 fn apply_read_cursor_dispatch(
     s: &mut ProjectionState,
@@ -1847,6 +1934,22 @@ fn apply_delivery_binding_policy_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_delivery_binding_policy(op)
+}
+
+fn apply_realm_disappearing_policy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_disappearing_policy(op)
+}
+
+fn apply_realm_search_policy_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_search_policy(op)
 }
 /// R3.1 — upsert a realm-link row into a per-Realm Vec cache. Matches
 /// on the composite key `(realm_id, target_realm_id, link_kind)`; an
@@ -2544,6 +2647,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_REDACTION, apply_redaction_dispatch);
     m.insert(CK_REACTION_ADD, apply_reaction_add_dispatch);
     m.insert(CK_REACTION_REMOVE, apply_reaction_remove_dispatch);
+    m.insert(CK_RSVP_SET, apply_rsvp_set_dispatch);
+    m.insert(CK_PIN_ADD, apply_pin_dispatch);
+    m.insert(CK_PIN_REMOVE, apply_pin_dispatch);
+    m.insert(CK_PIN_REORDER, apply_pin_dispatch);
     m.insert(CK_READ_MARKER, apply_read_cursor_dispatch);
     m.insert(CK_RELATION_CREATE, apply_relation_create_dispatch);
     m.insert(CK_RELATION_UPDATE, apply_relation_update_dispatch);
@@ -2643,6 +2750,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         CK_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
     );
+    m.insert(
+        CK_REALM_DISAPPEARING_POLICY,
+        apply_realm_disappearing_policy_dispatch,
+    );
+    m.insert(CK_REALM_SEARCH_POLICY, apply_realm_search_policy_dispatch);
     m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
@@ -3746,6 +3858,7 @@ impl ProjectionState {
             sender,
             thread_id,
             content,
+            expiry: operation.payload.get("expiry").cloned(),
             encrypted,
             operation_id: operation.operation_id.to_string(),
             created_at: now,
@@ -4145,6 +4258,114 @@ impl ProjectionState {
         }
     }
 
+    fn apply_rsvp_set(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(event_ref) = operation.payload.get("event_ref").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_event_ref_missing".to_owned(),
+            };
+        };
+        let Some(status) = operation.payload.get("status").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_status_missing".to_owned(),
+            };
+        };
+        let occurrence = operation
+            .payload
+            .get("occurrence")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let actor_id = operation_actor_id(operation);
+        let key = (
+            event_ref.to_owned(),
+            occurrence_key(operation.payload.get("occurrence")),
+            actor_id.clone(),
+        );
+        self.rsvps.insert(
+            key,
+            RsvpProjection {
+                event_ref: event_ref.to_owned(),
+                status: status.to_owned(),
+                occurrence: occurrence.clone(),
+                comment: operation.payload.get("comment").cloned(),
+                actor_id: actor_id.clone(),
+                updated_at: now,
+            },
+        );
+        ProjectionEffect::RsvpProjected {
+            event_ref: event_ref.to_owned(),
+            actor_id,
+            occurrence,
+            status: status.to_owned(),
+        }
+    }
+
+    fn apply_pin(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Some(pin_scope) = operation.payload.get("pin_scope") else {
+            return ProjectionEffect::Rejected {
+                reason: "pin_scope_missing".to_owned(),
+            };
+        };
+        let Some(pin_scope_key) = pin_scope_key(pin_scope) else {
+            return ProjectionEffect::Rejected {
+                reason: "pin_scope_invalid".to_owned(),
+            };
+        };
+        let Some(target_ref) = operation.payload.get("target_ref").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "pin_target_ref_missing".to_owned(),
+            };
+        };
+        let map_key = (pin_scope_key.clone(), target_ref.to_owned());
+        let operation_kind = crate::kinds::canonical_kind_for_operation(operation);
+        if operation_kind == Some(crate::kinds::CK_PIN_REMOVE) {
+            if let Some(pin) = self.pins.get_mut(&map_key) {
+                pin.active = false;
+                pin.updated_at = now;
+            }
+            return ProjectionEffect::PinProjected {
+                pin_scope_key,
+                target_ref: target_ref.to_owned(),
+                active: false,
+            };
+        }
+        let Some(rank) = operation.payload.get("rank").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "pin_rank_missing".to_owned(),
+            };
+        };
+        let previous = self.pins.get(&map_key);
+        let note = if operation_kind == Some(crate::kinds::CK_PIN_REORDER) {
+            previous.and_then(|pin| pin.note.clone())
+        } else {
+            operation.payload.get("note").cloned()
+        };
+        self.pins.insert(
+            map_key,
+            PinProjection {
+                pin_scope: pin_scope.clone(),
+                target_ref: target_ref.to_owned(),
+                rank: Some(rank.to_owned()),
+                note,
+                actor_id: operation_actor_id(operation),
+                active: true,
+                updated_at: now,
+            },
+        );
+        ProjectionEffect::PinProjected {
+            pin_scope_key,
+            target_ref: target_ref.to_owned(),
+            active: true,
+        }
+    }
+
     fn apply_read_cursor(
         &mut self,
         operation: &Operation,
@@ -4434,6 +4655,28 @@ impl ProjectionState {
     /// - `target_realm_id` is required and MUST be a Realm-shaped id.
     /// - `status` defaults to `active`; valid values are `active|rejected|tombstoned`.
     /// - Self-referential links (target == source) are rejected with `realm_link_self_reference`.
+    fn apply_realm_disappearing_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+        )) {
+            self.cells
+                .insert(cell_id, CellState::Value(operation.payload.clone()));
+        }
+        ProjectionEffect::RealmDisappearingPolicyProjected { realm_id }
+    }
+
+    fn apply_realm_search_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.search_policy.v1:{realm_id}"
+        )) {
+            self.cells
+                .insert(cell_id, CellState::Value(operation.payload.clone()));
+        }
+        ProjectionEffect::RealmSearchPolicyProjected { realm_id }
+    }
+
     fn apply_realm_link(
         &mut self,
         operation: &Operation,
@@ -8044,6 +8287,22 @@ impl ProjectionState {
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         let cell_id = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.delivery_binding_policy.v1:{realm_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.search_policy.v1:{realm_id}"
         ))
         .ok()?;
         self.cell_value(&cell_id)

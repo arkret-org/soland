@@ -1154,12 +1154,20 @@ pub struct ContactRequestRequest {
     #[serde(default)]
     #[serde(rename = "consent_scope")]
     pub scope: Option<String>,
+    #[serde(default)]
+    pub requested_scopes: Vec<String>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct ContactRespondRequest {
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub requester: String,
     pub action: String,
+    #[serde(default)]
+    pub granted_scopes: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -1175,7 +1183,59 @@ pub struct ContactResponse {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ContactsResponse {
-    pub contacts: Vec<ContactResponse>,
+    pub contacts: Vec<ContactListRow>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DirectConversationSummary {
+    pub realm_id: String,
+    pub main_flow_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_event_ref: Option<String>,
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct ContactListRow {
+    pub peer: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_event_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_event_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tombstone_event_ref: Option<String>,
+    pub granted_by_me: Vec<String>,
+    pub granted_to_me: Vec<String>,
+    pub bidirectional_scopes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effective_scopes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_conversation: Option<DirectConversationSummary>,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct DirectConversationResolveRequest {
+    pub peer: String,
+    #[serde(default)]
+    pub create: bool,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DirectConversationResolveResponse {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_flow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_event_ref: Option<String>,
+    pub created: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

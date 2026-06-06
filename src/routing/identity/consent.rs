@@ -393,6 +393,16 @@ pub(super) fn has_active_consent_for_scope(
     })
 }
 
+pub(crate) fn grant_contact_managed_consent(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scope: &str,
+    granted_at: DateTime<Utc>,
+) -> ConsentCellRecord {
+    grant_cell(state, holder, peer, scope, None, granted_at)
+}
+
 fn grant_cell(
     state: &AppState,
     holder: &str,

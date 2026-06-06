@@ -906,6 +906,11 @@ pub struct AppState {
     /// gate; durable Move/Anchor cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    /// Direct conversation binding projection keyed by sorted participant DID
+    /// pair. This is the bounded server-side fallback for
+    /// `ck.self.direct_conversation.resolve` until signed
+    /// `ck.direct_conversation.bound` event projection is fully wired.
+    pub direct_conversation_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
     /// Runtime state for sovereign-main / enclave deployment handshakes,
     /// trust-root decisions, boundary audit, and store-and-forward queues.
     /// The P2-056 implementation keeps this in memory so the dual-soland
@@ -1286,6 +1291,17 @@ pub struct ConsentCellRecord {
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectConversationBindingRecord {
+    pub participants_unordered: Vec<String>,
+    pub realm_id: String,
+    pub main_flow_id: String,
+    pub binding_event_ref: String,
+    pub state: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1994,6 +2010,7 @@ impl AppState {
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
+            direct_conversation_bindings: Arc::new(Mutex::new(BTreeMap::new())),
             sovereign_deployment: Arc::new(Mutex::new(SovereignDeploymentState {
                 upstream_available: true,
                 ..Default::default()

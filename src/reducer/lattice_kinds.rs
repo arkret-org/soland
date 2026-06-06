@@ -21,12 +21,13 @@ pub use cokret_sdk::lattice_registry::{
     DevicePushRoute, DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
     MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage, PolicyRule, ProfileCreate,
     RealmArchive, RealmAssetPrivacyPolicy, RealmCreate, RealmDeliveryBindingPolicy, RealmDestroy,
-    RealmDiscovery, RealmFreeze, RealmHistorySharingPolicy, RealmHistoryVisibility,
-    RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService, RealmModerationPolicy,
-    RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyComponents,
-    RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema, RealmTombstone,
-    RealmUpgrade, SessionGrant, SpaceParent, ViewCreate, ViewReconcile, ViewUpdate,
-    build_sdk_cell_registry, default_lattice_registry, lattice_bindings_for_sdk_registry,
+    RealmDisappearingPolicy, RealmDiscovery, RealmFreeze, RealmHistorySharingPolicy,
+    RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService,
+    RealmModerationPolicy, RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy,
+    RealmPolicyComponents, RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy,
+    RealmSchema, RealmSearchPolicy, RealmTombstone, RealmUpgrade, SessionGrant, SpaceParent,
+    ViewCreate, ViewReconcile, ViewUpdate, build_sdk_cell_registry, default_lattice_registry,
+    lattice_bindings_for_sdk_registry,
 };
 
 #[cfg(test)]
@@ -114,15 +115,12 @@ mod tests {
     }
 
     /// Sanity: the SDK-defined registry covers every spec-normative
-    /// cell family. Locked at 80 after key-backup active-series landed
-    /// in the spec registry —
-    /// see the matching assertion in
-    /// `cokret-rust-sdk/crates/sdk/src/lattice_registry.rs` for the
-    /// breakdown. Bump deliberately when a new spec family lands.
+    /// cell family plus reducer-local anchor/MLS families. Keep this in
+    /// lockstep with `cokret-rust-sdk/crates/sdk/src/lattice_registry.rs`.
     #[test]
     fn default_registry_still_covers_every_spec_family() {
         let registry = default_lattice_registry();
-        assert_eq!(registry.len(), 80);
+        assert_eq!(registry.len(), 63);
     }
 
     #[test]

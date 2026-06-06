@@ -47,12 +47,105 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         data_type: "ck.agent.sidecar_projection.v1",
         controller_private: true,
     },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+        controller_private: true,
+    },
+];
+
+const PRIVATE_ACCOUNT_DATA_PREFIXES: &[&str] = &[
+    cokret_sdk::ACCOUNT_DATA_TYPE_REMINDER,
+    cokret_sdk::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+    cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
+    cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
+    cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+    cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
 ];
 
 fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataTypeSpec> {
+    let canonical_type = private_account_data_prefix(data_type).unwrap_or(data_type);
     REGISTERED_ACCOUNT_DATA_TYPES
         .iter()
-        .find(|spec| spec.data_type == data_type)
+        .find(|spec| spec.data_type == canonical_type)
+}
+
+fn private_account_data_prefix(data_type: &str) -> Option<&'static str> {
+    PRIVATE_ACCOUNT_DATA_PREFIXES
+        .iter()
+        .copied()
+        .find(|prefix| {
+            data_type
+                .strip_prefix(*prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+        })
+}
+
+fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError> {
+    if private_account_data_prefix(data_type).is_some() {
+        cokret_sdk::validate_private_account_data_key(data_type)
+            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn validate_private_account_data_content(data_type: &str, content: &Value) -> Result<(), AppError> {
+    if private_account_data_prefix(data_type).is_none() {
+        return Ok(());
+    }
+    let Some(object) = content.as_object() else {
+        return Err(AppError::invalid_param(
+            "private account_data content must be an encrypted envelope object",
+        ));
+    };
+    if object.get("tombstone").is_some() {
+        return Ok(());
+    }
+    for forbidden in [
+        "body",
+        "target_ref",
+        "collection_title",
+        "note",
+        "message_payload",
+        "content",
+        "blind_tokens",
+        "shard_key",
+    ] {
+        if object.contains_key(forbidden) {
+            return Err(AppError::invalid_param(format!(
+                "private account_data content must not expose `{forbidden}` in plaintext",
+            )));
+        }
+    }
+    if object.contains_key("encrypted_payload")
+        || object.contains_key("encrypted_content")
+        || object.contains_key("ciphertext")
+    {
+        Ok(())
+    } else {
+        Err(AppError::invalid_param(
+            "private account_data content requires encrypted_payload, encrypted_content, or ciphertext",
+        ))
+    }
 }
 
 pub(super) fn router() -> Router {
@@ -146,6 +239,7 @@ async fn put_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
+    validate_registered_account_data_key(&data_type)?;
 
     // CKP-0008 / CKP-0009 — enforce controller-only writes on the
     // registered personal-agent account-data types.
@@ -167,6 +261,7 @@ async fn put_account_data(
     }
 
     let body = body.into_inner();
+    validate_private_account_data_content(&data_type, &body.content)?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
     // filling the row with megabytes of base64.
@@ -245,6 +340,7 @@ async fn get_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
+    validate_registered_account_data_key(&data_type)?;
 
     match state
         .persistence
@@ -299,6 +395,7 @@ async fn delete_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
+    validate_registered_account_data_key(&data_type)?;
 
     state
         .persistence
@@ -329,4 +426,45 @@ async fn delete_account_data(
     .await;
 
     json_ok(serde_json::json!({"ok": true, "data_type": data_type}))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn private_account_data_key_patterns_are_validated() {
+        assert!(
+            validate_registered_account_data_key(
+                "ck.scheduled_send.v1:ck:message:01904100-0000-7000-8000-000000000001"
+            )
+            .is_ok()
+        );
+        let err = validate_registered_account_data_key(
+            "ck.draft.v1:message:ck:message:01904100-0000-7000-8000-000000000001:main",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("raw typed refs"));
+    }
+
+    #[test]
+    fn private_account_data_requires_encrypted_content() {
+        let key = "ck.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        assert!(
+            validate_private_account_data_content(
+                key,
+                &json!({"encrypted_payload": {"ciphertext": "opaque"}}),
+            )
+            .is_ok()
+        );
+        assert!(validate_private_account_data_content(key, &json!({"tombstone": true})).is_ok());
+        let err = validate_private_account_data_content(
+            key,
+            &json!({"body": {"collection_title": "Leaks"}}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("body"));
+    }
 }
