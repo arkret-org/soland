@@ -829,7 +829,9 @@ pub(super) async fn submit_federation_events(
             return;
         }
     };
-    if let Err((code, message)) = EventsSubmitRequestBody::validate_federation_binding(&submit) {
+    if let Err((code, message)) =
+        SolandEventsSubmitRequestBody::validate_federation_binding(&submit)
+    {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
@@ -4194,7 +4196,7 @@ pub async fn effective_read_receipt_policy_for_realm(
 /// gated by federation authentication.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum EventsSubmitRequestBody {
+pub enum SolandEventsSubmitRequestBody {
     /// Federation form — `service_binding_ref` is REQUIRED and all 6
     /// fields validated.
     Federation(EventsSubmitFederationRequestBody),
@@ -4204,7 +4206,7 @@ pub enum EventsSubmitRequestBody {
     Single(Value),
 }
 
-impl EventsSubmitRequestBody {
+impl SolandEventsSubmitRequestBody {
     /// Classify an incoming JSON body without consuming it. Returns the
     /// discriminator name for tracing / metrics.
     #[allow(dead_code)]
@@ -4722,9 +4724,12 @@ mod admission_tests {
         let single = json!({"event_id": "x"});
         let batch = json!({"events": []});
         let federation = json!({"events": [], "service_binding_ref": {"realm_id": "x"}});
-        assert_eq!(EventsSubmitRequestBody::shape(&single), "single");
-        assert_eq!(EventsSubmitRequestBody::shape(&batch), "batch");
-        assert_eq!(EventsSubmitRequestBody::shape(&federation), "federation");
+        assert_eq!(SolandEventsSubmitRequestBody::shape(&single), "single");
+        assert_eq!(SolandEventsSubmitRequestBody::shape(&batch), "batch");
+        assert_eq!(
+            SolandEventsSubmitRequestBody::shape(&federation),
+            "federation"
+        );
     }
 
     #[test]
@@ -4748,7 +4753,7 @@ mod admission_tests {
             events: Vec::new(),
             idempotency_key: None,
         };
-        let err = EventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
+        let err = SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
         assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
     }
 }

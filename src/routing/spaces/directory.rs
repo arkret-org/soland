@@ -23,7 +23,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use cokret_sdk::{
-    Did, Ed25519MoveSigner, LinkType, MoveSigner, RealmRef, TargetDescriptor, canonical,
+    Did, Ed25519MoveSigner, LinkType, MoveSigner, RealmId, RealmRef, TargetDescriptor, canonical,
     parse_address, target_digest,
 };
 use ed25519_dalek::{Signature, Verifier};
@@ -45,7 +45,8 @@ use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
     DirectoryDescribeOutcome, DirectoryValueSearchResponse, RealmJoinCandidate,
-    ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
+    RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
+    RealmJoinMethod, ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
     ResolveOrganizationResponse, ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest,
     SearchOrganizationsRequest, SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
     SolandHandleClaim, SolandHandleClaimDeliveryBinding, SolandHandleClaimProof,
@@ -758,29 +759,29 @@ fn join_candidates_for_resolved_realm(
 ) -> Vec<RealmJoinCandidate> {
     let observed_at = now();
     let join_methods = if discoverability == "public" {
-        vec!["member_join".to_owned(), "invite_accept".to_owned()]
+        vec![RealmJoinMethod::MemberJoin, RealmJoinMethod::InviteAccept]
     } else {
         vec![
-            "invite_accept".to_owned(),
-            "knock".to_owned(),
-            "application".to_owned(),
+            RealmJoinMethod::InviteAccept,
+            RealmJoinMethod::Knock,
+            RealmJoinMethod::Application,
         ]
     };
     vec![RealmJoinCandidate {
-        realm_id: realm_id.to_owned(),
-        service_did: state.config.service_did.clone(),
-        service_type: "principal_server".to_owned(),
-        role: "primary".to_owned(),
+        realm_id: RealmId::new(realm_id.to_owned()).expect("directory realm id is validated"),
+        service_did: Did::new(state.config.service_did.clone()).expect("service DID is validated"),
+        service_type: RealmJoinCandidateServiceType::PrincipalServer,
+        role: RealmJoinCandidateRole::Primary,
         endpoint: Some(state.config.public_base_url.clone()),
         operations: vec!["ck.self.events.submit".to_owned()],
         join_methods,
         priority: Some(0),
-        source: "directory_ingest".to_owned(),
-        source_refs: None,
+        source: RealmJoinCandidateSource::DirectoryIngest,
+        source_refs: Vec::new(),
         frontier_ref: None,
-        as_of: observed_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        expires_at: (observed_at + chrono::Duration::minutes(10))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        as_of: observed_at,
+        expires_at: observed_at + chrono::Duration::minutes(10),
+        proofs: Vec::new(),
     }]
 }
 

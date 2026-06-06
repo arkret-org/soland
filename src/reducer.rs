@@ -78,7 +78,7 @@ pub struct ProjectionState {
     ///
     /// Banned and knocking members are derived via `members_in_state`
     /// against the FSM state field, not stored as separate collections.
-    pub members: BTreeMap<(String, String), MembershipState>,
+    pub members: BTreeMap<(String, String), SolandMembershipState>,
     /// Realm lifecycle state keyed by realm_id.
     pub realm_states: BTreeMap<String, RealmState>,
     /// Redacted event IDs (tombstones). This stays as a flat
@@ -112,7 +112,7 @@ pub struct ProjectionState {
     ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read path uses
     ///     `cell_value`.
     ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
-    ///     `members: BTreeMap<(String, String), MembershipState>` cache + per-actor
+    ///     `members: BTreeMap<(String, String), SolandMembershipState>` cache + per-actor
     ///     `ck.component.member.state.v1` FSM cell.
     ///   - `realm_states` (mixed: ordered-log + cas-register) — kept as structured `realm_states`
     ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
@@ -164,7 +164,7 @@ pub struct ProjectionState {
     /// Protocol-session events for agents
     /// (`ck.agent.protocol_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
-    pub agents: BTreeMap<String, AgentProjection>,
+    pub agents: BTreeMap<String, SolandAgentProjection>,
     /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
     /// state for each agent_principal_id. Driven by
     /// `ck.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
@@ -705,7 +705,7 @@ pub struct AppletProjection {
 /// `ck.agent.protocol_session.result` envelope's `detail.endpoint_url`
 /// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentProjection {
+pub struct SolandAgentProjection {
     /// `agent_id` — canonical agent runtime DID per spec.
     pub agent_id: String,
     /// Protocol the agent speaks (free-form string per spec event-kind-registry
@@ -1100,7 +1100,7 @@ impl RelationState {
 }
 
 #[derive(Clone, Debug)]
-pub struct MembershipState {
+pub struct SolandMembershipState {
     pub member: String,
     pub realm_id: String,
     /// Canonical FSM state value (one of `invite` / `join` / `leave` /
@@ -5253,7 +5253,7 @@ impl ProjectionState {
         // Update the structured cache with side-band + FSM state mirror.
         self.members.insert(
             key.clone(),
-            MembershipState {
+            SolandMembershipState {
                 member: member.clone(),
                 realm_id: realm_id.clone(),
                 state: new_state.to_owned(),
@@ -7865,7 +7865,7 @@ impl ProjectionState {
         ProjectionEffect::AppletProjectionUpdated { service_did }
     }
 
-    /// Apply `ck.agent.endpoint`. Upserts the AgentProjection keyed by
+    /// Apply `ck.agent.endpoint`. Upserts the SolandAgentProjection keyed by
     /// `agent_id`. If the payload carries an endpoint URL field it
     /// is captured into the projection so the bridge can echo it back
     /// on `protocol_session.result`.
@@ -7920,7 +7920,7 @@ impl ProjectionState {
             .get(&agent_id)
             .map(|p| p.registered_at)
             .unwrap_or(now);
-        let projection = AgentProjection {
+        let projection = SolandAgentProjection {
             agent_id: agent_id.clone(),
             protocol,
             endpoint_url,
@@ -8145,13 +8145,13 @@ impl ProjectionState {
 
     /// Get members of a Realm currently in `state="join"`.
     /// For state-specific queries use [`members_in_state`].
-    pub fn members_of_realm(&self, realm_id: &str) -> Vec<&MembershipState> {
+    pub fn members_of_realm(&self, realm_id: &str) -> Vec<&SolandMembershipState> {
         self.members_in_state(realm_id, "join")
     }
 
-    /// All `MembershipState` entries for a Realm whose FSM state matches
+    /// All `SolandMembershipState` entries for a Realm whose FSM state matches
     /// `state` (`invite` / `join` / `leave` / `ban` / `knock`).
-    pub fn members_in_state(&self, realm_id: &str, state: &str) -> Vec<&MembershipState> {
+    pub fn members_in_state(&self, realm_id: &str, state: &str) -> Vec<&SolandMembershipState> {
         self.members
             .iter()
             .filter(|((sid, _), m)| sid == realm_id && m.state == state)
@@ -8160,7 +8160,7 @@ impl ProjectionState {
     }
 
     /// Look up a single `(realm_id, actor_did)` member entry.
-    pub fn member(&self, realm_id: &str, actor_did: &str) -> Option<&MembershipState> {
+    pub fn member(&self, realm_id: &str, actor_did: &str) -> Option<&SolandMembershipState> {
         self.members
             .get(&(realm_id.to_owned(), actor_did.to_owned()))
     }

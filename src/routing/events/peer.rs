@@ -124,7 +124,7 @@ async fn peer_events_query_post(depot: &mut Depot, req: &mut Request) -> JsonRes
         serde_json::from_value::<EventsQueryPostRequestBody>(body.clone()).map_err(|error| {
             schema_violation(format!("invalid ck.peer.events.query shape: {error}"))
         })?;
-    let parts = PeerEventsQueryParts::from_body(request, body.get("filters").cloned())?;
+    let parts = PeerEventsQueryParts::from_body(request)?;
     peer_events_query_response(state, parts).await
 }
 
@@ -414,19 +414,25 @@ impl PeerEventsQueryParts {
         Ok(parts)
     }
 
-    fn from_body(
-        body: EventsQueryPostRequestBody,
-        filters: Option<Value>,
-    ) -> Result<Self, AppError> {
-        let kind_filter = parse_kind_filter(filters.as_ref())?;
+    fn from_body(body: EventsQueryPostRequestBody) -> Result<Self, AppError> {
+        let kind_filter = parse_kind_filter(body.filters.as_ref())?;
         let parts = Self {
-            realms: body.realms,
-            actors: body.actors,
-            after: body.after,
-            before: body.before,
+            realms: body
+                .realms
+                .into_iter()
+                .map(|realm| realm.into_string())
+                .collect(),
+            actors: body
+                .actors
+                .into_iter()
+                .map(|actor| actor.into_string())
+                .collect(),
+            after: body.after.map(|cursor| cursor.into_string()),
+            before: body.before.map(|cursor| cursor.into_string()),
             order: body.order.unwrap_or_else(|| "default".to_owned()),
             limit: body
                 .limit
+                .map(|limit| limit as usize)
                 .unwrap_or(MAX_PEER_EVENTS_QUERY_LIMIT)
                 .clamp(1, MAX_PEER_EVENTS_QUERY_LIMIT),
             kind_filter,

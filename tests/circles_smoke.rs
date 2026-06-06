@@ -24,7 +24,9 @@ use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
     CK_FLOW_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE,
 };
-use soland::reducer::{CircleLifecycleState, MembershipState, ProjectionEffect, ProjectionState};
+use soland::reducer::{
+    CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
+};
 
 const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
@@ -85,7 +87,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
     let now = chrono::Utc::now();
     state.members.insert(
         (realm_id.to_owned(), actor.to_owned()),
-        MembershipState {
+        SolandMembershipState {
             member: actor.to_owned(),
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),

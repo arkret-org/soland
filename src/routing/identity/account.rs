@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
-use cokret_sdk::ErrorCode;
+use cokret_sdk::{Did, ErrorCode, EventId, FlowId, RealmId};
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -38,12 +38,12 @@ use crate::state::{
     DirectConversationBindingRecord, RealmDirectoryEntry,
 };
 use crate::wire::{
-    ClaimHandleRequest, ClaimHandleResponse, ContactListRow, ContactResponse, ContactsResponse,
-    DirectConversationSummary, RegisterAccountRequest, SolandAccountRegisterOutcome,
-    SolandAccountUpdateProfileOutcome, SolandAccountUpdateProfileRequestBody,
-    SolandContactRequestRequestBody, SolandContactRespondRequestBody,
-    SolandDirectConversationResolveOutcome, SolandDirectConversationResolveRequestBody,
-    TransferHandleRequest, TransferHandleResponse,
+    ClaimHandleRequest, ClaimHandleResponse, ContactListRow, ContactResponse, ContactState,
+    ContactsResponse, DirectConversationBindingState, DirectConversationSummary,
+    RegisterAccountRequest, SolandAccountRegisterOutcome, SolandAccountUpdateProfileOutcome,
+    SolandAccountUpdateProfileRequestBody, SolandContactRequestRequestBody,
+    SolandContactRespondRequestBody, SolandDirectConversationResolveOutcome,
+    SolandDirectConversationResolveRequestBody, TransferHandleRequest, TransferHandleResponse,
 };
 
 /// Grace period after a handle is released before another actor may claim
@@ -2112,8 +2112,8 @@ fn contact_list_rows(
         };
         let row_state = directional_contact_state(actor, &record);
         let entry = rows.entry(peer.clone()).or_insert_with(|| ContactListRow {
-            peer: peer.clone(),
-            state: row_state.clone(),
+            peer: Did::new(peer.clone()).expect("contact peer DID is validated"),
+            state: row_state,
             request_event_ref: None,
             response_event_ref: None,
             tombstone_event_ref: None,
@@ -2130,12 +2130,12 @@ fn contact_list_rows(
     let mut out = rows
         .into_values()
         .map(|mut row| {
-            row.granted_by_me = active_scopes(state, actor, &row.peer);
-            row.granted_to_me = active_scopes(state, &row.peer, actor);
+            row.granted_by_me = active_scopes(state, actor, row.peer.as_str());
+            row.granted_to_me = active_scopes(state, row.peer.as_str(), actor);
             row.bidirectional_scopes = intersection(&row.granted_by_me, &row.granted_to_me);
             row.effective_scopes = row.bidirectional_scopes.clone();
             row.direct_conversation =
-                active_direct_binding(state, &direct_pair_key(actor, &row.peer))
+                active_direct_binding(state, &direct_pair_key(actor, row.peer.as_str()))
                     .map(direct_summary);
             row
         })
@@ -2144,23 +2144,24 @@ fn contact_list_rows(
     out
 }
 
-fn directional_contact_state(actor: &str, record: &ContactRecord) -> String {
+fn directional_contact_state(actor: &str, record: &ContactRecord) -> ContactState {
     match record.status.as_str() {
-        "pending" if record.requester == actor => "pending_outgoing".to_owned(),
-        "pending" => "pending_incoming".to_owned(),
-        "accepted" | "rejected" | "tombstoned" => record.status.clone(),
-        other => other.to_owned(),
+        "pending" if record.requester == actor => ContactState::PendingOutgoing,
+        "pending" => ContactState::PendingIncoming,
+        "accepted" => ContactState::Accepted,
+        "rejected" => ContactState::Rejected,
+        "tombstoned" => ContactState::Tombstoned,
+        other => panic!("invalid stored contact state: {other}"),
     }
 }
 
-fn contact_state_rank(state: &str) -> u8 {
+fn contact_state_rank(state: &ContactState) -> u8 {
     match state {
-        "accepted" => 5,
-        "pending_incoming" => 4,
-        "pending_outgoing" => 3,
-        "rejected" => 2,
-        "tombstoned" => 1,
-        _ => 0,
+        ContactState::Accepted => 5,
+        ContactState::PendingIncoming => 4,
+        ContactState::PendingOutgoing => 3,
+        ContactState::Rejected => 2,
+        ContactState::Tombstoned => 1,
     }
 }
 
@@ -2294,10 +2295,23 @@ fn materialize_direct_realm_index(
 
 fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversationSummary {
     DirectConversationSummary {
-        realm_id: binding.realm_id,
-        main_flow_id: binding.main_flow_id,
-        binding_event_ref: Some(binding.binding_event_ref),
-        state: binding.state,
+        realm_id: RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
+        main_flow_id: FlowId::new(binding.main_flow_id)
+            .expect("direct conversation flow id is valid"),
+        binding_event_ref: Some(
+            EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
+        ),
+        state: direct_conversation_binding_state(&binding.state),
+    }
+}
+
+fn direct_conversation_binding_state(state: &str) -> DirectConversationBindingState {
+    match state {
+        "active" => DirectConversationBindingState::Active,
+        "retired" => DirectConversationBindingState::Retired,
+        "duplicate" => DirectConversationBindingState::Duplicate,
+        "non_canonical" => DirectConversationBindingState::NonCanonical,
+        other => panic!("invalid stored direct conversation binding state: {other}"),
     }
 }
 

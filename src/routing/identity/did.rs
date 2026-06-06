@@ -393,10 +393,8 @@ pub(super) async fn identity_resolve(
 ) -> JsonResult<SolandIdentityResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if validate_did(&body.did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
-    }
-    if let Ok(Some(record)) = state.persistence.webvh().get_document(&body.did).await {
+    let did = body.did.as_str();
+    if let Ok(Some(record)) = state.persistence.webvh().get_document(did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
         // log chain, SCID derivation, and configured witness quorum.
         // Rotation entries fail closed when witness quorum is missing;
@@ -408,8 +406,8 @@ pub(super) async fn identity_resolve(
         // (key-management.md §3.3 recovery key). Today rotation entries
         // must be controller-signed; recovery-key-only rotations are
         // not yet accepted.
-        if body.did.starts_with("did:webvh:") {
-            run_webvh_resolution_checks(state, &body.did).await?;
+        if did.starts_with("did:webvh:") {
+            run_webvh_resolution_checks(state, did).await?;
         }
         return json_ok(SolandIdentityResolveOutcome {
             did_document: record.did_document,
@@ -419,15 +417,14 @@ pub(super) async fn identity_resolve(
             method_evidence: record.method_evidence,
         });
     }
-    let sdk_did = cokret_sdk::Did::new(body.did.clone());
-    let sdk_document = sdk_did.ok().and_then(|did| {
+    let sdk_document = {
         state
             .did_resolver
             .lock()
             .expect("did resolver lock")
-            .resolve_did(&did)
+            .resolve_did(&body.did)
             .ok()
-    });
+    };
     if let Some(doc) = sdk_document {
         return json_ok(SolandIdentityResolveOutcome {
             did_document: json!({
@@ -441,7 +438,7 @@ pub(super) async fn identity_resolve(
             method_evidence: json!({"mode": "sdk_resolver", "source": "did_resolver"}),
         });
     }
-    let record = identity_document_record(state, &body.did).await;
+    let record = identity_document_record(state, did).await;
     json_ok(SolandIdentityResolveOutcome {
         did_document: record.did_document,
         key_log_head: record.key_log_head,

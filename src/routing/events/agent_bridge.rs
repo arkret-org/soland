@@ -14,7 +14,7 @@
 //! Dispatch rules:
 //!
 //! - The runtime first looks up `counterparty_agent` in `state.projection.lock().agents`. When no
-//!   AgentProjection is present the bridge fails closed with a single
+//!   SolandAgentProjection is present the bridge fails closed with a single
 //!   `ck.agent.protocol_session.result` (`status="failed"` + `error.code="unknown_agent"`) and
 //!   emits no status(working).
 //! - When the registered agent carries an `endpoint_url`, the runtime POSTs the invocation to it
@@ -64,7 +64,7 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_e
 /// itself has been broadcast + persisted, so a subscriber sees them
 /// in causal order: start -> status(working) -> result(completed).
 ///
-/// When `counterparty_agent` does not resolve to a registered AgentProjection
+/// When `counterparty_agent` does not resolve to a registered SolandAgentProjection
 /// the bridge fails closed with a single result
 /// (`status=failed`, `error.code=unknown_agent`) and emits no
 /// status(working) event.
@@ -92,7 +92,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         .to_owned();
     let params = body.get("params").cloned().unwrap_or(Value::Null);
 
-    // Dispatch by counterparty_agent. Look up the AgentProjection; if absent
+    // Dispatch by counterparty_agent. Look up the SolandAgentProjection; if absent
     // the runtime cannot route the invocation, so fail closed with
     // an error result. When present, capture the `endpoint_url` (if
     // any) so the result envelope can report it. We snapshot the
@@ -531,7 +531,7 @@ mod tests {
         let mut proj = state.projection.lock().expect("projection lock");
         proj.agents.insert(
             agent_principal_id.to_owned(),
-            crate::reducer::AgentProjection {
+            crate::reducer::SolandAgentProjection {
                 agent_id: agent_principal_id.to_owned(),
                 protocol: "echo".to_owned(),
                 endpoint_url: endpoint_url.map(ToOwned::to_owned),
@@ -736,7 +736,7 @@ mod tests {
         );
     }
 
-    /// When the registered AgentProjection carries an `endpoint_url`,
+    /// When the registered SolandAgentProjection carries an `endpoint_url`,
     /// the bridge MUST attempt outbound HTTP to that URL. When the
     /// upstream is unreachable (the standard test condition -
     /// localhost:1 is reserved and immediately refuses), the result

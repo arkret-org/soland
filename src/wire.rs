@@ -6,10 +6,13 @@ use chrono::{DateTime, Utc};
 pub use cokret_sdk::api::ops::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 pub use cokret_sdk::{
-    DeviceMessageEnvelope, DeviceMessageTarget, DeviceMessagesGetOutcome, DeviceMessagesPutOutcome,
-    DeviceMessagesPutRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
+    ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
+    DeviceMessagesGetOutcome, DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody,
+    DirectConversationBindingState, DirectConversationSummary, EventsQueryPostRequestBody,
+    IdentityResolveRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
     KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,
-    PushNotifyRequestBody,
+    PushNotifyRequestBody, RealmJoinCandidate, RealmJoinCandidateRole,
+    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -437,27 +440,6 @@ pub struct ResolveRealmResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RealmJoinCandidate {
-    pub realm_id: String,
-    pub service_did: String,
-    pub service_type: String,
-    pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-    pub operations: Vec<String>,
-    pub join_methods: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<u16>,
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_refs: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frontier_ref: Option<String>,
-    pub as_of: String,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SearchRealmsResponse {
     pub results: Vec<RealmDirectoryEntry>,
     pub next_cursor: Option<String>,
@@ -774,24 +756,6 @@ pub struct EventResolveResponse {
     pub events: Vec<EventReadResponse>,
     pub missing: Vec<String>,
     pub unauthorized: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct EventsQueryPostRequestBody {
-    #[serde(default)]
-    pub realms: Vec<String>,
-    #[serde(default)]
-    pub actors: Vec<String>,
-    #[serde(default)]
-    pub after: Option<String>,
-    #[serde(default)]
-    pub before: Option<String>,
-    #[serde(default)]
-    pub order: Option<String>,
-    #[serde(default)]
-    pub filters: Option<Value>,
-    #[serde(default)]
-    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -1180,34 +1144,6 @@ pub struct ContactsResponse {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectConversationSummary {
-    pub realm_id: String,
-    pub main_flow_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding_event_ref: Option<String>,
-    pub state: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ContactListRow {
-    pub peer: String,
-    pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_event_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_event_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tombstone_event_ref: Option<String>,
-    pub granted_by_me: Vec<String>,
-    pub granted_to_me: Vec<String>,
-    pub bidirectional_scopes: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub effective_scopes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub direct_conversation: Option<DirectConversationSummary>,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandDirectConversationResolveRequestBody {
     pub peer: String,
@@ -1258,13 +1194,6 @@ pub struct IdentityDescribeOutcome {
     pub resolver_policy: Value,
     pub did_webvh: Value,
     pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IdentityResolveRequestBody {
-    pub did: String,
-    #[serde(default)]
-    pub requested_evidence_kinds: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]

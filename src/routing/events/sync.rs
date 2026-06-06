@@ -2871,12 +2871,24 @@ pub(super) async fn events_query_post(
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let parts = EventsQueryParts {
-        realms: body.realms,
-        actors: body.actors,
-        after: body.after,
-        before: body.before,
+        realms: body
+            .realms
+            .into_iter()
+            .map(|realm| realm.into_string())
+            .collect(),
+        actors: body
+            .actors
+            .into_iter()
+            .map(|actor| actor.into_string())
+            .collect(),
+        after: body.after.map(|cursor| cursor.into_string()),
+        before: body.before.map(|cursor| cursor.into_string()),
         order: body.order.unwrap_or_else(|| "default".to_owned()),
-        limit: body.limit.unwrap_or(100).clamp(1, 100),
+        limit: body
+            .limit
+            .map(|limit| limit as usize)
+            .unwrap_or(100)
+            .clamp(1, 100),
     };
     events_query_impl(state, req, parts).await
 }
