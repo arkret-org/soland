@@ -1978,8 +1978,9 @@ async fn direct_conversation_resolve(
             created: false,
         });
     }
-    let binding = create_direct_binding(state, &pair_key, &session.actor, &body.peer)?;
-    json_ok(direct_resolve_response(binding, true, "created"))
+    let (binding, created) = create_direct_binding(state, &pair_key, &session.actor, &body.peer)?;
+    let state_name = if created { "created" } else { "found" };
+    json_ok(direct_resolve_response(binding, created, state_name))
 }
 
 /// `GET /_soland/self/account/{did}/principal-realm` response.
@@ -2208,7 +2209,9 @@ async fn accepted_contact_for_pair(
 }
 
 fn direct_resolve_precondition(reason: &'static str, message: &'static str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason)
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code(reason)
 }
 
 fn direct_pair_key(left: &str, right: &str) -> String {
@@ -2235,7 +2238,7 @@ fn create_direct_binding(
     pair_key: &str,
     actor: &str,
     peer: &str,
-) -> Result<DirectConversationBindingRecord, AppError> {
+) -> Result<(DirectConversationBindingRecord, bool), AppError> {
     let mut guard = state
         .direct_conversation_bindings
         .lock()
@@ -2244,7 +2247,7 @@ fn create_direct_binding(
         .get(pair_key)
         .filter(|binding| binding.state == "active")
     {
-        return Ok(existing.clone());
+        return Ok((existing.clone(), false));
     }
     let realm_id = crate::ids::generate_realm_id();
     let main_flow_id = crate::ids::generate("flow");
@@ -2260,7 +2263,7 @@ fn create_direct_binding(
     guard.insert(pair_key.to_owned(), binding.clone());
     drop(guard);
     materialize_direct_realm_index(state, &binding)?;
-    Ok(binding)
+    Ok((binding, true))
 }
 
 fn sorted_participants(actor: &str, peer: &str) -> Vec<String> {
@@ -2313,8 +2316,6 @@ fn direct_resolve_response(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn principal_realm_for_did_is_deterministic() {
         let a = crate::routing::identity::recovery::principal_control_realm_for_did(

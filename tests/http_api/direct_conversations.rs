@@ -96,9 +96,9 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     let row = &contacts["contacts"][0];
     assert_eq!(row["peer"], BOB_DID);
     assert_eq!(row["state"], "accepted");
-    assert_eq!(row["granted_by_me"][0], "message");
-    assert_eq!(row["granted_to_me"][0], "message");
-    assert_eq!(row["bidirectional_scopes"][0], "message");
+    assert_eq!(row["granted_by_me"][0], "direct_message");
+    assert_eq!(row["granted_to_me"][0], "direct_message");
+    assert_eq!(row["bidirectional_scopes"][0], "direct_message");
 
     let not_found: Value =
         TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
@@ -109,8 +109,9 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
             .take_json()
             .await
             .unwrap();
-    assert_eq!(not_found["state"], "not_found");
-    assert_eq!(not_found["reason_code"], "not_found");
+    assert_eq!(not_found["state"], "not_found", "body: {not_found}");
+    assert!(not_found.get("reason_code").is_none(), "body: {not_found}");
+    assert!(not_found.get("canonical").is_none(), "body: {not_found}");
 
     let created: Value =
         TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
@@ -122,7 +123,9 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
             .await
             .unwrap();
     assert_eq!(created["state"], "created");
-    assert_eq!(created["canonical"], true);
+    assert_eq!(created["created"], true);
+    assert!(created.get("canonical").is_none(), "body: {created}");
+    assert!(created.get("reason_code").is_none(), "body: {created}");
     assert!(
         created["realm_id"]
             .as_str()
@@ -147,4 +150,86 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     assert_eq!(found["state"], "found");
     assert_eq!(found["realm_id"], created["realm_id"]);
     assert_eq!(found["main_flow_id"], created["main_flow_id"]);
+}
+
+#[tokio::test]
+async fn concurrent_direct_resolve_create_converges_to_one_binding() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
+
+    TestClient::post("http://server/_cokret/self/contacts/request")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "target": BOB_DID,
+            "requested_scopes": ["direct_message"]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    TestClient::post("http://server/_cokret/self/contacts/respond")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({
+            "requester": "did:web:alice.example",
+            "action": "accept",
+            "granted_scopes": ["direct_message"]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+
+    let state_a = state.clone();
+    let state_b = state.clone();
+    let alice_a = alice.clone();
+    let alice_b = alice.clone();
+    let create_a = async move {
+        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+            .add_header("authorization", format!("Bearer {alice_a}"), true)
+            .json(&serde_json::json!({
+                "peer": BOB_DID,
+                "create": true,
+                "idempotency_key": "direct-concurrent-a"
+            }))
+            .send(&app_from_state(state_a))
+            .await
+            .take_json()
+            .await
+            .unwrap()
+    };
+    let create_b = async move {
+        TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
+            .add_header("authorization", format!("Bearer {alice_b}"), true)
+            .json(&serde_json::json!({
+                "peer": BOB_DID,
+                "create": true,
+                "idempotency_key": "direct-concurrent-b"
+            }))
+            .send(&app_from_state(state_b))
+            .await
+            .take_json()
+            .await
+            .unwrap()
+    };
+
+    let (first, second): (Value, Value) = tokio::join!(create_a, create_b);
+    assert_eq!(first["realm_id"], second["realm_id"]);
+    assert_eq!(first["main_flow_id"], second["main_flow_id"]);
+    assert_eq!(first["binding_event_ref"], second["binding_event_ref"]);
+    assert_eq!(
+        [
+            first["created"].as_bool().unwrap(),
+            second["created"].as_bool().unwrap()
+        ]
+        .into_iter()
+        .filter(|created| *created)
+        .count(),
+        1,
+        "exactly one concurrent request should create the binding: {first} {second}"
+    );
+    assert_eq!(
+        state
+            .direct_conversation_bindings
+            .lock()
+            .expect("direct_conversation_bindings lock")
+            .len(),
+        1
+    );
 }
