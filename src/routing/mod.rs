@@ -1365,6 +1365,8 @@ fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "x-cokret-request-id",
             "x-cokret-wait-for",
             "x-cokret-content-digest",
+            "x-cokret-key-backup-delete-proof",
+            "x-cokret-key-backup-unlock-proof",
             "range",
         ]);
 

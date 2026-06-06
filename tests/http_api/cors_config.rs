@@ -16,7 +16,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, x-cokret-wait-for",
+            "authorization, content-type, x-cokret-wait-for, x-cokret-key-backup-unlock-proof, x-cokret-key-backup-delete-proof",
             true,
         )
         .send(&service)
@@ -34,6 +34,20 @@ async fn configured_cors_allows_only_explicit_origin() {
             .get("access-control-allow-credentials")
             .and_then(|value| value.to_str().ok()),
         Some("true")
+    );
+    let allow_headers = allowed
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        allow_headers.contains("x-cokret-key-backup-unlock-proof"),
+        "key-backup unlock proof header must be allowed in browser preflight: {allow_headers}"
+    );
+    assert!(
+        allow_headers.contains("x-cokret-key-backup-delete-proof"),
+        "key-backup delete proof header must be allowed in browser preflight: {allow_headers}"
     );
 
     let denied = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")
