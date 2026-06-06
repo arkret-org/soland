@@ -38,8 +38,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::identity::DidResolver;
 use cokret_sdk::model::AuthzDecision;
 use cokret_sdk::{
-    Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
-    PolicyCheckSource, RealmId,
+    Did, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
+    PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
@@ -50,7 +50,7 @@ use crate::reducer::RealmPolicyServerConfig;
 type VerificationKeyResolver =
     Arc<dyn Fn(&str) -> Result<VerifyingKey, String> + Send + Sync + 'static>;
 
-/// Inputs needed to build a [`PolicyCheckRequest`] plus a
+/// Inputs needed to build a [`PolicyCheckRequestBody`] plus a
 /// per-request control surface (cache bypass).
 #[derive(Clone, Debug)]
 pub struct PolicyCheckRequestInput {
@@ -93,9 +93,9 @@ impl PolicyCheckRequestInput {
             .unwrap_or_else(|_| Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap())
     }
 
-    fn into_wire(self) -> PolicyCheckRequest {
+    fn into_wire(self) -> PolicyCheckRequestBody {
         let request_canonical_digest = self.canonical_request_hash();
-        PolicyCheckRequest {
+        PolicyCheckRequestBody {
             request_id: self.request_id,
             realm_id: self.realm_id,
             actor: self.actor,
@@ -130,7 +130,7 @@ fn blake3_or_sha256(bytes: &[u8]) -> String {
 /// `cache_ttl_seconds`).
 #[derive(Clone, Debug)]
 struct PolicyCacheEntry {
-    response: PolicyCheckResponse,
+    response: PolicyCheckOutcome,
     expires_at: Instant,
 }
 
@@ -147,7 +147,7 @@ impl PolicyCache {
         Self::default()
     }
 
-    fn lookup(&self, realm_id: &str, canonical_hash: &str) -> Option<PolicyCheckResponse> {
+    fn lookup(&self, realm_id: &str, canonical_hash: &str) -> Option<PolicyCheckOutcome> {
         let now = Instant::now();
         let mut guard = self.inner.lock().expect("policy cache mutex");
         let key = (realm_id.to_owned(), canonical_hash.to_owned());
@@ -164,7 +164,7 @@ impl PolicyCache {
         &self,
         realm_id: &str,
         canonical_hash: &str,
-        response: PolicyCheckResponse,
+        response: PolicyCheckOutcome,
         ttl: Duration,
     ) {
         let expires_at = Instant::now() + ttl;
@@ -255,7 +255,7 @@ impl PolicyClient {
         &self,
         input: PolicyCheckRequestInput,
         config_lookup: F,
-    ) -> Result<PolicyCheckResponse, PolicyClientError>
+    ) -> Result<PolicyCheckOutcome, PolicyClientError>
     where
         F: FnOnce(&str) -> Option<RealmPolicyServerConfig>,
     {
@@ -322,8 +322,8 @@ impl PolicyClient {
     async fn post_check(
         &self,
         url: &str,
-        body: &PolicyCheckRequest,
-    ) -> Result<PolicyCheckResponse, PolicyClientError> {
+        body: &PolicyCheckRequestBody,
+    ) -> Result<PolicyCheckOutcome, PolicyClientError> {
         let url = reqwest::Url::parse(url).map_err(|error| {
             PolicyClientError::Configuration(format!("invalid policy_server_url: {error}"))
         })?;
@@ -347,7 +347,7 @@ impl PolicyClient {
             )));
         }
         response
-            .json::<PolicyCheckResponse>()
+            .json::<PolicyCheckOutcome>()
             .await
             .map_err(|e| PolicyClientError::BadResponse(e.to_string()))
     }
@@ -359,9 +359,9 @@ impl PolicyClient {
     fn fail_closed_response(
         &self,
         config: &RealmPolicyServerConfig,
-        request: &PolicyCheckRequest,
+        request: &PolicyCheckRequestBody,
         reason_code: &str,
-    ) -> PolicyCheckResponse {
+    ) -> PolicyCheckOutcome {
         let policy_server_id =
             Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor.clone());
         let bound_to = PolicyCheckBoundTo {
@@ -377,7 +377,7 @@ impl PolicyClient {
             kid: format!("{}#proxy-{}", self.local_service_did, reason_code),
             sig: "proxy".to_owned(),
         };
-        PolicyCheckResponse {
+        PolicyCheckOutcome {
             decision: AuthzDecision::Deny,
             bound_to,
             auth_state_digest: zero_hash.clone(),
@@ -398,7 +398,7 @@ impl PolicyClient {
         }
     }
 
-    /// Verify the signature on a genuine `PolicyCheckResponse`. The
+    /// Verify the signature on a genuine `PolicyCheckOutcome`. The
     /// `kid` MUST be a verification method owned by the declared
     /// `policy_server_did`; the signature MUST verify over the canonical
     /// policy-check transcript reconstructed from the original request
@@ -406,8 +406,8 @@ impl PolicyClient {
     fn verify_signature(
         &self,
         config: &RealmPolicyServerConfig,
-        request: &PolicyCheckRequest,
-        response: &PolicyCheckResponse,
+        request: &PolicyCheckRequestBody,
+        response: &PolicyCheckOutcome,
     ) -> Result<(), PolicyClientError> {
         if response.signature.sig.is_empty() {
             return Err(PolicyClientError::SignatureInvalid("empty sig".to_owned()));
@@ -501,8 +501,8 @@ struct PolicyDecisionTranscript<'a> {
 }
 
 fn policy_decision_transcript_bytes(
-    request: &PolicyCheckRequest,
-    response: &PolicyCheckResponse,
+    request: &PolicyCheckRequestBody,
+    response: &PolicyCheckOutcome,
 ) -> Result<Vec<u8>, PolicyClientError> {
     let expires_at = response.expires_at.as_ref().map(format_canonical_rfc3339);
     let transcript = PolicyDecisionTranscript {
@@ -690,9 +690,9 @@ mod tests {
         }
     }
 
-    fn sample_response() -> PolicyCheckResponse {
+    fn sample_response() -> PolicyCheckOutcome {
         let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        PolicyCheckResponse {
+        PolicyCheckOutcome {
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
@@ -749,10 +749,10 @@ mod tests {
     fn signed_sample_response(
         input: &PolicyCheckRequestInput,
         signing: &SigningKey,
-    ) -> PolicyCheckResponse {
+    ) -> PolicyCheckOutcome {
         let wire_request = input.clone().into_wire();
         let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-        let mut response = PolicyCheckResponse {
+        let mut response = PolicyCheckOutcome {
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: wire_request.realm_id.clone(),

@@ -202,7 +202,7 @@ pub struct IssueDecisionReq {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct DecisionResBody {
+pub struct DecisionOutcome {
     pub decision_id: String,
 }
 
@@ -217,7 +217,7 @@ async fn issue_decision(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<IssueDecisionReq>,
-) -> JsonResult<DecisionResBody> {
+) -> JsonResult<DecisionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -273,7 +273,7 @@ async fn issue_decision(
         "issued",
     )
     .await;
-    json_ok(DecisionResBody { decision_id })
+    json_ok(DecisionOutcome { decision_id })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

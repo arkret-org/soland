@@ -50,10 +50,10 @@ struct FederationPeerTarget {
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.transaction"))]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
-    body: JsonBody<cokret_sdk::FederationTransactionReqBody>,
+    body: JsonBody<cokret_sdk::FederationTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationTransactionResBody> {
+) -> JsonResult<cokret_sdk::FederationTransactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
@@ -167,7 +167,7 @@ pub(super) async fn federation_transaction(
             if request_signals_historical {
                 response_value = mark_response_historical_only(response_value);
             }
-            let response: cokret_sdk::FederationTransactionResBody =
+            let response: cokret_sdk::FederationTransactionOutcome =
                 serde_json::from_value(response_value).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
@@ -204,7 +204,7 @@ pub(super) async fn federation_transaction(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    let response = cokret_sdk::FederationTransactionResBody {
+    let response = cokret_sdk::FederationTransactionOutcome {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -243,10 +243,10 @@ pub(super) async fn federation_transaction(
     fields(op = "ck.extension.soland.federation.push_operations")
 )]
 pub(super) async fn federation_push_operations(
-    body: JsonBody<cokret_sdk::FederationPushOperationsReqBody>,
+    body: JsonBody<cokret_sdk::FederationPushOperationsRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationPushOperationsResBody> {
+) -> JsonResult<cokret_sdk::FederationPushOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
@@ -269,7 +269,7 @@ pub(super) async fn federation_push_operations(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    json_ok(cokret_sdk::FederationPushOperationsResBody {
+    json_ok(cokret_sdk::FederationPushOperationsOutcome {
         accepted: ingest.accepted,
         rejected: ingest.rejected,
         quarantine: Vec::new(),
@@ -617,7 +617,7 @@ pub(super) async fn federation_pull_operations(
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-) -> JsonResult<cokret_sdk::FederationPullOperationsResBody> {
+) -> JsonResult<cokret_sdk::FederationPullOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
@@ -684,7 +684,7 @@ pub(super) async fn federation_pull_operations(
         .last()
         .map(|operation| operation.operation_id.to_string())
         .or_else(|| Some(sync_token(state)));
-    json_ok(cokret_sdk::FederationPullOperationsResBody {
+    json_ok(cokret_sdk::FederationPullOperationsOutcome {
         operations,
         snapshot_bootstrap,
         next_cursor,
@@ -812,7 +812,7 @@ pub(super) async fn federation_operation_frontier(
 pub(super) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<cokret_sdk::FederationRealmMembersResBody> {
+) -> JsonResult<cokret_sdk::FederationRealmMemberList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id_value = RealmId::new(realm_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -832,7 +832,7 @@ pub(super) async fn federation_realm_members(
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(cokret_sdk::FederationRealmMembersResBody {
+    json_ok(cokret_sdk::FederationRealmMemberList {
         members,
         membership_frontier: sync_token(state),
         next_cursor: None,
@@ -846,10 +846,10 @@ pub(super) async fn federation_realm_members(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.verify_actor"))]
 pub(super) async fn federation_verify_actor(
-    body: JsonBody<cokret_sdk::FederationVerifyActorReqBody>,
+    body: JsonBody<cokret_sdk::FederationVerifyActorRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<cokret_sdk::FederationVerifyActorResBody> {
+) -> JsonResult<cokret_sdk::FederationVerifyActorOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
@@ -859,7 +859,7 @@ pub(super) async fn federation_verify_actor(
     validate_federation_request_binding(&state.config.trust_domain, req, &request_hash)?;
 
     if state.config.development_mode {
-        return json_ok(cokret_sdk::FederationVerifyActorResBody {
+        return json_ok(cokret_sdk::FederationVerifyActorOutcome {
             valid: true,
             actor_id: body.actor_id.clone(),
             verified_key_id: None,
@@ -881,7 +881,7 @@ pub(super) async fn federation_verify_actor(
     let verification =
         verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
 
-    json_ok(cokret_sdk::FederationVerifyActorResBody {
+    json_ok(cokret_sdk::FederationVerifyActorOutcome {
         valid: true,
         actor_id: body.actor_id.clone(),
         verified_key_id: Some(verification.verified_key_id),
@@ -937,7 +937,7 @@ fn validate_federation_headers(
 fn verify_inbound_push_http_signature(
     state: &AppState,
     req: &Request,
-    body: &cokret_sdk::FederationPushOperationsReqBody,
+    body: &cokret_sdk::FederationPushOperationsRequestBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -957,7 +957,7 @@ fn verify_inbound_push_http_signature(
 fn verify_inbound_transaction_http_signature(
     state: &AppState,
     req: &Request,
-    body: &cokret_sdk::FederationTransactionReqBody,
+    body: &cokret_sdk::FederationTransactionRequestBody,
 ) -> Result<(), AppError> {
     let body_value = serde_json::to_value(body).map_err(|error| {
         AppError::internal(format!(
@@ -1389,7 +1389,7 @@ fn signature_error(message: impl Into<String>) -> AppError {
 }
 
 fn federation_verify_actor_digest(
-    body: &cokret_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorRequestBody,
 ) -> Result<String, &'static str> {
     let value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
@@ -1398,7 +1398,7 @@ fn federation_verify_actor_digest(
 }
 
 fn federation_verify_actor_unsigned_digest(
-    body: &cokret_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorRequestBody,
 ) -> Result<String, &'static str> {
     let mut value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
@@ -1418,7 +1418,7 @@ fn federation_verify_actor_unsigned_digest(
 /// is populated after signing. The HTTP federation trust headers still bind
 /// the complete request body, including `signature`.
 fn federation_verify_actor_signature_transcript(
-    body: &cokret_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorRequestBody,
     unsigned_request_digest: &str,
 ) -> Value {
     let scope_id = body.realm_id.as_ref().map(|value| value.as_str());
@@ -1447,7 +1447,7 @@ struct FederationActorSignature {
 
 async fn verify_federation_actor_signature(
     state: &AppState,
-    body: &cokret_sdk::FederationVerifyActorReqBody,
+    body: &cokret_sdk::FederationVerifyActorRequestBody,
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = parse_federation_actor_signature(&body.signature)?;
@@ -1615,7 +1615,7 @@ async fn pull_operations_page(
     realm_id: &str,
     after_cursor: Option<&str>,
     limit: usize,
-) -> Result<cokret_sdk::FederationPullOperationsResBody, AppError> {
+) -> Result<cokret_sdk::FederationPullOperationsOutcome, AppError> {
     let mut url = reqwest::Url::parse(&format!("{}/_cokret/peer/events", peer.url))
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
@@ -1647,7 +1647,7 @@ async fn pull_operations_page(
             "federation pull from {url} returned {status}: {text}"
         )));
     }
-    serde_json::from_str::<cokret_sdk::FederationPullOperationsResBody>(&text)
+    serde_json::from_str::<cokret_sdk::FederationPullOperationsOutcome>(&text)
         .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
@@ -1701,7 +1701,7 @@ fn is_valid_federation_txn_id(value: &str) -> bool {
 }
 
 fn federation_request_digest(
-    body: &cokret_sdk::FederationTransactionReqBody,
+    body: &cokret_sdk::FederationTransactionRequestBody,
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
@@ -2509,8 +2509,8 @@ mod tests {
         }
     }
 
-    fn verify_actor_body() -> cokret_sdk::FederationVerifyActorReqBody {
-        cokret_sdk::FederationVerifyActorReqBody {
+    fn verify_actor_body() -> cokret_sdk::FederationVerifyActorRequestBody {
+        cokret_sdk::FederationVerifyActorRequestBody {
             actor_id: cokret_sdk::Did::new("did:web:alice.example").unwrap(),
             challenge: Some("challenge-1".to_owned()),
             signed_payload_digest: None,

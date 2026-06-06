@@ -38,11 +38,12 @@ use crate::state::{
     DirectConversationBindingRecord, RealmDirectoryEntry,
 };
 use crate::wire::{
-    AccountResponse, ClaimHandleRequest, ClaimHandleResponse, ContactListRow,
-    ContactRequestRequest, ContactRespondRequest, ContactResponse, ContactsResponse,
-    DirectConversationResolveRequest, DirectConversationResolveResponse, DirectConversationSummary,
-    RegisterAccountRequest, TransferHandleRequest, TransferHandleResponse, UpdateProfileRequest,
-    UpdateProfileResponse,
+    ClaimHandleRequest, ClaimHandleResponse, ContactListRow, ContactResponse, ContactsResponse,
+    DirectConversationSummary, RegisterAccountRequest, SolandAccountRegisterOutcome,
+    SolandAccountUpdateProfileOutcome, SolandAccountUpdateProfileRequestBody,
+    SolandContactRequestRequestBody, SolandContactRespondRequestBody,
+    SolandDirectConversationResolveOutcome, SolandDirectConversationResolveRequestBody,
+    TransferHandleRequest, TransferHandleResponse,
 };
 
 /// Grace period after a handle is released before another actor may claim
@@ -120,7 +121,7 @@ async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
     body: JsonBody<RegisterAccountRequest>,
-) -> JsonResult<AccountResponse> {
+) -> JsonResult<SolandAccountRegisterOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if validate_did(&body.did).is_err() {
@@ -212,7 +213,7 @@ async fn account_me(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AccountResponse> {
+) -> JsonResult<SolandAccountRegisterOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     match state
@@ -322,8 +323,8 @@ async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<UpdateProfileRequest>,
-) -> JsonResult<UpdateProfileResponse> {
+    body: JsonBody<SolandAccountUpdateProfileRequestBody>,
+) -> JsonResult<SolandAccountUpdateProfileOutcome> {
     // Spec: discovery/profiles-presence.md §2 — actor profile updates
     // fan out through the directory's actor projection. We store the
     // updates on the `AccountRecord` directly; `demo_actors()` reads
@@ -371,7 +372,7 @@ async fn update_profile(
         "accepted",
     )
     .await;
-    json_ok(UpdateProfileResponse {
+    json_ok(SolandAccountUpdateProfileOutcome {
         did: current.did,
         handle: current.handle,
         display_name: current.display_name,
@@ -1767,7 +1768,7 @@ async fn contact_request(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-    body: JsonBody<ContactRequestRequest>,
+    body: JsonBody<SolandContactRequestRequestBody>,
 ) -> JsonResult<ContactResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -1849,7 +1850,7 @@ async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<ContactRespondRequest>,
+    body: JsonBody<SolandContactRespondRequestBody>,
 ) -> JsonResult<ContactResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -1933,8 +1934,8 @@ async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<DirectConversationResolveRequest>,
-) -> JsonResult<DirectConversationResolveResponse> {
+    body: JsonBody<SolandDirectConversationResolveRequestBody>,
+) -> JsonResult<SolandDirectConversationResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -1970,7 +1971,7 @@ async fn direct_conversation_resolve(
         return json_ok(direct_resolve_response(binding, false, "found"));
     }
     if !body.create {
-        return json_ok(DirectConversationResolveResponse {
+        return json_ok(SolandDirectConversationResolveOutcome {
             state: "not_found".to_owned(),
             realm_id: None,
             main_flow_id: None,
@@ -2048,9 +2049,9 @@ async fn account_principal_realm(
     })
 }
 
-fn account_response(account: AccountRecord, state: &AppState) -> AccountResponse {
+fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {
     let lifecycle_state = state.account_lifecycle_state(&account.did);
-    AccountResponse {
+    SolandAccountRegisterOutcome {
         did: account.did,
         handle: account.handle,
         display_name: account.display_name,
@@ -2059,7 +2060,7 @@ fn account_response(account: AccountRecord, state: &AppState) -> AccountResponse
     }
 }
 
-fn contact_request_scope(body: &ContactRequestRequest) -> Result<String, AppError> {
+fn contact_request_scope(body: &SolandContactRequestRequestBody) -> Result<String, AppError> {
     let candidate = body
         .requested_scopes
         .first()
@@ -2070,7 +2071,7 @@ fn contact_request_scope(body: &ContactRequestRequest) -> Result<String, AppErro
 }
 
 fn contact_respond_scopes(
-    body: &ContactRespondRequest,
+    body: &SolandContactRespondRequestBody,
     fallback_scope: &str,
 ) -> Result<Vec<String>, AppError> {
     if body.granted_scopes.is_empty() {
@@ -2304,8 +2305,8 @@ fn direct_resolve_response(
     binding: DirectConversationBindingRecord,
     created: bool,
     state_name: &str,
-) -> DirectConversationResolveResponse {
-    DirectConversationResolveResponse {
+) -> SolandDirectConversationResolveOutcome {
+    SolandDirectConversationResolveOutcome {
         state: state_name.to_owned(),
         realm_id: Some(binding.realm_id),
         main_flow_id: Some(binding.main_flow_id),

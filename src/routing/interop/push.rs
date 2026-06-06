@@ -38,7 +38,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AccountDataRecord, AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
-    OkResBody, PushNotifyReqBody, PushNotifyResBody, PushRegisterRequest, PushRegisterResponse,
+    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterRequest, PushRegisterResponse,
     PushRulesResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
     UpsertPushRuleRequest, UpsertPushRuleResponse,
 };
@@ -160,7 +160,7 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResBody> {
+) -> JsonResult<OkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -190,7 +190,7 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(OkResBody { ok: true })
+    json_ok(OkOutcome { ok: true })
 }
 
 #[endpoint(
@@ -288,7 +288,7 @@ pub(super) async fn delete_push_rule(
     rule_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResBody> {
+) -> JsonResult<OkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let rule_id = rule_id.into_inner();
@@ -300,7 +300,7 @@ pub(super) async fn delete_push_rule(
     persist_push_rule_records(state, &session.actor, &rules)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(OkResBody { ok: true })
+    json_ok(OkOutcome { ok: true })
 }
 
 #[endpoint(
@@ -310,9 +310,9 @@ pub(super) async fn delete_push_rule(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.push.notify"))]
 pub(super) async fn push_notify(
-    body: JsonBody<PushNotifyReqBody>,
+    body: JsonBody<PushNotifyRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<PushNotifyResBody> {
+) -> JsonResult<PushNotifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if push_notification_leaks_private_payload(&body.notification, None) {
@@ -398,7 +398,7 @@ pub(super) async fn push_notify(
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
     }
-    json_ok(PushNotifyResBody { rejected })
+    json_ok(PushNotifyOutcome { rejected })
 }
 
 /// Resolve the gateway URL of a registered device into a `bridge_describe_url`

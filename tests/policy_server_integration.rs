@@ -25,8 +25,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::identity::{DidDocument, DidResolver, DidWebResolver};
 use cokret_sdk::model::AuthzDecision;
 use cokret_sdk::{
-    Did, Hash, PolicyCheckBoundTo, PolicyCheckRequest, PolicyCheckResponse, PolicyCheckSignature,
-    PolicyCheckSource, RealmId,
+    Did, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
+    PolicyCheckSignature, PolicyCheckSource, RealmId,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
@@ -89,8 +89,8 @@ fn ed25519_public_multibase(signing: &SigningKey) -> String {
     format!("z{}", bs58::encode(bytes).into_string())
 }
 
-fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequest {
-    PolicyCheckRequest {
+fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
+    PolicyCheckRequestBody {
         request_id: input.request_id.clone(),
         realm_id: input.realm_id.clone(),
         actor: input.actor.clone(),
@@ -110,13 +110,13 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequest {
 fn mock_allow_response(
     input: &PolicyCheckRequestInput,
     signing: &SigningKey,
-) -> PolicyCheckResponse {
+) -> PolicyCheckOutcome {
     let request = wire_request(input);
     let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
     let now = chrono::Utc::now();
     let expires_at =
         chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp() + 60, 0).unwrap();
-    let mut response = PolicyCheckResponse {
+    let mut response = PolicyCheckOutcome {
         decision: AuthzDecision::Allow,
         bound_to: PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
@@ -159,8 +159,8 @@ struct PolicyDecisionTranscript<'a> {
 }
 
 fn policy_decision_transcript_bytes(
-    request: &PolicyCheckRequest,
-    response: &PolicyCheckResponse,
+    request: &PolicyCheckRequestBody,
+    response: &PolicyCheckOutcome,
 ) -> Vec<u8> {
     let expires_at = response
         .expires_at

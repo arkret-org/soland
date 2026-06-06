@@ -17,14 +17,15 @@ use serde_json::{Value, json};
 
 use super::{
     SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync,
-    validate_device_message_payload, validate_did,
+    validate_device_message_payload,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
 use crate::wire::{
-    DeviceMessagesReceiveResBody, DeviceMessagesSendReqBody, DeviceMessagesSendResBody, sync_token,
+    DeviceMessageEnvelope, DeviceMessagesGetOutcome, DeviceMessagesPutOutcome,
+    DeviceMessagesPutRequestBody, sync_token,
 };
 
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
@@ -61,10 +62,10 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.put"))]
 async fn send_device_messages(
     aa: AuthArgs,
-    body: JsonBody<DeviceMessagesSendReqBody>,
+    body: JsonBody<DeviceMessagesPutRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceMessagesSendResBody> {
+) -> JsonResult<DeviceMessagesPutOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = req
@@ -75,17 +76,18 @@ async fn send_device_messages(
         .unwrap_or_else(sync_token);
     let body = body.into_inner();
     for (recipient, devices) in &body.messages {
-        if validate_did(recipient).is_err() {
-            return Err(AppError::invalid_param("invalid device message recipient"));
-        }
         for (device_id, content) in devices {
-            if device_id.trim().is_empty() {
-                return Err(AppError::invalid_param("invalid device_id"));
-            }
-            if let Err(message) = validate_device_message_payload(content) {
+            let content_value = json!({
+                "kind": content.kind.clone(),
+                "content": content.content.clone(),
+                "expires_at": content.expires_at,
+            });
+            if let Err(message) = validate_device_message_payload(&content_value) {
                 return Err(AppError::invalid_param(message));
             }
+            let _ = device_id;
         }
+        let _ = recipient;
     }
     let device_messages = state.persistence.device_messages();
     let registered = device_messages
@@ -93,24 +95,29 @@ async fn send_device_messages(
         .await
         .unwrap_or(false);
     if !registered {
-        return json_ok(DeviceMessagesSendResBody {
+        return json_ok(DeviceMessagesPutOutcome {
             ok: true,
-            delivered: json!({}),
-            unknown_devices: json!({}),
+            delivered: BTreeMap::new(),
+            unknown_devices: BTreeMap::new(),
         });
     }
-    let mut delivered = serde_json::Map::new();
+    let mut delivered = BTreeMap::new();
     for (recipient, devices) in body.messages {
         let mut delivered_devices = Vec::new();
         for (device_id, content) in devices {
             let created_at = now();
             let position = state.next_to_device_position();
+            let mut content = serde_json::to_value(&content)
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            if let Some(object) = content.as_object_mut() {
+                object.insert("sender_device_id".to_owned(), json!(session.device_id));
+            }
             if let Err(error) = device_messages
                 .append(DeviceMessageRecord {
                     idempotency_key: idempotency_key.clone(),
                     sender: session.actor.clone(),
-                    recipient: recipient.clone(),
-                    device_id: device_id.clone(),
+                    recipient: recipient.to_string(),
+                    device_id: device_id.to_string(),
                     position,
                     content,
                     created_at,
@@ -119,14 +126,14 @@ async fn send_device_messages(
             {
                 tracing::error!(%error, "failed to append device message");
             }
-            delivered_devices.push(device_id);
+            delivered_devices.push(device_id.to_string());
         }
-        delivered.insert(recipient, json!(delivered_devices));
+        delivered.insert(recipient.to_string(), json!(delivered_devices));
     }
-    json_ok(DeviceMessagesSendResBody {
+    json_ok(DeviceMessagesPutOutcome {
         ok: true,
-        delivered: json!(delivered),
-        unknown_devices: json!({}),
+        delivered,
+        unknown_devices: BTreeMap::new(),
     })
 }
 
@@ -189,7 +196,7 @@ async fn get_device_messages(
     from: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceMessagesReceiveResBody> {
+) -> JsonResult<DeviceMessagesGetOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let cursor = from.into_inner();
@@ -237,14 +244,14 @@ async fn get_device_messages(
         .list_after(&session.actor, &session.device_id, ack_position)
         .await
         .unwrap_or_default();
-    let events = device_message_events_after(&queued);
-    let to_device_position = events
+    let messages = device_message_envelopes_after(&queued);
+    let to_device_position = queued
         .iter()
-        .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
+        .map(|message| message.position)
         .max()
         .unwrap_or(ack_position);
-    json_ok(DeviceMessagesReceiveResBody {
-        events,
+    json_ok(DeviceMessagesGetOutcome {
+        messages,
         next_cursor: Some(sync_token_for_client_sync(
             state,
             Some(&session),
@@ -252,6 +259,7 @@ async fn get_device_messages(
             BTreeMap::new(),
             to_device_position,
         )),
+        has_more: false,
         limited: false,
     })
 }
@@ -283,4 +291,52 @@ pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Valu
             })
         })
         .collect()
+}
+
+fn device_message_envelopes_after(messages: &[DeviceMessageRecord]) -> Vec<DeviceMessageEnvelope> {
+    messages
+        .iter()
+        .filter_map(device_message_envelope_from_record)
+        .collect()
+}
+
+fn device_message_envelope_from_record(
+    message: &DeviceMessageRecord,
+) -> Option<DeviceMessageEnvelope> {
+    let kind = message
+        .content
+        .get("kind")
+        .or_else(|| message.content.get("type"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    let content = message
+        .content
+        .get("content")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let expires_at = message
+        .content
+        .get("expires_at")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
+    Some(DeviceMessageEnvelope {
+        kind,
+        sender_principal_id: cokret_sdk::Did::new(message.sender.clone()).ok()?,
+        sender_device_id: cokret_sdk::DeviceId::new(
+            message
+                .content
+                .get("sender_device_id")
+                .and_then(Value::as_str)
+                .unwrap_or("ck:device:00000000-0000-7000-8000-000000000000")
+                .to_owned(),
+        )
+        .ok()?,
+        recipient_principal_id: cokret_sdk::Did::new(message.recipient.clone()).ok()?,
+        recipient_device_id: cokret_sdk::DeviceId::new(message.device_id.clone()).ok()?,
+        sent_at: message.created_at,
+        expires_at,
+        content,
+        device_proof: message.content.get("device_proof").cloned(),
+        unsigned: message.content.get("unsigned").cloned(),
+    })
 }

@@ -6,6 +6,8 @@
 //! - `POST /_cokret/self/keys/query` - fetch device key bundles for a peer set.
 //! - `POST /_cokret/self/keys/claim` - claim one-time keys, draining the per-device pool.
 
+use std::collections::BTreeMap;
+
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
@@ -16,8 +18,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
-    KeysClaimReqBody, KeysClaimResBody, KeysQueryReqBody, KeysQueryResBody, KeysUploadReqBody,
-    KeysUploadResBody,
+    KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
+    KeysUploadOutcome, KeysUploadRequestBody,
 };
 
 pub(super) fn router() -> Router {
@@ -35,10 +37,10 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.upload"))]
 async fn keys_upload(
     aa: AuthArgs,
-    body: JsonBody<KeysUploadReqBody>,
+    body: JsonBody<KeysUploadRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysUploadResBody> {
+) -> JsonResult<KeysUploadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     if is_device_revoked(state, &session.actor, &session.device_id).await {
@@ -46,37 +48,26 @@ async fn keys_upload(
     }
 
     let body = body.into_inner();
-    if body.device_id.trim().is_empty() {
-        return Err(AppError::invalid_param("invalid device_id"));
-    }
-    if body.device_id != session.device_id {
+    let device_id = body.device_id.as_str().to_owned();
+    if device_id != session.device_id {
         return Err(AppError::capability_denied(
             "session device does not match upload device",
         ));
     }
 
     let one_time_key_count = body.one_time_keys.len() as u64;
-    let mut one_time_key_alg_counts: std::collections::BTreeMap<String, u64> =
-        std::collections::BTreeMap::new();
-    for key in &body.one_time_keys {
-        let alg = key
-            .get("algorithm")
-            .and_then(|value| value.as_str())
-            .or_else(|| key.get("alg").and_then(|value| value.as_str()))
-            .unwrap_or("signed_curve25519")
-            .to_owned();
-        *one_time_key_alg_counts.entry(alg).or_insert(0) += 1;
+    let mut one_time_key_alg_counts = BTreeMap::new();
+    for algorithm in body.one_time_keys.keys() {
+        *one_time_key_alg_counts
+            .entry(algorithm.clone())
+            .or_insert(0) += 1;
     }
+    let one_time_keys = body.one_time_keys;
+    let fallback_keys = body.fallback_keys;
     let key_payload = json!({
-        "device_id": body.device_id.clone(),
-        "device_keys": body.device_keys.clone(),
-        "principal_signing_keys": body.principal_signing_keys.clone(),
-        "recovery_keys": body.recovery_keys.clone(),
-        "session_keys": body.session_keys.clone(),
-        "agent_keys": body.agent_keys.clone(),
-        "mls_key_packages": body.mls_key_packages.clone(),
-        "backup_restore_keys": body.backup_restore_keys.clone(),
-        "fallback_keys": body.fallback_keys.clone(),
+        "device_id": device_id.clone(),
+        "one_time_keys": one_time_keys.clone(),
+        "fallback_keys": fallback_keys.clone(),
         "device_signature": body.device_signature.clone(),
         "updated_at": now(),
     });
@@ -85,7 +76,7 @@ async fn keys_upload(
         .device_keys()
         .put(
             session.actor.clone(),
-            body.device_id.clone(),
+            device_id.clone(),
             key_payload.clone(),
         )
         .await
@@ -96,17 +87,17 @@ async fn keys_upload(
     let current_device = state
         .persistence
         .devices()
-        .get(&session.actor, &body.device_id)
+        .get(&session.actor, &device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let updated_at = now();
     let previous_payload = current_device
         .as_ref()
         .map(|device| device.payload.clone())
-        .unwrap_or_else(|| json!({"device_id": body.device_id.clone()}));
+        .unwrap_or_else(|| json!({"device_id": device_id.clone()}));
     let device = DeviceInventoryRecord {
         actor: session.actor.clone(),
-        device_id: body.device_id.clone(),
+        device_id: device_id.clone(),
         display_name: current_device
             .as_ref()
             .and_then(|device| device.display_name.clone()),
@@ -115,7 +106,7 @@ async fn keys_upload(
             .map(|device| device.verification_state.clone())
             .unwrap_or_else(|| "unverified".to_owned()),
         payload: json!({
-            "device_id": body.device_id.clone(),
+            "device_id": device_id.clone(),
             "display_name": current_device
                 .as_ref()
                 .and_then(|device| device.display_name.clone()),
@@ -143,20 +134,20 @@ async fn keys_upload(
     if let Err(error) = state
         .persistence
         .one_time_keys()
-        .put(session.actor, body.device_id, body.one_time_keys)
+        .put(
+            session.actor,
+            device_id,
+            one_time_keys.into_values().collect(),
+        )
         .await
     {
         tracing::error!(%error, "failed to persist one-time keys");
     }
 
-    let mut counts_value = serde_json::Map::new();
-    counts_value.insert("total".to_owned(), json!(one_time_key_count));
-    for (alg, count) in one_time_key_alg_counts {
-        counts_value.insert(alg, json!(count));
-    }
-    json_ok(KeysUploadResBody {
-        one_time_key_counts: json!(counts_value),
-        fallback_keys: body.fallback_keys,
+    one_time_key_alg_counts.insert("total".to_owned(), one_time_key_count);
+    json_ok(KeysUploadOutcome {
+        one_time_key_counts: one_time_key_alg_counts,
+        fallback_keys,
     })
 }
 
@@ -168,31 +159,31 @@ async fn keys_upload(
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.query"))]
 async fn keys_query(
     aa: AuthArgs,
-    body: JsonBody<KeysQueryReqBody>,
+    body: JsonBody<KeysQueryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysQueryResBody> {
+) -> JsonResult<KeysQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
     let store = state.persistence.device_keys();
-    let mut result = serde_json::Map::new();
+    let mut result = BTreeMap::new();
     for (actor, devices) in body.device_keys {
-        let mut actor_keys = serde_json::Map::new();
+        let mut actor_keys = BTreeMap::new();
         for device_id in devices {
-            if is_device_revoked(state, &actor, &device_id).await {
+            if is_device_revoked(state, actor.as_str(), device_id.as_str()).await {
                 continue;
             }
-            if let Ok(Some(key)) = store.get(&actor, &device_id).await {
+            if let Ok(Some(key)) = store.get(actor.as_str(), device_id.as_str()).await {
                 actor_keys.insert(device_id, key);
             }
         }
-        result.insert(actor, json!(actor_keys));
+        result.insert(actor, actor_keys);
     }
-    json_ok(KeysQueryResBody {
-        device_keys: json!(result),
-        failures: json!({}),
+    json_ok(KeysQueryOutcome {
+        device_keys: result,
+        failures: Vec::new(),
     })
 }
 
@@ -204,27 +195,27 @@ async fn keys_query(
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
-    body: JsonBody<KeysClaimReqBody>,
+    body: JsonBody<KeysClaimRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysClaimResBody> {
+) -> JsonResult<KeysClaimOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
     let store = state.persistence.one_time_keys();
-    let mut claimed = serde_json::Map::new();
+    let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
-        let mut device_map = serde_json::Map::new();
+        let mut device_map = BTreeMap::new();
         for (device_id, _algorithm) in devices {
-            if let Ok(Some(key)) = store.claim(&actor, &device_id).await {
+            if let Ok(Some(key)) = store.claim(actor.as_str(), device_id.as_str()).await {
                 device_map.insert(device_id, key);
             }
         }
-        claimed.insert(actor, json!(device_map));
+        claimed.insert(actor, device_map);
     }
-    json_ok(KeysClaimResBody {
-        one_time_keys: json!(claimed),
-        failures: json!({}),
+    json_ok(KeysClaimOutcome {
+        one_time_keys: claimed,
+        failures: Vec::new(),
     })
 }

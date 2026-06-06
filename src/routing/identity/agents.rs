@@ -37,10 +37,12 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 use crate::wire::{
-    AgentGrantAttachReqBody, AgentGrantDetachResBody, AgentGrantResBody, AgentKeyPairReqBody,
-    AgentKeyPairResBody, AgentLifecycleReqBody, AgentLifecycleResBody, AgentListResBody,
-    AgentProvisionReqBody, AgentResBody, AgentRotateKeyReqBody, AgentRotateKeyResBody,
-    AgentSidecarThreadEnsureReqBody, AgentSidecarThreadEnsureResBody,
+    SolandAgentGrantAttachRequestBody, SolandAgentGrantDetachOutcome, SolandAgentGrantOutcome,
+    SolandAgentKeyPairOutcome, SolandAgentKeyPairRequestBody, SolandAgentLifecycleOutcome,
+    SolandAgentLifecycleRequestBody, SolandAgentList, SolandAgentProvisionRequestBody,
+    SolandAgentRotateKeyOutcome, SolandAgentRotateKeyRequestBody,
+    SolandAgentSidecarThreadEnsureOutcome, SolandAgentSidecarThreadEnsureRequestBody,
+    SolandAgentView,
 };
 
 /// Mounted under `/_cokret/self`.
@@ -121,10 +123,10 @@ fn generate_agent_principal_did() -> String {
 #[tracing::instrument(skip_all, fields(op = "ck.gate.account.agent_key_pair"))]
 async fn agent_key_pair(
     aa: AuthArgs,
-    body: JsonBody<AgentKeyPairReqBody>,
+    body: JsonBody<SolandAgentKeyPairRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentKeyPairResBody> {
+) -> JsonResult<SolandAgentKeyPairOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -179,7 +181,7 @@ async fn agent_key_pair(
         "accepted",
     )
     .await;
-    json_ok(AgentKeyPairResBody {
+    json_ok(SolandAgentKeyPairOutcome {
         ok: true,
         agent_principal_id: body.agent_principal_id,
         verification_method: body.verification_method,
@@ -201,11 +203,11 @@ async fn agent_key_pair(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.provision"))]
 async fn provision_agent(
     aa: AuthArgs,
-    body: JsonBody<AgentProvisionReqBody>,
+    body: JsonBody<SolandAgentProvisionRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<AgentResBody> {
+) -> JsonResult<SolandAgentView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -243,7 +245,7 @@ async fn provision_agent(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(AgentResBody {
+    json_ok(SolandAgentView {
         agent_principal_id,
         controller_did,
         agent_id,
@@ -271,13 +273,13 @@ async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentListResBody> {
+) -> JsonResult<SolandAgentList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     // TODO(P2-impl): query the agent_principal projection scoped to the
     // controller's DID. For now we return an empty stable shape so
     // sodmin/yougen can wire the endpoint without 404.
-    json_ok(AgentListResBody {
+    json_ok(SolandAgentList {
         agents: Vec::new(),
         next_cursor: None,
         todos: vec![
@@ -299,7 +301,7 @@ async fn get_agent(
     agent_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentResBody> {
+) -> JsonResult<SolandAgentView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -319,7 +321,7 @@ async fn lifecycle_transition(
     new_state: &str,
     event_kind: &str,
     reason: Option<String>,
-) -> Result<AgentLifecycleResBody, AppError> {
+) -> Result<SolandAgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
     // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
@@ -377,7 +379,7 @@ async fn lifecycle_transition(
                 .to_owned(),
         );
     }
-    Ok(AgentLifecycleResBody {
+    Ok(SolandAgentLifecycleOutcome {
         ok: true,
         agent_principal_id: agent_id,
         state: new_state.to_owned(),
@@ -396,10 +398,10 @@ async fn lifecycle_transition(
 async fn pause_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentLifecycleReqBody>,
+    body: JsonBody<SolandAgentLifecycleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentLifecycleResBody> {
+) -> JsonResult<SolandAgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -426,10 +428,10 @@ async fn pause_agent(
 async fn resume_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentLifecycleReqBody>,
+    body: JsonBody<SolandAgentLifecycleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentLifecycleResBody> {
+) -> JsonResult<SolandAgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -456,10 +458,10 @@ async fn resume_agent(
 async fn deactivate_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentLifecycleReqBody>,
+    body: JsonBody<SolandAgentLifecycleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentLifecycleResBody> {
+) -> JsonResult<SolandAgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -486,10 +488,10 @@ async fn deactivate_agent(
 async fn rotate_agent_key(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentRotateKeyReqBody>,
+    body: JsonBody<SolandAgentRotateKeyRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentRotateKeyResBody> {
+) -> JsonResult<SolandAgentRotateKeyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -513,7 +515,7 @@ async fn rotate_agent_key(
         "accepted",
     )
     .await;
-    json_ok(AgentRotateKeyResBody {
+    json_ok(SolandAgentRotateKeyOutcome {
         ok: true,
         agent_principal_id: agent_id,
         authorized_verification_method: body.new_verification_method,
@@ -537,11 +539,11 @@ async fn rotate_agent_key(
 async fn attach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentGrantAttachReqBody>,
+    body: JsonBody<SolandAgentGrantAttachRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<AgentGrantResBody> {
+) -> JsonResult<SolandAgentGrantOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -566,7 +568,7 @@ async fn attach_agent_grant(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(AgentGrantResBody {
+    json_ok(SolandAgentGrantOutcome {
         ok: true,
         agent_principal_id: agent_id,
         grant_id,
@@ -593,7 +595,7 @@ async fn detach_agent_grant(
     grant_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentGrantDetachResBody> {
+) -> JsonResult<SolandAgentGrantDetachOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -616,7 +618,7 @@ async fn detach_agent_grant(
         "accepted",
     )
     .await;
-    json_ok(AgentGrantDetachResBody {
+    json_ok(SolandAgentGrantDetachOutcome {
         ok: true,
         agent_principal_id: agent_id,
         grant_id,
@@ -635,20 +637,20 @@ async fn detach_agent_grant(
 async fn ensure_sidecar_thread(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<AgentSidecarThreadEnsureReqBody>,
+    body: JsonBody<SolandAgentSidecarThreadEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureResBody> {
+) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
     ensure_sidecar_thread_impl(aa, agent_id.into_inner(), body.into_inner(), depot, req).await
 }
 
 async fn ensure_sidecar_thread_impl(
     aa: AuthArgs,
     agent_id: String,
-    body: AgentSidecarThreadEnsureReqBody,
+    body: SolandAgentSidecarThreadEnsureRequestBody,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureResBody> {
+) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
@@ -680,7 +682,7 @@ async fn ensure_sidecar_thread_impl(
     )
     .await;
     let _ = now();
-    json_ok(AgentSidecarThreadEnsureResBody {
+    json_ok(SolandAgentSidecarThreadEnsureOutcome {
         ok: true,
         agent_principal_id: agent_id,
         sidecar_circle_id,
@@ -702,10 +704,10 @@ async fn ensure_sidecar_thread_impl(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.ensure"))]
 async fn ensure_sidecar_thread_canonical(
     aa: AuthArgs,
-    body: JsonBody<AgentSidecarThreadEnsureReqBody>,
+    body: JsonBody<SolandAgentSidecarThreadEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureResBody> {
+) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
     let mut body = body.into_inner();
     let agent_id = body
         .agent_principal_id

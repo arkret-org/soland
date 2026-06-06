@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::state_res::{CellRegistry, CellStore, StoreError};
-use cokret_sdk::{CellRef, Operation, RealmId};
+use cokret_sdk::{AgentLifecycleState, CellRef, Operation, RealmId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -717,28 +717,6 @@ pub struct AgentProjection {
     pub endpoint_url: Option<String>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM-lattice state
-/// for `ck.agent.{pause,resume,deactivate}`. Bottom = `Reject`;
-/// `Deactivated` is terminal (no transition out). Reducer enforcement
-/// lives in [`ProjectionState::apply_agent_lifecycle`] (REDU-1).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AgentLifecycleState {
-    #[default]
-    Active,
-    Paused,
-    Deactivated,
-}
-
-impl AgentLifecycleState {
-    pub fn as_wire_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Paused => "paused",
-            Self::Deactivated => "deactivated",
-        }
-    }
 }
 
 /// State enum shared by Flow and Morph projections (mirrors SDK

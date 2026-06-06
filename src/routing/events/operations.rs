@@ -3325,11 +3325,12 @@ pub fn validate_device_message_payload(content: &serde_json::Value) -> Result<()
         return Err("device message must be a JSON object");
     };
     if message
-        .get("type")
+        .get("kind")
+        .or_else(|| message.get("type"))
         .and_then(|value| value.as_str())
         .is_none_or(|value| value.trim().is_empty())
     {
-        return Err("device message requires type");
+        return Err("device message requires kind");
     }
     let Some(envelope) = message.get("content") else {
         return Err("device message requires encrypted content envelope");

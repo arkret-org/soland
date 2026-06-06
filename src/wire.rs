@@ -5,6 +5,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 pub use cokret_sdk::api::ops::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
+pub use cokret_sdk::{
+    DeviceMessageEnvelope, DeviceMessageTarget, DeviceMessagesGetOutcome, DeviceMessagesPutOutcome,
+    DeviceMessagesPutRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
+    KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,
+    PushNotifyRequestBody,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -359,7 +365,7 @@ pub struct OutboundPushBridgeCacheInvalidateResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AccountDescribeResBody {
+pub struct AccountDescribeOutcome {
     pub service_did: String,
     pub supported_sync_profiles: Vec<String>,
     pub limits: Value,
@@ -405,7 +411,7 @@ pub struct SearchRealmsRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectoryDescribeResBody {
+pub struct DirectoryDescribeOutcome {
     pub service_did: String,
     pub resource_types: Vec<String>,
     pub discovery_profiles: Vec<String>,
@@ -527,7 +533,7 @@ pub struct ResolveOrganizationResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct HandleClaim {
+pub struct SolandHandleClaim {
     pub schema: String,
     /// Canonical handle in the spec form `<localpart>:<domain>(:<port>)?`
     /// (handle-claim.schema.json#/properties/handle, cokret-spec @ 7157ee8).
@@ -556,7 +562,7 @@ pub struct HandleClaim {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub claim_scope: BTreeMap<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_delivery_binding: Option<HandleClaimDeliveryBinding>,
+    pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<Value>,
     pub created_at: String,
@@ -566,11 +572,11 @@ pub struct HandleClaim {
     pub verified_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<String>,
-    pub proofs: Vec<HandleClaimProof>,
+    pub proofs: Vec<SolandHandleClaimProof>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct HandleClaimDeliveryBinding {
+pub struct SolandHandleClaimDeliveryBinding {
     pub recipient_service_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipient_service_type: Option<String>,
@@ -584,7 +590,7 @@ pub struct HandleClaimDeliveryBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct HandleClaimProof {
+pub struct SolandHandleClaimProof {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alg: Option<String>,
@@ -614,13 +620,13 @@ pub struct ResolveHandleResponse {
     pub audience: Option<String>,
     /// Embedded handle claim envelope when the resolver issued one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub handle_claim: Option<HandleClaim>,
+    pub handle_claim: Option<SolandHandleClaim>,
     /// Top-level membership-builder routing evidence. For
     /// `intent=member_add|invite` this mirrors
     /// `handle_claim.member_delivery_binding` so verifiers can consume the
     /// candidate shape defined by `member-delivery-binding-candidate.schema`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_delivery_binding: Option<HandleClaimDeliveryBinding>,
+    pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<String>,
 }
@@ -716,7 +722,7 @@ pub struct IndexSpaceHierarchyResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct BackfillResBody {
+pub struct BackfillOutcome {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
     pub next_cursor: Option<String>,
@@ -771,7 +777,7 @@ pub struct EventResolveResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct EventsQueryPostRequest {
+pub struct EventsQueryPostRequestBody {
     #[serde(default)]
     pub realms: Vec<String>,
     #[serde(default)]
@@ -796,14 +802,14 @@ pub struct EventsPageResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventsFrontierResBody {
+pub struct SolandEventsFrontierState {
     pub actor_frontier: BTreeMap<String, u64>,
     pub realm_frontier: BTreeMap<String, Value>,
     pub frontier: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SnapshotHeadResponse {
+pub struct SolandSnapshotHeadState {
     pub snapshot_ref: String,
     pub state_digest: String,
     pub manifest: Value,
@@ -831,7 +837,7 @@ pub struct SnapshotHeadResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AuthzCheckReqBody {
+pub struct SolandAuthzCheckRequestBody {
     pub actor: String,
     pub action: String,
     pub resource: Value,
@@ -840,7 +846,7 @@ pub struct AuthzCheckReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AuthzCheckResBody {
+pub struct SolandAuthzCheckOutcome {
     pub allowed: bool,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
@@ -850,7 +856,7 @@ pub struct AuthzCheckResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EffectiveGrantsResBody {
+pub struct SolandGrantList {
     pub grants: Vec<Value>,
     pub state_digest: Option<String>,
     pub evaluated_at: DateTime<Utc>,
@@ -894,16 +900,6 @@ pub struct PushUnregisterRequest {
     pub app_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushNotifyReqBody {
-    pub notification: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PushNotifyResBody {
-    pub rejected: Vec<Value>,
-}
-
 fn default_true() -> bool {
     true
 }
@@ -931,13 +927,8 @@ pub struct UpsertPushRuleRequest {
     pub conditions: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct OkResBody {
-    pub ok: bool,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationReportReqBody {
+pub struct ModerationReportRequestBody {
     pub realm_id: String,
     pub target_ref: String,
     pub report_reason_code: String,
@@ -948,7 +939,7 @@ pub struct ModerationReportReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ModerationReportResBody {
+pub struct SolandModerationReportOutcome {
     pub report_id: String,
     pub status: String,
     pub routed_to: Vec<String>,
@@ -991,7 +982,7 @@ pub struct PolicyDocumentsResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PolicyCheckReqBody {
+pub struct SolandPolicyCheckRequestBody {
     pub request_id: String,
     #[serde(default)]
     pub realm_id: Option<String>,
@@ -1005,7 +996,7 @@ pub struct PolicyCheckReqBody {
     pub auth_context: Option<Value>,
 }
 
-/// Frontier binding stamped onto every signed `PolicyCheckResBody`.
+/// Frontier binding stamped onto every signed `SolandPolicyCheckOutcome`.
 ///
 /// The four hashes pin the decision to a concrete authz universe so a
 /// client (or auditor) can detect that the decision is stale once any
@@ -1029,7 +1020,7 @@ pub struct PolicyBinding {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PolicyCheckResBody {
+pub struct SolandPolicyCheckOutcome {
     pub decision: String,
     pub reason_code: String,
     pub policy_id: Option<String>,
@@ -1087,7 +1078,7 @@ pub struct RegisterAccountRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AccountResponse {
+pub struct SolandAccountRegisterOutcome {
     pub did: String,
     pub handle: String,
     pub display_name: Option<String>,
@@ -1127,7 +1118,7 @@ pub struct TransferHandleResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpdateProfileRequest {
+pub struct SolandAccountUpdateProfileRequestBody {
     /// Each field updates the corresponding `AccountRecord` slot.
     /// Send `null` / omit to leave the field unchanged; send `""` to
     /// explicitly clear it (server stores `None`).
@@ -1140,7 +1131,7 @@ pub struct UpdateProfileRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct UpdateProfileResponse {
+pub struct SolandAccountUpdateProfileOutcome {
     pub did: String,
     pub handle: String,
     pub display_name: Option<String>,
@@ -1149,7 +1140,7 @@ pub struct UpdateProfileResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ContactRequestRequest {
+pub struct SolandContactRequestRequestBody {
     pub target: String,
     #[serde(default)]
     #[serde(rename = "consent_scope")]
@@ -1161,7 +1152,7 @@ pub struct ContactRequestRequest {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ContactRespondRequest {
+pub struct SolandContactRespondRequestBody {
     #[serde(default)]
     pub request_id: Option<String>,
     pub requester: String,
@@ -1218,7 +1209,7 @@ pub struct ContactListRow {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DirectConversationResolveRequest {
+pub struct SolandDirectConversationResolveRequestBody {
     pub peer: String,
     #[serde(default)]
     pub create: bool,
@@ -1227,7 +1218,7 @@ pub struct DirectConversationResolveRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectConversationResolveResponse {
+pub struct SolandDirectConversationResolveOutcome {
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub realm_id: Option<String>,
@@ -1258,7 +1249,7 @@ pub struct SendMessageRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityDescribeResBody {
+pub struct IdentityDescribeOutcome {
     pub service_did: String,
     pub registry_mode: String,
     pub supported_receipts: Vec<String>,
@@ -1270,27 +1261,27 @@ pub struct IdentityDescribeResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IdentityResolveReqBody {
+pub struct IdentityResolveRequestBody {
     pub did: String,
     #[serde(default)]
     pub requested_evidence_kinds: Vec<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityLogResBody {
+pub struct IdentityLogOutcome {
     pub events: Vec<Value>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityReceiptsResBody {
+pub struct IdentityReceiptsOutcome {
     pub receipts: Vec<Value>,
     pub threshold_met: bool,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityResolveResBody {
+pub struct SolandIdentityResolveOutcome {
     pub did_document: Value,
     pub key_log_head: Option<String>,
     pub seq: u64,
@@ -1298,64 +1289,8 @@ pub struct IdentityResolveResBody {
     pub method_evidence: Value,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysUploadReqBody {
-    pub device_id: String,
-    #[serde(default)]
-    pub device_keys: Value,
-    #[serde(default)]
-    pub principal_signing_keys: Vec<Value>,
-    #[serde(default)]
-    pub recovery_keys: Vec<Value>,
-    #[serde(default)]
-    pub session_keys: Vec<Value>,
-    #[serde(default)]
-    pub agent_keys: Vec<Value>,
-    #[serde(default)]
-    pub one_time_keys: Vec<Value>,
-    #[serde(default)]
-    pub fallback_keys: Value,
-    #[serde(default)]
-    pub mls_key_packages: Vec<Value>,
-    #[serde(default)]
-    pub backup_restore_keys: Vec<Value>,
-    #[serde(default)]
-    pub device_signature: Value,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysUploadResBody {
-    pub one_time_key_counts: Value,
-    pub fallback_keys: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysQueryReqBody {
-    pub device_keys: std::collections::BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysQueryResBody {
-    pub device_keys: Value,
-    pub failures: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct KeysClaimReqBody {
-    pub one_time_keys:
-        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysClaimResBody {
-    pub one_time_keys: Value,
-    pub failures: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsPutResBody {
+pub struct SolandKeysBackupsPutOutcome {
     pub ok: bool,
     pub backup: Value,
     pub state: String,
@@ -1364,7 +1299,7 @@ pub struct KeysBackupsPutResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsListResBody {
+pub struct SolandKeysBackupsList {
     pub backups: Vec<Value>,
     pub next_cursor: Option<String>,
     pub state: String,
@@ -1373,18 +1308,13 @@ pub struct KeysBackupsListResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct KeysBackupsDeleteResBody {
+pub struct SolandKeysBackupsDeleteOutcome {
     pub ok: bool,
     pub backup_id: String,
     pub deleted: bool,
     pub state: String,
     #[serde(default)]
     pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesSendReqBody {
-    pub messages: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
 }
 
 // CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent 11 operations.
@@ -1394,7 +1324,7 @@ pub struct DeviceMessagesSendReqBody {
 // `routing::events::agents`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentKeyPairReqBody {
+pub struct SolandAgentKeyPairRequestBody {
     pub agent_principal_id: String,
     pub verification_method: String,
     #[serde(default)]
@@ -1402,7 +1332,7 @@ pub struct AgentKeyPairReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentKeyPairResBody {
+pub struct SolandAgentKeyPairOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub verification_method: String,
@@ -1412,7 +1342,7 @@ pub struct AgentKeyPairResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentProvisionReqBody {
+pub struct SolandAgentProvisionRequestBody {
     pub display_name: String,
     #[serde(default)]
     pub controller_did: Option<String>,
@@ -1423,7 +1353,7 @@ pub struct AgentProvisionReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentResBody {
+pub struct SolandAgentView {
     pub agent_principal_id: String,
     pub controller_did: String,
     pub agent_id: String,
@@ -1438,21 +1368,21 @@ pub struct AgentResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentListResBody {
-    pub agents: Vec<AgentResBody>,
+pub struct SolandAgentList {
+    pub agents: Vec<SolandAgentView>,
     pub next_cursor: Option<String>,
     #[serde(default)]
     pub todos: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentLifecycleReqBody {
+pub struct SolandAgentLifecycleRequestBody {
     #[serde(default)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentLifecycleResBody {
+pub struct SolandAgentLifecycleOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub state: String,
@@ -1462,14 +1392,14 @@ pub struct AgentLifecycleResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentRotateKeyReqBody {
+pub struct SolandAgentRotateKeyRequestBody {
     pub new_verification_method: String,
     #[serde(default)]
     pub previous_key_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentRotateKeyResBody {
+pub struct SolandAgentRotateKeyOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub authorized_verification_method: String,
@@ -1480,7 +1410,7 @@ pub struct AgentRotateKeyResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentGrantAttachReqBody {
+pub struct SolandAgentGrantAttachRequestBody {
     pub grant_kind: String,
     #[serde(rename = "agent_key_scope")]
     pub scope: Value,
@@ -1489,7 +1419,7 @@ pub struct AgentGrantAttachReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentGrantResBody {
+pub struct SolandAgentGrantOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub grant_id: String,
@@ -1503,7 +1433,7 @@ pub struct AgentGrantResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentGrantDetachResBody {
+pub struct SolandAgentGrantDetachOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub grant_id: String,
@@ -1513,7 +1443,7 @@ pub struct AgentGrantDetachResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AgentSidecarThreadEnsureReqBody {
+pub struct SolandAgentSidecarThreadEnsureRequestBody {
     #[serde(default)]
     pub agent_principal_id: Option<String>,
     #[serde(default)]
@@ -1521,7 +1451,7 @@ pub struct AgentSidecarThreadEnsureReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AgentSidecarThreadEnsureResBody {
+pub struct SolandAgentSidecarThreadEnsureOutcome {
     pub ok: bool,
     pub agent_principal_id: String,
     pub sidecar_circle_id: String,
@@ -1531,20 +1461,13 @@ pub struct AgentSidecarThreadEnsureResBody {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesSendResBody {
-    pub ok: bool,
-    pub delivered: Value,
-    pub unknown_devices: Value,
-}
-
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Mirrors `MediaTokenResponse` /
 // `ParticipantBinding` in `cokret_sdk::media`; soland mints the
 // soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct MediaTokenExchangeReqBody {
+pub struct SolandCallMediaTokenExchangeRequestBody {
     pub realm_id: String,
     pub call_id: String,
     pub actor_id: String,
@@ -1556,7 +1479,7 @@ pub struct MediaTokenExchangeReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ParticipantBindingResBody {
+pub struct SolandCallMediaParticipantBinding {
     /// `ck.media.participant_binding.v1`.
     pub scheme: String,
     /// Detached signature over the canonical binding body.
@@ -1575,10 +1498,10 @@ pub struct ParticipantBindingResBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct MediaTokenExchangeResBody {
+pub struct SolandCallMediaTokenExchangeOutcome {
     pub backend_token: String,
     pub participant_identity: String,
-    pub participant_binding: ParticipantBindingResBody,
+    pub participant_binding: SolandCallMediaParticipantBinding,
     pub expires_at: DateTime<Utc>,
     pub service_signature: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1592,7 +1515,7 @@ pub struct MediaTokenExchangeResBody {
 // internal proof verifier is TODO(R3.1).
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RecoveryPolicyReqBody {
+pub struct SolandRecoveryPolicyRequestBody {
     /// `ck.schema.recovery_policy.v1`.
     pub schema: String,
     pub policy_id: String,
@@ -1606,7 +1529,7 @@ pub struct RecoveryPolicyReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RecoveryPolicyResBody {
+pub struct SolandRecoveryPolicyOutcome {
     pub ok: bool,
     pub policy_id: String,
     pub policy_version: u64,
@@ -1617,7 +1540,7 @@ pub struct RecoveryPolicyResBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RecoveryReceiptReqBody {
+pub struct SolandRecoveryReceiptRequestBody {
     /// `ck.schema.recovery_receipt.v1`.
     pub schema: String,
     pub recovery_session_id: String,
@@ -1631,20 +1554,13 @@ pub struct RecoveryReceiptReqBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RecoveryReceiptResBody {
+pub struct SolandRecoveryReceiptOutcome {
     pub ok: bool,
     pub recovery_session_id: String,
     pub policy_id: String,
     pub issued_at: DateTime<Utc>,
     #[serde(default)]
     pub todos: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeviceMessagesReceiveResBody {
-    pub events: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub limited: bool,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1702,7 +1618,7 @@ pub struct WebrtcSignalsResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct BlobUploadResBody {
+pub struct SolandBlobUploadOutcome {
     pub blob_ref: String,
     pub size_bytes: usize,
     pub media_type: String,
@@ -2343,7 +2259,7 @@ mod tests {
 
     #[test]
     fn handle_claim_serializes_spec_shape() {
-        let claim = HandleClaim {
+        let claim = SolandHandleClaim {
             schema: "ck.schema.handle_claim.v1".to_owned(),
             handle: "alice:acme.example".to_owned(),
             handle_aliases: vec!["acct:alice@acme.example".to_owned()],
@@ -2356,7 +2272,7 @@ mod tests {
             audience: Some("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
             challenge: None,
             claim_scope: BTreeMap::new(),
-            member_delivery_binding: Some(HandleClaimDeliveryBinding {
+            member_delivery_binding: Some(SolandHandleClaimDeliveryBinding {
                 recipient_service_did: "did:web:principal.acme.example".to_owned(),
                 recipient_service_type: Some("principal_server".to_owned()),
                 binding_source: "organization_policy".to_owned(),
@@ -2369,7 +2285,7 @@ mod tests {
             expires_at: Some("2026-08-19T00:00:00Z".to_owned()),
             verified_at: None,
             source_refs: Vec::new(),
-            proofs: vec![HandleClaimProof {
+            proofs: vec![SolandHandleClaimProof {
                 kind: "detached_jws".to_owned(),
                 alg: Some("EdDSA".to_owned()),
                 verification_method: Some("did:web:acme.example#key-1".to_owned()),

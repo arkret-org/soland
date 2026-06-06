@@ -255,7 +255,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     if !encrypted && let Some(filename) = filename {
         upload_receipt["filename"] = json!(filename);
     }
-    res.render(Json(crate::wire::BlobUploadResBody {
+    res.render(Json(crate::wire::SolandBlobUploadOutcome {
         blob_ref,
         size_bytes: size,
         media_type,

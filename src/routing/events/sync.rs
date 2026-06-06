@@ -28,7 +28,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use cokret_sdk::lattice::CellState;
-use cokret_sdk::{EphemeralSubmitResBody, RealmId};
+use cokret_sdk::{EphemeralSubmitOutcome, RealmId};
 use ed25519_dalek::{Signature, Signer as _, Verifier as _};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
@@ -57,8 +57,8 @@ use crate::state::{
     ProjectionEventRecord, RealmDirectoryEntry, SessionRecord, TypingRecord,
 };
 use crate::wire::{
-    AccountDescribeResBody, BackfillResBody, ClientSyncRequest, EventsQueryPostRequest,
-    SnapshotHeadResponse,
+    AccountDescribeOutcome, BackfillOutcome, ClientSyncRequest, EventsQueryPostRequestBody,
+    SolandSnapshotHeadState,
 };
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
@@ -121,7 +121,7 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
     if is_stateless_cursor_profile_declared(state) {
         supported_sync_profiles.push("ck.profile.stateless_cursor.v1".to_owned());
     }
-    res.render(Json(AccountDescribeResBody {
+    res.render(Json(AccountDescribeOutcome {
         service_did: state.config.service_did.clone(),
         supported_sync_profiles,
         limits: json!({
@@ -442,7 +442,7 @@ fn parse_max_wait_ms(req: &mut Request) -> u64 {
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &cokret_sdk::model::SyncResBody) -> bool {
+fn delta_is_empty(response: &cokret_sdk::model::SyncOutcome) -> bool {
     response.realms.is_empty()
         && response.left_realms.is_empty()
         && response.to_device.is_empty()
@@ -458,7 +458,7 @@ fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
     }
 }
 
-fn account_delta_frame(response: cokret_sdk::model::SyncResBody) -> Value {
+fn account_delta_frame(response: cokret_sdk::model::SyncOutcome) -> Value {
     json!({
         "kind": "delta",
         "cursor": response.cursor,
@@ -555,7 +555,7 @@ async fn build_sync_snapshot(
     session: Option<&SessionRecord>,
     body: &ClientSyncRequest,
     after_cursor: &SyncCursor,
-) -> cokret_sdk::model::SyncResBody {
+) -> cokret_sdk::model::SyncOutcome {
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
@@ -778,7 +778,7 @@ async fn build_sync_snapshot(
         Vec::new()
     };
 
-    cokret_sdk::model::SyncResBody {
+    cokret_sdk::model::SyncOutcome {
         cursor: sync_token_for_client_sync(
             state,
             session,
@@ -2213,7 +2213,7 @@ async fn submit_ephemeral(
     body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EphemeralSubmitResBody> {
+) -> crate::result::JsonResult<EphemeralSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let envelope = body.into_inner();
@@ -2248,7 +2248,7 @@ async fn submit_ephemeral(
         }
     }
 
-    crate::result::json_ok(EphemeralSubmitResBody {
+    crate::result::json_ok(EphemeralSubmitOutcome {
         accepted: true,
         kind: envelope.kind,
         realm_id,
@@ -2864,7 +2864,7 @@ pub(super) async fn events_query(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.events.query_post"))]
 pub(super) async fn events_query_post(
-    body: salvo::oapi::extract::JsonBody<EventsQueryPostRequest>,
+    body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> crate::result::JsonResult<serde_json::Value> {
@@ -2928,7 +2928,7 @@ async fn events_query_impl(
     let limit = parts.limit;
     let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
-    // Single-Realm fast path preserves the original `BackfillResBody` shape
+    // Single-Realm fast path preserves the original `BackfillOutcome` shape
     // for soland's existing test surface (ck.sync.backfill behavior).
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
@@ -2945,7 +2945,7 @@ async fn events_query_impl(
                 }
                 let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
                 return crate::result::json_ok(
-                    serde_json::to_value(BackfillResBody {
+                    serde_json::to_value(BackfillOutcome {
                         events,
                         prev_cursor: cursor.clone(),
                         next_cursor: page
@@ -2966,7 +2966,7 @@ async fn events_query_impl(
             }
         }
         return crate::result::json_ok(
-            serde_json::to_value(BackfillResBody {
+            serde_json::to_value(BackfillOutcome {
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
                 next_cursor: Some(sync_token_for_state(state)),
@@ -3027,7 +3027,7 @@ async fn events_query_impl(
         .flatten()
         .or_else(|| Some(sync_token_for_state(state)));
     crate::result::json_ok(
-        serde_json::to_value(BackfillResBody {
+        serde_json::to_value(BackfillOutcome {
             events: page_events,
             prev_cursor: cursor.clone(),
             next_cursor,
@@ -3190,7 +3190,7 @@ async fn sync_gap_backfill(
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<SnapshotHeadResponse> {
+) -> crate::result::JsonResult<SolandSnapshotHeadState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec-canonical query param is `realm_id`.
     let realm_id = query_param(req, "realm_id")
@@ -3233,7 +3233,7 @@ async fn snapshot_head(
         "{}:{}:{}",
         bundle.snapshot_ref, bundle.state_digest, service_did
     );
-    crate::result::json_ok(SnapshotHeadResponse {
+    crate::result::json_ok(SolandSnapshotHeadState {
         snapshot_ref: bundle.snapshot_ref,
         state_digest: bundle.state_digest,
         manifest: bundle.manifest,

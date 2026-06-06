@@ -35,9 +35,10 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
-    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, MediaTokenExchangeReqBody,
-    MediaTokenExchangeResBody, OkResBody, ParticipantBindingResBody, WebrtcSignalRequest,
-    WebrtcSignalResponse, WebrtcSignalsResponse,
+    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkOutcome,
+    SolandCallMediaParticipantBinding, SolandCallMediaTokenExchangeOutcome,
+    SolandCallMediaTokenExchangeRequestBody, WebrtcSignalRequest, WebrtcSignalResponse,
+    WebrtcSignalsResponse,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -565,7 +566,7 @@ async fn delete_webrtc_session(
     session_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResBody> {
+) -> JsonResult<OkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
@@ -590,7 +591,7 @@ async fn delete_webrtc_session(
         ));
     }
     let _ = state.persistence.webrtc().delete(&session_id).await;
-    json_ok(OkResBody { ok: true })
+    json_ok(OkOutcome { ok: true })
 }
 
 #[endpoint(
@@ -814,8 +815,8 @@ impl MediaTokenIssuer for MediasoupMediaIssuer {
 async fn handle_rtc_token(
     state: &AppState,
     session: &SessionRecord,
-    body: MediaTokenExchangeReqBody,
-) -> JsonResult<MediaTokenExchangeResBody> {
+    body: SolandCallMediaTokenExchangeRequestBody,
+) -> JsonResult<SolandCallMediaTokenExchangeOutcome> {
     use crate::error::ErrorCode;
 
     if RealmId::new(body.realm_id.clone()).is_err() {
@@ -992,7 +993,7 @@ async fn handle_rtc_token(
         URL_SAFE_NO_PAD.encode(service_sig.to_bytes())
     );
 
-    let participant_binding = ParticipantBindingResBody {
+    let participant_binding = SolandCallMediaParticipantBinding {
         scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
@@ -1005,7 +1006,7 @@ async fn handle_rtc_token(
         expires_at,
     };
 
-    json_ok(MediaTokenExchangeResBody {
+    json_ok(SolandCallMediaTokenExchangeOutcome {
         backend_token: issued_token.backend_token,
         participant_identity,
         participant_binding,
@@ -1387,10 +1388,10 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 #[tracing::instrument(skip_all, fields(op = "ck.self.call.media.token_exchange"))]
 async fn cokret_rtc_token(
     aa: AuthArgs,
-    body: JsonBody<MediaTokenExchangeReqBody>,
+    body: JsonBody<SolandCallMediaTokenExchangeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<MediaTokenExchangeResBody> {
+) -> JsonResult<SolandCallMediaTokenExchangeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     handle_rtc_token(state, &session, body.into_inner()).await

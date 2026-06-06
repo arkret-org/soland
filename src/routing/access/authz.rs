@@ -22,8 +22,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    AuthzCheckReqBody, AuthzCheckResBody, CreateGrantRequest, CreateGrantResponse,
-    EffectiveGrantsResBody, InvitesResponse, RevokeGrantResponse,
+    CreateGrantRequest, CreateGrantResponse, InvitesResponse, RevokeGrantResponse,
+    SolandAuthzCheckOutcome, SolandAuthzCheckRequestBody, SolandGrantList,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -51,10 +51,10 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.authz.check"))]
 async fn authz_check(
     aa: AuthArgs,
-    body: JsonBody<AuthzCheckReqBody>,
+    body: JsonBody<SolandAuthzCheckRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AuthzCheckResBody> {
+) -> JsonResult<SolandAuthzCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // TODO(authz-scoping): spec service-http-binding.md:140 要求按 caller
     // 身份(本人/服务签名)进一步限定,此处先关闭匿名访问。
@@ -148,7 +148,7 @@ async fn authz_check(
             })
         })
         .collect::<Vec<_>>();
-    json_ok(AuthzCheckResBody {
+    json_ok(SolandAuthzCheckOutcome {
         allowed: result.allowed,
         reason_code: (!result.allowed).then(|| result.reason.clone()),
         reason: if result.allowed {
@@ -196,7 +196,7 @@ async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EffectiveGrantsResBody> {
+) -> crate::result::JsonResult<SolandGrantList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
@@ -246,7 +246,7 @@ async fn effective_grants(
         Vec::new()
     };
     let all_grants = [grants, default_grants].concat();
-    crate::result::json_ok(EffectiveGrantsResBody {
+    crate::result::json_ok(SolandGrantList {
         grants: all_grants,
         state_digest: Some(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),

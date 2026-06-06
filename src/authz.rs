@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 // live in the SDK so yougen and sodmin admin can call them client-side. See
 // `cokret_sdk::authz::delegation` (crates/sdk/src/authz/delegation.rs).
 pub use cokret_sdk::authz::delegation::{
-    DelegationError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict, GrantReqBody,
+    DelegationError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict, GrantRequestDraft,
     delegation_chain_intact, grant_effective_expiry, is_grant_expired, resource_within,
     revoke_with_cascade,
 };
@@ -159,7 +159,7 @@ impl AuthzEngine {
             .values()
             .cloned()
             .collect();
-        let request = GrantReqBody {
+        let request = GrantRequestDraft {
             // Parent's realm_id is authoritative for delegated children
             // (the wire `realm_id` argument is informational only; the SDK
             // helper does not check it). Use the parent's so persisted
@@ -653,16 +653,16 @@ fn evaluate_constraint(
 pub enum MergedAuthzDecision {
     Allowed {
         local: AuthzResult,
-        remote: Option<cokret_sdk::PolicyCheckResponse>,
+        remote: Option<cokret_sdk::PolicyCheckOutcome>,
     },
     LocalDeny(AuthzResult),
     RemoteDeny {
         local: AuthzResult,
-        remote: cokret_sdk::PolicyCheckResponse,
+        remote: cokret_sdk::PolicyCheckOutcome,
     },
     RemoteObligationFailed {
         local: AuthzResult,
-        remote: cokret_sdk::PolicyCheckResponse,
+        remote: cokret_sdk::PolicyCheckOutcome,
         error: obligation_executor::ObligationError,
     },
 }

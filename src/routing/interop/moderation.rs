@@ -23,7 +23,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{ModerationReportReqBody, ModerationReportResBody};
+use crate::wire::{ModerationReportRequestBody, SolandModerationReportOutcome};
 
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
@@ -44,10 +44,10 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.moderation.report"))]
 async fn moderation_report(
     aa: AuthArgs,
-    body: JsonBody<ModerationReportReqBody>,
+    body: JsonBody<ModerationReportRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ModerationReportResBody> {
+) -> JsonResult<SolandModerationReportOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -137,7 +137,7 @@ async fn moderation_report(
     {
         routed_to.push(audit_agent_principal_id);
     }
-    json_ok(ModerationReportResBody {
+    json_ok(SolandModerationReportOutcome {
         report_id,
         status: "queued".to_owned(),
         routed_to,
@@ -495,7 +495,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationAppealSubmitReqBody {
+pub struct ModerationAppealSubmitRequestBody {
     /// The `ck.moderation.decision` event being appealed.
     pub decision_ref: String,
     /// The original moderation target (message / flow / blob / etc.).
@@ -514,7 +514,7 @@ pub struct ModerationAppealSubmitReqBody {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationAppealSubmitResBody {
+pub struct ModerationAppealSubmitOutcome {
     pub appeal_id: String,
     pub state: String,
 }
@@ -527,10 +527,10 @@ pub struct ModerationAppealSubmitResBody {
 #[tracing::instrument(skip_all, fields(op = "ck.moderation.appeal.submit"))]
 async fn moderation_appeal_submit(
     aa: AuthArgs,
-    body: JsonBody<ModerationAppealSubmitReqBody>,
+    body: JsonBody<ModerationAppealSubmitRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ModerationAppealSubmitResBody> {
+) -> JsonResult<ModerationAppealSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -602,7 +602,7 @@ async fn moderation_appeal_submit(
         "submitted",
     )
     .await;
-    json_ok(ModerationAppealSubmitResBody {
+    json_ok(ModerationAppealSubmitOutcome {
         appeal_id,
         state: "submitted".to_owned(),
     })

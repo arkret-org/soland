@@ -19,7 +19,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use cokret_sdk::{
-    EventsSubmitFederationRequest, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
+    EventsSubmitFederationRequestBody, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
     canonical,
 };
 use ed25519_dalek::Verifier as _;
@@ -43,7 +43,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
 use crate::wire::{
     EventDescribeResponse, EventReadResponse, EventResolveRequest, EventResolveResponse,
-    EventSubmitResponse, EventsFrontierResBody, EventsPageResponse,
+    EventSubmitResponse, EventsPageResponse, SolandEventsFrontierState,
 };
 use crate::{artifacts, kinds};
 
@@ -510,7 +510,7 @@ async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<EventsFrontierResBody> {
+) -> crate::result::JsonResult<SolandEventsFrontierState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
@@ -582,7 +582,7 @@ async fn events_frontier(
             "actor_seq_upper_bounds": actor_frontier.clone(),
         },
     });
-    crate::result::json_ok(EventsFrontierResBody {
+    crate::result::json_ok(SolandEventsFrontierState {
         actor_frontier,
         realm_frontier,
         frontier,
@@ -817,7 +817,7 @@ pub(super) async fn submit_federation_events(
         return;
     }
 
-    let submit = match serde_json::from_value::<EventsSubmitFederationRequest>(body) {
+    let submit = match serde_json::from_value::<EventsSubmitFederationRequestBody>(body) {
         Ok(value) => value,
         Err(error) => {
             render_error(
@@ -829,7 +829,7 @@ pub(super) async fn submit_federation_events(
             return;
         }
     };
-    if let Err((code, message)) = EventsSubmitRequest::validate_federation_binding(&submit) {
+    if let Err((code, message)) = EventsSubmitRequestBody::validate_federation_binding(&submit) {
         render_error(res, StatusCode::BAD_REQUEST, code, &message);
         return;
     }
@@ -4194,17 +4194,17 @@ pub async fn effective_read_receipt_policy_for_realm(
 /// gated by federation authentication.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum EventsSubmitRequest {
+pub enum EventsSubmitRequestBody {
     /// Federation form — `service_binding_ref` is REQUIRED and all 6
     /// fields validated.
-    Federation(EventsSubmitFederationRequest),
+    Federation(EventsSubmitFederationRequestBody),
     /// Batch form — multiple envelopes, optional `idempotency_key`.
-    Batch(cokret_sdk::EventsSubmitBatchRequest),
+    Batch(cokret_sdk::EventsSubmitBatchRequestBody),
     /// Single Event Envelope (legacy / dominant shape).
     Single(Value),
 }
 
-impl EventsSubmitRequest {
+impl EventsSubmitRequestBody {
     /// Classify an incoming JSON body without consuming it. Returns the
     /// discriminator name for tracing / metrics.
     #[allow(dead_code)]
@@ -4225,7 +4225,7 @@ impl EventsSubmitRequest {
     /// `delivery_binding_frontier` if they are non-empty arrays containing
     /// duplicates.
     pub fn validate_federation_binding(
-        req: &EventsSubmitFederationRequest,
+        req: &EventsSubmitFederationRequestBody,
     ) -> Result<(), (&'static str, String)> {
         let binding = &req.service_binding_ref;
         for (name, frontier) in [
@@ -4722,14 +4722,14 @@ mod admission_tests {
         let single = json!({"event_id": "x"});
         let batch = json!({"events": []});
         let federation = json!({"events": [], "service_binding_ref": {"realm_id": "x"}});
-        assert_eq!(EventsSubmitRequest::shape(&single), "single");
-        assert_eq!(EventsSubmitRequest::shape(&batch), "batch");
-        assert_eq!(EventsSubmitRequest::shape(&federation), "federation");
+        assert_eq!(EventsSubmitRequestBody::shape(&single), "single");
+        assert_eq!(EventsSubmitRequestBody::shape(&batch), "batch");
+        assert_eq!(EventsSubmitRequestBody::shape(&federation), "federation");
     }
 
     #[test]
     fn federation_binding_rejects_duplicate_frontier_entries() {
-        let req = EventsSubmitFederationRequest {
+        let req = EventsSubmitFederationRequestBody {
             service_binding_ref: cokret_sdk::FederationServiceBindingRef {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
                 realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
@@ -4748,7 +4748,7 @@ mod admission_tests {
             events: Vec::new(),
             idempotency_key: None,
         };
-        let err = EventsSubmitRequest::validate_federation_binding(&req).unwrap_err();
+        let err = EventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
         assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
     }
 }

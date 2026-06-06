@@ -44,11 +44,11 @@ use crate::routing::admin::audit::append_audit_log;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
-    DirectoryDescribeResBody, DirectoryValueSearchResponse, HandleClaim,
-    HandleClaimDeliveryBinding, HandleClaimProof, RealmJoinCandidate, ResolveHandleRequest,
-    ResolveHandleResponse, ResolveOrganizationRequest, ResolveOrganizationResponse,
-    ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest, SearchOrganizationsRequest,
-    SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
+    DirectoryDescribeOutcome, DirectoryValueSearchResponse, RealmJoinCandidate,
+    ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
+    ResolveOrganizationResponse, ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest,
+    SearchOrganizationsRequest, SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
+    SolandHandleClaim, SolandHandleClaimDeliveryBinding, SolandHandleClaimProof,
 };
 
 /// Snapshot the in-memory realm directory (under a short lock) and return the
@@ -116,7 +116,7 @@ pub(crate) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(DirectoryDescribeResBody {
+    res.render(Json(DirectoryDescribeOutcome {
         service_did: state.config.service_did.clone(),
         resource_types: vec![
             "space".to_owned(),
@@ -1079,7 +1079,7 @@ fn signed_handle_claim(
     handle: &str,
     did: &str,
     audience: &str,
-) -> Result<HandleClaim, AppError> {
+) -> Result<SolandHandleClaim, AppError> {
     // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
     // holder/principal DID (e.g. a `ck:actor:` / `ck:account:` typed id).
     // Delegates to the SDK rejection rule via the shared wire validator.
@@ -1147,7 +1147,7 @@ fn signed_handle_claim(
     let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
 
-    let claim = HandleClaim {
+    let claim = SolandHandleClaim {
         schema: "ck.schema.handle_claim.v1".to_owned(),
         handle: canonical_handle,
         handle_aliases: vec![format!("acct:{localpart}@{service_domain}")],
@@ -1162,7 +1162,7 @@ fn signed_handle_claim(
         audience: Some(audience.to_owned()),
         challenge: None,
         claim_scope: BTreeMap::new(),
-        member_delivery_binding: Some(HandleClaimDeliveryBinding {
+        member_delivery_binding: Some(SolandHandleClaimDeliveryBinding {
             recipient_service_did: service_did,
             recipient_service_type: Some("principal_server".to_owned()),
             binding_source: "explicit".to_owned(),
@@ -1181,7 +1181,7 @@ fn signed_handle_claim(
         expires_at: Some(expires_at.to_rfc3339()),
         verified_at: None,
         source_refs: Vec::new(),
-        proofs: vec![HandleClaimProof {
+        proofs: vec![SolandHandleClaimProof {
             kind: "detached_jws".to_owned(),
             alg: Some(signature.alg),
             verification_method: Some(signature.verification_method),

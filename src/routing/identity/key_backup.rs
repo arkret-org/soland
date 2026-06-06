@@ -13,7 +13,9 @@ use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoverySessionRecord};
-use crate::wire::{KeysBackupsDeleteResBody, KeysBackupsListResBody, KeysBackupsPutResBody};
+use crate::wire::{
+    SolandKeysBackupsDeleteOutcome, SolandKeysBackupsList, SolandKeysBackupsPutOutcome,
+};
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
@@ -1307,7 +1309,7 @@ async fn put_key_backup(
     backup: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsPutResBody> {
+) -> JsonResult<SolandKeysBackupsPutOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
@@ -1330,7 +1332,7 @@ async fn put_key_backup(
         .put(backup_id.clone(), backup.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(KeysBackupsPutResBody {
+    json_ok(SolandKeysBackupsPutOutcome {
         ok: true,
         backup: serde_json::json!({
             "backup_id": backup_id,
@@ -1359,7 +1361,7 @@ async fn list_key_backups(
     backup_class: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsListResBody> {
+) -> JsonResult<SolandKeysBackupsList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let series_filter = series_id.into_inner();
@@ -1401,7 +1403,7 @@ async fn list_key_backups(
         .map(key_backup_metadata_for_list)
         .collect();
     let next_cursor = cursor.into_inner().map(|_| "key-backups-end".to_owned());
-    json_ok(KeysBackupsListResBody {
+    json_ok(SolandKeysBackupsList {
         backups,
         next_cursor,
         state: "active".to_owned(),
@@ -1452,7 +1454,7 @@ async fn delete_key_backup(
     backup_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsDeleteResBody> {
+) -> JsonResult<SolandKeysBackupsDeleteOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
@@ -1462,7 +1464,7 @@ async fn delete_key_backup(
             backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor)
         });
     let Some(backup) = owned_backup else {
-        return json_ok(KeysBackupsDeleteResBody {
+        return json_ok(SolandKeysBackupsDeleteOutcome {
             ok: true,
             backup_id,
             deleted: false,
@@ -1488,7 +1490,7 @@ async fn delete_key_backup(
         )
         .await;
     }
-    json_ok(KeysBackupsDeleteResBody {
+    json_ok(SolandKeysBackupsDeleteOutcome {
         ok: true,
         backup_id,
         deleted,

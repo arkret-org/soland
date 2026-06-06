@@ -1,7 +1,7 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/policy/check`               — evaluate a `PolicyCheckReqBody`
+//! - `POST   /_cokret/self/policy/check`               — evaluate a `SolandPolicyCheckRequestBody`
 //! - `GET    /_soland/self/policies`            — list owner-scoped policies
 //! - `POST   /_soland/self/policies`            — upsert compatibility route
 //! - `GET    /_soland/self/policies/{id}`       — read one policy document
@@ -30,8 +30,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
-    OkResBody, PolicyBinding, PolicyCheckReqBody, PolicyCheckResBody, PolicyDocumentResponse,
-    PolicyDocumentsResponse, UpsertPolicyDocumentRequest,
+    OkOutcome, PolicyBinding, PolicyDocumentResponse, PolicyDocumentsResponse,
+    SolandPolicyCheckOutcome, SolandPolicyCheckRequestBody, UpsertPolicyDocumentRequest,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -308,7 +308,7 @@ async fn delete_policy_document(
     policy_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkResBody> {
+) -> JsonResult<OkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
@@ -325,7 +325,7 @@ async fn delete_policy_document(
         .delete(&policy_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(OkResBody { ok: true })
+    json_ok(OkOutcome { ok: true })
 }
 
 #[endpoint(
@@ -336,10 +336,10 @@ async fn delete_policy_document(
 #[tracing::instrument(skip_all, fields(op = "ck.self.policy.check"))]
 async fn policy_check(
     aa: AuthArgs,
-    body: JsonBody<PolicyCheckReqBody>,
+    body: JsonBody<SolandPolicyCheckRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyCheckResBody> {
+) -> JsonResult<SolandPolicyCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
@@ -459,7 +459,7 @@ async fn policy_check(
     let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     let jws_detached = format!("{protected_b64u}..{signature_b64u}");
 
-    json_ok(PolicyCheckResBody {
+    json_ok(SolandPolicyCheckOutcome {
         decision,
         reason_code,
         policy_id: policy_id.clone(),
@@ -548,7 +548,7 @@ struct MatchedPolicyDecision {
 
 async fn matching_policy_decision(
     state: &AppState,
-    request: &PolicyCheckReqBody,
+    request: &SolandPolicyCheckRequestBody,
 ) -> Option<MatchedPolicyDecision> {
     state
         .persistence
@@ -588,7 +588,10 @@ async fn matching_policy_decision(
         })
 }
 
-fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckReqBody) -> bool {
+fn policy_matches_check(
+    policy: &PolicyDocumentRecord,
+    request: &SolandPolicyCheckRequestBody,
+) -> bool {
     policy_scope_matches(&policy.scope, request.realm_id.as_deref())
         && policy_subject_matches(&policy.subject_ref, &request.actor)
         && (policy.policy_type == "*" || policy.policy_type == request.action)
@@ -618,7 +621,7 @@ fn policy_actions_match(actions: &Value, action: &str) -> bool {
     })
 }
 
-fn policy_resource_matches(resource: &Value, request: &PolicyCheckReqBody) -> bool {
+fn policy_resource_matches(resource: &Value, request: &SolandPolicyCheckRequestBody) -> bool {
     let Some(resource) = resource.as_object() else {
         return true;
     };

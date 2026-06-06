@@ -247,7 +247,7 @@ fn erasure_push_payload(
     let origin = Did::new(state.config.service_did.clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
-    let body = cokret_sdk::FederationPushOperationsReqBody {
+    let body = cokret_sdk::FederationPushOperationsRequestBody {
         origin,
         destination,
         realm_id,

@@ -31,9 +31,9 @@
 //! debugging UIs.
 
 use cokret_sdk::{
-    Did, FlowId, MorphId, ProjectionFlowRow, ProjectionFlowsResBody, ProjectionMorphRow,
-    ProjectionMorphsResBody, ProjectionObjectState, ProjectionSpaceRow, ProjectionSpaceState,
-    ProjectionSpacesResBody, RealmId, SpaceId,
+    Did, FlowId, MorphId, ProjectionFlowList, ProjectionFlowRow, ProjectionMorphList,
+    ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList, ProjectionSpaceRow,
+    ProjectionSpaceState, RealmId, SpaceId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -329,7 +329,7 @@ async fn list_space_container_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<ProjectionSpacesResBody> {
+) -> JsonResult<ProjectionSpaceList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
@@ -383,7 +383,7 @@ async fn list_space_container_projections(
         .collect::<Result<_, AppError>>()?;
     drop(proj);
     let total = total_count(spaces.len())?;
-    json_ok(ProjectionSpacesResBody {
+    json_ok(ProjectionSpaceList {
         realm_id: response_realm_id,
         spaces,
         total,
@@ -402,7 +402,7 @@ async fn list_flow_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<ProjectionFlowsResBody> {
+) -> JsonResult<ProjectionFlowList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
@@ -448,7 +448,7 @@ async fn list_flow_projections(
         .collect::<Result<_, AppError>>()?;
     drop(proj);
     let total = total_count(flows.len())?;
-    json_ok(ProjectionFlowsResBody {
+    json_ok(ProjectionFlowList {
         realm_id: response_realm_id,
         flows,
         total,
@@ -467,7 +467,7 @@ async fn list_morph_projections(
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<ProjectionMorphsResBody> {
+) -> JsonResult<ProjectionMorphList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
@@ -509,7 +509,7 @@ async fn list_morph_projections(
         .collect::<Result<_, AppError>>()?;
     drop(proj);
     let total = total_count(morphs.len())?;
-    json_ok(ProjectionMorphsResBody {
+    json_ok(ProjectionMorphList {
         realm_id: response_realm_id,
         morphs,
         total,

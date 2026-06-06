@@ -13,7 +13,7 @@ use super::{
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord};
-use crate::wire::{EventResolveRequest, EventsQueryPostRequest, SnapshotHeadResponse};
+use crate::wire::{EventResolveRequest, EventsQueryPostRequestBody, SolandSnapshotHeadState};
 
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
@@ -121,7 +121,7 @@ async fn peer_events_query_post(depot: &mut Depot, req: &mut Request) -> JsonRes
     let body = parse_json_body(req, "invalid ck.peer.events.query request body").await?;
     validate_peer_request(state, req, Some(&body))?;
     let request =
-        serde_json::from_value::<EventsQueryPostRequest>(body.clone()).map_err(|error| {
+        serde_json::from_value::<EventsQueryPostRequestBody>(body.clone()).map_err(|error| {
             schema_violation(format!("invalid ck.peer.events.query shape: {error}"))
         })?;
     let parts = PeerEventsQueryParts::from_body(request, body.get("filters").cloned())?;
@@ -311,7 +311,7 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
 async fn peer_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SnapshotHeadResponse> {
+) -> JsonResult<SolandSnapshotHeadState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None)?;
     let realm_id = query_param(req, "realm_id")
@@ -349,7 +349,7 @@ async fn peer_snapshot_head(
         "{}:{}:{}",
         bundle.snapshot_ref, bundle.state_digest, service_did
     );
-    json_ok(SnapshotHeadResponse {
+    json_ok(SolandSnapshotHeadState {
         snapshot_ref: bundle.snapshot_ref,
         state_digest: bundle.state_digest,
         manifest: bundle.manifest,
@@ -414,7 +414,10 @@ impl PeerEventsQueryParts {
         Ok(parts)
     }
 
-    fn from_body(body: EventsQueryPostRequest, filters: Option<Value>) -> Result<Self, AppError> {
+    fn from_body(
+        body: EventsQueryPostRequestBody,
+        filters: Option<Value>,
+    ) -> Result<Self, AppError> {
         let kind_filter = parse_kind_filter(filters.as_ref())?;
         let parts = Self {
             realms: body.realms,
