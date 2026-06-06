@@ -43,6 +43,37 @@ pub struct HealthResponse {
     pub hardening: HardeningStatus,
 }
 
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct SolandServerDescribeResponse {
+    #[serde(flatten)]
+    pub service: ServerDescription,
+    pub unsupported_profiles: Vec<UnsupportedProfileDescriptor>,
+    pub proof_verifier_mode: String,
+    pub admin_auth_mode: String,
+    pub erasure_receipts_endpoint: String,
+    pub hardening: HardeningStatus,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct UnsupportedProfileDescriptor {
+    pub profile: String,
+    pub status: String,
+    pub reason: String,
+}
+
+impl UnsupportedProfileDescriptor {
+    pub fn unsupported(
+        profile: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> UnsupportedProfileDescriptor {
+        UnsupportedProfileDescriptor {
+            profile: profile.into(),
+            status: "unsupported".to_owned(),
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AuthBridgeDescribeResponse {
     pub contract: String,
@@ -1799,13 +1830,14 @@ pub fn describe(
     // service-surface.md §3.0; `verified_profiles` MUST be empty when
     // `development_mode=true`. The full T6.1 claim-level partition layer
     // in routing::system::describe::apply_claim_level_partition still
-    // overrides these values on the JSON wire response — we keep typed
+    // overrides these typed fields before serialization — we keep typed
     // defaults here so out-of-tree typed consumers see the correct shape
     // and pass `ServerDescription::validate`.
     // Round 4 — typed entries match `service-describe.schema.json`
     // (`claimed_profiles[*]`, `compat_surfaces[*]`). The routing-layer
-    // `apply_claim_level_partition` reserialises these via the SDK types
-    // below so the JSON wire shape and the typed surface can never drift.
+    // `apply_claim_level_partition` populates these SDK-typed fields
+    // before the response is serialized so the JSON wire shape and the
+    // typed surface can never drift.
     //
     // Profile catalogue per `cokret-spec/spec/v1/zh/conformance/conformance-profiles.md`
     // §1 / §7 / §8: a principal server self-claims the Event Store

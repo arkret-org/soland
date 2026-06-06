@@ -30,9 +30,15 @@ use crate::state::AppState;
 use crate::wire::{
     AuthBridgeAuthDescriptor, AuthBridgeDescribeResponse, AuthBridgeExamples,
     AuthBridgePushDescriptor, HealthResponse, IntegrationDependencyDescriptor,
-    IntegrationDescribeResponse, IntegrationSurfaceDescriptor, describe,
+    IntegrationDescribeResponse, IntegrationSurfaceDescriptor, SolandServerDescribeResponse,
+    UnsupportedProfileDescriptor, describe,
 };
 use crate::{JsonResult, json_ok};
+
+const SOLAND_LOCAL_COMPAT_SURFACE_NAME: &str = "soland_private_local_routes";
+const SOLAND_LOCAL_COMPAT_BASE_PATH: &str = "/_soland";
+const SOLAND_LOCAL_COMPAT_STATUS: &str = "soland_private_local";
+const SOLAND_LOCAL_COMPAT_NOTES: &str = "non-registry REST routes were moved out of /_cokret; clients should prefer operation-registry canonical paths";
 
 pub(super) fn health_router() -> Router {
     Router::new()
@@ -185,9 +191,9 @@ struct HealthCheckRow {
     summary = "Server capability description"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.server.describe"))]
-async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
+async fn server_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeResponse> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let description = describe(
+    let mut description = describe(
         &state.config.service_did,
         &state.config.public_base_url,
         state.db.mode(),
@@ -196,6 +202,14 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
         state.config.auth_server_url.as_deref(),
         &state.config.trust_domain,
     );
+    // T6.1 — claim-level partition of the describe response.
+    // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
+    // `ck.schema.service_describe.v1`. `supported_operations` is
+    // wire-callable only; this helper separates implementation state,
+    // self-claims, cotest-verified claims, and compat surfaces while the
+    // response is still the SDK's typed `ServerDescription`.
+    apply_claim_level_partition(&mut description, state.verified_profiles.as_ref());
+
     // Round 4 (B1) — validate the v2 invariants. development_mode=true MUST
     // forbid non-empty verified_profiles; protocol_version MUST equal the
     // SDK constant. A failure here means the producer drifted from the
@@ -206,64 +220,27 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
             "ServiceDescribe validation failed; this is a build-time invariant"
         );
     }
-    let mut value = serde_json::to_value(description).expect("server description serializes");
-    value["unsupported_profiles"] = json!([
-        {
-            "profile": "ck.profile.soland_limited_server.v1",
-            "status": "unsupported",
-            "reason": "limited profile is a limitation descriptor, not a conformance claim"
-        }
-    ]);
-    // Surface the runtime posture so dashboards (e.g. sodmin) can render a
-    // red "DEVELOPMENT MODE" banner without parsing `auth_metadata.mode`.
-    // The same fields are also emitted on `/health` for monitoring probes
-    // that don't need the full describe payload.
-    value["development_mode"] = json!(state.config.development_mode);
-    value["proof_verifier_mode"] = json!(state.config.proof_verifier_mode());
-    value["admin_auth_mode"] = json!(state.config.admin_auth_mode());
-    // Round R2/R3 (T08) — expose deployment trust_domain so peers /
-    // clients can bind `ck.cross_signing.reset` payloads correctly.
-    value["trust_domain"] = json!(state.config.trust_domain);
-    // service-surface.md §3 — `supported_bindings[].base_url` is the only
-    // documented example field and is typed `format: uri` in
-    // service-describe.schema.json. Emit the deployment's connectable base
-    // URL so clients can build `base_url + operation_path` directly instead
-    // of receiving a non-connectable relative `base_path` segment.
-    value["supported_bindings"] = json!([
-        {
-            "kind": "http_json",
-            "base_url": state.config.public_base_url.trim_end_matches('/'),
-        }
-    ]);
-    // Stream-F (Wave 2C) — advertise the audit erasure-receipts
-    // surface. Spec `realm-and-space.md` §2.5.2 requires the receipt
-    // list to be reachable via `server.describe.erasure_receipts_endpoint`
-    // so verifiers can query the issuing server's current view (incl.
-    // per-peer fanout_status and the timeout-triggered `incomplete`
-    // flip).
-    value["erasure_receipts_endpoint"] = json!("/_soland/admin/audit/erasure-receipts");
-    // T8.3 — embed the production hardening checklist so sodmin's
-    // `/hardening` page can render it without an extra round-trip.
-    value["hardening"] =
-        serde_json::to_value(state.config.hardening_status()).expect("hardening status serializes");
 
-    // T6.1 — claim-level partition of the describe response.
-    // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and
-    // `ck.schema.service_describe.v1`. The legacy `supported_operations`
-    // already populated above is wire-callable only; the helper below
-    // separates feature implementation from profile claims and dev-mode
-    // posture from cotest-verified claims.
-    apply_claim_level_partition(
-        &mut value,
-        state.config.development_mode,
-        state.verified_profiles.as_ref(),
-    );
-    json_ok(value)
+    json_ok(SolandServerDescribeResponse {
+        service: description,
+        unsupported_profiles: vec![UnsupportedProfileDescriptor::unsupported(
+            "ck.profile.soland_limited_server.v1",
+            "limited profile is a limitation descriptor, not a conformance claim",
+        )],
+        proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
+        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
+        // Stream-F (Wave 2C) — advertise the audit erasure-receipts surface.
+        // Spec `realm-and-space.md` §2.5.2 requires this receipt list to be
+        // reachable from server describe.
+        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
+        hardening: state.config.hardening_status(),
+    })
 }
 
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,
-/// `claimed_profiles`, `verified_profiles`, `experimental_features`,
-/// `compat_surfaces`) into a describe response.
+/// `claimed_profiles`, `verified_profiles`, `compat_surfaces`) into a
+/// describe response. `experimental_features` is already carried by the typed
+/// [`crate::wire::describe`] `ServerDescription`.
 ///
 /// Invariants enforced here:
 /// - `verified_profiles` MUST be empty when `development_mode=true`. The loader
@@ -277,23 +254,13 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<Value> {
 ///   dropped with a `warn!` line. The wire never advertises a profile we don't also self-claim —
 ///   that would be a silent cross-binding lie.
 pub(crate) fn apply_claim_level_partition(
-    value: &mut Value,
-    development_mode: bool,
+    description: &mut cokret_sdk::ServerDescription,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
 ) {
     // implemented_features: mirror of supported_features. Every entry
     // there corresponds to in-tree implementation code, but soland does
     // not claim conformance for any of them today.
-    let implemented_features_owned: Vec<String> = value
-        .get("supported_features")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    value["implemented_features"] = json!(implemented_features_owned);
+    description.implemented_features = description.supported_features.clone();
 
     // claimed_profiles: self-claimed only. Serialise via the SDK's
     // typed `ClaimedProfileEntry` so the wire shape stays bound to
@@ -351,8 +318,7 @@ pub(crate) fn apply_claim_level_partition(
         .iter()
         .map(|c| c.profile_id.clone())
         .collect();
-    value["claimed_profiles"] =
-        serde_json::to_value(claimed_profiles).expect("claimed_profiles serializes");
+    description.claimed_profiles = claimed_profiles;
 
     // verified_profiles: populated by the G4.T3 cotest artifact loader.
     // `loaded_verified` is the deserialised + role-filtered slice from
@@ -364,7 +330,7 @@ pub(crate) fn apply_claim_level_partition(
     // the `claimed_profiles[]` built above. Entries that fail the
     // cross-check are dropped with a warn — we never advertise a verified
     // profile we don't also self-claim.
-    let verified_profiles: Vec<cokret_sdk::VerifiedProfileEntry> = if development_mode {
+    let verified_profiles: Vec<cokret_sdk::VerifiedProfileEntry> = if description.development_mode {
         if !loaded_verified.is_empty() {
             tracing::warn!(
                 target: "verified_profiles",
@@ -402,26 +368,20 @@ pub(crate) fn apply_claim_level_partition(
             .collect()
     };
     debug_assert!(
-        !development_mode || verified_profiles.is_empty(),
+        !description.development_mode || verified_profiles.is_empty(),
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
     );
-    value["verified_profiles"] =
-        serde_json::to_value(verified_profiles).expect("verified_profiles serializes");
+    description.verified_profiles = verified_profiles;
+    description.compat_surfaces = soland_compat_surfaces();
+}
 
-    // experimental_features: surfaces still maturing.
-    value["experimental_features"] = json!([
-        "federation.outbound_push.signed_intent",
-        "admin.bottom.manual_repair",
-        "index.query.local_projection",
-    ]);
-
-    value["compat_surfaces"] = json!([
-        {
-            "base_path": "/_soland",
-            "status": "soland_private_local",
-            "reason": "non-registry REST routes were moved out of /_cokret; clients should prefer operation-registry canonical paths"
-        }
-    ]);
+fn soland_compat_surfaces() -> Vec<cokret_sdk::CompatSurfaceEntry> {
+    vec![
+        cokret_sdk::CompatSurfaceEntry::external_interop(SOLAND_LOCAL_COMPAT_SURFACE_NAME)
+            .with_extra_string("base_path", SOLAND_LOCAL_COMPAT_BASE_PATH)
+            .with_extra_string("status", SOLAND_LOCAL_COMPAT_STATUS)
+            .with_notes(SOLAND_LOCAL_COMPAT_NOTES),
+    ]
 }
 
 #[endpoint(
