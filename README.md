@@ -283,6 +283,25 @@ https://auth.local.host -> 127.0.0.1:7080
 
 Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
 
+```dotenv
+SOLAND_BIND=127.0.0.1:8698
+SOLAND_PUBLIC_BASE_URL=https://local.host
+SOLAND_SERVICE_DID=did:web:local.host
+SOLAND_DEVELOPMENT_MODE=true
+SOLAND_OAUTH_INTROSPECTION_URL=https://auth.local.host/oauth/introspect
+SOLAND_OAUTH_INTROSPECTION_BEARER=local-coauth-oauth-introspection
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_coauth/gate/account/session-grants/introspect
+SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
+SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
+```
+
+Those bearer values must match coauth's
+`cokret.principal_servers[]` entry for `https://local.host/`. If coauth
+is still using an old local file with a `contrix:` section, rename that
+section to `cokret:` before restarting it; otherwise coauth will reject
+soland's introspection call and browser sign-in will end with
+`unauthenticated: invalid bearer token`.
+
 ```bash
 just caddy
 ```
