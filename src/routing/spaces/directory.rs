@@ -33,9 +33,8 @@ use serde_json::{Value, json};
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
-    invite_token_realm_id, is_realm_deleted, normalize_handle, now, realm_discoverability,
-    realm_history_visibility, realm_resolvable_to, realm_search_discoverability,
-    realm_search_visible_to,
+    invite_token_realm_id, is_realm_deleted, now, realm_discoverability, realm_history_visibility,
+    realm_resolvable_to, realm_search_discoverability, realm_search_visible_to,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -979,25 +978,12 @@ async fn search_users(
 /// `<localpart>:<domain>` per handle-claim.schema.json, cokret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
-    let service_domain = state
-        .config
-        .service_did
-        .strip_prefix("did:web:")
-        .map(|value| value.replace(':', "."))
-        .unwrap_or_else(|| "soland.local".to_owned());
-    let raw_handle = actor
+    let service_domain = service_handle_domain(&state.config.service_did);
+    let canonical = actor
         .get("handle")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim_start_matches('@')
-        .to_ascii_lowercase();
-    let canonical = if raw_handle.is_empty() {
-        String::new()
-    } else if raw_handle.contains(':') {
-        raw_handle
-    } else {
-        format!("{raw_handle}:{service_domain}")
-    };
+        .and_then(|handle| canonicalize_handle_for_service(handle, &service_domain))
+        .unwrap_or_default();
     let mut row = serde_json::Map::new();
     row.insert("handle".to_owned(), json!(canonical));
     if let Some(display_name) = actor.get("display_name").and_then(Value::as_str) {
@@ -1010,6 +996,163 @@ fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
         row.insert("verified".to_owned(), verified.clone());
     }
     Value::Object(row)
+}
+
+#[derive(Debug)]
+struct HandleLookup {
+    canonical: String,
+    localpart: String,
+    authority: String,
+}
+
+fn service_handle_domain(service_did: &str) -> String {
+    service_did
+        .strip_prefix("did:web:")
+        .map(|value| value.replace(':', "."))
+        .unwrap_or_else(|| "soland.local".to_owned())
+}
+
+fn handle_lookup(input: &str, default_domain: &str) -> Option<HandleLookup> {
+    let (localpart, authority) = normalize_handle_parts(input, default_domain)?;
+    Some(HandleLookup {
+        canonical: format!("{localpart}:{authority}"),
+        localpart,
+        authority,
+    })
+}
+
+fn local_actor_handle_matches(
+    actor_handle: &str,
+    lookup: &HandleLookup,
+    service_domain: &str,
+) -> bool {
+    canonicalize_handle_for_service(actor_handle, service_domain)
+        .is_some_and(|canonical| canonical == lookup.canonical)
+}
+
+fn canonicalize_handle_for_service(handle: &str, default_domain: &str) -> Option<String> {
+    let (localpart, authority) = normalize_handle_parts(handle, default_domain)?;
+    Some(format!("{localpart}:{authority}"))
+}
+
+fn normalize_handle_parts(handle: &str, default_domain: &str) -> Option<(String, String)> {
+    let trimmed = handle.trim().to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed.starts_with("did:") {
+        return None;
+    }
+    let without_acct = trimmed.strip_prefix("acct:").unwrap_or(trimmed.as_str());
+    let without_at_prefix = without_acct.strip_prefix('@').unwrap_or(without_acct);
+    let (localpart, authority) =
+        if let Some((localpart, authority)) = without_at_prefix.rsplit_once('@') {
+            (localpart, authority)
+        } else if let Some((localpart, authority)) = without_at_prefix.split_once(':') {
+            (localpart, authority)
+        } else {
+            (without_at_prefix, default_domain)
+        };
+    let localpart = localpart.trim();
+    let authority = authority.trim();
+    if localpart.is_empty() || authority.is_empty() {
+        return None;
+    }
+    Some((localpart.to_owned(), authority.to_owned()))
+}
+
+async fn handle_resolvable_to(
+    state: &AppState,
+    actor: &Value,
+    session: Option<&SessionRecord>,
+    request: &ResolveHandleRequest,
+) -> bool {
+    if actor_visible_to(state, actor, session).await {
+        return true;
+    }
+    membership_builder_resolve_allowed(state, session, request).await
+}
+
+async fn membership_builder_resolve_allowed(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    request: &ResolveHandleRequest,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    if !matches!(
+        request.intent.as_deref().map(str::trim),
+        Some("invite" | "member_add")
+    ) {
+        return false;
+    }
+    match request.requester.as_deref().map(str::trim) {
+        Some(requester) if requester == session.actor => {}
+        _ => return false,
+    }
+    let Some(realm_id) = request
+        .realm_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    super::realm_has_member(state, realm_id, &session.actor).await
+}
+
+fn did_web_authority(authority: &str) -> String {
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) => {
+            format!("{host}%3A{port}")
+        }
+        _ => authority.to_owned(),
+    }
+}
+
+fn remote_handle_resolution(
+    lookup: &HandleLookup,
+    audience: String,
+) -> JsonResult<ResolveHandleResponse> {
+    let did_authority = did_web_authority(&lookup.authority);
+    let recipient_service_did = format!("did:web:{did_authority}");
+    let subject = format!("{recipient_service_did}:users:{}", lookup.localpart);
+    Did::new(recipient_service_did.clone()).map_err(|err| {
+        AppError::invalid_param(format!(
+            "resolved handle recipient service DID is invalid: {err}"
+        ))
+    })?;
+    Did::new(subject.clone()).map_err(|err| {
+        AppError::invalid_param(format!("resolved handle subject DID is invalid: {err}"))
+    })?;
+    let binding = SolandHandleClaimDeliveryBinding {
+        recipient_service_did: recipient_service_did.clone(),
+        recipient_service_type: Some("principal_server".to_owned()),
+        binding_source: "explicit".to_owned(),
+        delivery_modes: vec![
+            "events".to_owned(),
+            "sync".to_owned(),
+            "to_device".to_owned(),
+            "push".to_owned(),
+            "key_packages".to_owned(),
+        ],
+        service_acceptance_ref: None,
+        policy_event_ref: None,
+    };
+    json_ok(ResolveHandleResponse {
+        handle: lookup.canonical.clone(),
+        subject: subject.clone(),
+        did: subject.clone(),
+        actor: json!({
+            "did": subject,
+            "handle": lookup.canonical,
+            "display_name": lookup.canonical,
+            "verified": false,
+            "source": "remote_handle",
+        }),
+        audience: Some(audience),
+        handle_claim: None,
+        member_delivery_binding: Some(binding),
+        source_refs: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -1029,14 +1172,18 @@ async fn resolve_handle(
     if body.handle.trim().is_empty() {
         return Err(AppError::missing_param("handle is required"));
     }
-    let normalized = normalize_handle(&body.handle);
+    let service_domain = service_handle_domain(&state.config.service_did);
+    let Some(lookup) = handle_lookup(&body.handle, &service_domain) else {
+        return Err(AppError::not_found("not found"));
+    };
     let session = authenticated_session(state, req).await.ok();
     let mut actor = None;
     for candidate in demo_actors(state).await {
         let handle_matches = candidate["handle"]
             .as_str()
-            .is_some_and(|handle| handle == normalized);
-        if handle_matches && actor_visible_to(state, &candidate, session.as_ref()).await {
+            .is_some_and(|handle| local_actor_handle_matches(handle, &lookup, &service_domain));
+        if handle_matches && handle_resolvable_to(state, &candidate, session.as_ref(), &body).await
+        {
             actor = Some(candidate);
             break;
         }
@@ -1053,7 +1200,7 @@ async fn resolve_handle(
                 .or(body.requester)
                 .unwrap_or_else(|| state.config.service_did.clone());
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
-            let handle_claim = signed_handle_claim(state, &normalized, &did, &audience)?;
+            let handle_claim = signed_handle_claim(state, &lookup.canonical, &did, &audience)?;
             // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
@@ -1070,6 +1217,14 @@ async fn resolve_handle(
                 member_delivery_binding,
                 source_refs: Vec::new(),
             })
+        }
+        None if membership_builder_resolve_allowed(state, session.as_ref(), &body).await => {
+            let audience = body
+                .audience
+                .or(body.realm_id)
+                .or(body.requester)
+                .unwrap_or_else(|| state.config.service_did.clone());
+            remote_handle_resolution(&lookup, audience)
         }
         None => Err(AppError::not_found("not found")),
     }
