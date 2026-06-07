@@ -147,6 +147,98 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 }
 
 #[tokio::test]
+async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
+    let state = AppState::new(
+        test_config_with_service_did("did:web:local.host"),
+        Db { pool: None },
+    );
+    let alice = dev_token(state.clone()).await;
+    let _bob = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        "ck:device:01904100-0000-7000-8000-b0b0b0000002",
+    )
+    .await;
+
+    let hidden_bob: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({"query": "bob"}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(hidden_bob["results"].as_array().unwrap().is_empty());
+
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Invite Handle Realm",
+        None,
+        "invite_only",
+        &["did:web:local.host"],
+        &[],
+    )
+    .await;
+    let realm_id = realm["realm_id"].as_str().unwrap();
+
+    let mut resolved = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "handle": "bob:local.host",
+            "intent": "invite",
+            "requester": "did:web:alice.example",
+            "realm_id": realm_id,
+            "audience": realm_id,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(resolved.status_code.unwrap(), StatusCode::OK);
+    let body: Value = resolved.take_json().await.unwrap();
+    assert_eq!(body["did"], "did:web:bob.example");
+    assert_eq!(body["handle"], "bob:local.host");
+    assert_eq!(body["audience"], realm_id);
+    assert_eq!(
+        body["member_delivery_binding"]["recipient_service_did"],
+        "did:web:local.host"
+    );
+
+    let hidden_remote_lookup =
+        TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+            .add_header("authorization", format!("Bearer {alice}"), true)
+            .json(&serde_json::json!({"handle": "bob:remote.example"}))
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(
+        hidden_remote_lookup.status_code.unwrap(),
+        StatusCode::NOT_FOUND
+    );
+
+    let mut remote = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "handle": "bob:remote.example",
+            "intent": "invite",
+            "requester": "did:web:alice.example",
+            "realm_id": realm_id,
+            "audience": realm_id,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(remote.status_code.unwrap(), StatusCode::OK);
+    let remote_body: Value = remote.take_json().await.unwrap();
+    assert_eq!(remote_body["did"], "did:web:remote.example:users:bob");
+    assert_eq!(remote_body["handle"], "bob:remote.example");
+    assert_eq!(remote_body["audience"], realm_id);
+    assert_eq!(
+        remote_body["member_delivery_binding"]["recipient_service_did"],
+        "did:web:remote.example"
+    );
+    assert!(remote_body.get("handle_claim").is_none());
+}
+
+#[tokio::test]
 async fn directory_demo_projection_rejects_outside_development_mode() {
     let mut config = test_config();
     config.development_mode = false;
