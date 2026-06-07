@@ -325,13 +325,19 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
-    let blob = state
+    let mut blob = state
         .persistence
         .blobs()
         .get(&blob_ref)
         .await
         .ok()
         .flatten();
+    if blob.is_none()
+        && purpose == "profile_avatar"
+        && let Some(session) = session.as_ref()
+    {
+        blob = try_recover_profile_avatar_blob(state, &blob_ref, &session.actor).await;
+    }
     match blob.as_ref() {
         Some(blob) => {
             let denied = if let Some(session) = session.as_ref() {
@@ -492,6 +498,52 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         None => render_error(res, StatusCode::NOT_FOUND, "not_found", "not found"),
     }
+}
+
+async fn try_recover_profile_avatar_blob(
+    state: &AppState,
+    blob_ref: &str,
+    uploaded_by: &str,
+) -> Option<BlobRecord> {
+    let sha256 = blob_ref.strip_prefix("ck:blob:sha256:")?;
+    if !is_valid_sha256_hex(sha256) {
+        return None;
+    }
+    let storage_key = state.object_storage.object_key_for_sha256(sha256);
+    let bytes = match state.object_storage.get(&storage_key).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::debug!(%error, %blob_ref, %storage_key, "profile avatar blob metadata missing and object is unavailable");
+            return None;
+        }
+    };
+    if bytes.len() > MAX_BLOB_UPLOAD_BYTES {
+        tracing::warn!(%blob_ref, size = bytes.len(), "refusing to recover oversized profile avatar blob");
+        return None;
+    }
+    let actual_sha256 = sha256_hex(&bytes);
+    if actual_sha256 != sha256 {
+        tracing::warn!(%blob_ref, %actual_sha256, "refusing to recover profile avatar blob with mismatched digest");
+        return None;
+    }
+    let media_type = infer_profile_avatar_media_type(&bytes)?;
+    let record = BlobRecord {
+        sha256: sha256.to_owned(),
+        size_bytes: bytes.len() as i64,
+        storage_backend: state.object_storage.backend_name().to_owned(),
+        storage_key,
+        media_type,
+        filename: None,
+        realm_id: None,
+        encryption: None,
+        uploaded_by: uploaded_by.to_owned(),
+        created_at: now(),
+    };
+    if let Err(error) = state.persistence.blobs().put(blob_ref, &record).await {
+        tracing::warn!(%error, %blob_ref, "failed to persist recovered profile avatar blob metadata");
+        return None;
+    }
+    Some(record)
 }
 
 #[endpoint(
@@ -783,6 +835,22 @@ fn sanitize_media_type(raw: &str) -> Option<String> {
     let media_type = raw.split(';').next()?.trim().to_ascii_lowercase();
     let (top, sub) = media_type.split_once('/')?;
     (is_valid_mime_token(top) && is_valid_mime_token(sub)).then_some(media_type)
+}
+
+fn infer_profile_avatar_media_type(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg".to_owned());
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png".to_owned());
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif".to_owned());
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp".to_owned());
+    }
+    None
 }
 
 fn is_valid_mime_token(value: &str) -> bool {
@@ -1114,5 +1182,26 @@ mod tests {
             blob_content_disposition(&blob, "profile_avatar").as_deref(),
             Some("attachment; filename=\"avatar.svg\"")
         );
+    }
+
+    #[test]
+    fn profile_avatar_media_type_inference_accepts_only_safe_image_types() {
+        assert_eq!(
+            infer_profile_avatar_media_type(&[0xff, 0xd8, 0xff, 0xdb]).as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            infer_profile_avatar_media_type(b"\x89PNG\r\n\x1a\nrest").as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            infer_profile_avatar_media_type(b"GIF89arest").as_deref(),
+            Some("image/gif")
+        );
+        assert_eq!(
+            infer_profile_avatar_media_type(b"RIFF\x00\x00\x00\x00WEBPrest").as_deref(),
+            Some("image/webp")
+        );
+        assert_eq!(infer_profile_avatar_media_type(b"<svg></svg>"), None);
     }
 }
