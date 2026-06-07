@@ -11,8 +11,8 @@
 //!    verifier call (the cotest scenario uses `mock-applet-registry`'s service DID).
 //! 3. **Schema hash** â€” the manifest carries a `schema_hash` field pinning the version of
 //!    `applet.schema.json` it was generated against. We lazily load the schema, hash it, and reject
-//!    the manifest if the hashes diverge â€” a basic guard against silently accepting manifests built
-//!    against stale schemas.
+//!    the manifest if the hashes diverge â€” a basic guard against silently accepting manifests
+//!    built against stale schemas.
 //! 4. **Capabilities** â€” every entry in `requested_capabilities` MUST be in the known registry
 //!    below (`KNOWN_APPLET_CAPABILITIES`).
 //!
@@ -251,7 +251,8 @@ fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
-// â”€â”€ HTTP surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€ HTTP surface
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub(super) fn router() -> Router {
     Router::with_path("applets/manifest/verify").post(verify_endpoint)

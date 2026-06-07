@@ -1,7 +1,8 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/policy/check`               â€” evaluate a `SolandPolicyCheckRequestBody`
+//! - `POST   /_cokret/self/policy/check`               â€” evaluate a
+//!   `SolandPolicyCheckRequestBody`
 //! - `GET    /_soland/self/policies`            â€” list owner-scoped policies
 //! - `POST   /_soland/self/policies`            â€” upsert compatibility route
 //! - `GET    /_soland/self/policies/{id}`       â€” read one policy document
@@ -384,7 +385,8 @@ async fn policy_check(
             )
         };
 
-    // â”€â”€ Frontier binding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€ Frontier binding
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The decision is pinned to a four-axis frontier so the caller (and
     // any auditor replaying the response) can detect a stale decision
     // once any of the four hashes move. All four hashes are sha256 hex

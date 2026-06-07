@@ -6,7 +6,8 @@
 //! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
 //! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
 //! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
-//! - `POST /_cokret/self/direct-conversations/resolve` — resolve/create the canonical 1:1 DM binding
+//! - `POST /_cokret/self/direct-conversations/resolve` — resolve/create the canonical 1:1 DM
+//!   binding
 
 use std::collections::{BTreeMap, BTreeSet};
 
