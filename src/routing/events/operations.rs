@@ -183,6 +183,7 @@ const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("invite_id", "ck.invite.create operation requires invite_id"),
     PayloadRequirement::AnyOf(
         INVITE_CREATE_TARGET_FIELDS,
         "ck.invite.create operation requires invitee",
@@ -1014,7 +1015,15 @@ fn validate_operation_payload_against_sdk_artifact(
 }
 
 fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
-    validate_operation_schema_from_sdk_artifact(kinds::CK_INVITE_CREATE, operation)?;
+    validate_invite_create_known_fields(operation)?;
+    let invite_id = operation
+        .payload
+        .get("invite_id")
+        .and_then(Value::as_str)
+        .ok_or("ck.invite.create operation requires invite_id")?;
+    if cokret_sdk::InviteId::new(invite_id.to_owned()).is_err() {
+        return Err("ck.invite.create invite_id must be ck:invite:<uuidv7>");
+    }
     let target = operation
         .payload
         .get("invite_delivery_target")
@@ -1039,6 +1048,42 @@ fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static 
         .ok_or("introduction_evidence_digest is required")?;
     if cokret_sdk::Hash::new(digest.to_owned()).is_err() {
         return Err("introduction_evidence_digest must be a hash");
+    }
+    validate_operation_schema_from_sdk_artifact(kinds::CK_INVITE_CREATE, operation)?;
+    Ok(())
+}
+
+fn validate_invite_create_known_fields(operation: &Operation) -> Result<(), &'static str> {
+    let object = operation
+        .payload
+        .as_object()
+        .ok_or("ck.invite.create payload must be an object")?;
+    for field in object.keys() {
+        if field.starts_with("x_") {
+            continue;
+        }
+        match field.as_str() {
+            "invite_id"
+            | "invitee"
+            | "invite_delivery_target"
+            | "introduction_evidence_digest"
+            | "expires_at" => {}
+            "inviter" => {
+                return Err(
+                    "ck.invite.create payload must not carry inviter; use envelope.actor_id",
+                );
+            }
+            "invite_token" => {
+                return Err("ck.invite.create payload must not carry invite_token");
+            }
+            "state" => {
+                return Err("ck.invite.create payload must not carry state");
+            }
+            "role" => {
+                return Err("ck.invite.create payload role must use x_role");
+            }
+            _ => return Err("ck.invite.create payload carries unsupported field"),
+        }
     }
     Ok(())
 }
@@ -3834,6 +3879,85 @@ pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static 
         _ => return Err("unsupported content block type"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod invite_create_schema_tests {
+    use cokret_sdk::Operation;
+    use serde_json::json;
+
+    use super::*;
+
+    fn op(payload: serde_json::Value) -> Operation {
+        Operation::create(
+            cokret_sdk::OperationId::new("ck:operation:01904100-0000-7000-8000-000000000701")
+                .unwrap(),
+            cokret_sdk::RealmId::new("ck:realm:01904100-0000-7000-8000-000000000701".to_owned())
+                .unwrap(),
+            kinds::CK_INVITE_CREATE,
+            payload,
+        )
+    }
+
+    fn invite_payload() -> serde_json::Value {
+        json!({
+            "invite_id": "ck:invite:01904100-0000-7000-8000-000000000701",
+            "invitee": "did:web:bob.example",
+            "invite_delivery_target": {
+                "recipient_service_did": "did:web:local.host",
+                "recipient_service_type": "principal_server"
+            },
+            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "expires_at": "2026-06-14T10:00:00Z"
+        })
+    }
+
+    #[test]
+    fn invite_create_accepts_directed_v1_payload() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let operation = op(invite_payload());
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn invite_create_rejects_legacy_inviter_payload_field() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload["inviter"] = json!("did:web:alice.example");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("ck.invite.create payload must not carry inviter; use envelope.actor_id")
+        );
+    }
+
+    #[test]
+    fn invite_create_requires_invite_id() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload.as_object_mut().unwrap().remove("invite_id");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("ck.invite.create operation requires invite_id")
+        );
+    }
+
+    #[test]
+    fn invite_create_rejects_invalid_invite_id() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload["invite_id"] = json!("ck:invite:01");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("ck.invite.create invite_id must be ck:invite:<uuidv7>")
+        );
+    }
 }
 
 #[cfg(test)]

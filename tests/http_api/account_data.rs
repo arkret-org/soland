@@ -6,6 +6,82 @@
 use super::common::*;
 
 #[tokio::test]
+async fn account_data_accepts_fresh_principal_control_realm() {
+    const FRESH_DID: &str = "did:web:fresh-avatar.example";
+    const FRESH_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000010";
+    const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000010";
+
+    let state = AppState::new(test_config(), Db { pool: None });
+    let fresh = dev_token_for_device(state.clone(), FRESH_DID, FRESH_DEVICE, "Fresh").await;
+    let bob = dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob").await;
+
+    let principal: Value = TestClient::get(format!(
+        "http://server/_soland/self/account/{FRESH_DID}/principal-realm"
+    ))
+    .add_header("authorization", format!("Bearer {fresh}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    let principal_realm = principal["realm_id"].as_str().unwrap();
+    assert!(
+        principal_realm.starts_with("ck:realm:"),
+        "principal realm response: {principal}"
+    );
+
+    let body = serde_json::json!({
+        "theme": "night",
+        "avatar_blob_ref": "ck:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    let put = submit_actor_private_event(
+        state.clone(),
+        &fresh,
+        FRESH_DID,
+        FRESH_DEVICE,
+        principal_realm,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": "client.ui",
+            "owner": FRESH_DID,
+            "body": body.clone(),
+            "updated_at": "2026-06-08T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(
+        put["status"], "accepted",
+        "fresh principal account_data response: {put}"
+    );
+
+    let sync = account_subscribe_frame(
+        state.clone(),
+        Some(&fresh),
+        "catchup=true&set_presence=online",
+    )
+    .await;
+    let entry = account_data_entry(&sync, "client.ui");
+    assert_eq!(entry["content"], body);
+
+    let denied = submit_actor_private_event(
+        state.clone(),
+        &bob,
+        "did:web:bob.example",
+        BOB_DEVICE,
+        principal_realm,
+        "ck.account_data.set",
+        serde_json::json!({
+            "key": "client.ui",
+            "owner": "did:web:bob.example",
+            "body": {"theme": "light"},
+            "updated_at": "2026-06-08T00:01:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(denied["error"]["code"], "capability_denied", "{denied}");
+}
+
+#[tokio::test]
 async fn account_data_realm_remark_round_trip() {
     const ALICE_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     const BOB_DEVICE: &str = "ck:device:01904100-0000-7000-8000-b0b000000001";
