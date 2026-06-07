@@ -1,12 +1,12 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/policy/check`               — evaluate a `SolandPolicyCheckRequestBody`
-//! - `GET    /_soland/self/policies`            — list owner-scoped policies
-//! - `POST   /_soland/self/policies`            — upsert compatibility route
-//! - `GET    /_soland/self/policies/{id}`       — read one policy document
-//! - `PATCH  /_soland/self/policies/{id}`       — update one policy document
-//! - `DELETE /_soland/self/policies/{id}`       — remove one policy document
+//! - `POST   /_cokret/self/policy/check`               â€” evaluate a `SolandPolicyCheckRequestBody`
+//! - `GET    /_soland/self/policies`            â€” list owner-scoped policies
+//! - `POST   /_soland/self/policies`            â€” upsert compatibility route
+//! - `GET    /_soland/self/policies/{id}`       â€” read one policy document
+//! - `PATCH  /_soland/self/policies/{id}`       â€” update one policy document
+//! - `DELETE /_soland/self/policies/{id}`       â€” remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -200,7 +200,7 @@ async fn upsert_policy_document(
     json_ok(policy_document_to_response(&record))
 }
 
-/// Body for `PATCH /_soland/self/policies/{policy_id}` — applies a
+/// Body for `PATCH /_soland/self/policies/{policy_id}` â€” applies a
 /// `ck.schema.patch.v1` field-patch to the existing policy document's
 /// payload (effect / actions / resource / obligations). Behaves as a
 /// shallow set/unset over the payload object: each key in `patch` is
@@ -376,12 +376,15 @@ async fn policy_check(
                 Vec::new(),
             )
         } else {
-            // TODO(policy-default): 默认 allow 是产品级默认,已要求端点认证;是否改 require_review
-            // 待产品决策。
-            ("allow".to_owned(), "ok".to_owned(), None, Vec::new())
+            (
+                "require_review".to_owned(),
+                "review_required".to_owned(),
+                None,
+                Vec::new(),
+            )
         };
 
-    // ── Frontier binding ───────────────────────────────────────────────
+    // â”€â”€ Frontier binding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The decision is pinned to a four-axis frontier so the caller (and
     // any auditor replaying the response) can detect a stale decision
     // once any of the four hashes move. All four hashes are sha256 hex
@@ -434,8 +437,8 @@ async fn policy_check(
         expires_at: binding_expires_at,
     };
 
-    // ── Detached JWS over canonical {decision, reason_code, bound_to,
-    // obligations} ──
+    // â”€â”€ Detached JWS over canonical {decision, reason_code, bound_to,
+    // obligations} â”€â”€
     let to_sign = json!({
         "decision": decision,
         "reason_code": reason_code,

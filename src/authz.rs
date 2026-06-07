@@ -388,14 +388,7 @@ impl AuthzEngine {
         }
 
         if members.iter().any(|m| m == actor) {
-            let member_actions = [
-                "read",
-                "send",
-                "react",
-                "edit_own",
-                "realm.read",
-                "space.read",
-            ];
+            let member_actions = ["ck.flow.read", "ck.message.create"];
             if member_actions.contains(&action) {
                 return AuthzResult {
                     allowed: true,

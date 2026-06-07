@@ -1,13 +1,13 @@
--- Flow / Morph projection state — server-side state-machine for
+-- Flow / Morph projection state â€” server-side state-machine for
 -- ck.flow.* and ck.morph.* lifecycle events. Spec:
--- cokret-spec/spec/v1/zh/models/common-fields.md §5.1 (canonical
+-- cokret-spec/spec/v1/zh/models/common-fields.md Â§5.1 (canonical
 -- state-transition table). soland's reducer maintains this in-memory
 -- (ProjectionState::flows / ProjectionState::morphs) and persists here
 -- for restart durability. Mirror of the projection_space_containers table from the
 -- 20260515000000_space_container_projection migration; key difference is the state
 -- enum:
---   - Flow / Morph: active / archived / deleted / redacted (per spec §5
---     ObjectState row — Flow / Morph carry the redacted state but have
+--   - Flow / Morph: active / archived / redacted (per spec Â§5
+--     ObjectState row â€” Flow / Morph carry the redacted state but have
 --     no dedicated tombstone event; terminal state is reached via
 --     ck.redaction).
 --   - Space-container uses {active, archived, tombstoned} (covered by the prior
@@ -16,7 +16,7 @@
 CREATE TABLE projection_flows (
     flow_id           TEXT PRIMARY KEY,
     realm_id          TEXT NOT NULL,
-    -- CKP-0007: the Circle this Flow is scoped to (`ck:circle:…`), if any.
+    -- CKP-0007: the Circle this Flow is scoped to (`ck:circle:â€¦`), if any.
     -- A message's effective circle-scope is derived from its Flow's
     -- scope_circle_id (spec: scope_circle_id is a Flow field, not a message
     -- field), so it MUST survive restart to keep circle-scoped messages
@@ -27,7 +27,7 @@ CREATE TABLE projection_flows (
     title             TEXT NOT NULL,
     summary           TEXT,
     state             TEXT NOT NULL DEFAULT 'active'
-        CHECK (state IN ('active', 'archived', 'deleted', 'redacted')),
+        CHECK (state IN ('active', 'archived', 'redacted')),
     state_changed_at  TIMESTAMPTZ,
     created_by        TEXT NOT NULL,
     created_at        TIMESTAMPTZ NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE projection_morphs (
     morph_type        TEXT NOT NULL,
     title             TEXT,
     state             TEXT NOT NULL DEFAULT 'active'
-        CHECK (state IN ('active', 'archived', 'deleted', 'redacted')),
+        CHECK (state IN ('active', 'archived', 'redacted')),
     state_changed_at  TIMESTAMPTZ,
     created_by        TEXT NOT NULL,
     created_at        TIMESTAMPTZ NOT NULL,

@@ -1,31 +1,29 @@
-//! G3.S9 — Applet manifest verifier.
+//! G3.S9 â€” Applet manifest verifier.
 //!
 //! `AppletManifest` is a signed envelope an applet developer submits to
 //! soland for registration. The verifier performs four checks:
 //!
-//! 1. **Signature** — Ed25519 over the canonical-JSON serialization of the manifest's body fields
+//! 1. **Signature** â€” Ed25519 over the canonical-JSON serialization of the manifest's body fields
 //!    (everything except `signature`). The verifying key is the one bound to the manifest's
 //!    `signer_did` (resolved via the trusted registry DID's published key for runnable-stub
-//!    purposes — full DID resolver chain integration is a follow-up).
-//! 2. **Trusted signer** — `signer_did` MUST match the `trusted_registry_did` configured for this
+//!    purposes â€” full DID resolver chain integration is a follow-up).
+//! 2. **Trusted signer** â€” `signer_did` MUST match the `trusted_registry_did` configured for this
 //!    verifier call (the cotest scenario uses `mock-applet-registry`'s service DID).
-//! 3. **Schema hash** — the manifest carries a `schema_hash` field pinning the version of
+//! 3. **Schema hash** â€” the manifest carries a `schema_hash` field pinning the version of
 //!    `applet.schema.json` it was generated against. We lazily load the schema, hash it, and reject
-//!    the manifest if the hashes diverge — a basic guard against silently accepting manifests built
+//!    the manifest if the hashes diverge â€” a basic guard against silently accepting manifests built
 //!    against stale schemas.
-//! 4. **Capabilities** — every entry in `requested_capabilities` MUST be in the known registry
+//! 4. **Capabilities** â€” every entry in `requested_capabilities` MUST be in the known registry
 //!    below (`KNOWN_APPLET_CAPABILITIES`).
 //!
 //! Spec anchor: `cokret-spec/spec/v1/zh/extensions/applet-integration.md`
-//! §3 (manifest shape) + `extensions/applet-schema.md` (JSON schema).
+//! Â§3 (manifest shape) + `extensions/applet-schema.md` (JSON schema).
 //!
 //! TODO(G3.S9-followup): resolve `signer_did` through the live
 //! `CompositeDidResolver` rather than the in-test ed25519 key passed
 //! alongside the manifest; honour `applet_registration` audit log
-//! entries; verify `manifest.signature` over the canonical-JSON form
-//! produced by the SDK's `canonical_json` helper instead of
-//! `serde_json::to_vec` (which is deterministic for object key order
-//! but not strictly the spec canonical form).
+//! entries. Signature bytes are already produced with the SDK canonical
+//! JSON helper.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -44,18 +42,19 @@ use crate::result::{JsonResult, json_ok};
 
 /// Registered applet capabilities recognised by the verifier. Anything
 /// not in this set fails closed with `unknown_capability`. The list is
-/// kept narrow on purpose — the spec defers the full capability lattice
+/// kept narrow on purpose â€” the spec defers the full capability lattice
 /// to a follow-up.
 pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
-    "realm:portal",
-    "message:write",
-    "message:read",
-    "actor:provision-ghost",
-    "actor:provision-bot",
+    "ck.flow.create",
+    "ck.flow.read",
+    "ck.flow.update",
+    "ck.message.create",
+    "ck.morph.read",
+    "ck.morph.update",
 ];
 
 /// On-wire applet manifest envelope. The bot/ghost actor registration
-/// flow in `applet-integration.md` §4 takes one of these, verifies it,
+/// flow in `applet-integration.md` Â§4 takes one of these, verifies it,
 /// and (if accepted) mints a `bot_actor_did` bound to the manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletManifest {
@@ -81,7 +80,7 @@ pub struct AppletManifest {
     pub metadata: Value,
 }
 
-/// Verified manifest — same fields as the input plus a recompute of the
+/// Verified manifest â€” same fields as the input plus a recompute of the
 /// schema-hash for the audit trail.
 #[derive(Clone, Debug, Serialize)]
 pub struct VerifiedAppletManifest {
@@ -185,10 +184,8 @@ pub fn verify_manifest(
     })
 }
 
-/// Bytes the signature is computed over. Sort of canonical-JSON — relies
-/// on `serde_json`'s deterministic key ordering for `BTreeMap`. The full
-/// spec canonical form lives in the SDK's `canonical_json` helper; the
-/// follow-up TODO at the top of this module tracks the swap.
+/// Bytes the signature is computed over: SDK canonical JSON for the manifest
+/// body, excluding `signature`.
 pub fn manifest_signing_bytes(manifest: &AppletManifest) -> Vec<u8> {
     let body = json!({
         "id": manifest.id,
@@ -199,13 +196,13 @@ pub fn manifest_signing_bytes(manifest: &AppletManifest) -> Vec<u8> {
         "schema_hash": manifest.schema_hash,
         "metadata": manifest.metadata,
     });
-    serde_json::to_vec(&body).expect("json serializes")
+    cokret_sdk::canonical::canonical_json_bytes(&body).expect("manifest signing body canonicalizes")
 }
 
 /// sha256 hex of the on-disk `applet.schema.json` referenced in
 /// `extensions/applet-schema.md`. Loaded lazily; empty string when the
 /// repo layout doesn't include the schema file (e.g. when soland is
-/// vendored standalone) — in that case the schema-hash check is
+/// vendored standalone) â€” in that case the schema-hash check is
 /// skipped (see `verify_manifest`).
 pub fn current_applet_schema_hash() -> String {
     static CACHE: OnceLock<String> = OnceLock::new();
@@ -254,7 +251,7 @@ fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
-// ── HTTP surface ──────────────────────────────────────────────────────
+// â”€â”€ HTTP surface â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub(super) fn router() -> Router {
     Router::with_path("applets/manifest/verify").post(verify_endpoint)
@@ -315,7 +312,7 @@ mod tests {
             signer_did: signer_did.to_owned(),
             signature: String::new(),
             signer_public_key: pubkey_b64,
-            requested_capabilities: vec!["realm:portal".to_owned(), "message:write".to_owned()],
+            requested_capabilities: vec!["ck.message.create".to_owned(), "ck.flow.read".to_owned()],
             schema_hash: current_applet_schema_hash(),
             metadata: json!({"namespace": "bridge.demo"}),
         };
@@ -347,7 +344,7 @@ mod tests {
         manifest
             .requested_capabilities
             .push("not:a:capability".to_owned());
-        // Re-sign so the signature is valid against the new body — we
+        // Re-sign so the signature is valid against the new body â€” we
         // want to isolate the capability check, not let the signature
         // check fire first.
         let body = manifest_signing_bytes(&manifest);
@@ -376,6 +373,10 @@ mod tests {
         let (manifest, _) = build_manifest("did:web:registry.example");
         let verified = verify_manifest(&manifest, "did:web:registry.example").unwrap();
         assert_eq!(verified.signer_did, "did:web:registry.example");
-        assert!(verified.capabilities.contains(&"message:write".to_owned()));
+        assert!(
+            verified
+                .capabilities
+                .contains(&"ck.message.create".to_owned())
+        );
     }
 }

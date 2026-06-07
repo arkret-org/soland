@@ -904,10 +904,13 @@ async fn erase_account(
         "storage_boundary": "account_private_store",
         "completed_at": completed_at_wire.clone(),
     });
-    let retained_stub_digest = format!(
-        "sha256:{}",
-        sha256_hex(retained_stub.to_string().as_bytes())
-    );
+    let retained_stub_bytes =
+        cokret_sdk::canonical::canonical_json_bytes(&retained_stub).map_err(|error| {
+            AppError::internal(format!(
+                "erasure retained stub canonicalization failed: {error}"
+            ))
+        })?;
+    let retained_stub_digest = format!("sha256:{}", sha256_hex(&retained_stub_bytes));
     let proof_payload = json!({
         "receipt_id_seed": actor.clone(),
         "retained_stub_digest": retained_stub_digest.clone(),

@@ -1240,12 +1240,7 @@ fn ensure_formal_ghost_provision_allowed(
                 .with_wire_code("applet_effective_scope_mismatch"),
         );
     }
-    if !record.allow_ghost_actors
-        && !record
-            .capabilities
-            .iter()
-            .any(|capability| capability_allows_ghost_actor(capability))
-    {
+    if !record.allow_ghost_actors {
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
         ));
@@ -1483,10 +1478,6 @@ async fn register_verified_applet(
     let now = chrono::Utc::now();
     let bot_actor_did = bot_actor_did_for(&namespace, &applet_id);
     let portal_realm_id = portal_realm_id_for(&namespace, &applet_id);
-    let allow_ghost_actors = verified
-        .capabilities
-        .iter()
-        .any(|capability| capability_allows_ghost_actor(capability));
     let record = AppletBridgeRecord {
         applet_id,
         namespace,
@@ -1498,7 +1489,7 @@ async fn register_verified_applet(
         manifest,
         package: None,
         namespaces: None,
-        allow_ghost_actors,
+        allow_ghost_actors: false,
         status: "registered".to_owned(),
         registered_at: now,
         revoked_at: None,
@@ -1552,12 +1543,7 @@ fn provision_ghost(
         .find(|record| record.applet_id == applet_id)
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     ensure_not_revoked(record)?;
-    if !record.allow_ghost_actors
-        && !record
-            .capabilities
-            .iter()
-            .any(|capability| capability_allows_ghost_actor(capability))
-    {
+    if !record.allow_ghost_actors {
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
         ));
@@ -2059,21 +2045,10 @@ fn allow_ghost_actors_from_package(package: &AppletPackage) -> bool {
         .get("allow_ghost_actors")
         .and_then(Value::as_bool)
         .unwrap_or(false)
-        || package
-            .requested_scopes
-            .iter()
-            .any(|capability| capability_allows_ghost_actor(capability))
 }
 
 fn capability_allows_message_create(capability: &str) -> bool {
-    matches!(capability, "ck.message.create" | "message:write")
-}
-
-fn capability_allows_ghost_actor(capability: &str) -> bool {
-    matches!(
-        capability,
-        "ck.applet.ghost.provision" | "actor:provision-ghost"
-    )
+    capability == "ck.message.create"
 }
 
 fn extension_actor_did_document(
