@@ -485,6 +485,9 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
         return false;
     };
+    if realm_id == crate::routing::identity::recovery::principal_control_realm_for_did(actor) {
+        return true;
+    }
     let realms = state.realms.lock().expect("realms lock");
     match realms.get(&realm_id_typed) {
         None => {

@@ -75,6 +75,63 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
 }
 
 #[tokio::test]
+async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
+    let avatar_sha256 = format!("{:x}", Sha256::digest(&avatar_bytes));
+    let blob_ref = format!("ck:blob:sha256:{avatar_sha256}");
+    let storage_key = state.object_storage.object_key_for_sha256(&avatar_sha256);
+    state
+        .object_storage
+        .put(&storage_key, avatar_bytes.clone())
+        .await
+        .unwrap();
+    assert!(
+        state
+            .persistence
+            .blobs()
+            .get(&blob_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let mut response = TestClient::get(format!(
+        "http://server/_cokret/self/blob/get?blob_ref={blob_ref}&purpose=profile_avatar"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(response.status_code.unwrap().as_u16(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "image/png"
+    );
+    assert_eq!(
+        response.take_bytes(None).await.unwrap().to_vec(),
+        avatar_bytes
+    );
+
+    let recovered = state
+        .persistence
+        .blobs()
+        .get(&blob_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.sha256, avatar_sha256);
+    assert_eq!(recovered.storage_key, storage_key);
+    assert_eq!(recovered.media_type, "image/png");
+    assert_eq!(recovered.realm_id, None);
+}
+
+#[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
