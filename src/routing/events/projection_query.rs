@@ -31,9 +31,9 @@
 //! debugging UIs.
 
 use cokret_sdk::{
-    Did, FlowId, MorphId, ProjectionFlowList, ProjectionFlowRow, ProjectionMorphList,
-    ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList, ProjectionSpaceRow,
-    ProjectionSpaceState, RealmId, SpaceId,
+    Did, FlowId, MorphId, ProjectionAssignedToRelation, ProjectionFlowList, ProjectionFlowRow,
+    ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
+    ProjectionSpaceRow, ProjectionSpaceState, RealmId, RelationId, SpaceId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -163,24 +163,35 @@ fn flow_position_fields(
     Ok((board_space_id, list_space_id, rank))
 }
 
-fn flow_assigned_actor_ids(
+fn flow_assigned_to_relations(
     projection: &ProjectionState,
     flow_id: &str,
-) -> Result<Vec<Did>, AppError> {
-    let mut actor_ids = projection
+) -> Result<Vec<ProjectionAssignedToRelation>, AppError> {
+    let mut relation_refs = projection
         .relations
         .values()
         .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "assigned_to")
         .filter(|relation| relation.from_ref.as_deref() == Some(flow_id))
-        .filter_map(|relation| relation.to_ref.as_deref())
-        .map(ToOwned::to_owned)
+        .filter_map(|relation| {
+            relation
+                .to_ref
+                .as_deref()
+                .map(|actor_id| (actor_id.to_owned(), relation.relation_id.clone()))
+        })
         .collect::<Vec<_>>();
-    actor_ids.sort();
-    actor_ids.dedup();
-    actor_ids
+    relation_refs.sort();
+    relation_refs
         .into_iter()
-        .map(|actor_id| parse_projection_id::<Did>(&actor_id, "assigned_actor_ids"))
+        .map(|(actor_id, relation_id)| {
+            Ok(ProjectionAssignedToRelation {
+                relation_id: parse_projection_id::<RelationId>(
+                    &relation_id,
+                    "assigned_to_relations.relation_id",
+                )?,
+                actor_id: parse_projection_id::<Did>(&actor_id, "assigned_to_relations.actor_id")?,
+            })
+        })
         .collect()
 }
 
@@ -451,7 +462,13 @@ async fn list_flow_projections(
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
             let (board_space_id, list_space_id, rank) = flow_position_fields(&proj, &f.flow_id)?;
-            let assigned_actor_ids = flow_assigned_actor_ids(&proj, &f.flow_id)?;
+            let assigned_to_relations = flow_assigned_to_relations(&proj, &f.flow_id)?;
+            let mut assigned_actor_ids = assigned_to_relations
+                .iter()
+                .map(|relation| relation.actor_id.clone())
+                .collect::<Vec<_>>();
+            assigned_actor_ids.sort();
+            assigned_actor_ids.dedup();
             Ok(ProjectionFlowRow {
                 flow_id: parse_projection_id::<FlowId>(&f.flow_id, "flow_id")?,
                 realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
@@ -463,6 +480,7 @@ async fn list_flow_projections(
                 list_space_id,
                 rank,
                 assigned_actor_ids,
+                assigned_to_relations,
                 created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
                 updated_at: f.updated_at,
