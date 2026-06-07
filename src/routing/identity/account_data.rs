@@ -68,6 +68,10 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
+        data_type: cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+        controller_private: true,
+    },
+    AccountDataTypeSpec {
         data_type: cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
@@ -79,6 +83,7 @@ const PRIVATE_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
     cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
     cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+    cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
     cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
 ];
 
@@ -129,6 +134,15 @@ fn validate_private_account_data_content(data_type: &str, content: &Value) -> Re
         "content",
         "blind_tokens",
         "shard_key",
+        "transfer_id",
+        "blob_ref",
+        "filename",
+        "media_type",
+        "plaintext_size_bytes",
+        "content_digest",
+        "recipient_device_ids",
+        "content_key",
+        "local_path",
     ] {
         if object.contains_key(forbidden) {
             return Err(AppError::invalid_param(format!(
@@ -442,6 +456,12 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            validate_registered_account_data_key(
+                "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            )
+            .is_ok()
+        );
         let err = validate_registered_account_data_key(
             "ck.draft.v1:message:ck:message:01904100-0000-7000-8000-000000000001:main",
         )
@@ -466,5 +486,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("body"));
+
+        let transfer_key = "ck.file_transfer.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let err = validate_private_account_data_content(
+            transfer_key,
+            &json!({"filename": "private.pdf", "encrypted_payload": {"ciphertext": "opaque"}}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("filename"));
     }
 }

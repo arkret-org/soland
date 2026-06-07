@@ -1527,6 +1527,15 @@ fn validate_account_data_set_payload(operation: &Operation) -> Result<(), &'stat
         "content",
         "blind_tokens",
         "shard_key",
+        "transfer_id",
+        "blob_ref",
+        "filename",
+        "media_type",
+        "plaintext_size_bytes",
+        "content_digest",
+        "recipient_device_ids",
+        "content_key",
+        "local_path",
     ] {
         if operation.payload.get(forbidden).is_some() {
             return Err("account_data.set private payload leaks plaintext field");
@@ -1548,6 +1557,7 @@ fn private_account_data_key_prefix(key: &str) -> Option<&'static str> {
         cokret_sdk::ACCOUNT_DATA_TYPE_SNOOZE,
         cokret_sdk::ACCOUNT_DATA_TYPE_SAVED,
         cokret_sdk::ACCOUNT_DATA_TYPE_DRAFT,
+        cokret_sdk::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
         cokret_sdk::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
     ]
     .into_iter()

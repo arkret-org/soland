@@ -23,6 +23,58 @@ fn account_data_entry<'a>(sync: &'a Value, data_type: &str) -> Option<&'a Value>
 }
 
 #[tokio::test]
+async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let file_transfer_bytes = b"file-transfer-ciphertext";
+    let file_transfer_digest = format!("sha256:{:x}", Sha256::digest(file_transfer_bytes));
+    let file_transfer_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "text/plain", true)
+        .add_header("x-cokret-filename", "private.txt", true)
+        .add_header("x-cokret-blob-encrypted", "true", true)
+        .add_header("x-cokret-blob-purpose", "file_transfer", true)
+        .add_header(
+            "x-cokret-content-digest",
+            file_transfer_digest.clone(),
+            true,
+        )
+        .body(file_transfer_bytes.as_slice())
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(file_transfer_blob["media_type"], "application/octet-stream");
+    assert_eq!(file_transfer_blob["content_digest"], file_transfer_digest);
+    assert!(
+        file_transfer_blob["upload_receipt"]
+            .get("filename")
+            .is_none()
+    );
+    assert_eq!(
+        file_transfer_blob["upload_receipt"]["purpose"],
+        "file_transfer"
+    );
+    assert_eq!(
+        file_transfer_blob["upload_receipt"]["encrypted_attachment"]["scheme"],
+        "ck.file_transfer.encrypted_blob.v1"
+    );
+
+    let file_transfer_presign = TestClient::post("http://server/_cokret/self/blob/presign")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "blob_ref": file_transfer_blob["blob_ref"].as_str().unwrap(),
+            "purpose": "file_transfer"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(file_transfer_presign.status_code.unwrap().as_u16(), 403);
+}
+
+#[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

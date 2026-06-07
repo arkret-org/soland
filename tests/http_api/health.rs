@@ -101,6 +101,13 @@ async fn health_and_describe_work() {
             .any(|profile| profile == "ck.profile.mimi_interop.v1")
     );
     assert!(
+        describe["supported_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile == "ck.profile.file_transfer.v1")
+    );
+    assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()

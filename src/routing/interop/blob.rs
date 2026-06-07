@@ -118,7 +118,14 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let encryption = match encrypted_attachment_metadata(req) {
+    let upload_purpose = match blob_upload_purpose(req) {
+        Ok(purpose) => purpose,
+        Err(message) => {
+            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            return;
+        }
+    };
+    let mut encryption = match encrypted_attachment_metadata(req) {
         Ok(encryption) => encryption,
         Err(message) => {
             render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
@@ -132,13 +139,19 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     };
+    if encrypted_flag == Some(true)
+        && encryption.is_none()
+        && upload_purpose.as_deref() == Some("file_transfer")
+    {
+        encryption = Some(file_transfer_blob_encryption_metadata());
+    }
     let encrypted = encryption.is_some() || encrypted_flag.unwrap_or(false);
     if encrypted_flag == Some(true) && encryption.is_none() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "encrypted blob uploads require x-cokret-attachment-envelope",
+            "encrypted blob uploads require x-cokret-attachment-envelope or x-cokret-blob-purpose=file_transfer",
         );
         return;
     }
@@ -252,6 +265,9 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         "realm_id": realm_id,
         "content_digest": content_digest.clone(),
     });
+    if let Some(purpose) = upload_purpose {
+        upload_receipt["purpose"] = json!(purpose);
+    }
     if !encrypted && let Some(filename) = filename {
         upload_receipt["filename"] = json!(filename);
     }
@@ -668,6 +684,34 @@ fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Val
         serde_json::from_str(value).map_err(|_| "attachment envelope must be JSON")?;
     validate_encrypted_attachment_metadata(&metadata)?;
     Ok(Some(metadata))
+}
+
+fn blob_upload_purpose(req: &Request) -> Result<Option<String>, &'static str> {
+    for header in ["x-cokret-blob-purpose", "x-cokret-purpose"] {
+        let Some(value) = req
+            .headers()
+            .get(header)
+            .and_then(|value| value.to_str().ok())
+        else {
+            continue;
+        };
+        let purpose = value.trim();
+        if purpose.is_empty() {
+            return Ok(None);
+        }
+        if !is_valid_blob_purpose(purpose) {
+            return Err("invalid blob upload purpose");
+        }
+        return Ok(Some(purpose.to_owned()));
+    }
+    Ok(None)
+}
+
+fn file_transfer_blob_encryption_metadata() -> Value {
+    json!({
+        "scheme": "ck.file_transfer.encrypted_blob.v1",
+        "purpose": "file_transfer",
+    })
 }
 
 fn validate_encrypted_attachment_metadata(

@@ -1825,6 +1825,7 @@ pub fn describe(
                 "ck.profile.principal_server.v1".to_owned(),
                 "ck.profile.principal_server_events_api.v1".to_owned(),
                 "ck.profile.mimi_interop.v1".to_owned(),
+                "ck.profile.file_transfer.v1".to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
@@ -1880,6 +1881,7 @@ pub fn describe(
             "ck.feature.soland.webrtc.signaling".to_owned(),
             "ck.feature.soland.blob.upload".to_owned(),
             "ck.feature.soland.blob.authenticated_download".to_owned(),
+            "ck.feature.soland.file_transfer".to_owned(),
             "ck.feature.soland.blob.presigned_download.local_direct_serve".to_owned(),
             "ck.feature.soland.blob.upload_policy".to_owned(),
             "ck.feature.soland.federation.transaction_idempotency".to_owned(),
