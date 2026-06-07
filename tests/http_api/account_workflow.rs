@@ -6,6 +6,31 @@
 use super::common::*;
 
 #[tokio::test]
+async fn account_viewer_returns_device_summaries() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(viewer["principal_id"], "did:web:alice.example");
+    assert_eq!(viewer["state"], "active");
+    let devices = viewer["devices"].as_array().expect("viewer devices array");
+    assert_eq!(devices.len(), 1);
+    assert_eq!(
+        devices[0]["device_id"],
+        "ck:device:01904100-0000-7000-8000-a11ce0000001"
+    );
+    assert_eq!(devices[0]["display_name"], "Alice Desktop");
+    assert_eq!(devices[0]["status"], "active");
+}
+
+#[tokio::test]
 async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;

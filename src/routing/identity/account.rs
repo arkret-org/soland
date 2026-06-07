@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
-use cokret_sdk::{Did, ErrorCode, EventId, FlowId, RealmId};
+use cokret_sdk::{
+    AccountDeviceSummary, AccountView, DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
+};
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -73,6 +75,7 @@ use crate::{JsonResult, json_ok};
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
+        .push(Router::with_path("account").push(Router::with_path("viewer").get(account_viewer)))
         .push(contact_routes())
         .push(direct_conversation_routes())
 }
@@ -109,6 +112,42 @@ fn contact_routes() -> Router {
 fn direct_conversation_routes() -> Router {
     Router::with_path("direct-conversations")
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
+}
+
+#[endpoint(
+    operation_id = "ck.self.account.viewer",
+    tags("account"),
+    summary = "Get the authenticated principal's account viewer projection",
+    status_codes(200, 401, 404, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.account.viewer"))]
+async fn account_viewer(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let account = state
+        .persistence
+        .accounts()
+        .get(&session.actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    let devices = account_device_summaries(state, &session.actor).await?;
+    let principal_id = Did::new(account.did.clone())
+        .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
+
+    json_ok(AccountView {
+        principal_id,
+        state: state.account_lifecycle_state(&account.did),
+        devices,
+        primary_handle_claim: None,
+        primary_handle_claim_ref: None,
+        handle_claim_digests: Vec::new(),
+        profile: None,
+    })
 }
 
 #[endpoint(
@@ -2062,6 +2101,46 @@ fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRe
         state: lifecycle_state,
         created_at: account.created_at,
     }
+}
+
+async fn account_device_summaries(
+    state: &AppState,
+    actor: &str,
+) -> Result<Vec<AccountDeviceSummary>, AppError> {
+    let devices = state
+        .persistence
+        .devices()
+        .list_for_actor(actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    devices.into_iter().map(account_device_summary).collect()
+}
+
+fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDeviceSummary, AppError> {
+    let device_id = DeviceId::new(device.device_id.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "stored device_id `{}` is invalid: {error}",
+            device.device_id
+        ))
+    })?;
+    let display_name = device
+        .display_name
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty());
+    let status = if device.revoked_at.is_some() {
+        "revoked"
+    } else {
+        "active"
+    };
+    Ok(AccountDeviceSummary {
+        device_id,
+        status: status.to_owned(),
+        display_name,
+        authorized_event_ref: None,
+        authorized_at: Some(device.created_at),
+        last_seen_at: None,
+        revoked_at: device.revoked_at,
+    })
 }
 
 fn contact_request_scope(body: &SolandContactRequestRequestBody) -> Result<String, AppError> {
