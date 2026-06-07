@@ -1019,7 +1019,8 @@ fn validate_operation_payload_against_sdk_artifact(
 }
 
 fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
-    validate_invite_create_known_fields(operation)?;
+    let wire_payload = invite_create_wire_payload(&operation.payload);
+    validate_invite_create_known_fields(&wire_payload)?;
     let invite_id = operation
         .payload
         .get("invite_id")
@@ -1061,13 +1062,23 @@ fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static 
     if cokret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
         return Err("expires_at must be a canonical timestamp");
     }
-    validate_operation_schema_from_sdk_artifact(kinds::CK_INVITE_CREATE, operation)?;
+    event_payload_validator_catalog()
+        .validate_payload(kinds::CK_INVITE_CREATE, &wire_payload)
+        .map_err(|_| "operation payload violates SDK artifact schema")?;
     Ok(())
 }
 
-fn validate_invite_create_known_fields(operation: &Operation) -> Result<(), &'static str> {
-    let object = operation
-        .payload
+fn invite_create_wire_payload(payload: &Value) -> Value {
+    let mut wire_payload = payload.clone();
+    if let Some(object) = wire_payload.as_object_mut() {
+        object.remove("event_id");
+        object.remove("sender");
+    }
+    wire_payload
+}
+
+fn validate_invite_create_known_fields(payload: &Value) -> Result<(), &'static str> {
+    let object = payload
         .as_object()
         .ok_or("ck.invite.create payload must be an object")?;
     for field in object.keys() {
@@ -3928,6 +3939,17 @@ mod invite_create_schema_tests {
     fn invite_create_accepts_directed_v1_payload() {
         let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
         let operation = op(invite_payload());
+
+        assert!(validate_operation_schema(&operation, schema).is_ok());
+    }
+
+    #[test]
+    fn invite_create_accepts_projection_internal_fields() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload["event_id"] = json!("ck:event:01904100-0000-7000-8000-000000000701");
+        payload["sender"] = json!("did:web:alice.example");
+        let operation = op(payload);
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
