@@ -139,6 +139,40 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .is_some_and(|digest| digest.starts_with("sha256:"))
     );
 
+    let describe: Value = TestClient::get("http://server/_cokret/describe")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        describe["supported_operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation == "ck.find.directory.list_handles_for_subject")
+    );
+
+    let subject_handles: Value =
+        TestClient::post("http://server/_cokret/find/directory/list-handles-for-subject")
+            .json(&serde_json::json!({
+                "subject": "did:web:alice.example",
+                "intent": "display",
+                "limit": 10
+            }))
+            .send(&app())
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(subject_handles["subject"], "did:web:alice.example");
+    assert_eq!(subject_handles["primary_handle"], "alice:soland.local");
+    assert_eq!(subject_handles["has_more"], false);
+    let claims = subject_handles["claims"].as_array().unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0]["subject"], "did:web:alice.example");
+    assert_eq!(claims[0]["handle"], "alice:soland.local");
+
     let invalid = TestClient::post("http://server/_cokret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
         .send(&app())
@@ -253,6 +287,10 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         ("search-actors", serde_json::json!({"query": "alice"})),
         ("search-users", serde_json::json!({"query": "alice"})),
         ("resolve-handle", serde_json::json!({"handle": "alice"})),
+        (
+            "list-handles-for-subject",
+            serde_json::json!({"subject": "did:web:alice.example"}),
+        ),
         (
             "private-contact-discovery",
             serde_json::json!({"contacts": [{"handle": "@alice"}]}),

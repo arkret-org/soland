@@ -502,6 +502,28 @@ pub struct ResolveHandleRequest {
     pub proofs: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct DirectoryListHandlesForSubjectRequest {
+    /// Holder / principal DID reverse-lookup key. This is not a Realm actor_id.
+    pub subject: String,
+    #[serde(default)]
+    pub realm_id: Option<String>,
+    #[serde(default)]
+    pub intent: Option<String>,
+    #[serde(default)]
+    pub requester: Option<String>,
+    #[serde(default)]
+    pub proof_challenge: Option<String>,
+    #[serde(default)]
+    pub proofs: Vec<Value>,
+    #[serde(default)]
+    pub as_of: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct DirectoryValueSearchResponse {
     pub results: Vec<Value>,
@@ -611,6 +633,18 @@ pub struct ResolveHandleResponse {
     pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DirectorySubjectHandleListResponse {
+    pub subject: String,
+    pub claims: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_handle: Option<String>,
+    pub as_of: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1572,6 +1606,7 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "ck.find.directory.search_realms",
     "ck.find.directory.resolve_realm",
     "ck.find.directory.resolve_target",
+    "ck.find.directory.list_handles_for_subject",
     "ck.self.blob.upload",
     "ck.self.blob.head",
     "ck.self.blob.get",

@@ -677,6 +677,13 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "resolve realm",
     ),
     (
+        "/_cokret/find/directory/list-handles-for-subject",
+        PathItemType::Post,
+        "directory",
+        "ck.find.directory.list_handles_for_subject",
+        "list handles for subject",
+    ),
+    (
         "/_soland/admin/actors",
         PathItemType::Get,
         "admin",

@@ -11,13 +11,14 @@
 //! - `POST /_cokret/find/directory/search-actors`
 //! - `POST /_cokret/find/directory/search-users`        — same as search-actors via body `q`
 //! - `POST /_cokret/find/directory/resolve-handle`
+//! - `POST /_cokret/find/directory/list-handles-for-subject`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
 //! provider lands. They are gated to development mode so production
 //! deployments do not expose built-in identities.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -43,7 +44,8 @@ use crate::routing::admin::audit::append_audit_log;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
 use crate::wire::{
-    DirectoryDescribeOutcome, DirectoryValueSearchResponse, RealmJoinCandidate,
+    DirectoryDescribeOutcome, DirectoryListHandlesForSubjectRequest,
+    DirectorySubjectHandleListResponse, DirectoryValueSearchResponse, RealmJoinCandidate,
     RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
     RealmJoinMethod, ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
     ResolveOrganizationResponse, ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest,
@@ -85,6 +87,9 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/search-users").post(search_users))
         .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
         .push(
+            Router::with_path("directory/list-handles-for-subject").post(list_handles_for_subject),
+        )
+        .push(
             Router::with_path("directory/private-contact-discovery")
                 .post(private_contact_discovery),
         )
@@ -103,6 +108,9 @@ pub(crate) fn legacy_router() -> Router {
         .push(Router::with_path("directory/search-actors").post(search_actors))
         .push(Router::with_path("directory/search-users").post(search_users))
         .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
+        .push(
+            Router::with_path("directory/list-handles-for-subject").post(list_handles_for_subject),
+        )
         .push(
             Router::with_path("directory/private-contact-discovery")
                 .post(private_contact_discovery),
@@ -1200,7 +1208,8 @@ async fn resolve_handle(
                 .or(body.requester)
                 .unwrap_or_else(|| state.config.service_did.clone());
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
-            let handle_claim = signed_handle_claim(state, &lookup.canonical, &did, &audience)?;
+            let handle_claim =
+                signed_handle_claim(state, &lookup.canonical, &did, &audience, true)?;
             // HDLREN-2 — surface the canonical `<localpart>:<domain>` handle
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
@@ -1235,6 +1244,7 @@ fn signed_handle_claim(
     handle: &str,
     did: &str,
     audience: &str,
+    cache: bool,
 ) -> Result<SolandHandleClaim, AppError> {
     // HC-SOL-2 (R3.2) — never issue a claim whose `subject` is not a
     // holder/principal DID (e.g. a `ck:actor:` / `ck:account:` typed id).
@@ -1346,7 +1356,7 @@ fn signed_handle_claim(
             jws: Some(signature.jws),
         }],
     };
-    if let Ok(envelope) = serde_json::to_value(&claim) {
+    if cache && let Ok(envelope) = serde_json::to_value(&claim) {
         let _ = state
             .member_identity
             .lock()
@@ -1354,6 +1364,287 @@ fn signed_handle_claim(
             .upsert_handle_claim_envelope(envelope);
     }
     Ok(claim)
+}
+
+#[endpoint(
+    operation_id = "ck.find.directory.list_handles_for_subject",
+    tags("directory"),
+    summary = "List current context-visible handle claims for a known subject DID"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.list_handles_for_subject"))]
+async fn list_handles_for_subject(
+    body: JsonBody<DirectoryListHandlesForSubjectRequest>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DirectorySubjectHandleListResponse> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    require_demo_directory_provider(state)?;
+    let body = body.into_inner();
+    let subject = body.subject.trim().to_owned();
+    if subject.is_empty() {
+        return Err(AppError::missing_param("subject is required"));
+    }
+    Did::new(subject.clone())
+        .map_err(|err| AppError::invalid_param(format!("invalid subject DID: {err}")))?;
+    if let Err(rejection) = crate::wire_validators::handle_claim_subject::validate_subject(
+        &json!({ "subject": subject.as_str() }),
+    ) {
+        return Err(AppError::new(
+            crate::error::ErrorCode::SchemaViolation,
+            rejection.message,
+        ));
+    }
+
+    let limit = checked_limit(body.limit)?;
+    let start = list_handles_cursor_start(body.cursor.as_deref())?;
+    let requested_as_of = body.as_of.clone();
+    let session = authenticated_session(state, req).await.ok();
+
+    let mut generated_claim = None;
+    for actor in demo_actors(state).await {
+        if actor.get("did").and_then(Value::as_str) != Some(subject.as_str()) {
+            continue;
+        }
+        if !actor_visible_to(state, &actor, session.as_ref()).await {
+            continue;
+        }
+        if let Some(handle) = actor.get("handle").and_then(Value::as_str) {
+            let audience = body
+                .realm_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    body.requester
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or(state.config.service_did.as_str());
+            generated_claim = Some(signed_handle_claim(
+                state, handle, &subject, audience, false,
+            )?);
+        }
+        break;
+    }
+
+    let cached_claims = state
+        .member_identity
+        .lock()
+        .expect("member_identity lock")
+        .handle_claims_for_subject(&subject);
+    let as_of = requested_as_of.unwrap_or_else(now);
+    let mut claims = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(claim) = generated_claim {
+        let claim = serde_json::to_value(claim).map_err(|err| {
+            AppError::internal(format!("handle claim serialization failed: {err}"))
+        })?;
+        push_visible_subject_handle_claim(
+            state,
+            &body,
+            &subject,
+            as_of,
+            claim,
+            &mut claims,
+            &mut seen,
+        );
+    }
+    for claim in cached_claims {
+        push_visible_subject_handle_claim(
+            state,
+            &body,
+            &subject,
+            as_of,
+            claim.envelope,
+            &mut claims,
+            &mut seen,
+        );
+    }
+    claims.sort_by(|left, right| {
+        subject_handle_claim_sort_key(left).cmp(&subject_handle_claim_sort_key(right))
+    });
+
+    let total = claims.len();
+    let page: Vec<Value> = claims.into_iter().skip(start).take(limit).collect();
+    let consumed = start.saturating_add(page.len());
+    let has_more = consumed < total;
+    let next_cursor = has_more.then(|| consumed.to_string());
+    let primary_handle = primary_handle_from_subject_claims(&page);
+    json_ok(DirectorySubjectHandleListResponse {
+        subject,
+        claims: page,
+        primary_handle,
+        as_of,
+        next_cursor,
+        has_more,
+    })
+}
+
+fn list_handles_cursor_start(cursor: Option<&str>) -> Result<usize, AppError> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(0);
+    };
+    cursor
+        .parse::<usize>()
+        .map_err(|_| AppError::invalid_param("cursor must be an unsigned integer offset"))
+}
+
+fn push_visible_subject_handle_claim(
+    state: &AppState,
+    request: &DirectoryListHandlesForSubjectRequest,
+    subject: &str,
+    as_of: DateTime<Utc>,
+    claim: Value,
+    claims: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+) {
+    if !subject_handle_claim_visible(state, request, subject, as_of, &claim) {
+        return;
+    }
+    let Some(key) = subject_handle_claim_dedupe_key(&claim) else {
+        return;
+    };
+    if seen.insert(key) {
+        claims.push(claim);
+    }
+}
+
+fn subject_handle_claim_visible(
+    state: &AppState,
+    request: &DirectoryListHandlesForSubjectRequest,
+    subject: &str,
+    as_of: DateTime<Utc>,
+    claim: &Value,
+) -> bool {
+    if claim.get("subject").and_then(Value::as_str) != Some(subject) {
+        return false;
+    }
+    if subject_handle_claim_handle(claim).is_none() {
+        return false;
+    }
+    if claim.get("binding_state").and_then(Value::as_str) != Some("verified") {
+        return false;
+    }
+    if claim
+        .get("revoked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || claim.get("revoked_at").is_some()
+    {
+        return false;
+    }
+    if claim
+        .get("visibility")
+        .and_then(Value::as_str)
+        .is_some_and(|visibility| visibility == "private")
+    {
+        return false;
+    }
+    if let Some(created_at) = subject_handle_claim_time(claim, "created_at")
+        && created_at > as_of
+    {
+        return false;
+    }
+    let Some(expires_at) = subject_handle_claim_time(claim, "expires_at") else {
+        return false;
+    };
+    if expires_at <= as_of {
+        return false;
+    }
+    let issuer = claim.get("issuer").and_then(Value::as_str);
+    let issuer_service_did = claim.get("issuer_service_did").and_then(Value::as_str);
+    if issuer != Some(state.config.service_did.as_str())
+        && issuer_service_did != Some(state.config.service_did.as_str())
+    {
+        return false;
+    }
+    let Some(audience) = claim.get("audience").and_then(Value::as_str) else {
+        return true;
+    };
+    let mut allowed_audiences = BTreeSet::new();
+    allowed_audiences.insert(state.config.service_did.as_str());
+    if let Some(realm_id) = request
+        .realm_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        allowed_audiences.insert(realm_id);
+    }
+    if let Some(requester) = request
+        .requester
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        allowed_audiences.insert(requester);
+    }
+    allowed_audiences.contains(audience)
+}
+
+fn subject_handle_claim_time(claim: &Value, field: &str) -> Option<DateTime<Utc>> {
+    claim
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn subject_handle_claim_handle(claim: &Value) -> Option<&str> {
+    claim.get("handle").and_then(Value::as_str)
+}
+
+fn subject_handle_claim_dedupe_key(claim: &Value) -> Option<String> {
+    Some(format!(
+        "{}|{}|{}|{}",
+        subject_handle_claim_handle(claim)?,
+        claim.get("subject").and_then(Value::as_str)?,
+        claim
+            .get("issuer")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        claim
+            .get("audience")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    ))
+}
+
+fn subject_handle_claim_sort_key(claim: &Value) -> (String, String, String, String) {
+    (
+        subject_handle_claim_handle(claim)
+            .unwrap_or_default()
+            .to_owned(),
+        claim
+            .get("issuer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        claim
+            .get("audience")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        claim
+            .get("created_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+fn primary_handle_from_subject_claims(claims: &[Value]) -> Option<String> {
+    let handles: BTreeSet<String> = claims
+        .iter()
+        .filter_map(subject_handle_claim_handle)
+        .map(ToOwned::to_owned)
+        .collect();
+    if handles.len() == 1 {
+        handles.into_iter().next()
+    } else {
+        None
+    }
 }
 
 #[endpoint(
