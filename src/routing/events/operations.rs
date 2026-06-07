@@ -1197,6 +1197,10 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: Some(validate_history_visibility_payload),
         },
+        kinds::CK_REALM_POLICY_COMPONENTS => OperationPayloadSchema {
+            requirements: REALM_POLICY_VALUE_REQUIREMENTS,
+            validate: None,
+        },
         kinds::CK_REALM_SEARCH_POLICY => OperationPayloadSchema {
             requirements: REALM_SEARCH_POLICY_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),

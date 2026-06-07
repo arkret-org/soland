@@ -1131,6 +1131,13 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            if let Err(reason) = proj.check_membership_join_admission(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
             if let Some(reason) = preflight_mls_projection_reject(&proj, operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1663,9 +1670,10 @@ async fn validate_event_envelope(
     // MLS cells, with the current payload used only for same-event writes.
     if kind == "ck.realm.policy_components" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
+        let policy_components = policy_components_value_from_state_payload(&payload);
         // Best-effort: collect active profiles from the payload's own
         // `profiles[]` field plus any payload-asserted "active_profiles".
-        let mut active_profiles: Vec<String> = payload
+        let mut active_profiles: Vec<String> = policy_components
             .get("profiles")
             .and_then(Value::as_array)
             .map(|arr| {
@@ -1674,7 +1682,10 @@ async fn validate_event_envelope(
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(extra) = payload.get("active_profiles").and_then(Value::as_array) {
+        if let Some(extra) = policy_components
+            .get("active_profiles")
+            .and_then(Value::as_array)
+        {
             for v in extra {
                 if let Some(s) = v.as_str() {
                     active_profiles.push(s.to_owned());
@@ -1682,13 +1693,17 @@ async fn validate_event_envelope(
             }
         }
         let media_plaintext_service_present =
-            projected_media_plaintext_service_present(state, &realm_id, &payload).await;
+            projected_media_plaintext_service_present(state, &realm_id, policy_components).await;
         let mls_governance_binding_covers_policy_root =
-            projected_mls_governance_binding_covers_policy_root(state, &realm_id, &payload);
+            projected_mls_governance_binding_covers_policy_root(
+                state,
+                &realm_id,
+                policy_components,
+            );
         let binding_discussion_metadata_digest =
             projected_mls_governance_binding_metadata_digest(state, &realm_id);
         if let Err((code, reason)) = realm_policy_components_check(
-            &payload,
+            policy_components,
             &active_profiles,
             media_plaintext_service_present,
             mls_governance_binding_covers_policy_root,
@@ -4302,6 +4317,10 @@ pub fn terminal_realm_check(
     None
 }
 
+fn policy_components_value_from_state_payload(payload: &Value) -> &Value {
+    payload.get("value").unwrap_or(payload)
+}
+
 /// `ck.cross_signing.reset` payload trust-domain & reset_event_id check.
 /// Spec T08.
 ///
@@ -4393,6 +4412,15 @@ pub fn realm_policy_components_check(
     mls_governance_binding_covers_policy_root: bool,
     binding_discussion_metadata_digest: Option<&str>,
 ) -> Result<(), (ErrorCode, String)> {
+    if let Some(join_policy) = payload.get("join_policy") {
+        crate::reducer::validate_join_policy_payload(join_policy).map_err(|reason| {
+            (
+                ErrorCode::SchemaViolation,
+                format!("ck.realm.policy_components.join_policy invalid: {reason}"),
+            )
+        })?;
+    }
+
     // (1) T09 — relaxed_window_max_ms ceiling.
     if let Some(window) = payload
         .pointer("/e2ee_relaxed/relaxed_window_max_ms")

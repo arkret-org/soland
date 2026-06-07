@@ -1252,6 +1252,11 @@ pub enum ProjectionEffect {
     DeliveryBindingPolicyProjected {
         realm_id: String,
     },
+    /// `ck.realm.policy_components` projected into the canonical
+    /// `ck.component.realm.policy_components.v1` cas-register cell.
+    RealmPolicyComponentsProjected {
+        realm_id: String,
+    },
     RealmDisappearingPolicyProjected {
         realm_id: String,
     },
@@ -1912,6 +1917,16 @@ fn apply_delivery_binding_policy_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_delivery_binding_policy(op)
+}
+
+/// Dispatch for `ck.realm.policy_components`; cell family is
+/// `ck.component.realm.policy_components.v1`.
+fn apply_realm_policy_components_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_policy_components(op)
 }
 
 fn apply_realm_disappearing_policy_dispatch(
@@ -2612,6 +2627,156 @@ fn enforce_delivery_binding_policy(
     Ok(())
 }
 
+fn state_payload_value(payload: &Value) -> &Value {
+    payload.get("value").unwrap_or(payload)
+}
+
+/// Validate the Join Policy subset that the reducer must enforce before
+/// accepting the policy-components cell. The full Join Policy model has
+/// several gate families; this validator focuses on reducer-hard invariants:
+/// unique gate IDs and non-empty `principal_admission` selectors.
+pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static str> {
+    let Some(object) = join_policy.as_object() else {
+        return Err("join_policy must be an object");
+    };
+    let Some(gates) = object.get("gates").and_then(Value::as_array) else {
+        return Err("join_policy requires gates");
+    };
+    if gates.is_empty() {
+        return Err("join_policy requires at least one gate");
+    }
+    let mut seen_gate_ids = BTreeSet::new();
+    for gate in gates {
+        let Some(gate) = gate.as_object() else {
+            return Err("join_policy gates must be objects");
+        };
+        let Some(gate_id) = gate.get("gate_id").and_then(Value::as_str) else {
+            return Err("join_policy gate requires gate_id");
+        };
+        if gate_id.is_empty() || !seen_gate_ids.insert(gate_id.to_owned()) {
+            return Err("join_policy_duplicate_gate_id");
+        }
+        if gate.get("kind").and_then(Value::as_str) == Some("principal_admission") {
+            validate_principal_admission_gate(gate)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_principal_admission_gate(
+    gate: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    let has_allowed_methods = validate_did_method_list(gate, "allowed_did_methods")?;
+    let has_allowed_dids = validate_did_list(gate, "allowed_principal_dids")?;
+    let has_denied_dids = validate_did_list(gate, "denied_principal_dids")?;
+    if !(has_allowed_methods || has_allowed_dids || has_denied_dids) {
+        return Err("principal_admission_requires_selector");
+    }
+    Ok(())
+}
+
+fn validate_did_method_list(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<bool, &'static str> {
+    let Some(value) = object.get(field) else {
+        return Ok(false);
+    };
+    let Some(values) = value.as_array() else {
+        return Err("principal_admission_methods_invalid");
+    };
+    for value in values {
+        let Some(method) = value.as_str() else {
+            return Err("principal_admission_methods_invalid");
+        };
+        if normalize_policy_did_method(method).is_none() {
+            return Err("principal_admission_methods_invalid");
+        }
+    }
+    Ok(!values.is_empty())
+}
+
+fn validate_did_list(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<bool, &'static str> {
+    let Some(value) = object.get(field) else {
+        return Ok(false);
+    };
+    let Some(values) = value.as_array() else {
+        return Err("principal_admission_dids_invalid");
+    };
+    for value in values {
+        let Some(did) = value.as_str() else {
+            return Err("principal_admission_dids_invalid");
+        };
+        if cokret_sdk::Did::new(did.to_owned()).is_err() {
+            return Err("principal_admission_dids_invalid");
+        }
+    }
+    Ok(!values.is_empty())
+}
+
+fn normalize_policy_did_method(value: &str) -> Option<&str> {
+    let method = value.strip_prefix("did:")?;
+    (!method.is_empty()
+        && method
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
+    .then_some(method)
+}
+
+fn principal_admission_gate_allows(gate: &serde_json::Map<String, Value>, member: &str) -> bool {
+    if !principal_admission_gate_has_selector(gate) {
+        return false;
+    }
+    let Ok(member_did) = cokret_sdk::Did::new(member.to_owned()) else {
+        return false;
+    };
+    if did_list_contains(gate, "denied_principal_dids", member) {
+        return false;
+    }
+    if did_list_non_empty(gate, "allowed_principal_dids")
+        && !did_list_contains(gate, "allowed_principal_dids", member)
+    {
+        return false;
+    }
+    let method = member_did.method();
+    if let Some(methods) = gate.get("allowed_did_methods").and_then(Value::as_array)
+        && !methods.is_empty()
+        && !methods.iter().any(|value| {
+            value
+                .as_str()
+                .and_then(normalize_policy_did_method)
+                .is_some_and(|allowed| allowed == method)
+        })
+    {
+        return false;
+    }
+    true
+}
+
+fn principal_admission_gate_has_selector(gate: &serde_json::Map<String, Value>) -> bool {
+    did_list_non_empty(gate, "allowed_principal_dids")
+        || did_list_non_empty(gate, "denied_principal_dids")
+        || gate
+            .get("allowed_did_methods")
+            .and_then(Value::as_array)
+            .is_some_and(|values| !values.is_empty())
+}
+
+fn did_list_non_empty(gate: &serde_json::Map<String, Value>, field: &str) -> bool {
+    gate.get(field)
+        .and_then(Value::as_array)
+        .is_some_and(|values| !values.is_empty())
+}
+
+fn did_list_contains(gate: &serde_json::Map<String, Value>, field: &str, did: &str) -> bool {
+    gate.get(field)
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(did)))
+}
+
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`ProjectionState::apply`]. Public so out-of-crate tests can assert
 /// the registry covers every canonical kind they care about.
@@ -2727,6 +2892,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         CK_REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
+    );
+    m.insert(
+        CK_REALM_POLICY_COMPONENTS,
+        apply_realm_policy_components_dispatch,
     );
     m.insert(
         CK_REALM_DISAPPEARING_POLICY,
@@ -4619,6 +4788,28 @@ impl ProjectionState {
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
+    /// Project `ck.realm.policy_components` into the canonical Realm policy
+    /// components cell. The Event Envelope wire shape is a generic state
+    /// payload (`{"value": ...}`), while reducer tests and Move-era callers may
+    /// pass the value directly; both forms are accepted and normalized here.
+    fn apply_realm_policy_components(&mut self, operation: &Operation) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        let value = state_payload_value(&operation.payload).clone();
+        if let Some(join_policy) = value.get("join_policy")
+            && let Err(reason) = validate_join_policy_payload(join_policy)
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
+        )) {
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+        ProjectionEffect::RealmPolicyComponentsProjected { realm_id }
+    }
+
     /// R3.1 — project a `ck.realm.link` event.
     ///
     /// Writes to the canonical `ck.component.realm.link.v1` cell (or_set
@@ -5164,6 +5355,11 @@ impl ProjectionState {
         // `delivery_status`; when `delivery_status=routable`, it MUST carry
         // `delivery_binding`. Validate here and reject malformed joins.
         if new_state == "join" {
+            if let Err(reason) = self.check_membership_join_admission(operation) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
             let delivery_status = operation
                 .payload
                 .get("delivery_status")
@@ -8268,6 +8464,66 @@ impl ProjectionState {
         ))
         .ok()?;
         self.cell_value(&cell_id)
+    }
+
+    pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        let cell_id = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.policy_components.v1:{realm_id}"
+        ))
+        .ok()?;
+        self.cell_value(&cell_id)
+    }
+
+    pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        let components = self.realm_policy_components_cell_value(realm_id)?;
+        components
+            .get("join_policy")
+            .or_else(|| components.pointer("/components/join_policy"))
+    }
+
+    /// Submit-time and reducer-time hard gate for
+    /// `principal_admission`. This gate is evaluated before normal Join
+    /// Policy combinators so manual review or other proofs cannot bypass
+    /// Realm-level principal DID admission.
+    pub fn check_membership_join_admission(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(crate::kinds::CK_MEMBER_STATE)
+            || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
+        {
+            return Ok(());
+        }
+        let Some(member) = operation
+            .payload
+            .get("actor_id")
+            .or_else(|| operation.payload.get("member"))
+            .or_else(|| operation.payload.get("member_id"))
+            .or_else(|| operation.payload.get("subject"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(());
+        };
+        let Some(join_policy) = self.realm_join_policy_cell_value(operation.realm_id.as_str())
+        else {
+            return Ok(());
+        };
+        let Some(gates) = join_policy.get("gates").and_then(Value::as_array) else {
+            return Err("gate_check_failed");
+        };
+        for gate in gates {
+            let Some(gate) = gate.as_object() else {
+                return Err("gate_check_failed");
+            };
+            if gate.get("kind").and_then(Value::as_str) == Some("principal_admission")
+                && !principal_admission_gate_allows(gate, member)
+            {
+                return Err("gate_check_failed");
+            }
+        }
+        Ok(())
     }
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
