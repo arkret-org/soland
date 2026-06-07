@@ -6114,6 +6114,10 @@ struct RealmInviteRow {
     inviter: String,
     #[diesel(sql_type = Nullable<Text>)]
     invitee: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    invite_delivery_target: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    introduction_evidence_digest: Option<String>,
     #[diesel(sql_type = Text)]
     invite_token: String,
     #[diesel(sql_type = Text)]
@@ -6131,6 +6135,8 @@ impl From<RealmInviteRow> for RealmInviteRecord {
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             inviter: row.inviter,
             invitee: row.invitee,
+            invite_delivery_target: row.invite_delivery_target,
+            introduction_evidence_digest: row.introduction_evidence_digest,
             invite_token: row.invite_token,
             status: row.status,
             expires_at: row.expires_at,
@@ -6145,7 +6151,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
         sql_query(
-            "SELECT id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at \
+            "SELECT id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
              FROM realm_invites WHERE id = $1",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
@@ -6162,12 +6168,14 @@ impl RealmInviteStore for PgRealmInviteStore {
         let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO realm_invites \
-             (id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             (id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 inviter = EXCLUDED.inviter, \
                 invitee = EXCLUDED.invitee, \
+                invite_delivery_target = EXCLUDED.invite_delivery_target, \
+                introduction_evidence_digest = EXCLUDED.introduction_evidence_digest, \
                 invite_token = EXCLUDED.invite_token, \
                 status = EXCLUDED.status, \
                 expires_at = EXCLUDED.expires_at",
@@ -6176,6 +6184,8 @@ impl RealmInviteStore for PgRealmInviteStore {
         .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Text, _>(&record.inviter)
         .bind::<Nullable<Text>, _>(&record.invitee)
+        .bind::<Nullable<Jsonb>, _>(&record.invite_delivery_target)
+        .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
         .bind::<Text, _>(&record.invite_token)
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
@@ -6189,7 +6199,7 @@ impl RealmInviteStore for PgRealmInviteStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, realm_id, inviter, invitee, invite_token, status, expires_at, created_at \
+            "SELECT id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
              FROM realm_invites ORDER BY created_at ASC, id ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)
@@ -9011,6 +9021,11 @@ mod tests {
             realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
             inviter: "did:web:alice.example".to_owned(),
             invitee: Some("did:web:bob.example".to_owned()),
+            invite_delivery_target: Some(serde_json::json!({
+                "recipient_service_did": "did:web:soland.local",
+                "recipient_service_type": "principal_server"
+            })),
+            introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             invite_token: "tok-abc".to_owned(),
             status: "pending".to_owned(),
             expires_at: Some(now + chrono::Duration::hours(24)),
@@ -9022,6 +9037,18 @@ mod tests {
         assert_eq!(fetched.invite_token, "tok-abc");
         assert_eq!(fetched.status, "pending");
         assert_eq!(fetched.invitee.as_deref(), Some("did:web:bob.example"));
+        assert_eq!(
+            fetched
+                .invite_delivery_target
+                .as_ref()
+                .and_then(|target| target.get("recipient_service_did"))
+                .and_then(Value::as_str),
+            Some("did:web:soland.local")
+        );
+        assert_eq!(
+            fetched.introduction_evidence_digest.as_deref(),
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+        );
 
         // Idempotent upsert (latest status wins).
         let updated = RealmInviteRecord {

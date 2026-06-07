@@ -165,6 +165,14 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
+    assert_eq!(
+        bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_did"],
+        "did:web:soland.local"
+    );
+    assert_eq!(
+        bob_invites["invites"][0]["introduction_evidence_digest"],
+        format!("sha256:{}", "1".repeat(64))
+    );
     let invite_token = bob_invites["invites"][0]["invite_token"]
         .as_str()
         .unwrap()

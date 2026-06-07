@@ -204,7 +204,7 @@ pub(super) async fn admin_create_realm(
     let realm_id = ids::generate_realm_id();
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
-    let mut object = json!({
+    let object = json!({
         "id": realm_id,
         "title": title,
         "summary": body.topic.filter(|value| !value.trim().is_empty()),
@@ -603,6 +603,8 @@ async fn admin_invite_items(state: &AppState) -> Vec<Value> {
                 "realm_id": invite.realm_id,
                 "inviter": invite.inviter,
                 "invitee": invite.invitee,
+                "invite_delivery_target": invite.invite_delivery_target,
+                "introduction_evidence_digest": invite.introduction_evidence_digest,
                 "token_hash": format!("sha256:{}", sha256_hex(invite.invite_token.as_bytes())),
                 "status": invite.status,
                 "expires_at": invite.expires_at,

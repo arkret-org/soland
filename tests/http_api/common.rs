@@ -320,6 +320,11 @@ pub(crate) async fn seed_test_realm(
                 realm_id: realm_id.clone(),
                 inviter: owner.to_owned(),
                 invitee: Some((*invitee).to_owned()),
+                invite_delivery_target: Some(serde_json::json!({
+                    "recipient_service_did": state.config.service_did.clone(),
+                    "recipient_service_type": "principal_server"
+                })),
+                introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 invite_token,
                 status: "pending".to_owned(),
                 expires_at: None,

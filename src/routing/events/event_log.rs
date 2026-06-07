@@ -614,10 +614,10 @@ struct EventValidationError {
 }
 
 #[derive(Debug)]
-struct SubmitOneError {
-    status: StatusCode,
-    code: String,
-    message: String,
+pub(in crate::routing) struct SubmitOneError {
+    pub status: StatusCode,
+    pub code: String,
+    pub message: String,
 }
 
 impl SubmitOneError {
@@ -952,7 +952,7 @@ fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
         .and_then(|object| event_string_field(object, &[field]))
 }
 
-async fn submit_event_value(
+pub(in crate::routing) async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
     mut envelope: Value,

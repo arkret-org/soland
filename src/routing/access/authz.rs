@@ -529,6 +529,8 @@ async fn invites(
                 "realm_id": invite.realm_id,
                 "inviter": invite.inviter,
                 "invitee": invite.invitee,
+                "invite_delivery_target": invite.invite_delivery_target,
+                "introduction_evidence_digest": invite.introduction_evidence_digest,
                 "invite_token": invite.invite_token,
                 "status": invite.status,
                 "expires_at": invite.expires_at,

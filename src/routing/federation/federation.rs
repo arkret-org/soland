@@ -2720,6 +2720,11 @@ mod tests {
             json!({
                 "invite_id": "ck:invite:01904100-0000-7000-8000-000000000056",
                 "invitee": "did:web:carol.example",
+                "invite_delivery_target": {
+                    "recipient_service_did": "did:web:test.local",
+                    "recipient_service_type": "principal_server"
+                },
+                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "sender": "did:web:alice.example",
                 "expires_at": "2030-01-01T00:00:00Z"
             }),
@@ -2787,6 +2792,18 @@ mod tests {
         );
         assert_eq!(projected_invite.inviter, "did:web:alice.example");
         assert_eq!(projected_invite.status, "pending");
+        assert_eq!(
+            projected_invite
+                .invite_delivery_target
+                .as_ref()
+                .and_then(|target| target.get("recipient_service_did"))
+                .and_then(Value::as_str),
+            Some("did:web:test.local")
+        );
+        assert_eq!(
+            projected_invite.introduction_evidence_digest.as_deref(),
+            Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+        );
 
         let federation_log = state
             .persistence

@@ -2190,6 +2190,8 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
                 realm_id: operation.realm_id.to_string(),
                 inviter: origin.to_owned(),
                 invitee: Some(invitee.as_str().to_owned()),
+                invite_delivery_target: None,
+                introduction_evidence_digest: None,
                 invite_token,
                 status: "pending".to_owned(),
                 expires_at: None,
@@ -2479,6 +2481,8 @@ async fn project_invite_create_operation(state: &AppState, origin: &str, operati
         realm_id: operation.realm_id.to_string(),
         inviter: inviter.to_owned(),
         invitee: Some(invitee.as_str().to_owned()),
+        invite_delivery_target: invite_delivery_target_for_operation(operation),
+        introduction_evidence_digest: introduction_evidence_digest_for_operation(operation),
         invite_token,
         status: "pending".to_owned(),
         expires_at,
@@ -2529,6 +2533,49 @@ fn invitee_for_operation(operation: &Operation) -> Option<Did> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(|value| Did::new(value.to_owned()).ok())
+}
+
+fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
+    let target = operation.payload.get("invite_delivery_target")?;
+    let object = target.as_object()?;
+    let service_did = object
+        .get("recipient_service_did")
+        .and_then(Value::as_str)?;
+    if Did::new(service_did.to_owned()).is_err() {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "ck.invite.create supplied invalid invite_delivery_target.recipient_service_did"
+        );
+        return None;
+    }
+    if let Some(service_type) = object.get("recipient_service_type").and_then(Value::as_str)
+        && service_type != "principal_server"
+    {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            service_type = %service_type,
+            "ck.invite.create supplied invalid invite_delivery_target.recipient_service_type"
+        );
+        return None;
+    }
+    Some(target.clone())
+}
+
+fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<String> {
+    let digest = operation
+        .payload
+        .get("introduction_evidence_digest")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if cokret_sdk::Hash::new(digest.to_owned()).is_err() {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "ck.invite.create supplied invalid introduction_evidence_digest"
+        );
+        return None;
+    }
+    Some(digest.to_owned())
 }
 
 fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {

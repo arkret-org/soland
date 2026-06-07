@@ -25,6 +25,7 @@ pub mod extensions;
 pub mod federation;
 mod identity;
 mod interop;
+mod invites;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
 pub(crate) mod organizations;
@@ -190,7 +191,13 @@ fn api_v1_router() -> Router {
                 .push(mls::router()),
         )
         // `peer` — service-to-service federation surface.
-        .push(Router::with_path("peer").push(events::peer_router()))
+        .push(
+            Router::with_path("peer")
+                .push(events::peer_router())
+                .push(invites::peer_router()),
+        )
+        // `open` - unauthenticated, body-only locator handoff surface.
+        .push(Router::with_path("open").push(invites::open_router()))
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
@@ -386,6 +393,20 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "server",
         "ck.server.describe",
         "server feature description",
+    ),
+    (
+        "/_cokret/peer/invites",
+        PathItemType::Post,
+        "peer",
+        "ck.peer.invites.submit",
+        "private invite delivery",
+    ),
+    (
+        "/_cokret/open/invite-locators/resolve",
+        PathItemType::Post,
+        "open",
+        "ck.open.invite_locator.resolve",
+        "resolve invite locator token",
     ),
     // CKP-0007 (P2A.3) — Circle admin surface. Operation ids align with
     // `ck.circles.*` (sibling of `ck.realms.*` / `ck.spaces.*`).

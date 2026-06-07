@@ -1329,6 +1329,8 @@ pub struct RealmInviteRecord {
     pub realm_id: String,
     pub inviter: String,
     pub invitee: Option<String>,
+    pub invite_delivery_target: Option<Value>,
+    pub introduction_evidence_digest: Option<String>,
     pub invite_token: String,
     pub status: String,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,

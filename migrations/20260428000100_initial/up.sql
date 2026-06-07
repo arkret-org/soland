@@ -240,6 +240,8 @@ CREATE TABLE IF NOT EXISTS realm_invites (
     realm_id UUID NOT NULL,
     inviter TEXT NOT NULL,
     invitee TEXT,
+    invite_delivery_target JSONB,
+    introduction_evidence_digest TEXT,
     invite_token TEXT NOT NULL,
     status TEXT NOT NULL,
     expires_at TIMESTAMPTZ,

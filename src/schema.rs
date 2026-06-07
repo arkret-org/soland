@@ -201,6 +201,8 @@ diesel::table! {
         realm_id -> Uuid,
         inviter -> Text,
         invitee -> Nullable<Text>,
+        invite_delivery_target -> Nullable<Jsonb>,
+        introduction_evidence_digest -> Nullable<Text>,
         invite_token -> Text,
         status -> Text,
         expires_at -> Nullable<Timestamptz>,

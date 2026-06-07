@@ -182,10 +182,20 @@ const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
         "membership operation requires member and membership",
     ),
 ];
-const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    INVITE_CREATE_TARGET_FIELDS,
-    "ck.invite.create operation requires invitee",
-)];
+const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::AnyOf(
+        INVITE_CREATE_TARGET_FIELDS,
+        "ck.invite.create operation requires invitee",
+    ),
+    PayloadRequirement::Required(
+        "invite_delivery_target",
+        "ck.invite.create operation requires invite_delivery_target",
+    ),
+    PayloadRequirement::Required(
+        "introduction_evidence_digest",
+        "ck.invite.create operation requires introduction_evidence_digest",
+    ),
+];
 const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "object",
@@ -1003,6 +1013,36 @@ fn validate_operation_payload_against_sdk_artifact(
     validate_operation_schema_from_sdk_artifact(kind, operation)
 }
 
+fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
+    validate_operation_schema_from_sdk_artifact(kinds::CK_INVITE_CREATE, operation)?;
+    let target = operation
+        .payload
+        .get("invite_delivery_target")
+        .and_then(Value::as_object)
+        .ok_or("invite_delivery_target must be an object")?;
+    let recipient_service_did = target
+        .get("recipient_service_did")
+        .and_then(Value::as_str)
+        .ok_or("invite_delivery_target.recipient_service_did is required")?;
+    if cokret_sdk::Did::new(recipient_service_did.to_owned()).is_err() {
+        return Err("invite_delivery_target.recipient_service_did must be a DID");
+    }
+    if let Some(service_type) = target.get("recipient_service_type").and_then(Value::as_str)
+        && service_type != "principal_server"
+    {
+        return Err("invite_delivery_target.recipient_service_type must be principal_server");
+    }
+    let digest = operation
+        .payload
+        .get("introduction_evidence_digest")
+        .and_then(Value::as_str)
+        .ok_or("introduction_evidence_digest is required")?;
+    if cokret_sdk::Hash::new(digest.to_owned()).is_err() {
+        return Err("introduction_evidence_digest must be a hash");
+    }
+    Ok(())
+}
+
 pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
     let schema = match kind {
         kinds::CK_MESSAGE_CREATE => OperationPayloadSchema {
@@ -1101,7 +1141,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         },
         kinds::CK_INVITE_CREATE => OperationPayloadSchema {
             requirements: INVITE_CREATE_REQUIREMENTS,
-            validate: None,
+            validate: Some(validate_invite_create_payload),
         },
         kinds::CK_AUDIT_ERASURE_RECEIPT => OperationPayloadSchema {
             requirements: ERASURE_RECEIPT_REQUIREMENTS,
@@ -2531,10 +2571,11 @@ fn active_direct_conversation_binding_for_realm(
 
 #[cfg(test)]
 mod direct_conversation_policy_tests {
+    use serde_json::json;
+
     use super::*;
     use crate::db::Db;
     use crate::state::DirectConversationBindingRecord;
-    use serde_json::json;
 
     fn test_config() -> crate::config::AppConfig {
         crate::config::AppConfig {
@@ -2643,7 +2684,12 @@ mod direct_conversation_policy_tests {
             json!({
                 "invite_id": "ck:invite:01904100-0000-7000-8000-000000000601",
                 "inviter": "did:web:alice.example",
-                "invitee": "did:web:charlie.example"
+                "invitee": "did:web:charlie.example",
+                "invite_delivery_target": {
+                    "recipient_service_did": "did:web:soland.local",
+                    "recipient_service_type": "principal_server"
+                },
+                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
             }),
         );
         assert_eq!(

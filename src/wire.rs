@@ -1564,6 +1564,7 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "projection_lifecycle",
     "push",
     "mimi_interop",
+    "invite_locator_handoff",
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
@@ -1578,6 +1579,8 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "ck.self.keys.backups.list",
     "ck.self.keys.backups.get",
     "ck.self.keys.backups.delete",
+    "ck.peer.invites.submit",
+    "ck.open.invite_locator.resolve",
 ];
 
 fn canonical_supported_operations() -> Vec<String> {

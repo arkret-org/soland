@@ -53,7 +53,8 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<Value> {
             "ck.peer.events.query_post",
             "ck.peer.events.resolve",
             "ck.peer.events.frontier",
-            "ck.peer.snapshot.head"
+            "ck.peer.snapshot.head",
+            "ck.peer.invites.submit"
         ],
         "supported_profiles": [
             "ck.profile.federation_minimal.v1"
@@ -620,7 +621,7 @@ async fn parse_json_body(req: &mut Request, message: &'static str) -> Result<Val
         .map_err(|_| AppError::bad_json(message))
 }
 
-fn validate_peer_request(
+pub(in crate::routing) fn validate_peer_request(
     state: &AppState,
     req: &Request,
     body: Option<&Value>,
@@ -675,13 +676,13 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
         .ok_or_else(|| schema_violation(format!("required federation header {name} missing")))
 }
 
-fn schema_violation(message: impl Into<String>) -> AppError {
+pub(in crate::routing) fn schema_violation(message: impl Into<String>) -> AppError {
     AppError::invalid_param(message)
         .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation")
 }
 
-fn cross_domain_replay(message: impl Into<String>) -> AppError {
+pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> AppError {
     AppError::conflict(message)
         .with_status(StatusCode::CONFLICT)
         .with_wire_code("cross_domain_replay_rejected")
