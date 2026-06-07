@@ -1498,7 +1498,7 @@ fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> s
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,
-        "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
+        "decryption_state": if message.encrypted { "opaque" } else { "plaintext" },
         "created_at": message.created_at,
     });
     add_scope_circle_metadata(&mut event, &message.content);

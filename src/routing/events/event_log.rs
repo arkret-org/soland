@@ -4295,6 +4295,12 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
              never accepted as Event.kind",
         ));
     }
+    if kind == crate::kinds::CK_MORPH_SCHEMA_MIGRATE {
+        return Some((
+            ErrorCode::SchemaViolation,
+            "ck.morph.schema_migrate is not admitted until its reducer projection is implemented",
+        ));
+    }
     None
 }
 
@@ -4608,6 +4614,14 @@ mod admission_tests {
     fn receipt_object_kind_rejected_at_submit_entry() {
         assert!(matches!(
             events_submit_pre_admit_check("ck.event_batch_receipt"),
+            Some((ErrorCode::SchemaViolation, _))
+        ));
+    }
+
+    #[test]
+    fn unimplemented_morph_schema_migrate_rejected_at_submit_entry() {
+        assert!(matches!(
+            events_submit_pre_admit_check(crate::kinds::CK_MORPH_SCHEMA_MIGRATE),
             Some((ErrorCode::SchemaViolation, _))
         ));
     }

@@ -262,12 +262,14 @@ async fn outbound_push_bridge_fetch(
         })?;
     let bridge_describe_url =
         join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
-    let bridge_describe_target = crate::security::validate_http_url_for_egress(
-        &bridge_describe_url,
-        "push bridge describe",
-        state.config.development_mode,
-    )
-    .map_err(AppError::capability_denied)?;
+    let (bridge_describe_target, client) =
+        crate::security::validate_http_url_for_egress_with_pinned_client(
+            &bridge_describe_url,
+            "push bridge describe",
+            state.config.development_mode,
+            Duration::from_secs(10),
+        )
+        .map_err(AppError::capability_denied)?;
     let existing_cache = state
         .persistence
         .push_bridge_cache()
@@ -287,8 +289,6 @@ async fn outbound_push_bridge_fetch(
         }
     }
 
-    let client = crate::security::build_default_egress_http_client(Duration::from_secs(10))
-        .map_err(|error| AppError::internal(format!("build push bridge client: {error}")))?;
     let response = client
         .get(bridge_describe_target)
         .header("accept", "application/json")

@@ -727,12 +727,6 @@ pub(super) async fn federation_backfill_operations(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     let frontier_before = operation_frontier_value(state, realm_id).await;
-    let client = crate::security::build_egress_http_client(
-        crate::routing::federation::outbox::CONNECT_TIMEOUT,
-        crate::routing::federation::outbox::REQUEST_TIMEOUT,
-    )
-    .map_err(|error| AppError::internal(format!("build federation backfill client: {error}")))?;
-
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
     let mut pulled = 0usize;
@@ -741,15 +735,8 @@ pub(super) async fn federation_backfill_operations(
     let mut peer_has_more = false;
     for _ in 0..max_pages {
         pages += 1;
-        let page = pull_operations_page(
-            state,
-            &client,
-            &peer,
-            realm_id,
-            after_cursor.as_deref(),
-            limit,
-        )
-        .await?;
+        let page =
+            pull_operations_page(state, &peer, realm_id, after_cursor.as_deref(), limit).await?;
         pulled += page.operations.len();
         peer_next_cursor = page.next_cursor.clone();
         peer_has_more = page.has_more;
@@ -1610,7 +1597,6 @@ fn configured_peer_from_backfill_body(
 
 async fn pull_operations_page(
     state: &AppState,
-    client: &reqwest::Client,
     peer: &FederationPeerTarget,
     realm_id: &str,
     after_cursor: Option<&str>,
@@ -1626,10 +1612,11 @@ async fn pull_operations_page(
             query.append_pair("after_cursor", after_cursor);
         }
     }
-    let url = crate::security::validate_http_url_for_egress(
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         url.as_str(),
         "peer events query",
         state.config.development_mode,
+        crate::routing::federation::outbox::REQUEST_TIMEOUT,
     )
     .map_err(AppError::capability_denied)?;
     let response = client

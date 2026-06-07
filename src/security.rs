@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use reqwest::Url;
@@ -51,6 +51,35 @@ pub fn build_default_egress_http_client(
     )
 }
 
+pub fn validate_http_url_for_egress_with_pinned_client(
+    raw_url: &str,
+    purpose: &str,
+    development_mode: bool,
+    request_timeout: Duration,
+) -> Result<(Url, reqwest::Client), String> {
+    let url = Url::parse(raw_url).map_err(|error| format!("{purpose}: invalid URL: {error}"))?;
+    let allow_private = private_networks_allowed(development_mode);
+    let socket_addrs = match resolve_and_validate_url_for_egress(&url, purpose, allow_private) {
+        Ok(addrs) => addrs,
+        Err(error) => {
+            record_egress_denial(&url, purpose, &error);
+            return Err(error);
+        }
+    };
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("{purpose}: URL host is required"))?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT.min(request_timeout))
+        .timeout(request_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .resolve_to_addrs(host, &socket_addrs)
+        .build()
+        .map_err(|error| format!("failed to build pinned egress HTTP client: {error}"))?;
+    Ok((url, client))
+}
+
 pub fn build_blocking_egress_http_client(
     connect_timeout: Duration,
     request_timeout: Duration,
@@ -95,6 +124,46 @@ pub fn validate_url_for_egress_with_resolved_ips(
     validate_url_for_egress_with_resolver(url, purpose, allow_private_networks, |_host, _port| {
         Ok(resolved_ips.to_vec())
     })
+}
+
+fn resolve_and_validate_url_for_egress(
+    url: &Url,
+    purpose: &str,
+    allow_private_networks: bool,
+) -> Result<Vec<SocketAddr>, String> {
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("{purpose}: URL scheme {scheme:?} is not allowed")),
+    }
+    let host = url
+        .host_str()
+        .filter(|host| !host.trim().is_empty())
+        .ok_or_else(|| format!("{purpose}: URL host is required"))?;
+    validate_host_policy(host, purpose)?;
+    if !allow_private_networks
+        && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
+    {
+        return Err(format!("{purpose}: localhost egress target is not allowed"));
+    }
+
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        (host, port)
+            .to_socket_addrs()
+            .map_err(|error| format!("{purpose}: DNS resolution for {host} failed: {error}"))?
+            .collect()
+    };
+    if addrs.is_empty() {
+        return Err(format!("{purpose}: DNS resolution returned no addresses"));
+    }
+    if !allow_private_networks {
+        for addr in &addrs {
+            validate_resolved_ip(addr.ip(), purpose)?;
+        }
+    }
+    Ok(addrs)
 }
 
 fn validate_url_for_egress_with_resolver<F>(

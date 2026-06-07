@@ -359,7 +359,7 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
         "sender": message.sender,
         "content": message.content,
         "encrypted": message.encrypted,
-        "decryption_state": if message.encrypted { "opaque" } else { "cleartext" },
+        "decryption_state": if message.encrypted { "opaque" } else { "plaintext" },
         "created_at": message.created_at,
     });
     add_scope_circle_metadata(&mut event, &message.content);
@@ -666,7 +666,7 @@ pub fn tombstone_timeline_event_value(event: &mut Value) {
         }),
     );
     object.insert("encrypted".to_owned(), json!(false));
-    object.insert("decryption_state".to_owned(), json!("cleartext"));
+    object.insert("decryption_state".to_owned(), json!("plaintext"));
 }
 
 pub fn retention_tombstone_for_event(
@@ -722,7 +722,7 @@ pub fn tombstone_timeline_event_for_retention(
         }),
     );
     object.insert("encrypted".to_owned(), json!(false));
-    object.insert("decryption_state".to_owned(), json!("cleartext"));
+    object.insert("decryption_state".to_owned(), json!("plaintext"));
 }
 
 pub fn retention_tombstone_payload_value(
