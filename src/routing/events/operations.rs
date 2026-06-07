@@ -196,6 +196,10 @@ const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "introduction_evidence_digest",
         "ck.invite.create operation requires introduction_evidence_digest",
     ),
+    PayloadRequirement::Required(
+        "expires_at",
+        "ck.invite.create operation requires expires_at",
+    ),
 ];
 const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
 const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
@@ -1048,6 +1052,14 @@ fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static 
         .ok_or("introduction_evidence_digest is required")?;
     if cokret_sdk::Hash::new(digest.to_owned()).is_err() {
         return Err("introduction_evidence_digest must be a hash");
+    }
+    let expires_at = operation
+        .payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .ok_or("expires_at is required")?;
+    if cokret_sdk::canonical::validate_timestamp_canonical(expires_at).is_err() {
+        return Err("expires_at must be a canonical timestamp");
     }
     validate_operation_schema_from_sdk_artifact(kinds::CK_INVITE_CREATE, operation)?;
     Ok(())
@@ -3947,6 +3959,19 @@ mod invite_create_schema_tests {
     }
 
     #[test]
+    fn invite_create_requires_expires_at() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload.as_object_mut().unwrap().remove("expires_at");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("ck.invite.create operation requires expires_at")
+        );
+    }
+
+    #[test]
     fn invite_create_rejects_invalid_invite_id() {
         let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
@@ -3956,6 +3981,19 @@ mod invite_create_schema_tests {
         assert_eq!(
             validate_operation_schema(&operation, schema),
             Err("ck.invite.create invite_id must be ck:invite:<uuidv7>")
+        );
+    }
+
+    #[test]
+    fn invite_create_rejects_non_canonical_expires_at() {
+        let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
+        let mut payload = invite_payload();
+        payload["expires_at"] = json!("2026-06-14T10:00:00+00:00");
+        let operation = op(payload);
+
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("expires_at must be a canonical timestamp")
         );
     }
 }
