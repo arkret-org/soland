@@ -5,8 +5,12 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use chrono::{Duration, SecondsFormat};
-use cokret_sdk::{Did, InviteDeliveryRequest, canonical};
+use chrono::Duration;
+use cokret_sdk::{
+    DetachedPayloadProof, Did, Hash, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
+    InviteDeliveryRequest, InviteLocatorResolveRequestBody, PrincipalLocator,
+    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose, canonical,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -82,10 +86,14 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
             "deferred",
         )
         .await;
-        return json_ok(json!({
-            "status": "deferred",
-            "received_at": now().to_rfc3339_opts(SecondsFormat::Millis, true)
-        }));
+        let outcome = InviteDeliveryOutcome {
+            status: InviteDeliveryOutcomeStatus::Deferred,
+            received_at: Some(now()),
+            retry_after_ms: None,
+        };
+        return json_ok(serde_json::to_value(outcome).map_err(|error| {
+            AppError::internal(format!("invite delivery outcome serialize: {error}"))
+        })?);
     }
 
     let actor = body
@@ -147,10 +155,18 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
         status,
     )
     .await;
-    json_ok(json!({
-        "status": status,
-        "received_at": response.received_at.to_rfc3339_opts(SecondsFormat::Millis, true)
-    }))
+    let outcome = InviteDeliveryOutcome {
+        status: if response.status == "duplicate" {
+            InviteDeliveryOutcomeStatus::Duplicate
+        } else {
+            InviteDeliveryOutcomeStatus::Accepted
+        },
+        received_at: Some(response.received_at),
+        retry_after_ms: None,
+    };
+    json_ok(serde_json::to_value(outcome).map_err(|error| {
+        AppError::internal(format!("invite delivery outcome serialize: {error}"))
+    })?)
 }
 
 #[endpoint(
@@ -169,21 +185,19 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
     }
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
-        .parse_json::<Value>()
+        .parse_json::<InviteLocatorResolveRequestBody>()
         .await
         .map_err(|_| AppError::bad_json("invalid invite locator resolve request body"))?;
-    let locator_token = body
-        .get("locator_token")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| is_locator_token_shape(value))
-        .ok_or_else(invite_locator_not_found)?;
+    body.validate_minimal()
+        .map_err(|_| invite_locator_not_found())?;
+    let locator_token = body.locator_token.trim();
     let locator_ref = decode_locator_token(locator_token).ok_or_else(invite_locator_not_found)?;
     let subject_id = locator_ref
         .get("subject_id")
         .and_then(Value::as_str)
         .filter(|value| Did::new((*value).to_owned()).is_ok())
         .ok_or_else(invite_locator_not_found)?;
+    let subject_id = Did::new(subject_id.to_owned()).map_err(|_| invite_locator_not_found())?;
     if locator_ref
         .get("nonce")
         .and_then(Value::as_str)
@@ -209,37 +223,66 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc))
         .unwrap_or_else(|| issued_at + Duration::minutes(DEFAULT_LOCATOR_TTL_MINUTES));
-    let locator_ref_digest = canonical::sha256_digest(locator_token.as_bytes());
-    let mut unsigned_locator = json!({
-        "schema": "ck.schema.principal_locator.v1",
-        "subject_id": subject_id,
-        "recipient_service_did": state.config.service_did,
-        "issued_at": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "locator_ref_digest": locator_ref_digest,
-    });
-    if let Some(display_hint) = locator_ref.get("display_hint") {
-        unsigned_locator["display_hint"] = display_hint.clone();
+    let locator_ref_digest = Hash::new(canonical::sha256_digest(locator_token.as_bytes()))
+        .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
+    let display_hint = locator_ref
+        .get("display_hint")
+        .cloned()
+        .map(serde_json::from_value::<PrincipalLocatorDisplayHint>)
+        .transpose()
+        .map_err(|_| invite_locator_not_found())?;
+    let recipient_service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "configured service DID invalid for principal locator: {error}"
+        ))
+    })?;
+    let mut locator = PrincipalLocator {
+        schema: cokret_sdk::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
+        subject_id,
+        recipient_service_did,
+        recipient_service_type: None,
+        issued_at,
+        expires_at,
+        locator_ref_digest,
+        delivery_modes: Vec::new(),
+        display_hint,
+        proofs: Vec::new(),
+    };
+    let mut unsigned_locator = serde_json::to_value(&locator).map_err(|error| {
+        AppError::internal(format!("principal locator unsigned serialize: {error}"))
+    })?;
+    if let Value::Object(object) = &mut unsigned_locator {
+        object.remove("proofs");
     }
     let canonical_bytes = canonical::canonical_json_bytes(&unsigned_locator)
         .map_err(|error| AppError::internal(format!("principal locator canonicalize: {error}")))?;
-    let payload_digest = canonical::sha256_digest(&canonical_bytes);
+    let payload_digest =
+        Hash::new(canonical::sha256_digest(&canonical_bytes)).map_err(|error| {
+            AppError::internal(format!("principal locator digest invalid: {error}"))
+        })?;
     let jws =
         cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.anchorer_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
-    let mut locator = unsigned_locator;
-    locator["proofs"] = json!([{
-        "proof_purpose": "recipient_service_acceptance",
-        "proof": {
-            "kind": "detached_jws",
-            "verification_method": format!("{}#server-key-1", state.config.service_did),
-            "alg": "EdDSA",
-            "payload_digest": payload_digest,
-            "created_at": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-            "jws": jws,
-        }
-    }]);
-    json_ok(locator)
+    locator.proofs = vec![PrincipalLocatorProof {
+        proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
+        proof: DetachedPayloadProof {
+            kind: "detached_jws".to_owned(),
+            verification_method: format!("{}#server-key-1", state.config.service_did),
+            alg: "EdDSA".to_owned(),
+            payload_digest,
+            created_at: issued_at,
+            domain: None,
+            audience: None,
+            jws,
+        },
+    }];
+    locator.validate_minimal().map_err(|error| {
+        AppError::internal(format!("principal locator validation failed: {error}"))
+    })?;
+    json_ok(
+        serde_json::to_value(locator)
+            .map_err(|error| AppError::internal(format!("principal locator serialize: {error}")))?,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
