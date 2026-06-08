@@ -2536,7 +2536,7 @@ pub async fn validate_content_encryption_floor(
             _ => {}
         }
         if flow_operation_carries_plaintext_private_content(operation)
-            && realm_requires_content_encryption(state, operation.realm_id.as_str()).await
+            && realm_content_floor_requires_e2ee(state, operation.realm_id.as_str())
         {
             return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
         }
@@ -3224,6 +3224,23 @@ async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> 
     realm_meta.is_some_and(|record| {
         encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
     })
+}
+
+/// Whether the Realm's effective `content_encryption_floor` requires E2EE
+/// content, read from the authoritative reducer projection (set by
+/// `ck.realm.policy_components`). This is independent of `encryption_profile`,
+/// which only declares the encryption mechanism: a `mls_rfc9420` Realm admits
+/// plaintext content until its content floor is raised to `e2ee_required`
+/// (realm-and-space.md §2.3 / §2.5, circle.md §7). The floor is a one-way
+/// ratchet enforced by the reducer, so this read can only flip false→true.
+fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str) -> bool {
+    state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.realm_content_encryption_floor(realm_id))
+        .as_deref()
+        == Some("e2ee_required")
 }
 
 fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {

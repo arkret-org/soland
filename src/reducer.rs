@@ -45,6 +45,12 @@ pub const CHILD_ORDER_CELL_FAMILY: &str = "ck.component.child_order.v1";
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
+/// One-way ratchet: effective `content_encryption_floor` MUST be monotonically
+/// non-decreasing. Lowering `e2ee_required` back to `allow_plaintext` is rejected.
+const CONTENT_ENCRYPTION_FLOOR_DOWNGRADE: &str = "content_encryption_floor_downgrade";
+/// One-way ratchet: effective metadata encryption floor MUST be monotonically
+/// non-decreasing (`allow_plaintext < e2ee_required`).
+const METADATA_ENCRYPTION_FLOOR_DOWNGRADE: &str = "metadata_encryption_floor_downgrade";
 
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
@@ -594,6 +600,11 @@ pub struct CircleProjection {
     pub directory_visibility: String,
     pub join_rule: String,
     pub history_visibility: String,
+    /// Optional Circle-local content-encryption floor; `None` inherits the
+    /// parent Realm `content_encryption_floor`. effective = max(parent Realm,
+    /// Circle). Reducer enforces "MAY only tighten" + one-way ratchet, and
+    /// rejects `e2ee_required` on an `encryption_profile=none` Circle.
+    pub content_encryption_floor: Option<String>,
     /// Optional tightening of metadata-encryption floor; `None` inherits
     /// parent Realm. Reducer enforces "MAY only tighten" against the
     /// projected Realm floor.
@@ -3561,6 +3572,36 @@ fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool
         .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
 }
 
+/// Extract an encryption-floor field from a `ck.realm.policy_components`
+/// value, accepting both the top-level and `/components/`-nested wire forms
+/// (mirrors `realm_join_policy_cell_value`).
+fn policy_floor_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .or_else(|| value.pointer(&format!("/components/{field}")))
+        .and_then(Value::as_str)
+}
+
+/// Ordinal rank for `content_encryption_floor` (`allow_plaintext < e2ee_required`).
+/// `None` / unknown values rank as `allow_plaintext` (0); spec default is
+/// `allow_plaintext` (realm-and-space.md §2.3, circle.md §7).
+fn content_floor_rank(floor: Option<&str>) -> u8 {
+    match floor.map(str::trim) {
+        Some("e2ee_required") => 1,
+        _ => 0,
+    }
+}
+
+/// Ordinal rank for the metadata encryption floor
+/// (`allow_plaintext < e2ee_required`), symmetric with the content floor.
+/// `None` / unknown ranks as `allow_plaintext` (0).
+fn metadata_floor_rank(floor: Option<&str>) -> u8 {
+    match floor.map(str::trim) {
+        Some("e2ee_required") => 1,
+        _ => 0,
+    }
+}
+
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
@@ -4800,6 +4841,26 @@ impl ProjectionState {
         {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
+            };
+        }
+        // One-way encryption-floor ratchet (realm-and-space.md §2.5): the
+        // effective content / metadata encryption floor MUST be monotonically
+        // non-decreasing. Compare the incoming snapshot against the currently
+        // projected floor before the cell is overwritten; tightening is always
+        // allowed, lowering (including dropping a previously-set floor by
+        // omission) is rejected.
+        if content_floor_rank(policy_floor_field(&value, "content_encryption_floor"))
+            < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+            };
+        }
+        if metadata_floor_rank(policy_floor_field(&value, "metadata_encryption_floor"))
+            < metadata_floor_rank(self.realm_metadata_encryption_floor(&realm_id).as_deref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
             };
         }
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
@@ -7647,6 +7708,10 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .unwrap_or("joined")
             .to_owned();
+        let content_encryption_floor = object
+            .get("content_encryption_floor")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let metadata_encryption_floor = object
             .get("metadata_encryption_floor")
             .and_then(Value::as_str)
@@ -7658,6 +7723,23 @@ impl ProjectionState {
             .to_owned();
         if !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
             && self.realm_requires_content_encryption(&realm_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+            };
+        }
+        // circle.md §7: a Circle content floor MUST NOT be below the effective
+        // parent Realm floor, and `e2ee_required` is only valid on an
+        // MLS-backed Circle (a `none` Circle has no scope to carry ciphertext).
+        if content_floor_rank(content_encryption_floor.as_deref())
+            < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
+        {
+            return ProjectionEffect::Rejected {
+                reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+            };
+        }
+        if content_floor_rank(content_encryption_floor.as_deref()) >= 1
+            && !encryption_profile_requires_content_encryption(Some(encryption_profile.as_str()))
         {
             return ProjectionEffect::Rejected {
                 reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
@@ -7677,6 +7759,7 @@ impl ProjectionState {
             directory_visibility,
             join_rule,
             history_visibility,
+            content_encryption_floor,
             metadata_encryption_floor,
             encryption_profile,
             mls_group_ref: None,
@@ -7710,10 +7793,13 @@ impl ProjectionState {
                 reason: "circle_update_missing_circle_id".to_owned(),
             };
         };
-        let Some(circle) = self.circles.get_mut(&circle_id) else {
+        // Read the current Circle state and parent Realm floor immutably first
+        // so the floor-ratchet validation below does not conflict with the
+        // later mutable borrow.
+        let Some(circle_ro) = self.circles.get(&circle_id) else {
             return ProjectionEffect::Ignored;
         };
-        if circle.state != CircleLifecycleState::Active {
+        if circle_ro.state != CircleLifecycleState::Active {
             return ProjectionEffect::Rejected {
                 reason: "circle_not_active".to_owned(),
             };
@@ -7723,6 +7809,53 @@ impl ProjectionState {
                 reason: CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
             };
         }
+        let realm_id = circle_ro.realm_id.clone();
+        let circle_profile = circle_ro.encryption_profile.clone();
+        let current_content_floor = circle_ro.content_encryption_floor.clone();
+        let current_metadata_floor = circle_ro.metadata_encryption_floor.clone();
+        let realm_content_floor = self.realm_content_encryption_floor(&realm_id);
+        // Validate the patched floors against the parent Realm floor and the
+        // one-way ratchet (circle.md §7) before applying any mutation.
+        if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
+            if let Some(new_floor) = patch
+                .get("content_encryption_floor")
+                .map(|v| v.as_str().map(ToOwned::to_owned))
+            {
+                let new_rank = content_floor_rank(new_floor.as_deref());
+                if new_rank < content_floor_rank(realm_content_floor.as_deref()) {
+                    return ProjectionEffect::Rejected {
+                        reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                    };
+                }
+                if new_rank < content_floor_rank(current_content_floor.as_deref()) {
+                    return ProjectionEffect::Rejected {
+                        reason: CONTENT_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                    };
+                }
+                if new_rank >= 1
+                    && !encryption_profile_requires_content_encryption(Some(
+                        circle_profile.as_str(),
+                    ))
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
+                    };
+                }
+            }
+            if let Some(new_floor) = patch
+                .get("metadata_encryption_floor")
+                .map(|v| v.as_str().map(ToOwned::to_owned))
+                && metadata_floor_rank(new_floor.as_deref())
+                    < metadata_floor_rank(current_metadata_floor.as_deref())
+            {
+                return ProjectionEffect::Rejected {
+                    reason: METADATA_ENCRYPTION_FLOOR_DOWNGRADE.to_owned(),
+                };
+            }
+        }
+        let Some(circle) = self.circles.get_mut(&circle_id) else {
+            return ProjectionEffect::Ignored;
+        };
         if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
             if let Some(title) = patch.get("title").and_then(Value::as_str) {
                 circle.title = title.to_owned();
@@ -7738,6 +7871,9 @@ impl ProjectionState {
             }
             if let Some(history) = patch.get("history_visibility").and_then(Value::as_str) {
                 circle.history_visibility = history.to_owned();
+            }
+            if let Some(floor) = patch.get("content_encryption_floor") {
+                circle.content_encryption_floor = floor.as_str().map(ToOwned::to_owned);
             }
             if let Some(floor) = patch.get("metadata_encryption_floor") {
                 circle.metadata_encryption_floor = floor.as_str().map(ToOwned::to_owned);
@@ -8666,6 +8802,24 @@ impl ProjectionState {
         )
     }
 
+    /// Effective Realm `content_encryption_floor` projected from the
+    /// `ck.component.realm.policy_components.v1` cell. `None` means the spec
+    /// default `allow_plaintext`. Independent of `encryption_profile`, which
+    /// only declares the encryption mechanism (realm-and-space.md §2.3).
+    pub fn realm_content_encryption_floor(&self, realm_id: &str) -> Option<String> {
+        let components = self.realm_policy_components_cell_value(realm_id)?;
+        policy_floor_field(components, "content_encryption_floor").map(ToOwned::to_owned)
+    }
+
+    /// Effective Realm `metadata_encryption_floor` projected from the
+    /// `ck.component.realm.policy_components.v1` cell. `None` means the
+    /// reducer default is inferred elsewhere (`e2ee_required` for MLS /
+    /// e2ee_required Realms, else `allow_plaintext`).
+    pub fn realm_metadata_encryption_floor(&self, realm_id: &str) -> Option<String> {
+        let components = self.realm_policy_components_cell_value(realm_id)?;
+        policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
+    }
+
     /// R3.4 — read the projected Realm `security_class` (from the
     /// `ck.component.realm.organization.v1` cas-register cell). Returns
     /// `None` when no Realm-update has landed yet — caller may infer
@@ -8773,6 +8927,72 @@ mod tests {
             object_type,
             payload,
         )
+    }
+
+    // CKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
+    // circle.md §7). Vectors: ck.vector.e2ee.content_floor_downgrade_rejected,
+    // ck.vector.e2ee.metadata_floor_downgrade_rejected, ck.vector.e2ee.in_place_enable.
+    #[test]
+    fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm = "ck:realm:01904100-0000-7000-8000-cfc039892061";
+        let apply_floor = |state: &mut ProjectionState, floor: Option<&str>| {
+            let payload = match floor {
+                Some(f) => serde_json::json!({ "content_encryption_floor": f }),
+                None => serde_json::json!({}),
+            };
+            state.apply(
+                &make_operation(crate::kinds::CK_REALM_POLICY_COMPONENTS, realm, payload),
+                &hlc,
+            )
+        };
+        // baseline allow_plaintext -> projected
+        assert!(matches!(
+            apply_floor(&mut state, Some("allow_plaintext")),
+            ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ));
+        // in-place enable: allow_plaintext -> e2ee_required is accepted
+        assert!(matches!(
+            apply_floor(&mut state, Some("e2ee_required")),
+            ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ));
+        // downgrade e2ee_required -> allow_plaintext is rejected
+        assert!(matches!(
+            apply_floor(&mut state, Some("allow_plaintext")),
+            ProjectionEffect::Rejected { reason } if reason == CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ));
+        // dropping the floor by omission is also a downgrade
+        assert!(matches!(
+            apply_floor(&mut state, None),
+            ProjectionEffect::Rejected { reason } if reason == CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ));
+    }
+
+    #[test]
+    fn metadata_floor_ratchet_rejects_downgrade() {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let realm = "ck:realm:01904100-0000-7000-8000-cfc039892062";
+        let apply_meta = |state: &mut ProjectionState, level: &str| {
+            state.apply(
+                &make_operation(
+                    crate::kinds::CK_REALM_POLICY_COMPONENTS,
+                    realm,
+                    serde_json::json!({ "metadata_encryption_floor": level }),
+                ),
+                &hlc,
+            )
+        };
+        assert!(matches!(
+            apply_meta(&mut state, "e2ee_required"),
+            ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ));
+        // tightening to the same level is fine; lowering is rejected
+        assert!(matches!(
+            apply_meta(&mut state, "allow_plaintext"),
+            ProjectionEffect::Rejected { reason } if reason == METADATA_ENCRYPTION_FLOOR_DOWNGRADE
+        ));
     }
 
     #[test]

@@ -273,7 +273,7 @@ fn install_projected_circle_scope(
                 directory_visibility: "members".to_owned(),
                 join_rule: "invite".to_owned(),
                 history_visibility: "joined".to_owned(),
-                metadata_encryption_floor: Some("minimal_encrypted".to_owned()),
+                metadata_encryption_floor: Some("e2ee_required".to_owned()),
                 encryption_profile: "mls_rfc9420".to_owned(),
                 mls_group_ref: Some(format!("ck:mls:mls_rfc9420:{circle_id}")),
                 state: CircleLifecycleState::Active,

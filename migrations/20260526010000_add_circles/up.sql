@@ -20,9 +20,13 @@ CREATE TABLE projection_circles (
     join_rule                  TEXT NOT NULL DEFAULT 'invite'
         CHECK (join_rule IN ('invite', 'request', 'open')),
     history_visibility         TEXT NOT NULL DEFAULT 'joined',
+    content_encryption_floor   TEXT
+        CHECK (content_encryption_floor IN (
+            'allow_plaintext', 'e2ee_required'
+        )),
     metadata_encryption_floor  TEXT
         CHECK (metadata_encryption_floor IN (
-            'body_only', 'minimal_encrypted', 'full_encrypted'
+            'allow_plaintext', 'e2ee_required'
         )),
     encryption_profile         TEXT NOT NULL DEFAULT 'mls_rfc9420',
     mls_group_ref              TEXT,

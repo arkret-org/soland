@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
-    CK_FLOW_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE,
+    CK_FLOW_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
 };
 use soland::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
@@ -163,6 +163,47 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
         matches!(rejected, ProjectionEffect::Rejected { ref reason }
                  if reason == "circle_encryption_below_realm_floor"),
         "plaintext Circle under E2EE Realm MUST reject as circle_encryption_below_realm_floor; got {rejected:?}"
+    );
+}
+
+#[test]
+fn circle_content_floor_below_realm_rejected() {
+    // ck.vector.circle.content_floor_below_realm_rejected.v1 — an MLS Circle
+    // (so the encryption_profile check passes) that declares a content floor
+    // LOWER than the parent Realm's effective floor is rejected (circle.md §7).
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("circles-content-floor-test");
+    seed_realm(&mut state, &hlc, REALM_A, ALICE);
+    // Realm raises its content floor to e2ee_required via policy_components.
+    state.apply(
+        &op(
+            CK_REALM_POLICY_COMPONENTS,
+            REALM_A,
+            json!({ "content_encryption_floor": "e2ee_required" }),
+        ),
+        &hlc,
+    );
+    let rejected = state.apply(
+        &op(
+            CK_CIRCLE_CREATE,
+            REALM_A,
+            json!({
+                "object": {
+                    "id": CIRCLE_A,
+                    "realm_id": REALM_A,
+                    "title": "Below-floor Ops",
+                    "encryption_profile": "mls_rfc9420",
+                    "content_encryption_floor": "allow_plaintext",
+                    "created_by": ALICE,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        matches!(rejected, ProjectionEffect::Rejected { ref reason }
+                 if reason == "circle_encryption_below_realm_floor"),
+        "Circle content floor below the parent Realm floor MUST reject; got {rejected:?}"
     );
 }
 

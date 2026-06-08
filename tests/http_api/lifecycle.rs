@@ -394,6 +394,25 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         .await
         .unwrap();
 
+    // Content admission is decoupled from `encryption_profile` (the MLS
+    // mechanism) and gated on the effective `content_encryption_floor`. The
+    // Realm raises its floor to `e2ee_required` via `ck.realm.policy_components`;
+    // the reducer projection then rejects plaintext private Flow content.
+    {
+        let hlc = soland::hlc::ServerHlc::new("lifecycle-test");
+        let mut projection = state.projection.lock().expect("projection lock");
+        projection.apply(
+            &cokret_sdk::Operation::create(
+                cokret_sdk::OperationId::new(format!("ck:operation:{}", uuid::Uuid::now_v7()))
+                    .unwrap(),
+                cokret_sdk::RealmId::new(DEMO_REALM_ID).unwrap(),
+                soland::kinds::CK_REALM_POLICY_COMPONENTS,
+                serde_json::json!({ "content_encryption_floor": "e2ee_required" }),
+            ),
+            &hlc,
+        );
+    }
+
     let flow_id = "ck:flow:01904100-0000-7000-8000-e30dc0000001";
     let create_flow = signed_flow_event(
         "ck:event:01904100-0000-7000-8000-e30ec0000001",
