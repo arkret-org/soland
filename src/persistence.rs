@@ -101,6 +101,23 @@ pub trait ContactStore: Send + Sync {
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
 }
 
+/// Durable backing for per-subject private `invite_receive_policy` overrides
+/// (spec `sync/invite-addressing.md` §5). The in-memory
+/// `AppState::invite_receive_policies` map remains the working projection; this
+/// store hydrates it on boot and is written through on policy changes
+/// (`ck.self.invite_receive_policy.set`, `ck.self.contact.tombstone(block_peer)`).
+#[async_trait]
+pub trait InviteReceivePolicyStore: Send + Sync {
+    async fn get(
+        &self,
+        subject_id: &str,
+    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>>;
+    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()>;
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>>;
+}
+
 /// Trait for Realm metadata storage operations.
 #[async_trait]
 pub trait RealmMetaStore: Send + Sync {
@@ -1002,6 +1019,7 @@ pub trait PersistenceStore: Send + Sync {
     fn sessions(&self) -> &dyn SessionStore;
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
+    fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
@@ -1045,6 +1063,7 @@ pub struct MemoryPersistenceStore {
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
     contacts: MemoryContactStore,
+    invite_receive_policies: MemoryInviteReceivePolicyStore,
     realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
@@ -1089,6 +1108,7 @@ impl MemoryPersistenceStore {
             sessions: MemorySessionStore::new(),
             account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),
+            invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
@@ -1149,6 +1169,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn contacts(&self) -> &dyn ContactStore {
         &self.contacts
+    }
+
+    fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
+        &self.invite_receive_policies
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
@@ -1632,6 +1656,49 @@ impl ContactStore for MemoryContactStore {
             row_requester != requester || row_target != target
         });
         Ok(())
+    }
+}
+
+// In-memory invite-receive policy store
+struct MemoryInviteReceivePolicyStore {
+    data: Arc<Mutex<BTreeMap<String, cokret_sdk::InviteReceivePolicy>>>,
+}
+
+impl MemoryInviteReceivePolicyStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
+    async fn get(
+        &self,
+        subject_id: &str,
+    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
+        Ok(self.data.lock().expect("lock").get(subject_id).cloned())
+    }
+
+    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("lock")
+            .insert(policy.subject_id.as_str().to_owned(), policy.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
     }
 }
 
@@ -3809,6 +3876,8 @@ pub struct PgPersistenceStore {
     accounts: PgAccountStore,
     sessions: PgSessionStore,
     account_data: PgAccountDataStore,
+    contacts: PgContactStore,
+    invite_receive_policies: PgInviteReceivePolicyStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
@@ -3845,6 +3914,8 @@ impl PgPersistenceStore {
             accounts: PgAccountStore { pool: pool.clone() },
             sessions: PgSessionStore { pool: pool.clone() },
             account_data: PgAccountDataStore { pool: pool.clone() },
+            contacts: PgContactStore { pool: pool.clone() },
+            invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
@@ -3891,7 +3962,11 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn contacts(&self) -> &dyn ContactStore {
-        self.fallback.contacts()
+        &self.contacts
+    }
+
+    fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
+        &self.invite_receive_policies
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
@@ -7907,6 +7982,229 @@ impl From<PushBridgeCacheRow> for OutboundPushBridgeCacheRecord {
     }
 }
 
+// ── Pg-backed contact projection store ───────────────────────────────────
+// Durable backing for the holder↔peer `ContactStore`. Mirrors the
+// `MemoryContactStore` query shape onto the `contacts` table. Column order
+// matches `state::ContactRecord`.
+struct PgContactStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct ContactRow {
+    #[diesel(sql_type = Text)]
+    requester: String,
+    #[diesel(sql_type = Text)]
+    target: String,
+    #[diesel(sql_type = Text)]
+    scope: String,
+    #[diesel(sql_type = Text)]
+    status: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    message: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    peer_service_did: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<ContactRow> for ContactRecord {
+    fn from(row: ContactRow) -> Self {
+        Self {
+            requester: row.requester,
+            target: row.target,
+            scope: row.scope,
+            status: row.status,
+            message: row.message,
+            peer_service_did: row.peer_service_did,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+const CONTACT_COLUMNS: &str =
+    "requester, target, scope, status, message, peer_service_did, created_at, updated_at";
+
+#[async_trait]
+impl ContactStore for PgContactStore {
+    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        // Mirror MemoryContactStore::get — prefer the `message` scope row, then
+        // fall back to any scope for this requester/target pair.
+        let row = sql_query(format!(
+            "SELECT {CONTACT_COLUMNS} FROM contacts \
+             WHERE requester = $1 AND target = $2 \
+             ORDER BY (scope = 'message') DESC, scope ASC LIMIT 1"
+        ))
+        .bind::<Text, _>(requester)
+        .bind::<Text, _>(target)
+        .get_result::<ContactRow>(&mut *conn)
+        .await
+        .optional()?;
+        Ok(row.map(ContactRecord::from))
+    }
+
+    async fn get_scoped(
+        &self,
+        requester: &str,
+        target: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ContactRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(format!(
+            "SELECT {CONTACT_COLUMNS} FROM contacts \
+             WHERE requester = $1 AND target = $2 AND scope = $3"
+        ))
+        .bind::<Text, _>(requester)
+        .bind::<Text, _>(target)
+        .bind::<Text, _>(scope)
+        .get_result::<ContactRow>(&mut *conn)
+        .await
+        .optional()?;
+        Ok(row.map(ContactRecord::from))
+    }
+
+    async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO contacts \
+             (requester, target, scope, status, message, peer_service_did, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (requester, target, scope) DO UPDATE SET \
+                status = EXCLUDED.status, \
+                message = EXCLUDED.message, \
+                peer_service_did = EXCLUDED.peer_service_did, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.requester)
+        .bind::<Text, _>(&record.target)
+        .bind::<Text, _>(&record.scope)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Text>, _>(record.message.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_service_did.as_deref())
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(format!(
+            "SELECT {CONTACT_COLUMNS} FROM contacts \
+             WHERE requester = $1 OR target = $1 \
+             ORDER BY created_at ASC, scope ASC"
+        ))
+        .bind::<Text, _>(actor)
+        .get_results::<ContactRow>(&mut *conn)
+        .await?;
+        Ok(rows.into_iter().map(ContactRecord::from).collect())
+    }
+
+    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("DELETE FROM contacts WHERE requester = $1 AND target = $2")
+            .bind::<Text, _>(requester)
+            .bind::<Text, _>(target)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+}
+
+// ── Pg-backed invite-receive policy store ────────────────────────────────
+// Durable backing for per-subject `invite_receive_policy` overrides. The full
+// `cokret_sdk::InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
+// is duplicated into a TEXT[] column for cheap hard-block lookups.
+struct PgInviteReceivePolicyStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct InviteReceivePolicyRow {
+    #[diesel(sql_type = Text)]
+    subject_id: String,
+    #[diesel(sql_type = Jsonb)]
+    policy_payload: Value,
+}
+
+impl InviteReceivePolicyRow {
+    fn into_pair(self) -> PersistenceResult<(String, cokret_sdk::InviteReceivePolicy)> {
+        let policy: cokret_sdk::InviteReceivePolicy =
+            serde_json::from_value(self.policy_payload).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "invite_receive_policy `{}` payload decode: {error}",
+                    self.subject_id
+                ))
+            })?;
+        Ok((self.subject_id, policy))
+    }
+}
+
+#[async_trait]
+impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
+    async fn get(
+        &self,
+        subject_id: &str,
+    ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT subject_id, policy_payload FROM invite_receive_policies WHERE subject_id = $1",
+        )
+        .bind::<Text, _>(subject_id)
+        .get_result::<InviteReceivePolicyRow>(&mut *conn)
+        .await
+        .optional()?;
+        row.map(|row| row.into_pair().map(|(_, policy)| policy))
+            .transpose()
+    }
+
+    async fn put(&self, policy: &cokret_sdk::InviteReceivePolicy) -> PersistenceResult<()> {
+        let subject_id = policy.subject_id.as_str().to_owned();
+        let payload = serde_json::to_value(policy).map_err(|error| {
+            PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
+        })?;
+        let blocked_subjects = policy
+            .blocked_subjects
+            .iter()
+            .map(|did| did.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO invite_receive_policies \
+             (subject_id, policy_payload, blocked_subjects, updated_at) \
+             VALUES ($1, $2, $3, NOW()) \
+             ON CONFLICT (subject_id) DO UPDATE SET \
+                policy_payload = EXCLUDED.policy_payload, \
+                blocked_subjects = EXCLUDED.blocked_subjects, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&subject_id)
+        .bind::<Jsonb, _>(&payload)
+        .bind::<Array<Text>, _>(&blocked_subjects)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query("SELECT subject_id, policy_payload FROM invite_receive_policies")
+            .get_results::<InviteReceivePolicyRow>(&mut *conn)
+            .await?;
+        rows.into_iter().map(InviteReceivePolicyRow::into_pair).collect()
+    }
+}
+
 async fn pg_conn(pool: &PgPool) -> PersistenceResult<Object<AsyncPgConnection>> {
     pool.get()
         .await
@@ -9538,5 +9836,61 @@ mod tests {
             store.ticket_fence_token("ck:restore:fence").await.unwrap(),
             4
         );
+    }
+
+    #[tokio::test]
+    async fn memory_contact_store_put_get_roundtrip() {
+        let store = MemoryContactStore::new();
+        let record = ContactRecord {
+            requester: "did:web:alice.example".to_owned(),
+            target: "did:web:bob.example".to_owned(),
+            scope: "message".to_owned(),
+            status: "accepted".to_owned(),
+            message: Some("hi".to_owned()),
+            peer_service_did: Some("did:web:bob-ps.example".to_owned()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        store.put(&record).await.unwrap();
+
+        let scoped = store
+            .get_scoped(&record.requester, &record.target, "message")
+            .await
+            .unwrap()
+            .expect("row round-trips");
+        assert_eq!(scoped.status, "accepted");
+        assert_eq!(
+            scoped.peer_service_did.as_deref(),
+            Some("did:web:bob-ps.example")
+        );
+
+        // list_for_actor surfaces the row for either end.
+        assert_eq!(
+            store.list_for_actor(&record.target).await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_invite_receive_policy_store_put_get_snapshot() {
+        let store = MemoryInviteReceivePolicyStore::new();
+        let subject = "did:web:alice.example";
+        let mut policy = crate::routing::invites::default_invite_receive_policy(subject);
+        policy
+            .blocked_subjects
+            .push(cokret_sdk::Did::new("did:web:mallory.example".to_owned()).unwrap());
+
+        store.put(&policy).await.unwrap();
+
+        let fetched = store
+            .get(subject)
+            .await
+            .unwrap()
+            .expect("policy round-trips");
+        assert_eq!(fetched.blocked_subjects.len(), 1);
+
+        let snapshot = store.snapshot_all().await.unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].0, subject);
     }
 }

@@ -1249,6 +1249,24 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: &[],
             validate: None,
         },
+        // Circle membership + lifecycle convenience ops (built by the
+        // `/_soland/self/circles/*` admin surface). Their payload structure and
+        // every authorization / subset invariant
+        // (`circle_member_must_be_realm_member`,
+        // `circle_member_manage_capability_required`, the lifecycle transition
+        // matrix) are owned by the reducer (`apply_circle_member_state` /
+        // `apply_circle_lifecycle`). They have no registered SDK artifact
+        // payload validator, so register them here with no extra requirements —
+        // otherwise the SDK-artifact fallback rejects them with
+        // "operation payload violates SDK artifact schema" before the reducer
+        // can run, making Circle membership/archive/tombstone unreachable.
+        kinds::CK_CIRCLE_MEMBER_STATE
+        | kinds::CK_CIRCLE_ARCHIVE
+        | kinds::CK_CIRCLE_RESTORE
+        | kinds::CK_CIRCLE_TOMBSTONE => OperationPayloadSchema {
+            requirements: &[],
+            validate: None,
+        },
         kinds::CK_REALM_DESTROY | kinds::CK_REALM_TOMBSTONE => OperationPayloadSchema {
             requirements: REALM_TERMINAL_REQUIREMENTS,
             validate: None,

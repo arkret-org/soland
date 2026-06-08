@@ -395,3 +395,63 @@ CREATE TABLE IF NOT EXISTS account_datas (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (actor, data_type)
 );
+
+-- Holder↔peer contact projection (spec contact-and-direct-conversation.md /
+-- contact-operations.schema.json). Column order mirrors `state::ContactRecord`.
+CREATE TABLE IF NOT EXISTS contacts (
+    requester TEXT NOT NULL,
+    target TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT,
+    peer_service_did TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (requester, target, scope)
+);
+
+CREATE INDEX IF NOT EXISTS contacts_target_idx
+    ON contacts (target, scope);
+
+-- Holder-private contact-managed consent cell projection (spec
+-- consent / invite-addressing). Column order mirrors
+-- `state::ConsentCellRecord`; grant/revoke dots are stored as JSONB so the
+-- in-memory `BTreeMap`/`BTreeSet` round-trips losslessly.
+CREATE TABLE IF NOT EXISTS consent_cells (
+    holder TEXT NOT NULL,
+    peer TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    requested_at TIMESTAMPTZ,
+    grant_dots JSONB NOT NULL DEFAULT '{}'::JSONB,
+    revoked_dots JSONB NOT NULL DEFAULT '[]'::JSONB,
+    revoked_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (holder, peer, scope)
+);
+
+-- Direct conversation binding projection (spec
+-- contact-and-direct-conversation.md §5). `participants_key` is the sorted,
+-- joined participant pair used as the in-memory map key; column order mirrors
+-- `state::DirectConversationBindingRecord` with the key prepended.
+CREATE TABLE IF NOT EXISTS direct_conversation_bindings (
+    participants_key TEXT PRIMARY KEY,
+    participants_unordered TEXT[] NOT NULL,
+    realm_id TEXT NOT NULL,
+    main_flow_id TEXT NOT NULL,
+    binding_event_ref TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-subject private invite-receive policy override (spec
+-- sync/invite-addressing.md §5). The full `cokret_sdk::InviteReceivePolicy`
+-- value is stored as JSONB; `blocked_subjects` is duplicated as a TEXT[] for
+-- cheap hard-block lookups.
+CREATE TABLE IF NOT EXISTS invite_receive_policies (
+    subject_id TEXT PRIMARY KEY,
+    policy_payload JSONB NOT NULL,
+    blocked_subjects TEXT[] NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

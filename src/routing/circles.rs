@@ -1,8 +1,14 @@
 //! CKP-0007 — Circle administration HTTP surface.
 //!
-//! Hosts the soland deployment-local `/_soland/self/circles/*` admin/CRUD layer.
-//! (The Circle *data model* `ck.circle.*` is spec-canonical; this HTTP
-//! convenience surface is soland-private, not a `/_cokret/` protocol path.)
+//! Hosts the `/_soland/self/circles/*` admin/CRUD layer (mounted under the
+//! `/_soland/self` 产品面; see `routing/mod.rs`). The Circle *data
+//! model* `ck.circle.*` is spec-canonical; this HTTP surface is the self-面
+//! convenience wrapper that builds the canonical operations.
+//!
+//! 命名空间依据 CKP-0014 §5:circle 是**候选操作**,未入正式 catalog 前
+//! MUST 挂 `/_soland`(产品面)、MUST NOT 挂 `/_cokret`(协议面)。待 circle
+//! 正式入 catalog 后,本表整体迁回 `/_cokret/self/circles/*`。
+//!
 //! Each handler builds a `ck.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
@@ -267,11 +273,73 @@ async fn post_circle_member(
     let body = body.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
     let target_state = body.state.clone().unwrap_or_else(|| "active".to_owned());
+    // CKP-0007 strict-subset invariant (`Circle.members ⊆ Realm.members`) —
+    // surfaced HERE, pre-projection, because `accept_local_operations` projects
+    // fire-and-forget and does not propagate the reducer's `Rejected` effect
+    // back to the HTTP caller. Without this gate, activating a non-member would
+    // be silently dropped by the reducer yet return 200. We mirror the reducer's
+    // `apply_circle_member_state` check (parent realm membership == "join") and
+    // return the same canonical 422 wire code the reducer emits.
+    if target_state == "active" {
+        let realm_id = realm_scope.to_string();
+        let parent_joined = {
+            let projection = state.projection.lock().expect("projection mutex");
+            projection
+                .member(&realm_id, &body.actor_id)
+                .map(|m| m.state == "join")
+                .unwrap_or(false)
+        };
+        if !parent_joined {
+            return Err(AppError::new(
+                ErrorCode::FailedPrecondition,
+                "circle reducer rejected: circle_member_must_be_realm_member",
+            )
+            .with_status(StatusCode::UNPROCESSABLE_ENTITY)
+            .with_wire_code(CIRCLE_MEMBER_MUST_BE_REALM_MEMBER));
+        }
+    }
+    // CKP-0007 §8 — authoritative capability decision for "pull another actor
+    // into the Circle". When the requester is activating *someone else*, they
+    // MUST hold `ck.circle.member.manage` (narrowed by `allowed_circle_ids`)
+    // on this Circle. The engine evaluates the selector against the
+    // `ck:circle:<uuid>` resource; we stamp the verdict into the operation so
+    // the reducer's fail-closed second-line check can rely on it. A
+    // self-service join (`actor == sender`) is left to the reducer's
+    // `join_rule=open` gate.
+    let pulling_other = body.actor_id != session.actor;
+    let manage_verified = if target_state == "active" && pulling_other {
+        let realm_id = realm_scope.to_string();
+        let (owner, members) = circle_authz_principals(state, &realm_id).await;
+        let verdict = state.authz.check(
+            &session.actor,
+            "ck.circle.member.manage",
+            &circle_id,
+            &realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        );
+        if !verdict.allowed {
+            return Err(AppError::capability_denied(
+                "ck.circle.member.manage required to add another actor to this Circle",
+            )
+            .with_wire_code(CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED));
+        }
+        true
+    } else {
+        false
+    };
     let payload = json!({
         "circle_id": circle_id,
         "actor": body.actor_id,
         "state": target_state,
         "sender": session.actor.clone(),
+        "manage_capability_verified": manage_verified,
+        "actor_capability": {
+            "action": "ck.circle.member.manage",
+            "circle_id": circle_id,
+            "allowed": manage_verified,
+        },
     });
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
@@ -415,6 +483,48 @@ async fn submit_circle_lifecycle(
         })
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     json_ok(response)
+}
+
+/// CKP-0007 §8 — canonical reducer reason code when the requester lacks
+/// `ck.circle.member.manage` for a cross-actor add. Kept in sync with the
+/// reducer constant of the same name so the HTTP 403 and the reducer 422
+/// surface the same wire code.
+const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
+
+/// CKP-0007 strict-subset invariant reason code (`Circle.members ⊆
+/// Realm.members`). Kept in sync with the reducer constant of the same name so
+/// the HTTP 422 and the reducer 422 surface the same wire code.
+const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str = "circle_member_must_be_realm_member";
+
+/// Resolve the `(owner, members)` pair the `AuthzEngine::check` default-rule
+/// path needs for a Realm. Mirrors the lookup in `routing/access/authz.rs`.
+async fn circle_authz_principals(
+    state: &AppState,
+    realm_id: &str,
+) -> (Option<String>, Vec<String>) {
+    let owner = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|m| m.owner);
+    let members = {
+        let realms = state.realms.lock().expect("realms lock");
+        RealmId::new(realm_id.to_owned())
+            .ok()
+            .and_then(|realm_id| realms.get(&realm_id))
+            .map(|realm| {
+                realm
+                    .members
+                    .iter()
+                    .map(|member| member.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    (owner, members)
 }
 
 fn circle_realm_scope(state: &AppState, circle_id: &str) -> Result<RealmId, AppError> {

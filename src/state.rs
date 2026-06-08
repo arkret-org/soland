@@ -2143,6 +2143,19 @@ impl AppState {
             proj.flows.extend(proj_updates.flows);
             proj.morphs.extend(proj_updates.morphs);
         }
+
+        // Hydrate per-subject invite_receive_policy overrides from durable
+        // storage into the in-memory working map (built off-lock first; the
+        // async snapshot read MUST NOT hold the std Mutex across `.await`).
+        if let Ok(policies) = self.persistence.invite_receive_policies().snapshot_all().await {
+            let mut map = self
+                .invite_receive_policies
+                .lock()
+                .expect("invite_receive_policies lock");
+            for (subject_id, policy) in policies {
+                map.entry(subject_id).or_insert(policy);
+            }
+        }
     }
 
     /// MID-1..6 — borrow a clone of the in-memory MemberIdentity

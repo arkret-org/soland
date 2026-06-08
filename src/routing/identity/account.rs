@@ -2138,6 +2138,10 @@ async fn contact_tombstone(
     // tombstone target.
     let store = state.persistence.contacts();
     let mut tombstoned_any = false;
+    // Peer's home Principal Server learned from a stored holder↔peer row (set
+    // on cross-PS contact deliveries). Used as the federation fallback when the
+    // request body omits `peer_service_did`.
+    let mut row_peer_service_did: Option<String> = None;
     let rows = store
         .list_for_actor(&holder)
         .await
@@ -2145,7 +2149,20 @@ async fn contact_tombstone(
     for mut row in rows {
         let touches_peer = (row.requester == holder && row.target == peer)
             || (row.requester == peer && row.target == holder);
-        if !touches_peer || row.status == "tombstoned" {
+        if !touches_peer {
+            continue;
+        }
+        if row_peer_service_did.is_none() {
+            if let Some(service_did) = row
+                .peer_service_did
+                .as_ref()
+                .map(|did| did.trim().to_owned())
+                .filter(|did| !did.is_empty())
+            {
+                row_peer_service_did = Some(service_did);
+            }
+        }
+        if row.status == "tombstoned" {
             continue;
         }
         row.status = "tombstoned".to_owned();
@@ -2161,7 +2178,13 @@ async fn contact_tombstone(
     }
 
     if body.block_peer {
-        block_peer_in_invite_policy(state, &holder, &peer);
+        if let Some(policy) = block_peer_in_invite_policy(state, &holder, &peer) {
+            // Write the hard-block through to durable storage so it survives
+            // restarts (hydrated back by `AppState::hydrate`).
+            if let Err(error) = state.persistence.invite_receive_policies().put(&policy).await {
+                tracing::warn!(%error, holder = %holder, "failed to persist invite_receive_policy block");
+            }
+        }
     }
 
     append_audit_log(
@@ -2181,6 +2204,37 @@ async fn contact_tombstone(
     )
     .await;
 
+    // Spec contact-and-direct-conversation.md §2/§4.1 — federate the
+    // `ck.contact.tombstoned` fact to the peer's home Principal Server when the
+    // peer is remote. The addressing service DID comes from the request body
+    // first, then falls back to the `peer_service_did` recorded on the stored
+    // holder↔peer contact row. The receiver
+    // (`contact_federation::peer_contacts_submit`) downgrades the mirrored row.
+    if let Some(peer_service_did) = body
+        .peer_service_did
+        .as_ref()
+        .map(|did| did.as_str().trim().to_owned())
+        .filter(|did| !did.is_empty())
+        .or(row_peer_service_did)
+        .filter(|did| did != &state.config.service_did)
+    {
+        super::contact_federation::federate_contact_fact(
+            state,
+            "ck.contact.tombstoned",
+            &holder,
+            &peer,
+            &peer_service_did,
+            json!({
+                "holder": holder,
+                "peer": peer,
+                "revoke_scopes": body.revoke_scopes,
+                "full_peer_revoke": body.full_peer_revoke,
+                "block_peer": body.block_peer,
+            }),
+        )
+        .await?;
+    }
+
     let consent_revoke_refs = revoked_dots
         .iter()
         .filter_map(|dot| EventId::new(format!("ck:event:{}", sha256_hex(dot.as_bytes()))).ok())
@@ -2197,10 +2251,15 @@ async fn contact_tombstone(
 /// (spec invite-addressing.md §5 / 0015 §3.4). Materializes the holder's
 /// recommended default policy first if no override exists yet, so the hard
 /// block is the only durable mutation a tombstone needs to make.
-fn block_peer_in_invite_policy(state: &AppState, holder: &str, peer: &str) {
-    let Ok(peer_did) = Did::new(peer.to_owned()) else {
-        return;
-    };
+/// Returns the mutated policy clone when the in-memory map changed, so the
+/// async caller can write it through to durable storage. `None` when the peer
+/// DID is malformed or already blocked (no durable write needed).
+fn block_peer_in_invite_policy(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+) -> Option<cokret_sdk::InviteReceivePolicy> {
+    let peer_did = Did::new(peer.to_owned()).ok()?;
     let mut policies = state
         .invite_receive_policies
         .lock()
@@ -2208,9 +2267,11 @@ fn block_peer_in_invite_policy(state: &AppState, holder: &str, peer: &str) {
     let policy = policies
         .entry(holder.to_owned())
         .or_insert_with(|| crate::routing::invites::default_invite_receive_policy(holder));
-    if !policy.blocked_subjects.iter().any(|did| did == &peer_did) {
-        policy.blocked_subjects.push(peer_did);
+    if policy.blocked_subjects.iter().any(|did| did == &peer_did) {
+        return None;
     }
+    policy.blocked_subjects.push(peer_did);
+    Some(policy.clone())
 }
 
 #[endpoint(
@@ -2273,6 +2334,11 @@ async fn set_invite_receive_policy(
         .lock()
         .expect("invite_receive_policies lock")
         .insert(session.actor.clone(), policy.clone());
+    // Write through to durable storage so the override survives restarts
+    // (hydrated back into the in-memory map by `AppState::hydrate`).
+    if let Err(error) = state.persistence.invite_receive_policies().put(&policy).await {
+        tracing::warn!(%error, actor = %session.actor, "failed to persist invite_receive_policy");
+    }
     json_ok(policy)
 }
 

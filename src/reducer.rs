@@ -45,6 +45,18 @@ pub const CHILD_ORDER_CELL_FAMILY: &str = "ck.component.child_order.v1";
 const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "realm_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm_floor";
+/// CKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
+/// an actor other than the target) requires the requester to hold
+/// `ck.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
+/// The HTTP surface runs the authoritative `AuthzEngine::check` and stamps a
+/// verdict into the operation payload; the reducer fails closed when that
+/// verdict is absent or false, so an unauthorised one-way add is rejected even
+/// if it bypasses the HTTP gate.
+const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
+/// CKP-0007 §8 — a self-service join (none/left → active *by the target actor*)
+/// is only permitted on an `open` Circle. Self-joining a non-`open` Circle must
+/// go through an invite/manage path.
+const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
 /// One-way ratchet: effective `content_encryption_floor` MUST be monotonically
 /// non-decreasing. Lowering `e2ee_required` back to `allow_plaintext` is rejected.
 const CONTENT_ENCRYPTION_FLOOR_DOWNGRADE: &str = "content_encryption_floor_downgrade";
@@ -2303,6 +2315,47 @@ fn find_capability_grant(
         }
     }
     None
+}
+
+/// CKP-0007 §8 — does the operation payload carry an authoritative
+/// `ck.circle.member.manage` verdict for `circle_id`?
+///
+/// The Circle HTTP surface (`/_soland/self/circles/{id}/members`) runs the
+/// real `AuthzEngine::check(sender, "ck.circle.member.manage",
+/// "ck:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
+/// selector — and stamps the result into the operation payload before handing
+/// it to the reducer. The reducer treats this as a fail-closed assertion:
+/// absent / false / mismatched-circle ⇒ not authorised.
+///
+/// Accepted shapes (any one suffices):
+///   - `manage_capability_verified: true`
+///   - `actor_capability: { action: "ck.circle.member.manage",
+///        circle_id: "ck:circle:…", allowed: true }`
+fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) -> bool {
+    if payload
+        .get("manage_capability_verified")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return true;
+    }
+    let Some(cap) = payload.get("actor_capability").filter(|v| v.is_object()) else {
+        return false;
+    };
+    let action_ok = cap
+        .get("action")
+        .and_then(Value::as_str)
+        .is_some_and(|a| a == "ck.circle.member.manage");
+    let allowed_ok = cap.get("allowed").and_then(Value::as_bool) == Some(true);
+    // The stamped verdict MUST be scoped to *this* Circle (mirrors the
+    // `allowed_circle_ids` selector the engine evaluated). A verdict that omits
+    // `circle_id` is accepted (the engine already bound it), but a mismatched
+    // id is rejected.
+    let circle_ok = cap
+        .get("circle_id")
+        .and_then(Value::as_str)
+        .is_none_or(|c| c == circle_id);
+    action_ok && allowed_ok && circle_ok
 }
 
 fn grants_for_realm(state: &ProjectionState, realm_id: &str) -> Vec<CapabilityGrantSnapshot> {
@@ -7979,11 +8032,25 @@ impl ProjectionState {
             .or_else(|| payload.get("membership").and_then(Value::as_str))
             .unwrap_or("active")
             .to_owned();
-        // Snapshot the parent Realm id BEFORE taking a mutable borrow on
-        // the Circle entry so we can run the strict-subset check against
-        // the parent Realm's membership set.
-        let realm_id = match self.circles.get(&circle_id) {
-            Some(c) => c.realm_id.clone(),
+        // The requester (`sender`) is distinct from the membership target
+        // (`actor`). When they differ, the operation is "admin pulls another
+        // actor into the Circle"; when they match, it is a self-service join.
+        // `sender` falls back to `actor` for legacy self-only payloads.
+        let sender = payload
+            .get("sender")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| actor.clone());
+        // Snapshot the parent Realm id + the Circle's `join_rule` and the
+        // target's current active-membership BEFORE taking a mutable borrow on
+        // the Circle entry so we can run the strict-subset and CKP-0007 §8
+        // authorization checks against the parent Realm / Circle state.
+        let (realm_id, join_rule, target_already_active) = match self.circles.get(&circle_id) {
+            Some(c) => (
+                c.realm_id.clone(),
+                c.join_rule.clone(),
+                c.members.contains(&actor),
+            ),
             None => return ProjectionEffect::Ignored,
         };
         if target_state == "active" {
@@ -7998,6 +8065,33 @@ impl ProjectionState {
                 return ProjectionEffect::Rejected {
                     reason: "circle_member_must_be_realm_member".to_owned(),
                 };
+            }
+            // CKP-0007 §8 second-line authorization (fail-closed). Only gate
+            // *new* activations (none/left → active); re-asserting an already
+            // active membership is idempotent and carries no privilege change.
+            if !target_already_active {
+                if sender == actor {
+                    // Self-service join: permitted only on an `open` Circle.
+                    // The strict-subset check above already proved the actor is
+                    // a joined Realm member; an `open` Circle lets such members
+                    // add themselves without an invite or manage capability.
+                    if join_rule != "open" {
+                        return ProjectionEffect::Rejected {
+                            reason: CIRCLE_JOIN_NOT_OPEN.to_owned(),
+                        };
+                    }
+                } else if !payload_asserts_circle_manage(payload, &circle_id) {
+                    // Pulling *another* actor in is a one-way add that needs no
+                    // consent from the target, but the requester MUST hold
+                    // `ck.circle.member.manage` (narrowed by
+                    // `allowed_circle_ids`) on this Circle. The authoritative
+                    // capability decision runs in the HTTP surface
+                    // (`AuthzEngine::check`) and is stamped into the payload;
+                    // the reducer fails closed when that verdict is absent.
+                    return ProjectionEffect::Rejected {
+                        reason: CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED.to_owned(),
+                    };
+                }
             }
         }
         let Some(circle) = self.circles.get_mut(&circle_id) else {
@@ -8927,6 +9021,180 @@ mod tests {
             object_type,
             payload,
         )
+    }
+
+    // ── CKP-0007 §8 — Circle member one-way add authorization ───────────
+    //
+    // Seed a Realm with `alice` (manage holder) + `bob` joined, plus a
+    // non-member `mallory`, and an `invite`-rule Circle. Exercise the reducer's
+    // fail-closed second-line check directly.
+
+    fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
+        let realm = "ck:realm:01904100-0000-7000-8000-c1c1c1c1c1c1".to_owned();
+        let circle = "ck:circle:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned();
+        let mut state = ProjectionState::new();
+        let now = chrono::Utc::now();
+        let join_member = |state: &mut ProjectionState, did: &str| {
+            state.members.insert(
+                (realm.clone(), did.to_owned()),
+                SolandMembershipState {
+                    member: did.to_owned(),
+                    realm_id: realm.clone(),
+                    state: "join".to_owned(),
+                    role: "member".to_owned(),
+                    invited_at: None,
+                    joined_at: now,
+                    updated_at: now,
+                },
+            );
+        };
+        join_member(&mut state, "did:web:alice");
+        join_member(&mut state, "did:web:bob");
+        // mallory is intentionally NOT a Realm member.
+        state.circles.insert(
+            circle.clone(),
+            CircleProjection {
+                circle_id: circle.clone(),
+                realm_id: realm.clone(),
+                title: "Ops".to_owned(),
+                summary: None,
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "joined".to_owned(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "mls_rfc9420".to_owned(),
+                mls_group_ref: None,
+                state: CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:alice".to_owned(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: BTreeSet::new(),
+            },
+        );
+        (state, ServerHlc::new("test"), realm, circle)
+    }
+
+    #[test]
+    fn circle_manage_pull_realm_member_succeeds() {
+        // alice holds `ck.circle.member.manage` (verdict stamped by the HTTP
+        // surface). She pulls the already-joined Realm member bob into the
+        // Circle; bob performs no action and lands in `members` immediately.
+        let (mut state, hlc, realm, circle) = seed_circle_authz_state();
+        let op = make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            &realm,
+            serde_json::json!({
+                "circle_id": circle,
+                "actor": "did:web:bob",
+                "state": "active",
+                "sender": "did:web:alice",
+                "manage_capability_verified": true,
+            }),
+        );
+        let effect = state.apply(&op, &hlc);
+        assert!(
+            matches!(effect, ProjectionEffect::CircleMemberStateChanged { .. }),
+            "manage-backed pull should be accepted, got {effect:?}"
+        );
+        assert!(
+            state.circles[&circle].members.contains("did:web:bob"),
+            "bob must be an active Circle member with no accept step"
+        );
+    }
+
+    #[test]
+    fn circle_pull_without_manage_rejected() {
+        // alice attempts to pull bob in WITHOUT a stamped manage verdict
+        // (e.g. the HTTP gate was bypassed). The reducer fails closed.
+        let (mut state, hlc, realm, circle) = seed_circle_authz_state();
+        let op = make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            &realm,
+            serde_json::json!({
+                "circle_id": circle,
+                "actor": "did:web:bob",
+                "state": "active",
+                "sender": "did:web:alice",
+            }),
+        );
+        assert!(
+            matches!(
+                state.apply(&op, &hlc),
+                ProjectionEffect::Rejected { reason }
+                    if reason == CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED
+            ),
+            "cross-actor add without manage capability must be rejected"
+        );
+        assert!(!state.circles[&circle].members.contains("did:web:bob"));
+    }
+
+    #[test]
+    fn circle_pull_non_realm_member_rejected() {
+        // Even with a valid manage verdict, pulling a non-Realm member in
+        // violates the strict-subset invariant.
+        let (mut state, hlc, realm, circle) = seed_circle_authz_state();
+        let op = make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            &realm,
+            serde_json::json!({
+                "circle_id": circle,
+                "actor": "did:web:mallory",
+                "state": "active",
+                "sender": "did:web:alice",
+                "manage_capability_verified": true,
+            }),
+        );
+        assert!(
+            matches!(
+                state.apply(&op, &hlc),
+                ProjectionEffect::Rejected { reason }
+                    if reason == "circle_member_must_be_realm_member"
+            ),
+            "non-Realm member must be rejected regardless of manage capability"
+        );
+    }
+
+    #[test]
+    fn circle_self_join_requires_open_rule() {
+        // bob self-joins an `invite`-rule Circle → rejected; an `open` Circle
+        // lets a joined Realm member add themselves with no manage capability.
+        let (mut state, hlc, realm, circle) = seed_circle_authz_state();
+        let op_invite = make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            &realm,
+            serde_json::json!({
+                "circle_id": circle, "actor": "did:web:bob",
+                "state": "active", "sender": "did:web:bob",
+            }),
+        );
+        assert!(
+            matches!(
+                state.apply(&op_invite, &hlc),
+                ProjectionEffect::Rejected { reason } if reason == CIRCLE_JOIN_NOT_OPEN
+            ),
+            "self-join on a non-open Circle must be rejected"
+        );
+        // Flip the Circle to open and retry.
+        state.circles.get_mut(&circle).unwrap().join_rule = "open".to_owned();
+        let op_open = make_operation(
+            crate::kinds::CK_CIRCLE_MEMBER_STATE,
+            &realm,
+            serde_json::json!({
+                "circle_id": circle, "actor": "did:web:bob",
+                "state": "active", "sender": "did:web:bob",
+            }),
+        );
+        assert!(
+            matches!(
+                state.apply(&op_open, &hlc),
+                ProjectionEffect::CircleMemberStateChanged { .. }
+            ),
+            "self-join on an open Circle must be accepted"
+        );
+        assert!(state.circles[&circle].members.contains("did:web:bob"));
     }
 
     // CKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,

@@ -1,3 +1,7 @@
+DROP TABLE IF EXISTS invite_receive_policies;
+DROP TABLE IF EXISTS direct_conversation_bindings;
+DROP TABLE IF EXISTS consent_cells;
+DROP TABLE IF EXISTS contacts;
 DROP TABLE IF EXISTS account_datas;
 DROP TABLE IF EXISTS space_state_events;
 DROP TABLE IF EXISTS events;

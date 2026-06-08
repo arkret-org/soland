@@ -417,6 +417,55 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    contacts (requester, target, scope) {
+        requester -> Text,
+        target -> Text,
+        scope -> Text,
+        status -> Text,
+        message -> Nullable<Text>,
+        peer_service_did -> Nullable<Text>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    consent_cells (holder, peer, scope) {
+        holder -> Text,
+        peer -> Text,
+        scope -> Text,
+        cell_id -> Text,
+        requested_at -> Nullable<Timestamptz>,
+        grant_dots -> Jsonb,
+        revoked_dots -> Jsonb,
+        revoked_at -> Nullable<Timestamptz>,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    direct_conversation_bindings (participants_key) {
+        participants_key -> Text,
+        participants_unordered -> Array<Text>,
+        realm_id -> Text,
+        main_flow_id -> Text,
+        binding_event_ref -> Text,
+        state -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    invite_receive_policies (subject_id) {
+        subject_id -> Text,
+        policy_payload -> Jsonb,
+        blocked_subjects -> Array<Text>,
+        updated_at -> Timestamptz,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     sessions,
@@ -447,4 +496,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_flows,
     projection_morphs,
     projection_events,
+    contacts,
+    consent_cells,
+    direct_conversation_bindings,
+    invite_receive_policies,
 );

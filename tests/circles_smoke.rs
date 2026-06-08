@@ -295,6 +295,10 @@ fn circle_member_must_be_realm_member() {
 
     // Adding Bob to the parent Realm unblocks the Circle write.
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
+    // CKP-0007 §8: the owner Alice pulls Bob into a non-`open` Circle, which is
+    // an authorised cross-actor add — the payload carries the `sender` + manage
+    // stamp the HTTP authz gate would attach. This isolates the strict-subset
+    // invariant under test without weakening the §8 authorization door.
     let accepted = state.apply(
         &op(
             CK_CIRCLE_MEMBER_STATE,
@@ -303,6 +307,8 @@ fn circle_member_must_be_realm_member() {
                 "circle_id": CIRCLE_A,
                 "actor": BOB,
                 "state": "active",
+                "sender": ALICE,
+                "manage_capability_verified": true,
             }),
         ),
         &hlc,
@@ -338,6 +344,10 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
         ),
         &hlc,
     );
+    // Owner Alice adds Bob to a non-`open` Circle (authorised cross-actor add):
+    // the payload carries the `sender` + manage stamp the HTTP authz gate would
+    // attach, so the §8 door passes and we reach the remove/active-set invariant
+    // under test.
     state.apply(
         &op(
             CK_CIRCLE_MEMBER_STATE,
@@ -346,6 +356,8 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
                 "circle_id": CIRCLE_A,
                 "actor": BOB,
                 "state": "active",
+                "sender": ALICE,
+                "manage_capability_verified": true,
             }),
         ),
         &hlc,
@@ -403,7 +415,13 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         ),
         &hlc,
     );
-    for actor in [ALICE, BOB] {
+    // Seed the Circle's active membership via authorised cross-actor adds: each
+    // payload carries a `sender` distinct from the target plus the manage stamp
+    // the HTTP authz gate would attach, so the CKP-0007 §8 door passes on a
+    // non-`open` Circle and we reach the scope/visibility invariant under test.
+    // (`payload_asserts_circle_manage` validates the stamp; the chosen `sender`
+    // only needs to differ from the target to route through the manage path.)
+    for (actor, sender) in [(ALICE, BOB), (BOB, ALICE)] {
         state.apply(
             &op(
                 CK_CIRCLE_MEMBER_STATE,
@@ -412,6 +430,8 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                     "circle_id": CIRCLE_A,
                     "actor": actor,
                     "state": "active",
+                    "sender": sender,
+                    "manage_capability_verified": true,
                 }),
             ),
             &hlc,
