@@ -77,7 +77,7 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope: &str) -> Value {
     TestClient::post("http://server/_soland/self/contacts/request")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({ "target": target, "scope": scope }))
+        .json(&serde_json::json!({ "target": target, "requested_scopes": [scope] }))
         .send(app)
         .await
         .take_json()
@@ -330,7 +330,7 @@ async fn consent_events_project_cells_and_contact_gate() {
         }),
     )
     .await;
-    let grant_event_id = grant_response["event_id"].as_str().unwrap();
+    let grant_event_id = grant_response["accepted"][0].as_str().unwrap();
     let grant_dot = format!("{grant_event_id}:{grant_seq}");
 
     let granted = get_cell(&app, &alice_token, alice, bob, "message").await;

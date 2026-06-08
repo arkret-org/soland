@@ -39,7 +39,7 @@ pub(super) fn router() -> Router {
 /// to subscribers in the control frame. `reconnect_after_ms` applies only to
 /// `resync_required`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminControlFrameRequest {
+pub struct AdminControlFrameRequestBody {
     /// The Space whose subscribers should receive the frame.
     pub realm_id: String,
     /// Free-form reason string. Surfaced verbatim in the NDJSON frame
@@ -55,7 +55,7 @@ pub struct AdminControlFrameRequest {
 /// (best-effort; broadcast::send returns the receiver count at the moment
 /// of send, not delivery confirmation).
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminControlFrameResponse {
+pub struct AdminControlFrameOutcome {
     /// `true` if the broadcast was attempted; `false` only if the channel
     /// was closed (server is shutting down).
     pub broadcast: bool,
@@ -89,12 +89,12 @@ async fn admin_emit_resync_required(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<AdminControlFrameRequest>,
-) -> JsonResult<AdminControlFrameResponse> {
+    body: JsonBody<AdminControlFrameRequestBody>,
+) -> JsonResult<AdminControlFrameOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
-    let AdminControlFrameRequest {
+    let AdminControlFrameRequestBody {
         realm_id,
         reason,
         reconnect_after_ms,
@@ -115,7 +115,7 @@ async fn admin_emit_resync_required(
         },
     };
     let receivers = state.event_broadcast.send(notification).unwrap_or(0);
-    json_ok(AdminControlFrameResponse {
+    json_ok(AdminControlFrameOutcome {
         broadcast: true,
         receivers,
         kind: "resync_required".to_owned(),
@@ -140,12 +140,12 @@ async fn admin_emit_unauthorized(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<AdminControlFrameRequest>,
-) -> JsonResult<AdminControlFrameResponse> {
+    body: JsonBody<AdminControlFrameRequestBody>,
+) -> JsonResult<AdminControlFrameOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
-    let AdminControlFrameRequest {
+    let AdminControlFrameRequestBody {
         realm_id, reason, ..
     } = body.into_inner();
     if realm_id.is_empty() {
@@ -161,7 +161,7 @@ async fn admin_emit_unauthorized(
         kind: EventNotificationKind::Unauthorized { reason },
     };
     let receivers = state.event_broadcast.send(notification).unwrap_or(0);
-    json_ok(AdminControlFrameResponse {
+    json_ok(AdminControlFrameOutcome {
         broadcast: true,
         receivers,
         kind: "unauthorized".to_owned(),
@@ -233,7 +233,7 @@ mod tests {
         // string check exercised by integration tests. This test just
         // pins the request shape so we don't accidentally drop the
         // `realm_id` field.
-        let req = AdminControlFrameRequest {
+        let req = AdminControlFrameRequestBody {
             realm_id: String::new(),
             reason: Some("x".to_owned()),
             reconnect_after_ms: Some(10_000),

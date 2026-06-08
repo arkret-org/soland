@@ -1699,7 +1699,7 @@ fn federation_request_digest(
 // ── Anchor pull/push (federation/anchors) ──────────────
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsResponse {
+pub struct FederationAnchorsOutcome {
     pub anchors: Vec<Anchor>,
     /// Echo of [`crate::config::FederationPolicy::as_str`] so the calling
     /// peer can reason about whether to fan out to other nodes.
@@ -1708,13 +1708,13 @@ pub struct FederationAnchorsResponse {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsPushRequest {
+pub struct FederationAnchorsPushRequestBody {
     pub origin: String,
     pub anchors: Vec<Anchor>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsPushResponse {
+pub struct FederationAnchorsPushOutcome {
     pub accepted: Vec<String>,
     pub rejected: Vec<serde_json::Value>,
 }
@@ -1728,7 +1728,7 @@ pub struct FederationAnchorsPushResponse {
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
-) -> JsonResult<FederationAnchorsResponse> {
+) -> JsonResult<FederationAnchorsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
@@ -1742,7 +1742,7 @@ pub(super) async fn federation_anchors_pull(
             anchors.push(a);
         }
     }
-    json_ok(FederationAnchorsResponse {
+    json_ok(FederationAnchorsOutcome {
         anchors,
         policy: state.config.federation_policy.as_str().to_owned(),
         next_cursor: None,
@@ -1757,8 +1757,8 @@ pub(super) async fn federation_anchors_pull(
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.push"))]
 pub(super) async fn federation_anchors_push(
     depot: &mut Depot,
-    body: JsonBody<FederationAnchorsPushRequest>,
-) -> JsonResult<FederationAnchorsPushResponse> {
+    body: JsonBody<FederationAnchorsPushRequestBody>,
+) -> JsonResult<FederationAnchorsPushOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {
@@ -1789,7 +1789,7 @@ pub(super) async fn federation_anchors_push(
         }
         accepted.push(id_str);
     }
-    json_ok(FederationAnchorsPushResponse { accepted, rejected })
+    json_ok(FederationAnchorsPushOutcome { accepted, rejected })
 }
 
 /// Outbound Move broadcast helper. Each accepted Move

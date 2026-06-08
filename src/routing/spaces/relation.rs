@@ -22,7 +22,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::query_param;
 use crate::state::AppState;
 use crate::wire::{
-    CreateRelationRequest, ListRelationsResponse, RelationResponse, TombstoneRelationResponse,
+    CreateRelationRequestBody, ListRelationsOutcome, RelationOutcome, TombstoneRelationOutcome,
 };
 use crate::{ids, kinds};
 
@@ -44,10 +44,10 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.relation.create"))]
 async fn create_relation(
     aa: AuthArgs,
-    body: JsonBody<CreateRelationRequest>,
+    body: JsonBody<CreateRelationRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RelationResponse> {
+) -> JsonResult<RelationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -99,7 +99,7 @@ async fn create_relation(
         proj.relations.get(&relation_id).cloned()
     };
     let r = relation.ok_or_else(|| AppError::internal("relation not found after creation"))?;
-    json_ok(RelationResponse {
+    json_ok(RelationOutcome {
         relation_id: r.relation_id,
         realm_id: r.realm_id,
         relation_kind: r.relation_kind,
@@ -122,7 +122,7 @@ async fn tombstone_relation(
     relation_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<TombstoneRelationResponse> {
+) -> JsonResult<TombstoneRelationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let relation_id = relation_id.into_inner();
@@ -141,7 +141,7 @@ async fn tombstone_relation(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(|error| AppError::new(ErrorCode::Conflict, error.to_string()))?;
-    json_ok(TombstoneRelationResponse {
+    json_ok(TombstoneRelationOutcome {
         state: "tombstoned".to_owned(),
         relation_id,
     })
@@ -158,7 +158,7 @@ async fn list_relations(
     kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ListRelationsResponse> {
+) -> JsonResult<ListRelationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _ = aa.authenticated_session(state, req).await?;
     let realm_id = query_param(req, "realm_id").unwrap_or_default();
@@ -167,7 +167,7 @@ async fn list_relations(
         let proj = state.projection.lock().expect("projection lock");
         proj.relations_for_realm(&realm_id, kind.as_deref())
             .into_iter()
-            .map(|r| RelationResponse {
+            .map(|r| RelationOutcome {
                 relation_id: r.relation_id.clone(),
                 realm_id: r.realm_id.clone(),
                 relation_kind: r.relation_kind.clone(),
@@ -179,5 +179,5 @@ async fn list_relations(
             })
             .collect::<Vec<_>>()
     };
-    json_ok(ListRelationsResponse { relations })
+    json_ok(ListRelationsOutcome { relations })
 }

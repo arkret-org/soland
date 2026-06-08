@@ -58,7 +58,7 @@ pub struct RealmLinkResponseEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListRealmLinksResponse {
+pub struct ListRealmLinksOutcome {
     pub realm_id: String,
     pub direction: String,
     pub links: Vec<RealmLinkResponseEntry>,
@@ -66,7 +66,7 @@ pub struct ListRealmLinksResponse {
 
 /// POST body for creating / updating a `ck.realm.link`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateRealmLinkRequest {
+pub struct CreateRealmLinkRequestBody {
     pub target_realm_id: String,
     pub link_kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,7 +79,7 @@ pub struct CreateRealmLinkRequest {
 
 /// POST/DELETE response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmLinkMutationResponse {
+pub struct RealmLinkMutationOutcome {
     pub realm_id: String,
     pub target_realm_id: String,
     pub link_kind: String,
@@ -88,7 +88,7 @@ pub struct RealmLinkMutationResponse {
 
 /// Effective-policy response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct EffectivePolicyResponse {
+pub struct EffectivePolicyOutcome {
     pub realm_id: String,
     pub effective_policy: Value,
     pub inheritance_chain: Vec<String>,
@@ -126,7 +126,7 @@ async fn list_realm_links(
     link_kind_allow: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ListRealmLinksResponse> {
+) -> JsonResult<ListRealmLinksOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -161,7 +161,7 @@ async fn list_realm_links(
         .map(RealmLinkResponseEntry::from)
         .collect::<Vec<_>>();
 
-    json_ok(ListRealmLinksResponse {
+    json_ok(ListRealmLinksOutcome {
         realm_id,
         direction: direction_str,
         links: entries,
@@ -181,10 +181,10 @@ async fn list_realm_links(
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
-    body: JsonBody<CreateRealmLinkRequest>,
+    body: JsonBody<CreateRealmLinkRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmLinkMutationResponse> {
+) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -230,7 +230,7 @@ async fn post_realm_link(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    json_ok(RealmLinkMutationResponse {
+    json_ok(RealmLinkMutationOutcome {
         realm_id,
         target_realm_id: body.target_realm_id,
         link_kind: body.link_kind,
@@ -270,7 +270,7 @@ async fn delete_realm_link(
     link_kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmLinkMutationResponse> {
+) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -309,7 +309,7 @@ async fn delete_realm_link(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    json_ok(RealmLinkMutationResponse {
+    json_ok(RealmLinkMutationOutcome {
         realm_id,
         target_realm_id,
         link_kind,
@@ -344,13 +344,13 @@ async fn get_effective_policy(
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EffectivePolicyResponse> {
+) -> JsonResult<EffectivePolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let ep = effective_policy_for_realm(&projection, &realm_id);
-    json_ok(EffectivePolicyResponse {
+    json_ok(EffectivePolicyOutcome {
         realm_id: ep.realm_id,
         effective_policy: ep.effective_policy,
         inheritance_chain: ep.inheritance_chain,

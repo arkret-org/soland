@@ -46,8 +46,15 @@ async fn health_and_describe_work() {
             .iter()
             .any(|profile| profile == "ck.profile.soland_limited_server.v1")
     );
+
+    let legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert!(
-        describe["unsupported_profiles"]
+        legacy_describe["unsupported_profiles"]
             .as_array()
             .unwrap()
             .iter()
@@ -319,8 +326,17 @@ async fn describe_returns_development_mode_field() {
         .await
         .unwrap();
     assert_eq!(describe["development_mode"], true);
-    assert_eq!(describe["proof_verifier_mode"], "development");
-    assert_eq!(describe["admin_auth_mode"], "development");
+    assert!(describe.get("proof_verifier_mode").is_none());
+    assert!(describe.get("admin_auth_mode").is_none());
+
+    let legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+        .send(&dev_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(legacy_describe["proof_verifier_mode"], "development");
+    assert_eq!(legacy_describe["admin_auth_mode"], "development");
 
     // Now flip to production posture with an explicit admin allowlist to
     // make sure the derivation tracks the config — this is the production
@@ -350,8 +366,17 @@ async fn describe_returns_development_mode_field() {
         .await
         .unwrap();
     assert_eq!(prod_describe["development_mode"], false);
-    assert_eq!(prod_describe["proof_verifier_mode"], "production");
-    assert_eq!(prod_describe["admin_auth_mode"], "did_allowlist");
+    assert!(prod_describe.get("proof_verifier_mode").is_none());
+    assert!(prod_describe.get("admin_auth_mode").is_none());
+
+    let prod_legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+        .send(&prod_app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(prod_legacy_describe["proof_verifier_mode"], "production");
+    assert_eq!(prod_legacy_describe["admin_auth_mode"], "did_allowlist");
 }
 
 #[tokio::test]
@@ -419,8 +444,8 @@ async fn healthz_exposes_hardening_status() {
         "prod posture should clear several extra checks (dev={score} prod={prod_score})"
     );
 
-    // /_cokret/describe should also embed the same hardening block.
-    let describe: Value = TestClient::get("http://server/_cokret/describe")
+    // /_soland/describe keeps the soland-local operator posture fields.
+    let describe: Value = TestClient::get("http://server/_soland/describe")
         .send(&prod_app)
         .await
         .take_json()

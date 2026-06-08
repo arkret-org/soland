@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::SecondsFormat;
-use cokret_sdk::{Did, RealmId, canonical};
+use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
+use cokret_sdk::{Did, EventsQueryPostRequestBody, RealmId, canonical};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -13,7 +14,7 @@ use super::{
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord};
-use crate::wire::{EventResolveRequest, EventsQueryPostRequestBody, SolandSnapshotHeadState};
+use crate::wire::SolandSnapshotHeadState;
 
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
@@ -104,7 +105,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     summary = "Query federation-visible Event Envelopes"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query"))]
-async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None)?;
     let parts = PeerEventsQueryParts::from_query(req)?;
@@ -117,7 +118,10 @@ async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<V
     summary = "Query federation-visible Event Envelopes with a JSON body"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query_post"))]
-async fn peer_events_query_post(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_events_query_post(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = parse_json_body(req, "invalid ck.peer.events.query request body").await?;
     validate_peer_request(state, req, Some(&body))?;
@@ -135,11 +139,14 @@ async fn peer_events_query_post(depot: &mut Depot, req: &mut Request) -> JsonRes
     summary = "Resolve federation-visible Event Envelopes by id or digest"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.resolve"))]
-async fn peer_events_resolve(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_events_resolve(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<EventsResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = parse_json_body(req, "invalid ck.peer.events.resolve request body").await?;
     validate_peer_request(state, req, Some(&body))?;
-    let request = serde_json::from_value::<EventResolveRequest>(body).map_err(|error| {
+    let request = serde_json::from_value::<EventsResolveRequestBody>(body).map_err(|error| {
         schema_violation(format!("invalid ck.peer.events.resolve shape: {error}"))
     })?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
@@ -151,21 +158,22 @@ async fn peer_events_resolve(depot: &mut Depot, req: &mut Request) -> JsonResult
         .with_wire_code("payload_too_large"));
     }
     for digest in &request.event_digests {
-        if !is_valid_sha256_digest(digest) {
+        if !is_valid_sha256_digest(digest.as_str()) {
             return Err(AppError::invalid_param(format!(
                 "invalid event digest: {digest}"
             )));
         }
     }
+    let include_payload = request.include_payload.unwrap_or(true);
     let requested_ids = request
         .event_ids
         .iter()
-        .map(String::as_str)
+        .map(|event_id| event_id.as_str())
         .collect::<BTreeSet<_>>();
     let requested_digests = request
         .event_digests
         .iter()
-        .map(String::as_str)
+        .map(|digest| digest.as_str())
         .collect::<BTreeSet<_>>();
     let records = state
         .persistence
@@ -184,24 +192,28 @@ async fn peer_events_resolve(depot: &mut Depot, req: &mut Request) -> JsonResult
         }
         found_ids.insert(record.event_id.clone());
         found_digests.insert(record.canonical_digest.clone());
-        events.push(event_read_json(state, &record, request.include_payload));
+        let mut event = super::event_log::sdk_event_for_state(state, &record)?;
+        if !include_payload {
+            event.content = Value::Null;
+        }
+        events.push(event);
     }
     let mut missing = Vec::new();
     for id in request.event_ids {
-        if !found_ids.contains(&id) {
-            missing.push(id);
+        if !found_ids.contains(id.as_str()) {
+            missing.push(id.to_string());
         }
     }
     for digest in request.event_digests {
-        if !found_digests.contains(&digest) {
-            missing.push(digest);
+        if !found_digests.contains(digest.as_str()) {
+            missing.push(digest.to_string());
         }
     }
-    json_ok(json!({
-        "events": events,
-        "missing": missing,
-        "unauthorized": []
-    }))
+    json_ok(EventsResolveOutcome {
+        events,
+        missing,
+        unauthorized: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -485,7 +497,7 @@ impl PeerEventsQueryParts {
 async fn peer_events_query_response(
     state: &AppState,
     parts: PeerEventsQueryParts,
-) -> JsonResult<Value> {
+) -> JsonResult<EventsQueryOutcome> {
     let realms_set = parts
         .realms
         .iter()
@@ -549,14 +561,14 @@ async fn peer_events_query_response(
     };
     let events = page
         .iter()
-        .map(|record| event_read_json(state, record, true))
-        .collect::<Vec<_>>();
-    json_ok(json!({
-        "events": events,
-        "next_cursor": next_cursor,
-        "prev_cursor": prev_cursor,
-        "has_more": has_more
-    }))
+        .map(|record| super::event_log::sdk_event_for_state(state, record))
+        .collect::<Result<Vec<_>, _>>()?;
+    json_ok(EventsQueryOutcome {
+        events,
+        next_cursor,
+        prev_cursor,
+        has_more,
+    })
 }
 
 fn peer_record_matches(
@@ -600,19 +612,6 @@ fn parse_kind_filter(filters: Option<&Value>) -> Result<Option<String>, AppError
         .get("kind")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
-}
-
-fn event_read_json(
-    state: &AppState,
-    record: &CanonicalEventRecord,
-    include_payload: bool,
-) -> Value {
-    let response = super::event_log::event_read_response_for_state(state, record);
-    let mut value = serde_json::to_value(response).unwrap_or_else(|_| json!({}));
-    if !include_payload && let Some(event) = value.get_mut("event").and_then(Value::as_object_mut) {
-        event.remove("payload");
-    }
-    value
 }
 
 async fn parse_json_body(req: &mut Request, message: &'static str) -> Result<Value, AppError> {

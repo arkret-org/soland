@@ -35,10 +35,10 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
-    CreateWebrtcSessionRequest, CreateWebrtcSessionResponse, OkOutcome,
+    CreateWebrtcSessionOutcome, CreateWebrtcSessionRequestBody, OkOutcome,
     SolandCallMediaParticipantBinding, SolandCallMediaTokenExchangeOutcome,
-    SolandCallMediaTokenExchangeRequestBody, WebrtcSignalRequest, WebrtcSignalResponse,
-    WebrtcSignalsResponse,
+    SolandCallMediaTokenExchangeRequestBody, WebrtcSignalOutcome, WebrtcSignalRequestBody,
+    WebrtcSignalsOutcome,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -311,10 +311,10 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
     aa: AuthArgs,
-    body: JsonBody<CreateWebrtcSessionRequest>,
+    body: JsonBody<CreateWebrtcSessionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CreateWebrtcSessionResponse> {
+) -> JsonResult<CreateWebrtcSessionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -369,7 +369,7 @@ async fn create_webrtc_session(
         .put(record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(CreateWebrtcSessionResponse {
+    json_ok(CreateWebrtcSessionOutcome {
         session_id,
         realm_id: body.realm_id,
         participants: participant_list,
@@ -390,10 +390,10 @@ async fn create_webrtc_session(
 async fn put_webrtc_signal(
     aa: AuthArgs,
     session_id: PathParam<String>,
-    body: JsonBody<WebrtcSignalRequest>,
+    body: JsonBody<WebrtcSignalRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<WebrtcSignalResponse> {
+) -> JsonResult<WebrtcSignalOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
@@ -466,7 +466,7 @@ async fn put_webrtc_signal(
                 .flatten()
                 .map(|record| call_state_for_webrtc_session(&record).to_owned())
                 .unwrap_or_else(|| "ringing".to_owned());
-            json_ok(WebrtcSignalResponse {
+            json_ok(WebrtcSignalOutcome {
                 ok: true,
                 session_id: session_id.clone(),
                 seq: appended.seq,
@@ -497,7 +497,7 @@ async fn get_webrtc_signals(
     limit: QueryParam<usize, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<WebrtcSignalsResponse> {
+) -> JsonResult<WebrtcSignalsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
@@ -546,7 +546,7 @@ async fn get_webrtc_signals(
         .and_then(|event| event["seq"].as_u64())
         .unwrap_or(since)
         .to_string();
-    json_ok(WebrtcSignalsResponse {
+    json_ok(WebrtcSignalsOutcome {
         session_id,
         call_state,
         events,
@@ -754,7 +754,7 @@ impl MediaServiceEpoch {
     }
 }
 
-struct MediaTokenIssueRequest<'a> {
+struct MediaTokenIssueRequestBody<'a> {
     focus: &'a MediaProviderConfig,
     realm_id: &'a str,
     call_id: &'a str,
@@ -773,7 +773,7 @@ struct IssuedMediaToken {
 trait MediaTokenIssuer {
     fn issue(
         &self,
-        request: &MediaTokenIssueRequest<'_>,
+        request: &MediaTokenIssueRequestBody<'_>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> IssuedMediaToken;
 }
@@ -785,7 +785,7 @@ struct MediasoupMediaIssuer;
 impl MediaTokenIssuer for CokretNativeMediaIssuer {
     fn issue(
         &self,
-        request: &MediaTokenIssueRequest<'_>,
+        request: &MediaTokenIssueRequestBody<'_>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> IssuedMediaToken {
         issue_signed_backend_token(MediaProviderKind::CokretNative, request, signing_key)
@@ -795,7 +795,7 @@ impl MediaTokenIssuer for CokretNativeMediaIssuer {
 impl MediaTokenIssuer for LiveKitMediaIssuer {
     fn issue(
         &self,
-        request: &MediaTokenIssueRequest<'_>,
+        request: &MediaTokenIssueRequestBody<'_>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> IssuedMediaToken {
         issue_signed_backend_token(MediaProviderKind::LiveKit, request, signing_key)
@@ -805,7 +805,7 @@ impl MediaTokenIssuer for LiveKitMediaIssuer {
 impl MediaTokenIssuer for MediasoupMediaIssuer {
     fn issue(
         &self,
-        request: &MediaTokenIssueRequest<'_>,
+        request: &MediaTokenIssueRequestBody<'_>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> IssuedMediaToken {
         issue_signed_backend_token(MediaProviderKind::Mediasoup, request, signing_key)
@@ -941,7 +941,7 @@ async fn handle_rtc_token(
         )[..32]
     );
     let signing_key = state.anchorer_signing_key();
-    let issue_request = MediaTokenIssueRequest {
+    let issue_request = MediaTokenIssueRequestBody {
         focus,
         realm_id: &body.realm_id,
         call_id: &body.call_id,
@@ -1291,7 +1291,7 @@ fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssu
 
 fn issue_signed_backend_token(
     provider: MediaProviderKind,
-    request: &MediaTokenIssueRequest<'_>,
+    request: &MediaTokenIssueRequestBody<'_>,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> IssuedMediaToken {
     let nonce = ids::generate("media_token");

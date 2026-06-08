@@ -18,10 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::artifacts;
-use crate::state::RealmDirectoryEntry;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct HealthResponse {
+pub struct HealthOutcome {
     pub ok: bool,
     pub service: &'static str,
     pub storage: &'static str,
@@ -53,7 +52,7 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandServerDescribeResponse {
+pub struct SolandServerDescribeOutcome {
     #[serde(flatten)]
     pub service: ServerDescription,
     pub unsupported_profiles: Vec<UnsupportedProfileDescriptor>,
@@ -84,7 +83,7 @@ impl UnsupportedProfileDescriptor {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AuthBridgeDescribeResponse {
+pub struct AuthBridgeDescribeOutcome {
     pub contract: String,
     pub version: String,
     pub api_base_path: String,
@@ -120,7 +119,7 @@ pub struct AuthBridgeExamples {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeDescribeResponse {
+pub struct OutboundPushBridgeDescribeOutcome {
     pub contract: String,
     pub version: String,
     pub api_base_path: String,
@@ -167,7 +166,7 @@ pub struct OutboundPushBridgeExamples {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct IntegrationDescribeResponse {
+pub struct IntegrationDescribeOutcome {
     pub contract: String,
     pub version: String,
     pub service: String,
@@ -201,21 +200,21 @@ pub struct IntegrationSurfaceDescriptor {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeResolveRequest {
+pub struct OutboundPushBridgeResolveRequestBody {
     pub push_gateway_url: String,
     #[serde(default)]
     pub refresh: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeFetchRequest {
+pub struct OutboundPushBridgeFetchRequestBody {
     pub push_gateway_url: String,
     #[serde(default)]
     pub force_refresh: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheInvalidateRequest {
+pub struct OutboundPushBridgeCacheInvalidateRequestBody {
     #[serde(default)]
     pub push_gateway_url: Option<String>,
 }
@@ -247,7 +246,7 @@ fn default_trust_pending() -> String {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheExportResponse {
+pub struct OutboundPushBridgeCacheExportOutcome {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
     pub snapshot_store_kind: String,
@@ -256,7 +255,7 @@ pub struct OutboundPushBridgeCacheExportResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheImportRequest {
+pub struct OutboundPushBridgeCacheImportRequestBody {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
     #[serde(default)]
@@ -264,7 +263,7 @@ pub struct OutboundPushBridgeCacheImportRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheImportResponse {
+pub struct OutboundPushBridgeCacheImportOutcome {
     pub imported_count: usize,
     pub skipped_count: usize,
     pub total_entries: usize,
@@ -275,7 +274,7 @@ pub struct OutboundPushBridgeCacheImportResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeResolveResponse {
+pub struct OutboundPushBridgeResolveOutcome {
     pub push_gateway_url: String,
     pub service_base_url: String,
     pub bridge_describe_url: String,
@@ -314,7 +313,7 @@ pub struct OutboundPushResolvedContract {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeFetchResponse {
+pub struct OutboundPushBridgeFetchOutcome {
     pub push_gateway_url: String,
     pub service_base_url: String,
     pub bridge_describe_url: String,
@@ -338,7 +337,7 @@ pub struct OutboundPushBridgeFetchResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheStatusResponse {
+pub struct OutboundPushBridgeCacheStatusOutcome {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheEntry>,
 }
@@ -361,7 +360,7 @@ pub struct OutboundPushBridgeCacheEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct OutboundPushBridgeCacheInvalidateResponse {
+pub struct OutboundPushBridgeCacheInvalidateOutcome {
     pub removed_count: usize,
     pub remaining_entries: usize,
     pub cache_state: String,
@@ -376,7 +375,7 @@ pub struct AccountDescribeOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ClientSyncRequest {
+pub struct ClientSyncRequestBody {
     pub after: Option<String>,
     #[serde(default)]
     pub catchup: Option<bool>,
@@ -384,156 +383,6 @@ pub struct ClientSyncRequest {
     pub filter: Option<Value>,
     #[serde(default)]
     pub set_presence: Option<String>,
-}
-
-/// `POST /_cokret/self/account/cursor/revoke` request body
-/// (`ck.self.account.cursor_revoke`).
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CursorRevokeRequest {
-    /// The cursor authority to revoke (`ck:cursor:<...>`).
-    pub cursor: String,
-    /// Machine-readable revocation reason (audited).
-    pub reason_code: String,
-    /// Revocation breadth. Defaults to `this_cursor`.
-    #[serde(default)]
-    pub revoke_scope: Option<String>,
-}
-
-/// `POST /_cokret/self/account/cursor/revoke` response body.
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CursorRevokeResponse {
-    pub revoked: bool,
-    /// When the revocation record expires (the revoked cursor's maximum TTL).
-    pub expires_at: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SearchRealmsRequest {
-    pub query: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectoryDescribeOutcome {
-    pub service_did: String,
-    pub resource_types: Vec<String>,
-    pub discovery_profiles: Vec<String>,
-    pub restricted_query_proof: bool,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ResolveRealmRequest {
-    pub realm_id: Option<String>,
-    pub alias: Option<String>,
-    pub invite_token: Option<String>,
-    pub signed_link: Option<String>,
-    #[serde(default)]
-    pub requester: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ResolveRealmResponse {
-    pub realm_preview: RealmDirectoryEntry,
-    pub stripped_state: Vec<Value>,
-    pub join_rule: String,
-    pub join_candidates: Vec<RealmJoinCandidate>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SearchRealmsResponse {
-    pub results: Vec<RealmDirectoryEntry>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SearchOrganizationsRequest {
-    pub query: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ResolveOrganizationRequest {
-    pub organization_id: Option<String>,
-    pub handle: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SearchActorsRequest {
-    pub query: Option<String>,
-    pub organization_id: Option<String>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SearchUsersRequest {
-    #[serde(default)]
-    pub query: Option<String>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-    /// Why the requester wants to enumerate users — gates anti-enumeration
-    /// filtering. Spec 0a5ab85: `ck.find.directory.search_users` adds `intent`.
-    #[serde(default)]
-    pub intent: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ResolveHandleRequest {
-    pub handle: String,
-    /// Why the handle is being resolved — gates audience binding on the
-    /// response handle claim. Spec 0a5ab85.
-    #[serde(default)]
-    pub intent: Option<String>,
-    /// DID / service DID of the requester. Used to scope audience-bearing
-    /// claims and apply Space `allowed_recipient_services` filtering.
-    #[serde(default)]
-    pub requester: Option<String>,
-    /// Optional explicit audience the verifier expects the claim to bind
-    /// to (typically a target Space DID or inviter service DID). When
-    /// present, the directory MUST issue an audience-bearing claim.
-    #[serde(default)]
-    pub audience: Option<String>,
-    /// Target Realm for membership-builder resolves (`member_add` / `invite`).
-    /// Required by the protocol when the response is used as admission
-    /// material rather than display-only lookup data.
-    #[serde(default)]
-    pub realm_id: Option<String>,
-    /// Optional requester proofs for proof-gated disclosure.
-    #[serde(default)]
-    pub proofs: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DirectoryListHandlesForSubjectRequest {
-    /// Holder / principal DID reverse-lookup key. This is not a Realm actor_id.
-    pub subject: String,
-    #[serde(default)]
-    pub realm_id: Option<String>,
-    #[serde(default)]
-    pub intent: Option<String>,
-    #[serde(default)]
-    pub requester: Option<String>,
-    #[serde(default)]
-    pub proof_challenge: Option<String>,
-    #[serde(default)]
-    pub proofs: Vec<Value>,
-    #[serde(default)]
-    pub as_of: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectoryValueSearchResponse {
-    pub results: Vec<Value>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ResolveOrganizationResponse {
-    pub organization: Value,
-    pub spaces: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -608,47 +457,8 @@ pub struct SolandHandleClaimProof {
     pub jws: Option<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ResolveHandleResponse {
-    pub handle: String,
-    pub did: String,
-    /// Principal DID of the handle holder. Kept byte-identical with `did`
-    /// while legacy clients still consume that field name.
-    pub subject: String,
-    pub actor: Value,
-    /// Audience the claim is bound to (echoes the `audience` request param
-    /// or the inferred default — typically the requester / target Space).
-    /// Verifiers MUST reject claims whose audience does not match their
-    /// invocation context. Spec 0a5ab85.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audience: Option<String>,
-    /// Embedded handle claim envelope when the resolver issued one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub handle_claim: Option<SolandHandleClaim>,
-    /// Top-level membership-builder routing evidence. For
-    /// `intent=member_add|invite` this mirrors
-    /// `handle_claim.member_delivery_binding` so verifiers can consume the
-    /// candidate shape defined by `member-delivery-binding-candidate.schema`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_refs: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DirectorySubjectHandleListResponse {
-    pub subject: String,
-    pub claims: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_handle: Option<String>,
-    pub as_of: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IndexQueryRequest {
+pub struct IndexQueryRequestBody {
     #[serde(default)]
     pub realm_ids: Vec<String>,
     /// Filter by typed-id kinds (`space`, `flow`, `message`, …) drawn from the
@@ -669,14 +479,14 @@ pub struct IndexQueryRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexQueryResponse {
+pub struct IndexQueryOutcome {
     pub results: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexDescribeResponse {
+pub struct IndexDescribeOutcome {
     pub service_did: String,
     pub reducer_profiles: Vec<String>,
     pub schema_profiles: Vec<String>,
@@ -685,7 +495,7 @@ pub struct IndexDescribeResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IndexSearchRequest {
+pub struct IndexSearchRequestBody {
     pub query: String,
     #[serde(default)]
     pub realm_ids: Vec<String>,
@@ -700,14 +510,14 @@ pub struct IndexSearchRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexSearchResponse {
+pub struct IndexSearchOutcome {
     pub results: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexThreadResponse {
+pub struct IndexThreadOutcome {
     pub thread: Value,
     pub events: Vec<Value>,
     pub next_cursor: Option<String>,
@@ -715,7 +525,7 @@ pub struct IndexThreadResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexNotificationsResponse {
+pub struct IndexNotificationsOutcome {
     pub notifications: Vec<Value>,
     pub next_cursor: Option<String>,
     pub unread_count: usize,
@@ -723,14 +533,14 @@ pub struct IndexNotificationsResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexInboxResponse {
+pub struct IndexInboxOutcome {
     pub flows: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexSpaceHierarchyResponse {
+pub struct IndexSpaceHierarchyOutcome {
     pub root_space_id: String,
     pub spaces: Vec<Value>,
     pub edges: Vec<Value>,
@@ -743,60 +553,6 @@ pub struct BackfillOutcome {
     pub prev_cursor: Option<String>,
     pub next_cursor: Option<String>,
     pub limited: bool,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventDescribeResponse {
-    pub service_did: String,
-    pub protocol_version: String,
-    pub primary_write_path: String,
-    pub event_envelope: Value,
-    pub supported_profiles: Vec<String>,
-    pub registry: Value,
-    pub schema_profile: String,
-    pub reducer_profile: String,
-    pub limits: Value,
-    pub capabilities: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventSubmitResponse {
-    pub status: String,
-    pub event_id: String,
-    pub canonical_digest: String,
-    pub sync_token: String,
-    pub received_at: DateTime<Utc>,
-    pub receipt: Value,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventReadResponse {
-    pub event: Value,
-    pub metadata: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct EventResolveRequest {
-    #[serde(default)]
-    pub event_ids: Vec<String>,
-    #[serde(default)]
-    pub event_digests: Vec<String>,
-    #[serde(default)]
-    pub include_payload: bool,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventResolveResponse {
-    pub events: Vec<EventReadResponse>,
-    pub missing: Vec<String>,
-    pub unauthorized: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EventsPageResponse {
-    pub events: Vec<EventReadResponse>,
-    pub next_cursor: Option<String>,
-    pub frontier: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -853,21 +609,8 @@ pub struct SolandAuthzCheckOutcome {
     pub decision_trace: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandGrantList {
-    pub grants: Vec<Value>,
-    pub state_digest: Option<String>,
-    pub evaluated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct InvitesResponse {
-    pub invites: Vec<Value>,
-    pub next_cursor: Option<String>,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushRegisterRequest {
+pub struct PushRegisterRequestBody {
     pub operation_id: Option<String>,
     pub principal_id: Option<String>,
     pub device_id: String,
@@ -881,18 +624,8 @@ pub struct PushRegisterRequest {
     pub proof: Option<Value>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PushRegisterResponse {
-    pub ok: bool,
-    pub registration_id: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub accepted_gateway: Option<String>,
-    pub request_id: Option<String>,
-    pub warnings: Vec<String>,
-}
-
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushUnregisterRequest {
+pub struct PushUnregisterRequestBody {
     pub device_id: String,
     pub push_key: Option<String>,
     pub app_id: Option<String>,
@@ -903,19 +636,19 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PushRulesResponse {
+pub struct PushRulesOutcome {
     pub rules: Vec<Value>,
     pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct UpsertPushRuleResponse {
+pub struct UpsertPushRuleOutcome {
     pub ok: bool,
     pub rule: Value,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpsertPushRuleRequest {
+pub struct UpsertPushRuleRequestBody {
     pub rule_id: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -944,7 +677,7 @@ pub struct SolandModerationReportOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct UpsertPolicyDocumentRequest {
+pub struct UpsertPolicyDocumentRequestBody {
     #[serde(default)]
     pub policy_id: Option<String>,
     pub scope: String,
@@ -962,7 +695,7 @@ pub struct UpsertPolicyDocumentRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PolicyDocumentResponse {
+pub struct PolicyDocumentOutcome {
     pub policy_id: String,
     pub owner: String,
     pub scope: String,
@@ -974,8 +707,8 @@ pub struct PolicyDocumentResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct PolicyDocumentsResponse {
-    pub policies: Vec<PolicyDocumentResponse>,
+pub struct PolicyDocumentsOutcome {
+    pub policies: Vec<PolicyDocumentOutcome>,
     pub next_cursor: Option<String>,
 }
 
@@ -1030,14 +763,14 @@ pub struct SolandPolicyCheckOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DevLoginRequest {
+pub struct DevLoginRequestBody {
     pub actor: String,
     pub device_id: String,
     pub display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SessionGrantExchangeRequest {
+pub struct SessionGrantExchangeRequestBody {
     pub grant_jwt: String,
     pub principal_id: String,
     pub device_id: String,
@@ -1053,7 +786,7 @@ pub struct SessionGrantIntrospectionProof {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DevLoginResponse {
+pub struct DevLoginOutcome {
     pub access_token: String,
     pub token_type: String,
     pub actor: String,
@@ -1062,13 +795,13 @@ pub struct DevLoginResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct LogoutResponse {
+pub struct LogoutOutcome {
     pub ok: bool,
     pub revoked: bool,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RegisterAccountRequest {
+pub struct RegisterAccountRequestBody {
     pub did: String,
     pub handle: String,
     pub display_name: Option<String>,
@@ -1085,28 +818,28 @@ pub struct SolandAccountRegisterOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ClaimHandleRequest {
+pub struct ClaimHandleRequestBody {
     /// New handle (with or without leading `@`). Normalized server-side
     /// to lowercase + `@`-prefixed form per identity-handles.md §2.
     pub handle: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ClaimHandleResponse {
+pub struct ClaimHandleOutcome {
     pub did: String,
     pub handle: String,
     pub previous_handle: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct TransferHandleRequest {
+pub struct TransferHandleRequestBody {
     /// DID of the recipient. MUST be a registered account; otherwise
     /// the request fails with `target_did_unknown`.
     pub target_did: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct TransferHandleResponse {
+pub struct TransferHandleOutcome {
     /// The handle string that was moved between accounts.
     pub handle: String,
     pub from_did: String,
@@ -1137,70 +870,8 @@ pub struct SolandAccountUpdateProfileOutcome {
     pub avatar_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandContactRequestRequestBody {
-    pub target: String,
-    #[serde(default)]
-    #[serde(rename = "consent_scope")]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub requested_scopes: Vec<String>,
-    #[serde(default)]
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandContactRespondRequestBody {
-    #[serde(default)]
-    pub request_id: Option<String>,
-    pub requester: String,
-    pub action: String,
-    #[serde(default)]
-    pub granted_scopes: Vec<String>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ContactResponse {
-    pub requester: String,
-    pub target: String,
-    #[serde(rename = "consent_scope")]
-    pub scope: String,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ContactsResponse {
-    pub contacts: Vec<ContactListRow>,
-    pub has_more: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandDirectConversationResolveRequestBody {
-    pub peer: String,
-    #[serde(default)]
-    pub create: bool,
-    #[serde(default)]
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandDirectConversationResolveOutcome {
-    pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub realm_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_flow_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding_event_ref: Option<String>,
-    pub created: bool,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RealmLifecycleResponse {
+pub struct RealmLifecycleOutcome {
     pub ok: bool,
     pub realm_id: String,
     pub owner: String,
@@ -1209,7 +880,7 @@ pub struct RealmLifecycleResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SendMessageRequest {
+pub struct SendMessageRequestBody {
     pub realm_id: String,
     #[serde(default)]
     pub thread_id: Option<String>,
@@ -1425,8 +1096,8 @@ pub struct SolandAgentSidecarThreadEnsureOutcome {
 }
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
-// token exchange wire shapes. Mirrors `MediaTokenResponse` /
-// `ParticipantBinding` in `cokret_sdk::media`; soland mints the
+// token exchange wire shapes. Mirrors `CallMediaTokenExchangeOutcome` /
+// `CallMediaParticipantBinding` in `cokret_sdk`; soland mints the
 // soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1527,7 +1198,7 @@ pub struct SolandRecoveryReceiptOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateWebrtcSessionRequest {
+pub struct CreateWebrtcSessionRequestBody {
     pub realm_id: String,
     #[serde(default)]
     pub participants: Vec<String>,
@@ -1540,7 +1211,7 @@ pub struct CreateWebrtcSessionRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CreateWebrtcSessionResponse {
+pub struct CreateWebrtcSessionOutcome {
     pub session_id: String,
     pub realm_id: String,
     pub participants: Vec<String>,
@@ -1552,7 +1223,7 @@ pub struct CreateWebrtcSessionResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalRequest {
+pub struct WebrtcSignalRequestBody {
     pub message_type: String,
     #[serde(default)]
     pub seq: Option<u64>,
@@ -1563,7 +1234,7 @@ pub struct WebrtcSignalRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalResponse {
+pub struct WebrtcSignalOutcome {
     pub ok: bool,
     pub session_id: String,
     pub seq: u64,
@@ -1572,7 +1243,7 @@ pub struct WebrtcSignalResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalsResponse {
+pub struct WebrtcSignalsOutcome {
     pub session_id: String,
     pub call_state: String,
     pub events: Vec<Value>,
@@ -2019,38 +1690,38 @@ pub fn now() -> DateTime<Utc> {
 // ── Conversation Model DTOs ──
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ReviseMessageRequest {
+pub struct ReviseMessageRequestBody {
     pub event_id: String,
     pub content: Value,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReviseMessageResponse {
+pub struct ReviseMessageOutcome {
     pub event_id: String,
     pub revision_of: String,
     pub operation_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RedactMessageRequest {
+pub struct RedactMessageRequestBody {
     pub event_id: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RedactMessageResponse {
+pub struct RedactMessageOutcome {
     pub redacted: bool,
     pub event_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AddReactionRequest {
+pub struct AddReactionRequestBody {
     pub event_id: String,
     pub key: String,
     pub realm_id: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReactionResponse {
+pub struct ReactionOutcome {
     pub event_id: String,
     pub actor: String,
     pub key: String,
@@ -2058,14 +1729,14 @@ pub struct ReactionResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RemoveReactionRequest {
+pub struct RemoveReactionRequestBody {
     pub event_id: String,
     pub key: String,
     pub realm_id: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SetReadMarkerRequest {
+pub struct SetReadMarkerRequestBody {
     pub realm_id: String,
     pub read_scope: ReadScopeWire,
     pub position: ReadCursorPositionWire,
@@ -2097,7 +1768,7 @@ pub struct ReadCursorPositionWire {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReadMarkerResponse {
+pub struct ReadMarkerOutcome {
     pub realm_id: String,
     pub actor_id: String,
     pub device_id: String,
@@ -2107,7 +1778,7 @@ pub struct ReadMarkerResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct GetReadMarkersRequest {
+pub struct GetReadMarkersRequestBody {
     pub realm_id: String,
 }
 
@@ -2117,7 +1788,7 @@ pub struct GetReadMarkersRequest {
 // `cokret-spec/v1/artifacts/registry/id-kind-registry.json`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateRelationRequest {
+pub struct CreateRelationRequestBody {
     pub realm_id: String,
     pub relation_kind: String,
     pub from: Option<String>,
@@ -2127,7 +1798,7 @@ pub struct CreateRelationRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RelationResponse {
+pub struct RelationOutcome {
     pub relation_id: String,
     pub realm_id: String,
     pub relation_kind: String,
@@ -2139,24 +1810,24 @@ pub struct RelationResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListRelationsRequest {
+pub struct ListRelationsRequestBody {
     pub realm_id: String,
     pub relation_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ListRelationsResponse {
-    pub relations: Vec<RelationResponse>,
+pub struct ListRelationsOutcome {
+    pub relations: Vec<RelationOutcome>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct TombstoneRelationResponse {
+pub struct TombstoneRelationOutcome {
     pub state: String,
     pub relation_id: String,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CreateGrantResponse {
+pub struct CreateGrantOutcome {
     pub grant_id: String,
     pub subject: String,
     pub actions: Vec<String>,
@@ -2175,7 +1846,7 @@ pub struct CreateGrantResponse {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RevokeGrantResponse {
+pub struct RevokeGrantOutcome {
     pub revoked: bool,
     pub grant_id: String,
     /// Grant ids that flipped to revoked as part of this call's delegation
@@ -2185,7 +1856,7 @@ pub struct RevokeGrantResponse {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateGrantRequest {
+pub struct CreateGrantRequestBody {
     pub realm_id: String,
     pub subject: String,
     pub resource: String,

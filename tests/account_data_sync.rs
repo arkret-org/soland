@@ -197,7 +197,7 @@ async fn send_plaintext_message(
         }]
     });
     event["canonical_digest"] = Value::String(event_canonical_digest(&event));
-    let response: Value = TestClient::post("http://server/_cokret/self/events")
+    let mut response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
         .send(&app_from_state(state))
@@ -205,6 +205,13 @@ async fn send_plaintext_message(
         .take_json()
         .await
         .unwrap();
+    if response["event_id"].is_null()
+        && let Some(event_id) = response["accepted"]
+            .as_array()
+            .and_then(|events| events.first())
+    {
+        response["event_id"] = event_id.clone();
+    }
     assert!(
         response["event_id"].is_string(),
         "message event submit must return event_id, got {response}"

@@ -35,7 +35,7 @@ const FEDERATION_ENDPOINT: &str = "/_cokret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ck:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
 
-struct CapturedSignedRequest {
+struct CapturedSignedRequestBody {
     captured: String,
     target_uri: String,
     state: AppState,
@@ -387,7 +387,7 @@ async fn outbound_signature_fails_after_service_key_rotation() {
     );
 }
 
-async fn capture_signed_request() -> CapturedSignedRequest {
+async fn capture_signed_request() -> CapturedSignedRequestBody {
     let (peer_url, request_rx) = spawn_mock_peer();
     let state = AppState::new(outbox_test_config(), Db { pool: None });
 
@@ -423,7 +423,7 @@ async fn capture_signed_request() -> CapturedSignedRequest {
         .recv_timeout(Duration::from_secs(5))
         .expect("mock peer should have received exactly one request");
 
-    CapturedSignedRequest {
+    CapturedSignedRequestBody {
         captured,
         target_uri: format!("{peer_url}{FEDERATION_ENDPOINT}"),
         state,

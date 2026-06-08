@@ -147,7 +147,7 @@ fn url_host(url: &str) -> Option<String> {
 pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ck.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct ConfigureDeploymentRequest {
+struct ConfigureDeploymentRequestBody {
     profile: Option<String>,
     upstream_main: Option<String>,
     trust_roots: Option<Vec<String>>,
@@ -156,7 +156,7 @@ struct ConfigureDeploymentRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct RegisterEnclaveRequest {
+struct RegisterEnclaveRequestBody {
     server_id: String,
     base_url: String,
     #[serde(default)]
@@ -164,7 +164,7 @@ struct RegisterEnclaveRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct RealmCreateRequest {
+struct RealmCreateRequestBody {
     realm_id: Option<String>,
     hosted_on: String,
     created_by: String,
@@ -172,14 +172,14 @@ struct RealmCreateRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct ExternalInviteRequest {
+struct ExternalInviteRequestBody {
     target_realm: String,
     invitee: String,
     inviter: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct AcceptExternalInviteRequest {
+struct AcceptExternalInviteRequestBody {
     invite_token: String,
     actor_did: String,
     target_realm: Option<String>,
@@ -187,25 +187,25 @@ struct AcceptExternalInviteRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct NetworkLinkRequest {
+struct NetworkLinkRequestBody {
     upstream_available: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct StoreForwardMessageRequest {
+struct StoreForwardMessageRequestBody {
     realm_id: String,
     actor: String,
     content: Value,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct IngestStoreForwardRequest {
+struct IngestStoreForwardRequestBody {
     #[serde(default)]
     operations: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct EnclaveProxyRequest {
+struct EnclaveProxyRequestBody {
     target: String,
     path: String,
     actor: Option<String>,
@@ -275,7 +275,7 @@ async fn deployment_info(depot: &mut Depot) -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "deployment.configure"))]
 async fn configure_deployment(
     depot: &mut Depot,
-    body: JsonBody<ConfigureDeploymentRequest>,
+    body: JsonBody<ConfigureDeploymentRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -317,7 +317,7 @@ async fn configure_deployment(
 #[tracing::instrument(skip_all, fields(op = "deployment.register_enclave"))]
 async fn register_enclave(
     depot: &mut Depot,
-    body: JsonBody<RegisterEnclaveRequest>,
+    body: JsonBody<RegisterEnclaveRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -357,7 +357,10 @@ async fn register_enclave(
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_create"))]
-async fn realm_create(depot: &mut Depot, body: JsonBody<RealmCreateRequest>) -> JsonResult<Value> {
+async fn realm_create(
+    depot: &mut Depot,
+    body: JsonBody<RealmCreateRequestBody>,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
@@ -435,7 +438,7 @@ async fn realm_info(depot: &mut Depot, realm_id: PathParam<String>) -> JsonResul
 #[tracing::instrument(skip_all, fields(op = "deployment.external_invite"))]
 async fn external_invite(
     depot: &mut Depot,
-    body: JsonBody<ExternalInviteRequest>,
+    body: JsonBody<ExternalInviteRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -495,7 +498,7 @@ async fn external_invite(
 #[tracing::instrument(skip_all, fields(op = "account.accept_external_invite"))]
 async fn accept_external_invite(
     depot: &mut Depot,
-    body: JsonBody<AcceptExternalInviteRequest>,
+    body: JsonBody<AcceptExternalInviteRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -642,7 +645,7 @@ async fn directory_realms(
 #[tracing::instrument(skip_all, fields(op = "deployment.enclave_proxy"))]
 async fn enclave_proxy(
     depot: &mut Depot,
-    body: JsonBody<EnclaveProxyRequest>,
+    body: JsonBody<EnclaveProxyRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -675,7 +678,7 @@ async fn enclave_proxy(
 #[tracing::instrument(skip_all, fields(op = "deployment.network_link"))]
 async fn set_network_link(
     depot: &mut Depot,
-    body: JsonBody<NetworkLinkRequest>,
+    body: JsonBody<NetworkLinkRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -695,7 +698,7 @@ async fn set_network_link(
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_message"))]
 async fn store_forward_message(
     depot: &mut Depot,
-    body: JsonBody<StoreForwardMessageRequest>,
+    body: JsonBody<StoreForwardMessageRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -778,7 +781,7 @@ async fn drain_store_forward(depot: &mut Depot) -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_ingest"))]
 async fn ingest_store_forward(
     depot: &mut Depot,
-    body: JsonBody<IngestStoreForwardRequest>,
+    body: JsonBody<IngestStoreForwardRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();

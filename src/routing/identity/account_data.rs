@@ -174,7 +174,7 @@ pub(super) fn router() -> Router {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AccountDataSetRequest {
+pub struct AccountDataSetRequestBody {
     /// Caller-supplied opaque payload. Server stores it verbatim; canonical
     /// encoding and (for sensitive keys like `ck.contacts.*` /
     /// `ck.account.blocklist`) client-side encryption are the client's
@@ -190,7 +190,7 @@ pub struct AccountDataEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AccountDataListResponse {
+pub struct AccountDataListOutcome {
     pub entries: Vec<AccountDataEntry>,
 }
 
@@ -247,7 +247,7 @@ async fn put_account_data(
     req: &mut Request,
     res: &mut Response,
     data_type: PathParam<String>,
-    body: JsonBody<AccountDataSetRequest>,
+    body: JsonBody<AccountDataSetRequestBody>,
 ) -> JsonResult<AccountDataEntry> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -378,7 +378,7 @@ async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AccountDataListResponse> {
+) -> JsonResult<AccountDataListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let entries = state
@@ -390,7 +390,7 @@ async fn list_account_data(
         .into_iter()
         .map(entry_from)
         .collect();
-    json_ok(AccountDataListResponse { entries })
+    json_ok(AccountDataListOutcome { entries })
 }
 
 #[endpoint(

@@ -41,13 +41,13 @@ use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, OutboundPushBridgeCacheRecord};
 use crate::wire::{
-    OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportResponse,
-    OutboundPushBridgeCacheImportRequest, OutboundPushBridgeCacheImportResponse,
-    OutboundPushBridgeCacheInvalidateRequest, OutboundPushBridgeCacheInvalidateResponse,
-    OutboundPushBridgeCacheSnapshot, OutboundPushBridgeCacheStatusResponse,
-    OutboundPushBridgeDescribeResponse, OutboundPushBridgeExamples, OutboundPushBridgeFetchRequest,
-    OutboundPushBridgeFetchResponse, OutboundPushBridgeResolveRequest,
-    OutboundPushBridgeResolveResponse, OutboundPushDeliveryDescriptor,
+    OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportOutcome,
+    OutboundPushBridgeCacheImportOutcome, OutboundPushBridgeCacheImportRequestBody,
+    OutboundPushBridgeCacheInvalidateOutcome, OutboundPushBridgeCacheInvalidateRequestBody,
+    OutboundPushBridgeCacheSnapshot, OutboundPushBridgeCacheStatusOutcome,
+    OutboundPushBridgeDescribeOutcome, OutboundPushBridgeExamples, OutboundPushBridgeFetchOutcome,
+    OutboundPushBridgeFetchRequestBody, OutboundPushBridgeResolveOutcome,
+    OutboundPushBridgeResolveRequestBody, OutboundPushDeliveryDescriptor,
     OutboundPushGatewayContractDescriptor, OutboundPushResolvedContract,
 };
 
@@ -78,7 +78,7 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_describe"))]
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(OutboundPushBridgeDescribeResponse {
+    res.render(Json(OutboundPushBridgeDescribeOutcome {
         contract: "cokret.rest.outbound_push_bridge.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         api_base_path: "/_soland/edge/push".to_owned(),
@@ -176,9 +176,9 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     fields(op = "ck.extension.soland.push.outbound_bridge_resolve")
 )]
 async fn outbound_push_bridge_resolve(
-    body: JsonBody<OutboundPushBridgeResolveRequest>,
+    body: JsonBody<OutboundPushBridgeResolveRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<OutboundPushBridgeResolveResponse> {
+) -> JsonResult<OutboundPushBridgeResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
 
@@ -205,7 +205,7 @@ async fn outbound_push_bridge_resolve(
         .map(|record| outbound_push_resolved_contract_from_remote(&record.remote_contract))
         .unwrap_or_else(default_outbound_push_resolved_contract);
 
-    json_ok(OutboundPushBridgeResolveResponse {
+    json_ok(OutboundPushBridgeResolveOutcome {
         push_gateway_url,
         service_base_url,
         bridge_describe_url,
@@ -246,9 +246,9 @@ async fn outbound_push_bridge_resolve(
     fields(op = "ck.extension.soland.push.outbound_bridge_fetch")
 )]
 async fn outbound_push_bridge_fetch(
-    body: JsonBody<OutboundPushBridgeFetchRequest>,
+    body: JsonBody<OutboundPushBridgeFetchRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<OutboundPushBridgeFetchResponse> {
+) -> JsonResult<OutboundPushBridgeFetchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
 
@@ -343,7 +343,7 @@ async fn outbound_push_bridge_fetch(
                     {
                         tracing::error!(%error, "failed to persist push bridge cache entry");
                     }
-                    json_ok(OutboundPushBridgeFetchResponse {
+                    json_ok(OutboundPushBridgeFetchOutcome {
                         push_gateway_url,
                         service_base_url,
                         bridge_describe_url,
@@ -400,7 +400,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
         .into_iter()
         .map(outbound_push_bridge_cache_entry)
         .collect();
-    res.render(Json(OutboundPushBridgeCacheStatusResponse { entries }));
+    res.render(Json(OutboundPushBridgeCacheStatusOutcome { entries }));
 }
 
 #[endpoint]
@@ -416,7 +416,7 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
         .into_iter()
         .map(outbound_push_bridge_cache_snapshot)
         .collect();
-    res.render(Json(OutboundPushBridgeCacheExportResponse {
+    res.render(Json(OutboundPushBridgeCacheExportOutcome {
         entries,
         snapshot_store_kind: "durable_push_bridge_cache".to_owned(),
         todos: Vec::new(),
@@ -433,9 +433,9 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     fields(op = "ck.extension.soland.push.outbound_bridge_cache_import")
 )]
 async fn outbound_push_bridge_cache_import(
-    body: JsonBody<OutboundPushBridgeCacheImportRequest>,
+    body: JsonBody<OutboundPushBridgeCacheImportRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<OutboundPushBridgeCacheImportResponse> {
+) -> JsonResult<OutboundPushBridgeCacheImportOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let replace_existing = body.replace_existing;
@@ -474,7 +474,7 @@ async fn outbound_push_bridge_cache_import(
         imported_count += 1;
     }
     let total_entries = cache.len().await.unwrap_or(0);
-    json_ok(OutboundPushBridgeCacheImportResponse {
+    json_ok(OutboundPushBridgeCacheImportOutcome {
         imported_count,
         skipped_count,
         total_entries,
@@ -500,9 +500,9 @@ async fn outbound_push_bridge_cache_import(
     fields(op = "ck.extension.soland.push.outbound_bridge_cache_invalidate")
 )]
 async fn outbound_push_bridge_cache_invalidate(
-    body: JsonBody<OutboundPushBridgeCacheInvalidateRequest>,
+    body: JsonBody<OutboundPushBridgeCacheInvalidateRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<OutboundPushBridgeCacheInvalidateResponse> {
+) -> JsonResult<OutboundPushBridgeCacheInvalidateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let cache = state.persistence.push_bridge_cache();
@@ -523,7 +523,7 @@ async fn outbound_push_bridge_cache_invalidate(
         cache.clear().await.unwrap_or(0)
     };
     let remaining_entries = cache.len().await.unwrap_or(0);
-    json_ok(OutboundPushBridgeCacheInvalidateResponse {
+    json_ok(OutboundPushBridgeCacheInvalidateOutcome {
         removed_count,
         remaining_entries,
         cache_state: if remaining_entries == 0 {
@@ -754,9 +754,9 @@ fn outbound_push_bridge_cache_record(
 
 fn outbound_push_bridge_fetch_response_from_cache(
     record: OutboundPushBridgeCacheRecord,
-) -> OutboundPushBridgeFetchResponse {
+) -> OutboundPushBridgeFetchOutcome {
     let fetched_contract = outbound_push_resolved_contract_from_remote(&record.remote_contract);
-    OutboundPushBridgeFetchResponse {
+    OutboundPushBridgeFetchOutcome {
         push_gateway_url: record.push_gateway_url,
         service_base_url: record.service_base_url,
         bridge_describe_url: record.bridge_describe_url,
@@ -779,14 +779,14 @@ fn outbound_push_bridge_fetch_fallback(
     service_base_url: String,
     bridge_describe_url: String,
     fetch_state: String,
-) -> OutboundPushBridgeFetchResponse {
+) -> OutboundPushBridgeFetchOutcome {
     if let Some(record) = existing_cache {
         let mut response = outbound_push_bridge_fetch_response_from_cache(record);
         response.fetch_state = format!("{fetch_state}:stale_cache_returned");
         return response;
     }
 
-    OutboundPushBridgeFetchResponse {
+    OutboundPushBridgeFetchOutcome {
         push_gateway_url,
         service_base_url,
         bridge_describe_url,

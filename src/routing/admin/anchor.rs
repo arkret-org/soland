@@ -18,7 +18,7 @@
 //!
 //! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
 //! `BottomEntry`, `WinnerHead`, `BottomRepairStrategy`, `AnchorDagSnapshot`,
-//! `AnchorLeaf`, `SignAnchorResponse`, `SubmitMoveResponse`,
+//! `AnchorLeaf`, `SignAnchorOutcome`, `SubmitMoveOutcome`,
 //! `CompactionRequest`).
 //!
 //! v1 scope:
@@ -61,7 +61,7 @@ use crate::{JsonResult, app_error, json_ok};
 /// `single_did|threshold|open_set|mixed`; only the fields relevant to
 /// `kind_raw` are populated.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorerValueResponse {
+pub struct AnchorerValueOutcome {
     pub kind_raw: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_did: Option<String>,
@@ -105,9 +105,9 @@ pub struct AnchorerReconfigBody {
     pub mixed_recovery: Vec<String>,
 }
 
-/// Mirrors sodmin's `SubmitMoveResponse`.
+/// Mirrors sodmin's `SubmitMoveOutcome`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminSubmitMoveResponse {
+pub struct AdminSubmitMoveOutcome {
     pub move_id: String,
     #[serde(default)]
     pub accepted: bool,
@@ -127,7 +127,7 @@ pub struct AdminSubmitMoveResponse {
 
 /// Candidate winning head row for a Bottom-conflict cell.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema, PartialEq, Eq)]
-pub struct WinnerHeadResponse {
+pub struct WinnerHeadOutcome {
     pub move_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer: Option<String>,
@@ -141,7 +141,7 @@ pub struct WinnerHeadResponse {
 /// snake_case (`conflict|invalid_transition|missing_dependency|unauthorized
 /// |anchorer_split|schema_error`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct BottomEntryResponse {
+pub struct BottomEntryOutcome {
     pub realm_id: String,
     pub cell_id: String,
     pub kind: String,
@@ -152,7 +152,7 @@ pub struct BottomEntryResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detected_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub candidate_heads: Vec<WinnerHeadResponse>,
+    pub candidate_heads: Vec<WinnerHeadOutcome>,
 }
 
 /// Body POSTed to `bottom/{cell_id}/repair`. `strategy` is internally
@@ -161,7 +161,7 @@ pub struct BottomEntryResponse {
 #[serde(tag = "strategy", rename_all = "snake_case")]
 pub enum BottomRepairStrategyBody {
     HeadInWinner {
-        head: WinnerHeadResponse,
+        head: WinnerHeadOutcome,
     },
     Manual {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +172,7 @@ pub enum BottomRepairStrategyBody {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorLeafResponse {
+pub struct AnchorLeafOutcome {
     pub anchor_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
@@ -187,9 +187,9 @@ pub struct AnchorLeafResponse {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorDagSnapshotResponse {
+pub struct AnchorDagSnapshotOutcome {
     pub realm_id: String,
-    pub leaves: Vec<AnchorLeafResponse>,
+    pub leaves: Vec<AnchorLeafOutcome>,
     pub frontier: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
@@ -204,7 +204,7 @@ pub struct CompactionRequestBody {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CompactionResponse {
+pub struct CompactionOutcome {
     pub anchor_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
@@ -228,7 +228,7 @@ pub struct AnchorPruneRequestBody {
 /// store actually removed the candidate; otherwise the candidate failed
 /// policy or the store rejected the prune.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorPruneResponse {
+pub struct AnchorPruneOutcome {
     /// Echo the candidate id so clients don't need to remember it.
     pub anchor_id: String,
     /// `true` when the candidate was removed and its successors rewired.
@@ -439,7 +439,7 @@ fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
 }
 
 /// Best-effort projection of a JSON cell value into the typed
-/// `AnchorerValueResponse` shape. The on-wire anchorer cell value is
+/// `AnchorerValueOutcome` shape. The on-wire anchorer cell value is
 /// expected to look like `{shape: single_did|threshold|open_set|mixed,
 /// did|dids[]|members[]|..., max_anchor_staleness_ms?, paused?}`.
 ///
@@ -447,9 +447,9 @@ fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
 /// pointed at the service DID — that matches the genesis-Space
 /// "implicit anchorer is service_did" rule the in-process anchorer
 /// worker already implements (see `crate::anchorer::is_authorized_for`).
-fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> AnchorerValueResponse {
+fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> AnchorerValueOutcome {
     let Some(value) = value else {
-        return AnchorerValueResponse {
+        return AnchorerValueOutcome {
             kind_raw: "single_did".to_owned(),
             single_did: Some(service_did.to_owned()),
             ..Default::default()
@@ -521,7 +521,7 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
         .get("paused")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    AnchorerValueResponse {
+    AnchorerValueOutcome {
         kind_raw,
         single_did,
         threshold_k,
@@ -535,12 +535,12 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
     }
 }
 
-/// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntryResponse`.
+/// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntryOutcome`.
 ///
 /// The SDK serializes `Bottom` as `{kind, ...}` where `kind` is one of
 /// `Conflict|InvalidTransition|...`. We snake-case it here so wire
 /// callers (sodmin) can pattern-match against `BottomKind::from_wire`.
-fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntryResponse {
+fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntryOutcome {
     let raw_kind = bottom
         .get("kind")
         .and_then(Value::as_str)
@@ -582,7 +582,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
     let candidate_heads = if kind == "conflict" {
         move_ids
             .iter()
-            .map(|move_id| WinnerHeadResponse {
+            .map(|move_id| WinnerHeadOutcome {
                 move_id: move_id.clone(),
                 ..Default::default()
             })
@@ -590,7 +590,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
     } else {
         Vec::new()
     };
-    BottomEntryResponse {
+    BottomEntryOutcome {
         realm_id: realm_id.to_owned(),
         cell_id: cell_id.to_owned(),
         kind,
@@ -603,7 +603,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
 
 /// Walk the projection cell map for one Realm, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
-fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntryResponse> {
+fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntryOutcome> {
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
@@ -651,7 +651,7 @@ pub(super) async fn admin_get_anchorer(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<AnchorerValueResponse> {
+) -> JsonResult<AnchorerValueOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -699,7 +699,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     req: &mut Request,
     realm_id: PathParam<String>,
     body: JsonBody<AnchorerReconfigBody>,
-) -> JsonResult<AdminSubmitMoveResponse> {
+) -> JsonResult<AdminSubmitMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -800,7 +800,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     // Move sits pending until the round leader signs.
     let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
     match outcome {
-        Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
+        Ok(Some(o)) => json_ok(AdminSubmitMoveOutcome {
             move_id,
             accepted: true,
             reason: None,
@@ -808,7 +808,7 @@ pub(super) async fn admin_reconfigure_anchorer(
             status: "accepted".to_owned(),
         }),
         Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
-            json_ok(AdminSubmitMoveResponse {
+            json_ok(AdminSubmitMoveOutcome {
                 move_id,
                 accepted: true,
                 reason: Some("Move stashed pending; another node owns the round".to_owned()),
@@ -820,7 +820,7 @@ pub(super) async fn admin_reconfigure_anchorer(
             // The Move IS pending — the anchorer pass failed downstream.
             // Surface the failure but keep the Move in the queue.
             tracing::warn!(error = %e, %move_id, "admin_reconfigure_anchorer: anchorer pass failed");
-            json_ok(AdminSubmitMoveResponse {
+            json_ok(AdminSubmitMoveOutcome {
                 move_id,
                 accepted: true,
                 reason: Some(format!("Move stashed pending; anchorer pass error: {e}")),
@@ -844,7 +844,7 @@ pub(super) async fn admin_list_realm_bottom(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<Vec<BottomEntryResponse>> {
+) -> JsonResult<Vec<BottomEntryOutcome>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -865,7 +865,7 @@ pub(super) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Vec<BottomEntryResponse>> {
+) -> JsonResult<Vec<BottomEntryOutcome>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
@@ -910,7 +910,7 @@ pub(super) async fn admin_repair_bottom(
     realm_id: PathParam<String>,
     cell_id: PathParam<String>,
     body: JsonBody<BottomRepairStrategyBody>,
-) -> JsonResult<AdminSubmitMoveResponse> {
+) -> JsonResult<AdminSubmitMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -997,7 +997,7 @@ pub(super) async fn admin_repair_bottom(
 
             let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
             match outcome {
-                Ok(Some(o)) => json_ok(AdminSubmitMoveResponse {
+                Ok(Some(o)) => json_ok(AdminSubmitMoveOutcome {
                     move_id,
                     accepted: true,
                     reason: None,
@@ -1005,7 +1005,7 @@ pub(super) async fn admin_repair_bottom(
                     status: "accepted".to_owned(),
                 }),
                 Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
-                    json_ok(AdminSubmitMoveResponse {
+                    json_ok(AdminSubmitMoveOutcome {
                         move_id,
                         accepted: true,
                         reason: Some(
@@ -1022,7 +1022,7 @@ pub(super) async fn admin_repair_bottom(
                         cell_id = %cell_id_str,
                         "admin_repair_bottom: anchorer pass failed"
                     );
-                    json_ok(AdminSubmitMoveResponse {
+                    json_ok(AdminSubmitMoveOutcome {
                         move_id,
                         accepted: true,
                         reason: Some(format!("Move stashed pending; anchorer pass error: {e}")),
@@ -1090,7 +1090,7 @@ pub(super) async fn admin_repair_bottom(
             });
             let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
             let placeholder_id = format!("sha256:{}", sha256_hex_for(&bytes));
-            json_ok(AdminSubmitMoveResponse {
+            json_ok(AdminSubmitMoveOutcome {
                 move_id: placeholder_id,
                 accepted: false,
                 reason: Some(
@@ -1119,7 +1119,7 @@ pub(super) async fn admin_get_anchor_dag(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<AnchorDagSnapshotResponse> {
+) -> JsonResult<AnchorDagSnapshotOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -1136,7 +1136,7 @@ pub(super) async fn admin_get_anchor_dag(
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
-    // Materialise each leaf into the wire `AnchorLeafResponse`. Move
+    // Materialise each leaf into the wire `AnchorLeafOutcome`. Move
     // count is `frontier.len()` — anchors carry their full per-Anchor
     // frontier, not a delta. `is_compaction` heuristic: an Anchor whose
     // frontier subset is exactly its predecessors' union (no new
@@ -1169,7 +1169,7 @@ pub(super) async fn admin_get_anchor_dag(
         // `is_compaction` reads the explicit
         // `Anchor.kind == AnchorKind::Compaction` field directly.
         let is_compaction = anchor.kind.is_compaction();
-        leaves.push(AnchorLeafResponse {
+        leaves.push(AnchorLeafOutcome {
             anchor_id: anchor.id.as_str().to_owned(),
             state_root: Some(anchor.state_root.as_str().to_owned()),
             move_count: anchor.frontier.len() as u64,
@@ -1178,7 +1178,7 @@ pub(super) async fn admin_get_anchor_dag(
             is_compaction,
         });
     }
-    json_ok(AnchorDagSnapshotResponse {
+    json_ok(AnchorDagSnapshotOutcome {
         realm_id,
         leaves,
         frontier: frontier_union.into_iter().collect(),
@@ -1210,7 +1210,7 @@ pub(super) async fn admin_compact_anchor_dag(
     req: &mut Request,
     realm_id: PathParam<String>,
     body: JsonBody<CompactionRequestBody>,
-) -> JsonResult<CompactionResponse> {
+) -> JsonResult<CompactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -1313,7 +1313,7 @@ pub(super) async fn admin_compact_anchor_dag(
     // Compaction Anchors accept zero new moves by definition; surface
     // `move_count: 0`.
     let _ = effect;
-    json_ok(CompactionResponse {
+    json_ok(CompactionOutcome {
         anchor_id: compaction.id.as_str().to_owned(),
         state_root: Some(compaction.state_root.as_str().to_owned()),
         move_count: 0,
@@ -1344,7 +1344,7 @@ pub(super) async fn admin_prune_anchor_dag(
     req: &mut Request,
     realm_id: PathParam<String>,
     body: JsonBody<AnchorPruneRequestBody>,
-) -> JsonResult<AnchorPruneResponse> {
+) -> JsonResult<AnchorPruneOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -1495,7 +1495,7 @@ pub(super) async fn admin_prune_anchor_dag(
         // we did. Surface the verdict with `pruned: false` + the
         // diagnostics so callers can decide whether to relax the policy
         // and retry.
-        return json_ok(AnchorPruneResponse {
+        return json_ok(AnchorPruneOutcome {
             anchor_id: candidate_id.as_str().to_owned(),
             pruned: false,
             eligibility: eligibility_wire.to_owned(),
@@ -1518,7 +1518,7 @@ pub(super) async fn admin_prune_anchor_dag(
             .with_status(StatusCode::CONFLICT)
         })?;
 
-    json_ok(AnchorPruneResponse {
+    json_ok(AnchorPruneOutcome {
         anchor_id: candidate_id.as_str().to_owned(),
         pruned: true,
         eligibility: eligibility_wire.to_owned(),
@@ -1544,7 +1544,7 @@ pub struct PartialSignatureBody {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PartialSubmitResponse {
+pub struct PartialSubmitOutcome {
     pub anchor_id: String,
     pub collected: u32,
     pub threshold: u32,
@@ -1563,7 +1563,7 @@ pub struct MultisigPendingEntry {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct MultisigPendingResponse {
+pub struct MultisigPendingOutcome {
     pub entries: Vec<MultisigPendingEntry>,
 }
 
@@ -1586,7 +1586,7 @@ pub(super) async fn admin_submit_multisig_partial(
     realm_id: PathParam<String>,
     anchor_id: PathParam<String>,
     body: JsonBody<PartialSignatureBody>,
-) -> JsonResult<PartialSubmitResponse> {
+) -> JsonResult<PartialSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _session = super::require_admin_principal(state, session)?;
@@ -1685,7 +1685,7 @@ pub(super) async fn admin_submit_multisig_partial(
         None
     };
 
-    json_ok(PartialSubmitResponse {
+    json_ok(PartialSubmitOutcome {
         anchor_id: anchor_id_str,
         collected,
         threshold,
@@ -1704,7 +1704,7 @@ pub(super) async fn admin_list_multisig_pending(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<MultisigPendingResponse> {
+) -> JsonResult<MultisigPendingOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
@@ -1742,7 +1742,7 @@ pub(super) async fn admin_list_multisig_pending(
         })
         .collect();
 
-    json_ok(MultisigPendingResponse { entries })
+    json_ok(MultisigPendingOutcome { entries })
 }
 
 /// `POST /_soland/admin/realms/{realm_id}/anchorer/rotate-signing-key` —
@@ -1766,7 +1766,7 @@ pub(super) async fn admin_list_multisig_pending(
 /// per-Realm anchorer endpoints; the signing key itself is process-wide,
 /// not Realm-scoped.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RotateSigningKeyResponse {
+pub struct RotateSigningKeyOutcome {
     pub kid: String,
     pub did: String,
     pub rotated_at: chrono::DateTime<chrono::Utc>,
@@ -1794,7 +1794,7 @@ pub(super) async fn admin_rotate_signing_key(
     req: &mut Request,
     realm_id: PathParam<String>,
     _body: JsonBody<serde_json::Value>,
-) -> JsonResult<RotateSigningKeyResponse> {
+) -> JsonResult<RotateSigningKeyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -1860,7 +1860,7 @@ pub(super) async fn admin_rotate_signing_key(
     )
     .await;
 
-    json_ok(RotateSigningKeyResponse {
+    json_ok(RotateSigningKeyOutcome {
         kid,
         did,
         rotated_at,
@@ -1937,7 +1937,7 @@ fn sha256_hex_for(bytes: &[u8]) -> String {
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` response.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct GcCandidatesResponse {
+pub struct GcCandidatesOutcome {
     pub realm_id: String,
     pub candidates: Vec<crate::gc::GcCandidate>,
     pub total: usize,
@@ -1955,7 +1955,7 @@ pub(super) async fn admin_list_gc_candidates(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<GcCandidatesResponse> {
+) -> JsonResult<GcCandidatesOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
@@ -1965,7 +1965,7 @@ pub(super) async fn admin_list_gc_candidates(
     })?;
     let candidates = crate::gc::scan_gc_candidates(state, &realm);
     let total = candidates.len();
-    json_ok(GcCandidatesResponse {
+    json_ok(GcCandidatesOutcome {
         realm_id: realm_id_str,
         candidates,
         total,
@@ -2074,7 +2074,7 @@ mod tests {
     #[test]
     fn bottom_repair_strategy_round_trips_through_serde() {
         let head_in = BottomRepairStrategyBody::HeadInWinner {
-            head: WinnerHeadResponse {
+            head: WinnerHeadOutcome {
                 move_id: "ck:move:abc".to_owned(),
                 issuer: Some("did:ck:alice".to_owned()),
                 hlc: None,
@@ -2136,7 +2136,7 @@ mod tests {
 
     #[test]
     fn admin_submit_move_response_serializes_status() {
-        let r = AdminSubmitMoveResponse {
+        let r = AdminSubmitMoveOutcome {
             move_id: "sha256:00".to_owned(),
             accepted: false,
             reason: Some("placeholder".to_owned()),

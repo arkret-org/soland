@@ -60,7 +60,7 @@ pub(crate) fn router() -> Router {
 // ── Response / request types ─────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleResponse {
+pub struct CircleOutcome {
     pub circle_id: String,
     pub realm_id: String,
     pub title: String,
@@ -85,13 +85,13 @@ pub struct CircleResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListCirclesResponse {
+pub struct ListCirclesOutcome {
     pub realm_id: String,
-    pub circles: Vec<CircleResponse>,
+    pub circles: Vec<CircleOutcome>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateCircleRequest {
+pub struct CreateCircleRequestBody {
     pub realm_id: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,7 +109,7 @@ pub struct CreateCircleRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleMemberRequest {
+pub struct CircleMemberRequestBody {
     pub actor_id: String,
     /// Optional explicit member state. Defaults to `"active"`. Spec
     /// `ck.circle.member.state` enum: invited / active / removed / banned / left.
@@ -118,14 +118,14 @@ pub struct CircleMemberRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleMembershipResponse {
+pub struct CircleMembershipOutcome {
     pub circle_id: String,
     pub actor_id: String,
     pub state: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleScopeRotateResponse {
+pub struct CircleScopeRotateOutcome {
     pub circle_id: String,
     pub mls_group_ref: Option<String>,
     /// Reducer-emitted reason code on `Ignored`/`Rejected`.
@@ -133,7 +133,7 @@ pub struct CircleScopeRotateResponse {
     pub note: Option<String>,
 }
 
-impl From<&CircleProjection> for CircleResponse {
+impl From<&CircleProjection> for CircleOutcome {
     fn from(c: &CircleProjection) -> Self {
         Self {
             circle_id: c.circle_id.clone(),
@@ -169,7 +169,7 @@ async fn list_circles(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ListCirclesResponse> {
+) -> JsonResult<ListCirclesOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -177,9 +177,9 @@ async fn list_circles(
     let circles = projection
         .circles_for_realm(&realm_id)
         .iter()
-        .map(|c| CircleResponse::from(*c))
+        .map(|c| CircleOutcome::from(*c))
         .collect();
-    json_ok(ListCirclesResponse { realm_id, circles })
+    json_ok(ListCirclesOutcome { realm_id, circles })
 }
 
 #[endpoint(
@@ -193,7 +193,7 @@ async fn get_circle(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleResponse> {
+) -> JsonResult<CircleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
@@ -201,7 +201,7 @@ async fn get_circle(
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    json_ok(CircleResponse::from(circle))
+    json_ok(CircleOutcome::from(circle))
 }
 
 #[endpoint(
@@ -212,10 +212,10 @@ async fn get_circle(
 #[tracing::instrument(skip_all, fields(op = "ck.circles.create"))]
 async fn post_circle(
     aa: AuthArgs,
-    body: JsonBody<CreateCircleRequest>,
+    body: JsonBody<CreateCircleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleResponse> {
+) -> JsonResult<CircleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -245,7 +245,7 @@ async fn post_circle(
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
-    json_ok(CircleResponse::from(circle))
+    json_ok(CircleOutcome::from(circle))
 }
 
 #[endpoint(
@@ -257,10 +257,10 @@ async fn post_circle(
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
-    body: JsonBody<CircleMemberRequest>,
+    body: JsonBody<CircleMemberRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleMembershipResponse> {
+) -> JsonResult<CircleMembershipOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
@@ -279,7 +279,7 @@ async fn post_circle_member(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    json_ok(CircleMembershipResponse {
+    json_ok(CircleMembershipOutcome {
         circle_id,
         actor_id: body.actor_id,
         state: target_state,
@@ -298,7 +298,7 @@ async fn delete_circle_member(
     actor_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleMembershipResponse> {
+) -> JsonResult<CircleMembershipOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
@@ -316,7 +316,7 @@ async fn delete_circle_member(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
-    json_ok(CircleMembershipResponse {
+    json_ok(CircleMembershipOutcome {
         circle_id,
         actor_id,
         state: "removed".to_owned(),
@@ -334,7 +334,7 @@ async fn post_scope_rotate(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleScopeRotateResponse> {
+) -> JsonResult<CircleScopeRotateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
@@ -361,7 +361,7 @@ async fn post_circle_archive(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleResponse> {
+) -> JsonResult<CircleOutcome> {
     submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_ARCHIVE).await
 }
 
@@ -376,7 +376,7 @@ async fn post_circle_tombstone(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleResponse> {
+) -> JsonResult<CircleOutcome> {
     submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_TOMBSTONE).await
 }
 
@@ -386,7 +386,7 @@ async fn submit_circle_lifecycle(
     aa: AuthArgs,
     circle_id: String,
     kind: &'static str,
-) -> JsonResult<CircleResponse> {
+) -> JsonResult<CircleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_scope = circle_realm_scope(state, &circle_id)?;
@@ -405,12 +405,12 @@ async fn submit_circle_lifecycle(
     // map lookup so the response still surfaces the terminal state.
     let response = projection
         .circle(&circle_id)
-        .map(CircleResponse::from)
+        .map(CircleOutcome::from)
         .or_else(|| {
-            projection.circles.get(&circle_id).map(|c| CircleResponse {
+            projection.circles.get(&circle_id).map(|c| CircleOutcome {
                 state: "tombstoned".to_owned(),
                 members: Vec::new(),
-                ..CircleResponse::from(c)
+                ..CircleOutcome::from(c)
             })
         })
         .ok_or_else(|| AppError::not_found("circle not found"))?;

@@ -23,8 +23,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
+use cokret_sdk::model::{Handle as SdkHandle, HandleClaim as SdkHandleClaim};
 use cokret_sdk::{
-    Did, Ed25519MoveSigner, LinkType, MoveSigner, RealmId, RealmRef, TargetDescriptor, canonical,
+    ActorPreview, DeliveryBindingHint, Did, DirectoryActorSearchOutcome, DirectoryDescription,
+    DirectoryHandleResolutionOutcome, DirectoryListHandlesForSubjectRequestBody,
+    DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
+    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+    DirectoryResolveHandleRequestBody, DirectoryResolveOrganizationRequestBody,
+    DirectoryResolveRealmRequestBody, DirectorySearchActorsRequestBody,
+    DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
+    DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryUserSearchOutcome,
+    Ed25519MoveSigner, JoinRule, LinkType, MoveSigner, OrganizationPreview, RealmId,
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
+    RealmJoinCandidateSource, RealmJoinMethod, RealmPreview, RealmRef, TargetDescriptor, canonical,
     parse_address, target_digest,
 };
 use ed25519_dalek::{Signature, Verifier};
@@ -35,7 +46,7 @@ use serde_json::{Value, json};
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
     invite_token_realm_id, is_realm_deleted, now, realm_discoverability, realm_history_visibility,
-    realm_resolvable_to, realm_search_discoverability, realm_search_visible_to,
+    realm_resolvable_to, realm_search_visible_to,
 };
 use crate::error::AppError;
 use crate::ids;
@@ -43,15 +54,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::admin::audit::append_audit_log;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery, SessionRecord};
-use crate::wire::{
-    DirectoryDescribeOutcome, DirectoryListHandlesForSubjectRequest,
-    DirectorySubjectHandleListResponse, DirectoryValueSearchResponse, RealmJoinCandidate,
-    RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
-    RealmJoinMethod, ResolveHandleRequest, ResolveHandleResponse, ResolveOrganizationRequest,
-    ResolveOrganizationResponse, ResolveRealmRequest, ResolveRealmResponse, SearchActorsRequest,
-    SearchOrganizationsRequest, SearchRealmsRequest, SearchRealmsResponse, SearchUsersRequest,
-    SolandHandleClaim, SolandHandleClaimDeliveryBinding, SolandHandleClaimProof,
-};
+use crate::wire::{SolandHandleClaim, SolandHandleClaimDeliveryBinding, SolandHandleClaimProof};
 
 /// Snapshot the in-memory realm directory (under a short lock) and return the
 /// owned entries that are not tombstoned. The deleted check is async (it reads
@@ -122,18 +125,20 @@ pub(crate) fn legacy_router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
-async fn directory_describe(depot: &mut Depot, res: &mut Response) {
+async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    res.render(Json(DirectoryDescribeOutcome {
-        service_did: state.config.service_did.clone(),
+    let service_did = Did::new(state.config.service_did.clone())
+        .map_err(|error| AppError::internal(format!("invalid configured service_did: {error}")))?;
+    json_ok(DirectoryDescription {
+        service_did,
         resource_types: vec![
             "space".to_owned(),
             "organization".to_owned(),
             "actor".to_owned(),
         ],
         discovery_profiles: vec!["ck.profile.directory_service.v1".to_owned()],
-        restricted_query_proof: false,
-    }));
+        restricted_query_proof: Some(false),
+    })
 }
 
 #[endpoint(
@@ -143,16 +148,16 @@ async fn directory_describe(depot: &mut Depot, res: &mut Response) {
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_realms"))]
 async fn search_realms(
-    body: JsonBody<SearchRealmsRequest>,
+    body: JsonBody<DirectorySearchRealmsRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SearchRealmsResponse> {
+) -> JsonResult<DirectoryRealmSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let query = RealmDirectoryQuery {
         text: body.query,
         public_only: false,
-        limit: body.limit,
+        limit: body.limit.map(|limit| limit as usize),
         ..Default::default()
     };
     let session = authenticated_session(state, req).await.ok();
@@ -166,8 +171,11 @@ async fn search_realms(
             results.push(realm_entry);
         }
     }
-    json_ok(SearchRealmsResponse {
-        results,
+    json_ok(DirectoryRealmSearchOutcome {
+        results: results
+            .iter()
+            .map(realm_preview_from_directory_entry)
+            .collect(),
         next_cursor: None,
     })
 }
@@ -179,10 +187,10 @@ async fn search_realms(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_realm"))]
 async fn resolve_realm(
-    body: JsonBody<ResolveRealmRequest>,
+    body: JsonBody<DirectoryResolveRealmRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ResolveRealmResponse> {
+) -> JsonResult<DirectoryRealmResolutionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.realm_id.is_none()
@@ -212,15 +220,15 @@ async fn resolve_realm(
     for entry in candidates {
         let matches_query = body
             .realm_id
-            .as_deref()
-            .is_some_and(|id| id == entry.realm_id.as_str())
+            .as_ref()
+            .is_some_and(|id| id == &entry.realm_id)
             || invite_realm_id
                 .as_deref()
                 .is_some_and(|id| id == entry.realm_id.as_str())
             || body
                 .alias
                 .as_deref()
-                .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.name));
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(&entry.title));
         if matches_query
             && realm_resolvable_to(
                 state,
@@ -238,24 +246,10 @@ async fn resolve_realm(
     match matched_realm {
         Some(realm) => {
             let discoverability = realm_discoverability(state, realm.realm_id.as_str()).await;
-            let searchable = realm_search_discoverability(state, realm.realm_id.as_str()).await;
-            json_ok(ResolveRealmResponse {
-                realm_preview: realm.clone(),
-                stripped_state: vec![json!({
-                    "type": "ck.realm.discovery",
-                    "subject": "",
-                    "content": {
-                        "discoverability": discoverability,
-                        "directory_visibility": {
-                            "searchable": searchable
-                        }
-                    }
-                })],
-                join_rule: if discoverability == "public" {
-                    "public".to_owned()
-                } else {
-                    "invite_or_request".to_owned()
-                },
+            json_ok(DirectoryRealmResolutionOutcome {
+                realm_preview: realm_preview_from_directory_entry(&realm),
+                stripped_state: Vec::new(),
+                join_rule: Some(join_rule_enum_for_discoverability(&discoverability)),
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
                     realm.realm_id.as_str(),
@@ -398,7 +392,7 @@ async fn resolve_realm_for_address(
     };
     candidates.into_iter().find(|entry| match &parsed.realm {
         RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("ck:realm:{uuid}"),
-        RealmRef::Alias(alias) => entry.name.eq_ignore_ascii_case(alias),
+        RealmRef::Alias(alias) => entry.title.eq_ignore_ascii_case(alias),
     })
 }
 
@@ -412,12 +406,94 @@ fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> &'static str {
     }
 }
 
+fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) -> RealmPreview {
+    let mut preview = serde_json::Map::new();
+    if let Some(description) = entry.description.as_ref() {
+        preview.insert("summary".to_owned(), json!(description));
+    }
+    if !entry.tags.is_empty() {
+        preview.insert(
+            "tags".to_owned(),
+            json!(entry.tags.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
+    if let Some(category) = entry.category.as_ref() {
+        preview.insert("category".to_owned(), json!(category));
+    }
+    preview.insert("public".to_owned(), json!(entry.public));
+
+    RealmPreview {
+        realm_id: entry.realm_id.clone(),
+        title: Some(entry.title.clone()),
+        preview: Value::Object(preview),
+    }
+}
+
 fn join_rule_for_discoverability(discoverability: &str) -> &'static str {
     if discoverability == "public" {
         "public"
     } else {
         "invite_or_request"
     }
+}
+
+fn join_rule_enum_for_discoverability(discoverability: &str) -> JoinRule {
+    if discoverability == "public" {
+        JoinRule::Public
+    } else {
+        JoinRule::Invite
+    }
+}
+
+fn organization_preview_from_value(
+    organization: &Value,
+    state: &AppState,
+) -> Result<OrganizationPreview, AppError> {
+    let organization_did = organization
+        .get("organization_did")
+        .and_then(Value::as_str)
+        .unwrap_or(state.config.service_did.as_str());
+    Ok(OrganizationPreview {
+        organization_did: Did::new(organization_did.to_owned()).map_err(|error| {
+            AppError::internal(format!("directory organization_did is invalid: {error}"))
+        })?,
+        handle: organization
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        preview: organization.clone(),
+    })
+}
+
+fn organization_preview_with_spaces(
+    organization: &Value,
+    spaces: Vec<Value>,
+    state: &AppState,
+) -> Result<OrganizationPreview, AppError> {
+    let mut preview = organization.clone();
+    if let Value::Object(object) = &mut preview {
+        object.insert("spaces".to_owned(), Value::Array(spaces));
+    }
+    organization_preview_from_value(&preview, state)
+}
+
+fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, AppError> {
+    let actor_id = actor
+        .get("actor_id")
+        .or_else(|| actor.get("did"))
+        .or_else(|| actor.get("subject"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("directory actor preview missing actor DID"))?;
+    Ok(ActorPreview {
+        actor_id: Did::new(actor_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("directory actor DID is invalid: {error}"))
+        })?,
+        display_name: actor
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        preview: actor.clone(),
+    })
 }
 
 async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectoryEntry) -> Value {
@@ -444,7 +520,7 @@ async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectory
 
     let mut preview = serde_json::Map::new();
     if fields.contains(&"title") {
-        preview.insert("title".to_owned(), json!(realm_entry.name));
+        preview.insert("title".to_owned(), json!(realm_entry.title));
     }
     if fields.contains(&"summary") {
         preview.insert("summary".to_owned(), json!(realm_entry.description));
@@ -486,7 +562,7 @@ async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectory
 
     json!({
         "realm_id": realm_entry.realm_id.as_str(),
-        "title": realm_entry.name,
+        "title": realm_entry.title,
         "preview": preview,
     })
 }
@@ -799,12 +875,12 @@ fn join_candidates_for_resolved_realm(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_organizations"))]
 async fn search_organizations(
-    body: JsonBody<SearchOrganizationsRequest>,
+    body: JsonBody<DirectorySearchOrganizationsRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<DirectoryValueSearchResponse> {
+) -> JsonResult<DirectoryOrganizationSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let limit = checked_limit(body.limit)?;
+    let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let mut results = organizations::organization_records_for_directory(state)
         .into_iter()
         .filter(|organization| query_matches(organization, body.query.as_deref()))
@@ -815,8 +891,12 @@ async fn search_organizations(
     if state.config.development_mode && query_matches(&organization, body.query.as_deref()) {
         results.push(organization);
     }
-    json_ok(DirectoryValueSearchResponse {
-        results: results.into_iter().take(limit).collect(),
+    json_ok(DirectoryOrganizationSearchOutcome {
+        results: results
+            .into_iter()
+            .take(limit)
+            .map(|organization| organization_preview_from_value(&organization, state))
+            .collect::<Result<Vec<_>, _>>()?,
         next_cursor: None,
     })
 }
@@ -828,39 +908,44 @@ async fn search_organizations(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_organization"))]
 async fn resolve_organization(
-    body: JsonBody<ResolveOrganizationRequest>,
+    body: JsonBody<DirectoryResolveOrganizationRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<ResolveOrganizationResponse> {
+) -> JsonResult<DirectoryOrganizationResolutionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if body.organization_id.is_none() && body.handle.is_none() {
+    if body.organization_did.is_none() && body.handle.is_none() {
         return Err(AppError::missing_param(
-            "organization_id or handle is required",
+            "organization_did or handle is required",
         ));
     }
     if let Some(organization) = organizations::organization_records_for_directory(state)
         .into_iter()
         .find(|organization| {
-            body.organization_id.as_deref().is_some_and(|id| {
-                organization["organization_id"].as_str() == Some(id)
-                    || organization["organization_did"].as_str() == Some(id)
-            }) || body.handle.as_deref().is_some_and(|handle| {
-                organization["handle"]
-                    .as_str()
-                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(handle))
-            })
+            body.organization_did
+                .as_ref()
+                .is_some_and(|did| organization["organization_did"].as_str() == Some(did.as_str()))
+                || body.handle.as_deref().is_some_and(|handle| {
+                    organization["handle"]
+                        .as_str()
+                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(handle))
+                })
         })
     {
-        let associated_realms = organization["realms"]
+        let associated_realms: Vec<Value> = organization["realms"]
             .as_array()
             .into_iter()
             .flat_map(|array| array.iter())
             .filter_map(Value::as_str)
             .map(|realm_id| json!({ "realm_id": realm_id }))
             .collect();
-        return json_ok(ResolveOrganizationResponse {
-            organization,
-            spaces: associated_realms,
+        return json_ok(DirectoryOrganizationResolutionOutcome {
+            organization_preview: organization_preview_with_spaces(
+                &organization,
+                associated_realms,
+                state,
+            )?,
+            did_document_ref: None,
+            endorsements: Vec::new(),
         });
     }
     if !state.config.development_mode {
@@ -870,10 +955,13 @@ async fn resolve_organization(
     let realm_entries = live_realm_entries(state).await;
     let realm_refs: Vec<&RealmDirectoryEntry> = realm_entries.iter().collect();
     let organization = demo_organization(&realm_refs, &state.config.service_did);
-    let matches_id = body
-        .organization_id
-        .as_deref()
-        .is_some_and(|id| id == organization["organization_id"].as_str().unwrap_or_default());
+    let matches_id = body.organization_did.as_ref().is_some_and(|did| {
+        did.as_str()
+            == organization["organization_did"]
+                .as_str()
+                .unwrap_or_default()
+            || did.as_str() == state.config.service_did
+    });
     let matches_handle = body
         .handle
         .as_deref()
@@ -882,20 +970,25 @@ async fn resolve_organization(
         return Err(AppError::not_found("not found"));
     }
 
-    let associated_realms = realm_entries
+    let associated_realms: Vec<Value> = realm_entries
         .into_iter()
         .map(|realm_entry| {
             json!({
                 "realm_id": realm_entry.realm_id,
-                "name": realm_entry.name,
+                "title": realm_entry.title,
                 "description": realm_entry.description,
                 "category": realm_entry.category,
             })
         })
         .collect();
-    json_ok(ResolveOrganizationResponse {
-        organization,
-        spaces: associated_realms,
+    json_ok(DirectoryOrganizationResolutionOutcome {
+        organization_preview: organization_preview_with_spaces(
+            &organization,
+            associated_realms,
+            state,
+        )?,
+        did_document_ref: None,
+        endorsements: Vec::new(),
     })
 }
 
@@ -906,25 +999,25 @@ async fn resolve_organization(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_actors"))]
 async fn search_actors(
-    body: JsonBody<SearchActorsRequest>,
+    body: JsonBody<DirectorySearchActorsRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DirectoryValueSearchResponse> {
+) -> JsonResult<DirectoryActorSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
-    let limit = checked_limit(body.limit)?;
-    if let Some(organization_id) = body.organization_id.as_deref()
-        && organization_id != "ck:org:demo"
+    let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
+    if let Some(organization_did) = body.organization_did.as_ref()
+        && organization_did.as_str() != state.config.service_did
     {
-        return json_ok(DirectoryValueSearchResponse {
+        return json_ok(DirectoryActorSearchOutcome {
             results: Vec::new(),
             next_cursor: None,
         });
     }
 
     let session = authenticated_session(state, req).await.ok();
-    let mut results: Vec<Value> = Vec::new();
+    let mut results: Vec<ActorPreview> = Vec::new();
     for actor in demo_actors(state).await {
         if results.len() >= limit {
             break;
@@ -932,10 +1025,10 @@ async fn search_actors(
         if actor_visible_to(state, &actor, session.as_ref()).await
             && query_matches(&actor, body.query.as_deref())
         {
-            results.push(actor);
+            results.push(actor_preview_from_value(&actor)?);
         }
     }
-    json_ok(DirectoryValueSearchResponse {
+    json_ok(DirectoryActorSearchOutcome {
         results,
         next_cursor: None,
     })
@@ -948,15 +1041,15 @@ async fn search_actors(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_users"))]
 async fn search_users(
-    body: JsonBody<SearchUsersRequest>,
+    body: JsonBody<DirectorySearchUsersRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DirectoryValueSearchResponse> {
+) -> JsonResult<DirectoryUserSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
-    let limit = checked_limit(body.limit)?;
-    let query = body.query;
+    let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
+    let query = body.q;
     let session = authenticated_session(state, req).await.ok();
     // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `ck.find.directory.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
@@ -964,21 +1057,19 @@ async fn search_users(
     // survive the rename. Other actor metadata (presence, organization,
     // avatar) goes through `ck.find.directory.search_actors` or
     // `ck.directory.resolve-handle`.
-    let mut results: Vec<Value> = Vec::new();
+    let mut results: Vec<ActorPreview> = Vec::new();
     for actor in demo_actors(state).await {
         if results.len() >= limit {
             break;
         }
         if actor_visible_to(state, &actor, session.as_ref()).await
-            && query_matches(&actor, query.as_deref())
+            && query_matches(&actor, Some(query.as_str()))
         {
-            results.push(project_search_users_row(state, &actor));
+            let projected = project_search_users_row(state, &actor);
+            results.push(actor_preview_from_value(&projected)?);
         }
     }
-    json_ok(DirectoryValueSearchResponse {
-        results,
-        next_cursor: None,
-    })
+    json_ok(DirectoryUserSearchOutcome { results })
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
@@ -1070,7 +1161,7 @@ async fn handle_resolvable_to(
     state: &AppState,
     actor: &Value,
     session: Option<&SessionRecord>,
-    request: &ResolveHandleRequest,
+    request: &DirectoryResolveHandleRequestBody,
 ) -> bool {
     if actor_visible_to(state, actor, session).await {
         return true;
@@ -1081,7 +1172,7 @@ async fn handle_resolvable_to(
 async fn membership_builder_resolve_allowed(
     state: &AppState,
     session: Option<&SessionRecord>,
-    request: &ResolveHandleRequest,
+    request: &DirectoryResolveHandleRequestBody,
 ) -> bool {
     let Some(session) = session else {
         return false;
@@ -1092,16 +1183,11 @@ async fn membership_builder_resolve_allowed(
     ) {
         return false;
     }
-    match request.requester.as_deref().map(str::trim) {
+    match request.requester.as_ref().map(Did::as_str) {
         Some(requester) if requester == session.actor => {}
         _ => return false,
     }
-    let Some(realm_id) = request
-        .realm_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(realm_id) = request.realm_id.as_ref().map(RealmId::as_str) else {
         return false;
     };
     super::realm_has_member(state, realm_id, &session.actor).await
@@ -1119,7 +1205,7 @@ fn did_web_authority(authority: &str) -> String {
 fn remote_handle_resolution(
     lookup: &HandleLookup,
     audience: String,
-) -> JsonResult<ResolveHandleResponse> {
+) -> JsonResult<DirectoryHandleResolutionOutcome> {
     let did_authority = did_web_authority(&lookup.authority);
     let recipient_service_did = format!("did:web:{did_authority}");
     let subject = format!("{recipient_service_did}:users:{}", lookup.localpart);
@@ -1145,21 +1231,98 @@ fn remote_handle_resolution(
         service_acceptance_ref: None,
         policy_event_ref: None,
     };
-    json_ok(ResolveHandleResponse {
+    json_ok(DirectoryHandleResolutionOutcome {
+        did: Did::new(subject.clone()).map_err(|err| {
+            AppError::invalid_param(format!("resolved handle subject DID is invalid: {err}"))
+        })?,
         handle: lookup.canonical.clone(),
-        subject: subject.clone(),
-        did: subject.clone(),
-        actor: json!({
-            "did": subject,
-            "handle": lookup.canonical,
-            "display_name": lookup.canonical,
-            "verified": false,
-            "source": "remote_handle",
+        verified: false,
+        claims: json!({
+            "actor": {
+                "did": subject,
+                "handle": lookup.canonical,
+                "display_name": lookup.canonical,
+                "verified": false,
+                "source": "remote_handle"
+            }
         }),
         audience: Some(audience),
         handle_claim: None,
-        member_delivery_binding: Some(binding),
+        member_delivery_binding: Some(sdk_delivery_binding_from_soland(&binding)?),
+        as_of: Some(now()),
         source_refs: Vec::new(),
+        policy_revision: None,
+        stale: false,
+        divergent: false,
+        via_services: vec![recipient_service_did],
+    })
+}
+
+fn sdk_delivery_binding_from_soland(
+    binding: &SolandHandleClaimDeliveryBinding,
+) -> Result<DeliveryBindingHint, AppError> {
+    serde_json::from_value::<DeliveryBindingHint>(serde_json::to_value(binding).map_err(|err| {
+        AppError::internal(format!("delivery binding serialization failed: {err}"))
+    })?)
+    .map_err(|err| AppError::internal(format!("delivery binding is not SDK-compatible: {err}")))
+}
+
+fn sdk_handle_claim_from_soland(claim: &SolandHandleClaim) -> Result<SdkHandleClaim, AppError> {
+    let value = serde_json::to_value(claim)
+        .map_err(|err| AppError::internal(format!("handle claim serialization failed: {err}")))?;
+    let claim = serde_json::from_value::<SdkHandleClaim>(value)
+        .map_err(|err| AppError::internal(format!("handle claim is not SDK-compatible: {err}")))?;
+    claim
+        .validate()
+        .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
+    Ok(claim)
+}
+
+fn resolve_handle_audience(
+    body: &DirectoryResolveHandleRequestBody,
+    default_audience: &str,
+) -> String {
+    body.audience
+        .clone()
+        .or_else(|| {
+            body.realm_id
+                .as_ref()
+                .map(|realm_id| realm_id.as_str().to_owned())
+        })
+        .or_else(|| body.requester.as_ref().map(|did| did.as_str().to_owned()))
+        .unwrap_or_else(|| default_audience.to_owned())
+}
+
+fn local_handle_resolution_outcome(
+    actor: Value,
+    did: String,
+    canonical_handle: String,
+    audience: String,
+    handle_claim: SolandHandleClaim,
+) -> Result<DirectoryHandleResolutionOutcome, AppError> {
+    let member_delivery_binding = handle_claim
+        .member_delivery_binding
+        .as_ref()
+        .map(sdk_delivery_binding_from_soland)
+        .transpose()?;
+    Ok(DirectoryHandleResolutionOutcome {
+        did: Did::new(did.clone())
+            .map_err(|err| AppError::invalid_param(format!("invalid resolved actor DID: {err}")))?,
+        handle: canonical_handle,
+        verified: true,
+        claims: json!({
+            "actor": actor,
+            "subject": did,
+        }),
+        audience: Some(audience),
+        handle_claim: Some(sdk_handle_claim_from_soland(&handle_claim)?),
+        member_delivery_binding,
+        as_of: Some(now()),
+        source_refs: Vec::new(),
+        policy_revision: None,
+        stale: false,
+        divergent: false,
+        via_services: Vec::new(),
     })
 }
 
@@ -1170,10 +1333,10 @@ fn remote_handle_resolution(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_handle"))]
 async fn resolve_handle(
-    body: JsonBody<ResolveHandleRequest>,
+    body: JsonBody<DirectoryResolveHandleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ResolveHandleResponse> {
+) -> JsonResult<DirectoryHandleResolutionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
@@ -1202,11 +1365,7 @@ async fn resolve_handle(
             // bind the claim to the requester's invocation context. We
             // default to the explicit `audience` param, falling back to
             // `realm_id` for membership-builder resolves, then `requester`.
-            let audience = body
-                .audience
-                .or(body.realm_id)
-                .or(body.requester)
-                .unwrap_or_else(|| state.config.service_did.clone());
+            let audience = resolve_handle_audience(&body, &state.config.service_did);
             let did = actor["did"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &did, &audience, true)?;
@@ -1215,24 +1374,16 @@ async fn resolve_handle(
             // matches handle-claim.schema.json (cokret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
             let canonical_handle = handle_claim.handle.clone();
-            let member_delivery_binding = handle_claim.member_delivery_binding.clone();
-            json_ok(ResolveHandleResponse {
-                handle: canonical_handle,
-                subject: did.clone(),
-                did,
+            json_ok(local_handle_resolution_outcome(
                 actor,
-                audience: Some(audience),
-                handle_claim: Some(handle_claim),
-                member_delivery_binding,
-                source_refs: Vec::new(),
-            })
+                did,
+                canonical_handle,
+                audience,
+                handle_claim,
+            )?)
         }
         None if membership_builder_resolve_allowed(state, session.as_ref(), &body).await => {
-            let audience = body
-                .audience
-                .or(body.realm_id)
-                .or(body.requester)
-                .unwrap_or_else(|| state.config.service_did.clone());
+            let audience = resolve_handle_audience(&body, &state.config.service_did);
             remote_handle_resolution(&lookup, audience)
         }
         None => Err(AppError::not_found("not found")),
@@ -1373,19 +1524,18 @@ fn signed_handle_claim(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.list_handles_for_subject"))]
 async fn list_handles_for_subject(
-    body: JsonBody<DirectoryListHandlesForSubjectRequest>,
+    body: JsonBody<DirectoryListHandlesForSubjectRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DirectorySubjectHandleListResponse> {
+) -> JsonResult<DirectorySubjectHandleList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
-    let subject = body.subject.trim().to_owned();
+    let subject_did = body.subject.clone();
+    let subject = subject_did.as_str().to_owned();
     if subject.is_empty() {
         return Err(AppError::missing_param("subject is required"));
     }
-    Did::new(subject.clone())
-        .map_err(|err| AppError::invalid_param(format!("invalid subject DID: {err}")))?;
     if let Err(rejection) = crate::wire_validators::handle_claim_subject::validate_subject(
         &json!({ "subject": subject.as_str() }),
     ) {
@@ -1395,7 +1545,7 @@ async fn list_handles_for_subject(
         ));
     }
 
-    let limit = checked_limit(body.limit)?;
+    let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let start = list_handles_cursor_start(body.cursor.as_deref())?;
     let requested_as_of = body.as_of.clone();
     let session = authenticated_session(state, req).await.ok();
@@ -1411,15 +1561,9 @@ async fn list_handles_for_subject(
         if let Some(handle) = actor.get("handle").and_then(Value::as_str) {
             let audience = body
                 .realm_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .or_else(|| {
-                    body.requester
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                })
+                .as_ref()
+                .map(RealmId::as_str)
+                .or_else(|| body.requester.as_ref().map(Did::as_str))
                 .unwrap_or(state.config.service_did.as_str());
             generated_claim = Some(signed_handle_claim(
                 state, handle, &subject, audience, false,
@@ -1471,14 +1615,31 @@ async fn list_handles_for_subject(
     let has_more = consumed < total;
     let next_cursor = has_more.then(|| consumed.to_string());
     let primary_handle = primary_handle_from_subject_claims(&page);
-    json_ok(DirectorySubjectHandleListResponse {
-        subject,
-        claims: page,
+    let claims = page
+        .into_iter()
+        .map(|claim| {
+            serde_json::from_value::<SdkHandleClaim>(claim).map_err(|err| {
+                AppError::internal(format!("handle claim is not SDK-compatible: {err}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let primary_handle = primary_handle
+        .as_deref()
+        .map(SdkHandle::parse)
+        .transpose()
+        .map_err(|err| AppError::internal(format!("primary handle is invalid: {err}")))?;
+    let response = DirectorySubjectHandleList {
+        subject: subject_did,
+        claims,
         primary_handle,
         as_of,
         next_cursor,
         has_more,
-    })
+    };
+    response.validate().map_err(|err| {
+        AppError::internal(format!("handle list response validation failed: {err}"))
+    })?;
+    json_ok(response)
 }
 
 fn list_handles_cursor_start(cursor: Option<&str>) -> Result<usize, AppError> {
@@ -1492,7 +1653,7 @@ fn list_handles_cursor_start(cursor: Option<&str>) -> Result<usize, AppError> {
 
 fn push_visible_subject_handle_claim(
     state: &AppState,
-    request: &DirectoryListHandlesForSubjectRequest,
+    request: &DirectoryListHandlesForSubjectRequestBody,
     subject: &str,
     as_of: DateTime<Utc>,
     claim: Value,
@@ -1512,7 +1673,7 @@ fn push_visible_subject_handle_claim(
 
 fn subject_handle_claim_visible(
     state: &AppState,
-    request: &DirectoryListHandlesForSubjectRequest,
+    request: &DirectoryListHandlesForSubjectRequestBody,
     subject: &str,
     as_of: DateTime<Utc>,
     claim: &Value,
@@ -1564,21 +1725,11 @@ fn subject_handle_claim_visible(
     };
     let mut allowed_audiences = BTreeSet::new();
     allowed_audiences.insert(state.config.service_did.as_str());
-    if let Some(realm_id) = request
-        .realm_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        allowed_audiences.insert(realm_id);
+    if let Some(realm_id) = request.realm_id.as_ref() {
+        allowed_audiences.insert(realm_id.as_str());
     }
-    if let Some(requester) = request
-        .requester
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        allowed_audiences.insert(requester);
+    if let Some(requester) = request.requester.as_ref() {
+        allowed_audiences.insert(requester.as_str());
     }
     allowed_audiences.contains(audience)
 }
@@ -1930,6 +2081,7 @@ fn require_demo_directory_provider(state: &AppState) -> Result<(), AppError> {
 pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_did: &str) -> Value {
     json!({
         "organization_id": "ck:org:demo",
+        "organization_did": service_did,
         "handle": "@cokret-demo",
         "name": "Cokret Demo Organization",
         "description": "Demo organization projected by soland",

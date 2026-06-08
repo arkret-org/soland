@@ -57,29 +57,15 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
-    assert_eq!(describe["primary_write_path"], "/_cokret/self/events");
-    assert_eq!(describe["event_envelope"]["schema"], "ck.schema.event.v1");
-    assert_eq!(
-        describe["registry"]["event_kind_registry_version"],
-        "2026-05-08"
-    );
-    assert_eq!(
-        describe["registry"]["source"],
-        "cokret-spec/spec/v1/artifacts"
-    );
     assert!(
-        describe["registry"]["event_kinds"]
+        describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|kind| kind == "ck.flow.create")
+            .any(|operation| operation == "ck.self.events.submit")
     );
-    assert_eq!(describe["schema_profile"], "ck.schema.core.v1");
-    assert_eq!(describe["reducer_profile"], "ck.reducer.v1");
-    assert_eq!(describe["capabilities"]["batch_receipt"], false);
-    assert_eq!(describe["capabilities"]["snapshot"], false);
-    assert_eq!(describe["capabilities"]["witness"], false);
-    assert_eq!(describe["capabilities"]["high_assurance"], false);
+    assert_eq!(describe["limits"]["max_event_bytes"], 64 * 1024);
+    assert_eq!(describe["limits"]["max_resolve"], 100);
 
     let first = signed_event_envelope(
         "ck:event:01904100-0000-7000-8000-f15c8ea06c11",
@@ -96,10 +82,9 @@ async fn events_describe_and_single_event_submit_work() {
         .unwrap();
     assert_eq!(submitted["status"], "accepted");
     assert_eq!(
-        submitted["event_id"],
+        submitted["accepted"][0],
         "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
-    assert_eq!(submitted["canonical_digest"], first["canonical_digest"]);
 
     let duplicate: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -110,7 +95,7 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(duplicate["status"], "duplicate");
-    assert_eq!(duplicate["receipt"]["idempotent"], true);
+    assert_eq!(duplicate["duplicate"][0], first["event_id"]);
 
     let fetched: Value = TestClient::get(
         "http://server/_cokret/self/events/ck:event:01904100-0000-7000-8000-f15c8ea06c11",
@@ -126,11 +111,11 @@ async fn events_describe_and_single_event_submit_work() {
         "ck:event:01904100-0000-7000-8000-f15c8ea06c11"
     );
     assert_eq!(
-        fetched["metadata"]["canonical_digest"],
+        fetched["event"]["proofs"][0]["event_digest"],
         first["canonical_digest"]
     );
     assert_eq!(
-        fetched["metadata"]["realm_id"],
+        fetched["visibility"]["realm_id"],
         "ck:realm:0196419b-0000-7000-8000-000000000000"
     );
 
@@ -237,9 +222,9 @@ async fn events_describe_and_single_event_submit_work() {
             .await
             .unwrap();
     assert_eq!(listed["events"].as_array().unwrap().len(), 3);
-    assert_eq!(listed["frontier"]["actors"]["did:web:alice.example"], 3);
+    assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
-        listed["frontier"]["realms"]["ck:realm:0196419b-0000-7000-8000-000000000000"],
+        listed["events"][2]["event_id"],
         "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
@@ -356,9 +341,9 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.extension.soland.account.register",
         "ck.extension.soland.account.me",
         "ck.extension.soland.auth.logout",
-        "ck.extension.soland.contacts.request",
-        "ck.extension.soland.contacts.respond",
-        "ck.extension.soland.contacts.list",
+        "ck.self.contact.request",
+        "ck.self.contact.respond",
+        "ck.self.contact.list",
         "ck.server.describe",
         "ck.self.events.describe",
         "ck.self.events.submit",
@@ -373,7 +358,7 @@ async fn cokret_openapi_spec_contains_facet_projection_contracts() {
         "ck.extension.soland.federation.transaction",
         "ck.extension.soland.federation.push_operations",
         "ck.extension.soland.federation.pull_operations",
-        "ck.extension.soland.federation.space_members",
+        "ck.extension.soland.federation.realm_members",
         "ck.extension.soland.federation.verify_actor",
         "ck.self.account.subscribe",
         "ck.self.ephemeral.send",

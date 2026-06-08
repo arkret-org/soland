@@ -38,9 +38,9 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AccountDataRecord, AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
-    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterRequest, PushRegisterResponse,
-    PushRulesResponse, PushUnregisterRequest, SessionGrantIntrospectionProof,
-    UpsertPushRuleRequest, UpsertPushRuleResponse,
+    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterRequestBody, PushRulesOutcome,
+    PushUnregisterRequestBody, SessionGrantIntrospectionProof, UpsertPushRuleOutcome,
+    UpsertPushRuleRequestBody,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
@@ -58,10 +58,10 @@ const PUSH_RULES_ACCOUNT_DATA_TYPE: &str = "ck.push_rules";
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.push.register_device"))]
 pub(super) async fn push_register(
-    body: JsonBody<PushRegisterRequest>,
+    body: JsonBody<PushRegisterRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PushRegisterResponse> {
+) -> JsonResult<cokret_sdk::PushRegisterDeviceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
@@ -125,13 +125,10 @@ pub(super) async fn push_register(
     {
         tracing::error!(%error, "failed to persist push device registration");
     }
-    json_ok(PushRegisterResponse {
+    json_ok(cokret_sdk::PushRegisterDeviceOutcome {
         ok: true,
         registration_id: Some(registration_id),
         expires_at: None,
-        accepted_gateway: Some(body.push_gateway),
-        request_id: body.request_id,
-        warnings,
     })
 }
 
@@ -157,7 +154,7 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
 #[tracing::instrument(skip_all, fields(op = "ck.edge.push.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
-    body: JsonBody<PushUnregisterRequest>,
+    body: JsonBody<PushUnregisterRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<OkOutcome> {
@@ -203,7 +200,7 @@ pub(super) async fn push_rules(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PushRulesResponse> {
+) -> JsonResult<PushRulesOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let rules = list_push_rule_records(state, &session.actor)
@@ -211,7 +208,7 @@ pub(super) async fn push_rules(
         .iter()
         .map(push_rule_to_json)
         .collect::<Vec<_>>();
-    json_ok(PushRulesResponse {
+    json_ok(PushRulesOutcome {
         rules,
         next_cursor: None,
     })
@@ -225,10 +222,10 @@ pub(super) async fn push_rules(
 #[tracing::instrument(skip_all, fields(op = "ck.push.upsert_rule"))]
 pub(super) async fn upsert_push_rule(
     aa: AuthArgs,
-    body: JsonBody<UpsertPushRuleRequest>,
+    body: JsonBody<UpsertPushRuleRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<UpsertPushRuleResponse> {
+) -> JsonResult<UpsertPushRuleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -271,7 +268,7 @@ pub(super) async fn upsert_push_rule(
     persist_push_rule_records(state, &session.actor, &rules)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(UpsertPushRuleResponse {
+    json_ok(UpsertPushRuleOutcome {
         ok: true,
         rule: push_rule_to_json(&rule),
     })
@@ -441,7 +438,7 @@ async fn verify_push_gateway_contract_drift(
 async fn push_register_session_grant_bridge(
     state: &AppState,
     req: &Request,
-    body: &PushRegisterRequest,
+    body: &PushRegisterRequestBody,
 ) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
     let Some(grant) = req.headers().get("x-cokret-session-grant") else {
         return Ok(None);

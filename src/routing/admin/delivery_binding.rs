@@ -31,7 +31,7 @@ use crate::{JsonResult, app_error, json_ok};
 /// `sodmin/src/types/api.rs`. `realm_id` is the security boundary id
 /// `policy_frontier` is reducer-written and read-only here.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmDeliveryBindingPolicyResponse {
+pub struct RealmDeliveryBindingPolicyOutcome {
     /// Realm identifier (security boundary).
     #[serde(default)]
     pub realm_id: String,
@@ -51,9 +51,9 @@ pub struct RealmDeliveryBindingPolicyResponse {
 /// while projection storage is sparse. Once the projection mirror table
 /// for delivery_binding_policy lands, read fields off the structured
 /// cache instead of generic JSON lookups.
-fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBindingPolicyResponse {
+fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBindingPolicyOutcome {
     let Some(value) = value else {
-        return RealmDeliveryBindingPolicyResponse {
+        return RealmDeliveryBindingPolicyOutcome {
             realm_id: realm_id.to_owned(),
             ..Default::default()
         };
@@ -80,7 +80,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
         .get("updated_at")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    RealmDeliveryBindingPolicyResponse {
+    RealmDeliveryBindingPolicyOutcome {
         realm_id: realm_id.to_owned(),
         allowed_recipient_services,
         binding_source_policy,
@@ -109,7 +109,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<RealmDeliveryBindingPolicyResponse> {
+) -> JsonResult<RealmDeliveryBindingPolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _admin_session = super::require_admin_principal(state, session)?;

@@ -32,7 +32,7 @@ use super::{
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
 use crate::wire::{
-    DevLoginRequest, DevLoginResponse, LogoutResponse, SessionGrantExchangeRequest,
+    DevLoginOutcome, DevLoginRequestBody, LogoutOutcome, SessionGrantExchangeRequestBody,
     SessionGrantIntrospectionProof,
 };
 use crate::{JsonResult, ids, json_ok};
@@ -176,8 +176,8 @@ fn account_existing_session_error(
 #[tracing::instrument(skip_all, fields(op = "ck.auth.dev_login"))]
 async fn dev_login(
     depot: &mut Depot,
-    body: JsonBody<DevLoginRequest>,
-) -> JsonResult<DevLoginResponse> {
+    body: JsonBody<DevLoginRequestBody>,
+) -> JsonResult<DevLoginOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     if !state.config.development_mode {
         return Err(AppError::not_found("endpoint not available"));
@@ -287,7 +287,7 @@ async fn dev_login(
     .await;
     state.clear_failed_login(&body.actor);
 
-    json_ok(DevLoginResponse {
+    json_ok(DevLoginOutcome {
         access_token: token,
         token_type: "Bearer".to_owned(),
         actor: body.actor,
@@ -304,8 +304,8 @@ async fn dev_login(
 #[tracing::instrument(skip_all, fields(op = "ck.auth.exchange_session_grant"))]
 async fn exchange_session_grant(
     depot: &mut Depot,
-    body: JsonBody<SessionGrantExchangeRequest>,
-) -> JsonResult<DevLoginResponse> {
+    body: JsonBody<SessionGrantExchangeRequestBody>,
+) -> JsonResult<DevLoginOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.grant_jwt.trim().is_empty()
@@ -417,7 +417,7 @@ async fn exchange_session_grant(
     .await;
     state.clear_failed_login(&body.principal_id);
 
-    json_ok(DevLoginResponse {
+    json_ok(DevLoginOutcome {
         access_token: token,
         token_type: "Bearer".to_owned(),
         actor: body.principal_id,
@@ -427,7 +427,7 @@ async fn exchange_session_grant(
 }
 
 #[derive(Debug, Serialize)]
-struct SessionGrantIntrospectionRequest<'a> {
+struct SessionGrantIntrospectionRequestBody<'a> {
     grant_jwt: &'a str,
     audience: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -435,7 +435,7 @@ struct SessionGrantIntrospectionRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct SessionGrantIntrospectionResponse {
+struct SessionGrantIntrospectionOutcome {
     active: bool,
     status: String,
     one_time_use_consumed: bool,
@@ -452,7 +452,7 @@ struct SessionGrantIntrospectionGrant {
 }
 
 #[derive(Debug, Serialize)]
-struct OAuthIntrospectionRequest<'a> {
+struct OAuthIntrospectionRequestBody<'a> {
     token: &'a str,
     token_type_hint: &'static str,
 }
@@ -501,7 +501,7 @@ pub(crate) async fn validate_session_grant_binding(
                 "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
-    let request = SessionGrantIntrospectionRequest {
+    let request = SessionGrantIntrospectionRequestBody {
         grant_jwt: input.grant_jwt,
         audience: state.config.service_did.as_str(),
         proof: input.proof,
@@ -539,7 +539,7 @@ pub(crate) async fn validate_session_grant_binding(
         )));
     }
     let response = response
-        .json::<SessionGrantIntrospectionResponse>()
+        .json::<SessionGrantIntrospectionOutcome>()
         .await
         .map_err(|error| {
             AppError::new(
@@ -602,7 +602,7 @@ async fn logout(
     aa: super::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<LogoutResponse> {
+) -> JsonResult<LogoutOutcome> {
     let _ = &aa; // header presence registered with the OpenAPI doc
     let state = depot.obtain::<AppState>().expect("state injected");
     let token = bearer_token(req)
@@ -647,7 +647,7 @@ async fn logout(
             .purge(&session.actor, &session.device_id)
             .await;
     }
-    json_ok(LogoutResponse { ok: true, revoked })
+    json_ok(LogoutOutcome { ok: true, revoked })
 }
 
 // ── Session validation pipeline ─────────────────────────────────────────────
@@ -896,7 +896,7 @@ async fn perform_oauth_introspection(
     token: &str,
     development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
-    let request = OAuthIntrospectionRequest {
+    let request = OAuthIntrospectionRequestBody {
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };
@@ -985,7 +985,7 @@ fn legacy_blocking_introspection(
     token: &str,
     development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
-    let request = OAuthIntrospectionRequest {
+    let request = OAuthIntrospectionRequestBody {
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };

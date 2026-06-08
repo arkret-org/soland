@@ -15,7 +15,7 @@ use serde_json::json;
 use super::{AuthArgs, accept_local_operations};
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::wire::{AddReactionRequest, ReactionResponse, RemoveReactionRequest};
+use crate::wire::{AddReactionRequestBody, ReactionOutcome, RemoveReactionRequestBody};
 use crate::{JsonResult, ids, json_ok, kinds};
 
 pub(super) fn router() -> Router {
@@ -34,8 +34,8 @@ async fn add_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<AddReactionRequest>,
-) -> JsonResult<ReactionResponse> {
+    body: JsonBody<AddReactionRequestBody>,
+) -> JsonResult<ReactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -54,7 +54,7 @@ async fn add_reaction(
     accept_local_operations(state, &session.actor, &[operation])
         .await
         .map_err(AppError::invalid_param)?;
-    json_ok(ReactionResponse {
+    json_ok(ReactionOutcome {
         event_id: body.event_id,
         actor: session.actor.clone(),
         key: body.key,
@@ -72,8 +72,8 @@ async fn remove_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<RemoveReactionRequest>,
-) -> JsonResult<ReactionResponse> {
+    body: JsonBody<RemoveReactionRequestBody>,
+) -> JsonResult<ReactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -92,7 +92,7 @@ async fn remove_reaction(
     accept_local_operations(state, &session.actor, &[operation])
         .await
         .map_err(AppError::invalid_param)?;
-    json_ok(ReactionResponse {
+    json_ok(ReactionOutcome {
         event_id: body.event_id,
         actor: session.actor.clone(),
         key: body.key,

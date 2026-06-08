@@ -22,5 +22,34 @@ pub fn admin_anchor_sign_router() -> Router {
 }
 
 pub fn router() -> Router {
-    Router::new().push(move_anchor::router())
+    Router::new().push(move_anchor::router()).push(
+        Router::with_path("federation")
+            .push(
+                Router::with_path("transactions/{txn_id}").post(federation::federation_transaction),
+            )
+            .push(
+                Router::with_path("operations")
+                    .post(federation::federation_push_operations)
+                    .get(federation::federation_pull_operations),
+            )
+            .push(
+                Router::with_path("operations/backfill")
+                    .post(federation::federation_backfill_operations),
+            )
+            .push(
+                Router::with_path("operations/frontier")
+                    .get(federation::federation_operation_frontier),
+            )
+            .push(Router::with_path("realm-members").get(federation::federation_realm_members))
+            .push(
+                Router::with_path("actors/{actor_id}/events")
+                    .get(federation::federation_actor_events),
+            )
+            .push(Router::with_path("verify-actor").post(federation::federation_verify_actor))
+            .push(
+                Router::with_path("anchors")
+                    .get(federation::federation_anchors_pull)
+                    .post(federation::federation_anchors_push),
+            ),
+    )
 }

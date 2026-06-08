@@ -77,16 +77,16 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // The new typed describe endpoints must:
     // 1. publish their wire response types as components,
     assert!(
-        body.contains("AuthBridgeDescribeResponse"),
-        "AuthBridgeDescribeResponse missing — auth_bridge_describe didn't publish its schema"
+        body.contains("AuthBridgeDescribeOutcome"),
+        "AuthBridgeDescribeOutcome missing — auth_bridge_describe didn't publish its schema"
     );
     assert!(
-        body.contains("IntegrationDescribeResponse"),
-        "IntegrationDescribeResponse missing — integration_describe didn't publish its schema"
+        body.contains("IntegrationDescribeOutcome"),
+        "IntegrationDescribeOutcome missing — integration_describe didn't publish its schema"
     );
     assert!(
-        body.contains("HealthResponse"),
-        "HealthResponse missing — health didn't publish its schema"
+        body.contains("HealthOutcome"),
+        "HealthOutcome missing — health didn't publish its schema"
     );
 
     // 2. publish AppError's standard error envelope on every typed handler,
@@ -113,14 +113,15 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Phase C/D-converted endpoints must publish their request body types so
     // the OpenAPI spec carries the typed schemas (not synthetic placeholders).
     for typed_request_body in [
-        "DevLoginRequest",
-        "SessionGrantExchangeRequest",
-        "RegisterAccountRequest",
-        "SolandContactRequestRequestBody",
-        "SolandContactRespondRequestBody",
-        "AddReactionRequest",
-        "RemoveReactionRequest",
-        "SetReadMarkerRequest",
+        "DevLoginRequestBody",
+        "SessionGrantExchangeRequestBody",
+        "RegisterAccountRequestBody",
+        "ContactRequestRequestBody",
+        "ContactRespondRequestBody",
+        "DirectConversationResolveRequestBody",
+        "AddReactionRequestBody",
+        "RemoveReactionRequestBody",
+        "SetReadMarkerRequestBody",
     ] {
         assert!(
             body.contains(typed_request_body),
@@ -130,14 +131,16 @@ async fn typed_describe_handlers_publish_response_schemas() {
 
     // Phase C/D-converted endpoints must publish typed response shapes too.
     for typed_response in [
-        "DevLoginResponse",
-        "LogoutResponse",
+        "DevLoginOutcome",
+        "LogoutOutcome",
         "SolandAccountRegisterOutcome",
-        "ContactResponse",
-        "ContactsResponse",
-        "ReactionResponse",
-        "ReadMarkerResponse",
-        "SpaceLifecycleResponse",
+        "ContactRequestOutcome",
+        "ContactRespondOutcome",
+        "ContactList",
+        "DirectConversationResolveOutcome",
+        "ReactionOutcome",
+        "ReadMarkerOutcome",
+        "RealmLifecycleOutcome",
     ] {
         assert!(
             body.contains(typed_response),
@@ -149,14 +152,14 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // embedded did:webvh register handler now use typed `#[endpoint]`
     // signatures (`JsonResult<T>` / `body: JsonBody<T>`), so their wire
     // types must appear in the generated YAML. The new
-    // `EmbeddedWebvhRegisterResponse` is asserted alongside the originally
+    // `EmbeddedWebvhRegisterOutcome` is asserted alongside the originally
     // forward-compat-only set.
     for typed_now in [
-        "FederationAnchorsResponse",
-        "FederationAnchorsPushRequest",
-        "FederationAnchorsPushResponse",
-        "EmbeddedWebvhRegisterRequest",
-        "EmbeddedWebvhRegisterResponse",
+        "FederationAnchorsOutcome",
+        "FederationAnchorsPushRequestBody",
+        "FederationAnchorsPushOutcome",
+        "EmbeddedWebvhRegisterRequestBody",
+        "EmbeddedWebvhRegisterOutcome",
     ] {
         assert!(
             body.contains(typed_now),
@@ -181,10 +184,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 15g — access/authz.rs invites + effective_grants converted.
-    // Their wire response types are already ToSchema; the conversion
-    // adds them to the typed-handler output set.
-    for typed_now in ["InvitesResponse", "SolandGrantList"] {
+    // Round 15g — access/authz.rs invites + effective_grants use the SDK
+    // canonical response DTOs.
+    for typed_now in ["AuthzInviteList", "GrantList"] {
         assert!(
             body.contains(typed_now),
             "{typed_now} missing — access/authz typed signature did not publish its schema"
@@ -227,7 +229,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.extension.soland.federation.transaction",
         "ck.extension.soland.federation.push_operations",
         "ck.extension.soland.federation.pull_operations",
-        "ck.extension.soland.federation.space_members",
+        "ck.extension.soland.federation.realm_members",
         "ck.extension.soland.federation.verify_actor",
         "ck.self.events.frontier",
     ] {
@@ -247,14 +249,14 @@ async fn typed_describe_handlers_publish_response_schemas() {
     for typed_now in [
         "ModerationReportRequestBody",
         "SolandModerationReportOutcome",
-        "PushUnregisterRequest",
+        "PushUnregisterRequestBody",
         "PushNotifyRequestBody",
         "PushNotifyOutcome",
-        "CreateWebrtcSessionRequest",
-        "CreateWebrtcSessionResponse",
-        "WebrtcSignalRequest",
-        "WebrtcSignalResponse",
-        "WebrtcSignalsResponse",
+        "CreateWebrtcSessionRequestBody",
+        "CreateWebrtcSessionOutcome",
+        "WebrtcSignalRequestBody",
+        "WebrtcSignalOutcome",
+        "WebrtcSignalsOutcome",
     ] {
         assert!(
             body.contains(typed_now),
@@ -284,9 +286,9 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // Wire types already carry ToSchema; canonical operation_ids come
     // from the SOLAND_EXTENSION_OPERATIONS registry in routing/mod.rs.
     for typed_now in [
-        "UpsertPolicyDocumentRequest",
-        "PolicyDocumentResponse",
-        "PolicyDocumentsResponse",
+        "UpsertPolicyDocumentRequestBody",
+        "PolicyDocumentOutcome",
+        "PolicyDocumentsOutcome",
         "SolandPolicyCheckRequestBody",
         "SolandPolicyCheckOutcome",
         "SolandAuthzCheckRequestBody",
@@ -315,13 +317,13 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // - identity/key_backup.rs::{put_key_backup, list_key_backups, get_key_backup,
     //   delete_key_backup}
     // - identity/profile.rs::profile_presence
-    // Note: profile_presence's response wrapper `ProfilePresenceResponse`
+    // Note: profile_presence's response wrapper `ProfilePresenceOutcome`
     // is newly added in profile.rs (no upstream wire type existed).
     for typed_now in [
         "SolandKeysBackupsPutOutcome",
         "SolandKeysBackupsList",
         "SolandKeysBackupsDeleteOutcome",
-        "ProfilePresenceResponse",
+        "ProfilePresenceOutcome",
     ] {
         assert!(
             body.contains(typed_now),
@@ -419,10 +421,16 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // already asserted in earlier rounds, or are publicly stable enough
     // through their handler tags).
     for typed_now in [
-        "ListRelationsResponse",
-        "TombstoneRelationResponse",
-        "PushRulesResponse",
-        "UpsertPushRuleResponse",
+        "DirectoryDescription",
+        "DirectorySearchRealmsRequestBody",
+        "DirectoryRealmSearchOutcome",
+        "DirectoryResolveRealmRequestBody",
+        "DirectoryRealmResolutionOutcome",
+        "RealmPreview",
+        "ListRelationsOutcome",
+        "TombstoneRelationOutcome",
+        "PushRulesOutcome",
+        "UpsertPushRuleOutcome",
     ] {
         assert!(
             body.contains(typed_now),
@@ -520,8 +528,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     // Round 15aa — access/authz.rs::{create_grant, revoke_grant} typed.
-    // New CreateGrantResponse + RevokeGrantResponse wire types.
-    for typed_now in ["CreateGrantResponse", "RevokeGrantResponse"] {
+    // New CreateGrantOutcome + RevokeGrantOutcome wire types.
+    for typed_now in ["CreateGrantOutcome", "RevokeGrantOutcome"] {
         assert!(
             body.contains(typed_now),
             "{typed_now} missing — round 15aa typed signature did not publish its schema"

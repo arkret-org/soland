@@ -28,7 +28,7 @@ pub(super) fn router() -> Router {
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ConsentCellResponse {
+pub struct ConsentCellOutcome {
     pub ok: bool,
     pub cell_id: String,
     pub holder_did: String,
@@ -49,9 +49,9 @@ pub struct ConsentCellResponse {
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ConsentCellsResponse {
+pub struct ConsentCellsOutcome {
     pub ok: bool,
-    pub cells: Vec<ConsentCellResponse>,
+    pub cells: Vec<ConsentCellOutcome>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -150,7 +150,7 @@ async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ConsentCellsResponse> {
+) -> JsonResult<ConsentCellsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let now = now();
@@ -168,7 +168,7 @@ async fn list_consent_cells(
             .then_with(|| a.peer_did.cmp(&b.peer_did))
             .then_with(|| a.scope.cmp(&b.scope))
     });
-    json_ok(ConsentCellsResponse { ok: true, cells })
+    json_ok(ConsentCellsOutcome { ok: true, cells })
 }
 
 #[endpoint(
@@ -183,7 +183,7 @@ async fn get_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-) -> JsonResult<ConsentCellResponse> {
+) -> JsonResult<ConsentCellOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
@@ -225,7 +225,7 @@ async fn grant_consent_cell(
     req: &mut Request,
     holder_did: PathParam<String>,
     body: JsonBody<ConsentUpdateBody>,
-) -> JsonResult<ConsentCellResponse> {
+) -> JsonResult<ConsentCellOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
@@ -275,7 +275,7 @@ async fn revoke_consent_cell(
     req: &mut Request,
     holder_did: PathParam<String>,
     body: JsonBody<ConsentUpdateBody>,
-) -> JsonResult<ConsentCellResponse> {
+) -> JsonResult<ConsentCellOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
@@ -313,7 +313,7 @@ async fn request_consent_cell(
     req: &mut Request,
     res: &mut Response,
     body: JsonBody<ConsentRequestBody>,
-) -> JsonResult<ConsentCellResponse> {
+) -> JsonResult<ConsentCellOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -764,9 +764,9 @@ fn observed_dot_string(value: &Value) -> Option<String> {
     None
 }
 
-fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellResponse {
+fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellOutcome {
     let active_grant_dots = active_grant_dots(cell, at);
-    ConsentCellResponse {
+    ConsentCellOutcome {
         ok: true,
         cell_id: cell.cell_id.clone(),
         holder_did: cell.holder.clone(),

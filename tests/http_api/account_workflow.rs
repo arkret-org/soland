@@ -78,7 +78,11 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(contact_request["status"], "pending");
+    assert_eq!(contact_request["state"], "pending_outgoing");
+    let contact_request_id = contact_request["request_event_ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let duplicate_contact_request: Value =
         TestClient::post("http://server/_soland/self/contacts/request")
@@ -89,11 +93,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(duplicate_contact_request["status"], "pending");
+    assert_eq!(duplicate_contact_request["state"], "pending_outgoing");
 
     let accepted: Value = TestClient::post("http://server/_soland/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
+            "request_id": contact_request_id,
             "requester": "did:web:alice.example",
             "action": "accept"
         }))
@@ -102,11 +107,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(accepted["state"], "accepted");
 
     let accepted_again: Value = TestClient::post("http://server/_soland/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
+            "request_id": contact_request["request_event_ref"],
             "requester": "did:web:alice.example",
             "action": "accept"
         }))
@@ -115,11 +121,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(accepted_again["status"], "accepted");
+    assert_eq!(accepted_again["state"], "accepted");
 
     let reject_after_accept = TestClient::post("http://server/_soland/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
+            "request_id": contact_request["request_event_ref"],
             "requester": "did:web:alice.example",
             "action": "reject"
         }))
@@ -144,7 +151,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(visible_bob["results"][0]["subject"], "did:web:bob.example");
+    assert_eq!(visible_bob["results"][0]["actor_id"], "did:web:bob.example");
 
     let created_realm = seed_test_realm(
         &state,
@@ -191,14 +198,14 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     assert_eq!(
-        bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_did"],
+        bob_invites["invites"][0]["third_party_id"]["recipient_service_did"],
         "did:web:soland.local"
     );
     assert_eq!(
-        bob_invites["invites"][0]["introduction_evidence_digest"],
+        bob_invites["invites"][0]["join_rule_snapshot"]["introduction_evidence_digest"],
         format!("sha256:{}", "1".repeat(64))
     );
-    let invite_token = bob_invites["invites"][0]["invite_token"]
+    let invite_token = bob_invites["invites"][0]["join_rule_snapshot"]["invite_token"]
         .as_str()
         .unwrap()
         .to_owned();

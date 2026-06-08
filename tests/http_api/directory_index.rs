@@ -73,20 +73,33 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .await
             .unwrap();
     assert_eq!(
-        organizations["results"][0]["organization_id"],
+        organizations["results"][0]["preview"]["organization_id"],
         "ck:org:demo"
+    );
+    assert_eq!(
+        organizations["results"][0]["organization_did"],
+        "did:web:soland.local"
     );
 
     let organization: Value =
         TestClient::post("http://server/_cokret/find/directory/resolve-organization")
-            .json(&serde_json::json!({"organization_id": "ck:org:demo"}))
+            .json(&serde_json::json!({"handle": "@cokret-demo"}))
             .send(&app())
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(organization["organization"]["handle"], "@cokret-demo");
-    assert_eq!(organization["spaces"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        organization["organization_preview"]["handle"],
+        "@cokret-demo"
+    );
+    assert_eq!(
+        organization["organization_preview"]["preview"]["spaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     let actors: Value = TestClient::post("http://server/_cokret/find/directory/search-actors")
         .json(&serde_json::json!({"query": "alice"}))
@@ -95,7 +108,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(actors["results"][0]["did"], "did:web:alice.example");
+    assert_eq!(actors["results"][0]["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        actors["results"][0]["preview"]["did"],
+        "did:web:alice.example"
+    );
 
     let users: Value = TestClient::post("http://server/_cokret/find/directory/search-users")
         .json(&serde_json::json!({"query": "alice"}))
@@ -107,10 +124,18 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     // DIR-1 (R3.1, cokret-spec @ 7157ee8) — search_users rows surface the
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
-    assert_eq!(users["results"][0]["handle"], "alice:soland.local");
-    assert!(users["results"][0].get("handle_uri").is_none());
-    assert!(users["results"][0].get("presence").is_none());
-    assert!(users["results"][0].get("organization_id").is_none());
+    assert_eq!(users["results"][0]["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        users["results"][0]["preview"]["handle"],
+        "alice:soland.local"
+    );
+    assert!(users["results"][0]["preview"].get("handle_uri").is_none());
+    assert!(users["results"][0]["preview"].get("presence").is_none());
+    assert!(
+        users["results"][0]["preview"]
+            .get("organization_id")
+            .is_none()
+    );
 
     let handle: Value = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
         .json(&serde_json::json!({"handle": "alice"}))
@@ -282,7 +307,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
     let not_found_cases = [
         (
             "resolve-organization",
-            serde_json::json!({"organization_id": "ck:org:demo"}),
+            serde_json::json!({"handle": "@cokret-demo"}),
         ),
         ("search-actors", serde_json::json!({"query": "alice"})),
         ("search-users", serde_json::json!({"query": "alice"})),
@@ -429,6 +454,37 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
     assert_eq!(
         resolved["join_candidates"].as_array().map(Vec::len),
         Some(0)
+    );
+}
+
+#[tokio::test]
+async fn directory_resolve_realm_returns_spec_title_field() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Spec title realm",
+        Some("visible summary"),
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["realm_id"].as_str().unwrap();
+
+    let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-realm")
+        .json(&serde_json::json!({"realm_id": realm_id}))
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
+    assert_eq!(resolved["realm_preview"]["title"], "Spec title realm");
+    assert!(
+        resolved["realm_preview"].get("name").is_none(),
+        "resolve-realm realm_preview must not expose retired name field: {resolved}"
     );
 }
 

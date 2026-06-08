@@ -17,7 +17,7 @@ use crate::routing::identity::device_messages::{
 };
 use crate::state::AppState;
 use crate::wire::{
-    ReadCursorPositionWire, ReadMarkerResponse, ReadScopeWire, SetReadMarkerRequest,
+    ReadCursorPositionWire, ReadMarkerOutcome, ReadScopeWire, SetReadMarkerRequestBody,
 };
 use crate::{JsonResult, ids, json_ok, kinds};
 
@@ -31,8 +31,8 @@ pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SetReadMarkerRequest>,
-) -> JsonResult<ReadMarkerResponse> {
+    body: JsonBody<SetReadMarkerRequestBody>,
+) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -81,7 +81,7 @@ pub(super) async fn set_read_cursor(
         }),
     )
     .await;
-    json_ok(ReadMarkerResponse {
+    json_ok(ReadMarkerOutcome {
         realm_id: realm_id.clone(),
         actor_id: session.actor.clone(),
         device_id: session.device_id.clone(),
@@ -113,7 +113,7 @@ pub(super) async fn get_read_cursors(
             .filter(|m| {
                 m.actor_id == session.actor && (realm_id.is_empty() || m.realm_id == realm_id)
             })
-            .map(|m| ReadMarkerResponse {
+            .map(|m| ReadMarkerOutcome {
                 realm_id: m.realm_id.clone(),
                 actor_id: m.actor_id.clone(),
                 device_id: m.device_id.clone(),

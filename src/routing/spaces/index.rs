@@ -539,7 +539,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         if let Some(text) = filter_text.as_deref() {
             let haystack = format!(
                 "{} {}",
-                realm.name.to_lowercase(),
+                realm.title.to_lowercase(),
                 realm.description.as_deref().unwrap_or("").to_lowercase()
             );
             if !haystack.contains(text) {
@@ -550,7 +550,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
             "kind": "realm",
             "object_id": realm.realm_id.as_str(),
             "realm_id": realm.realm_id.as_str(),
-            "title": realm.name,
+            "title": realm.title,
             "summary": realm.description,
             "tags": realm.tags.iter().cloned().collect::<Vec<_>>(),
             "public": realm.public,

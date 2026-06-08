@@ -27,6 +27,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use cokret_sdk::http::EventsQueryOutcome;
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::{EphemeralSubmitOutcome, RealmId};
 use ed25519_dalek::{Signature, Signer as _, Verifier as _};
@@ -57,7 +58,7 @@ use crate::state::{
     ProjectionEventRecord, RealmDirectoryEntry, SessionRecord, TypingRecord,
 };
 use crate::wire::{
-    AccountDescribeOutcome, BackfillOutcome, ClientSyncRequest, EventsQueryPostRequestBody,
+    AccountDescribeOutcome, BackfillOutcome, ClientSyncRequestBody, EventsQueryPostRequestBody,
     SolandSnapshotHeadState,
 };
 
@@ -344,10 +345,10 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
 #[tracing::instrument(skip_all, fields(op = "ck.self.account.cursor_revoke"))]
 async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<crate::wire::CursorRevokeRequest>,
+    body: salvo::oapi::extract::JsonBody<cokret_sdk::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<crate::wire::CursorRevokeResponse> {
+) -> crate::result::JsonResult<cokret_sdk::AccountCursorRevokeOutcome> {
     use crate::error::AppError;
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -361,16 +362,16 @@ async fn account_cursor_revoke(
     if reason_code.is_empty() {
         return Err(AppError::invalid_param("reason_code is required"));
     }
-    let scope = body.revoke_scope.as_deref().unwrap_or("this_cursor");
-    if !matches!(scope, "this_cursor" | "same_device" | "same_session") {
-        return Err(AppError::invalid_param(
-            "revoke_scope must be this_cursor, same_device, or same_session",
-        ));
-    }
+    let scope = body.revoke_scope;
+    let scope_value = match scope {
+        cokret_sdk::CursorRevokeScope::ThisCursor => "this_cursor",
+        cokret_sdk::CursorRevokeScope::SameDevice => "same_device",
+        cokret_sdk::CursorRevokeScope::SameSession => "same_session",
+    };
 
     let revoked_at = now();
     let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
-    let device_id = if scope == "this_cursor" {
+    let device_id = if matches!(scope, cokret_sdk::CursorRevokeScope::ThisCursor) {
         None
     } else {
         Some(session.device_id.clone())
@@ -379,7 +380,7 @@ async fn account_cursor_revoke(
         cursor_digest: sha256_hex(cursor.as_bytes()),
         principal_id: session.actor.clone(),
         device_id,
-        scope: scope.to_owned(),
+        scope: scope_value.to_owned(),
         reason_code: reason_code.to_owned(),
         revoked_at,
         expires_at,
@@ -394,9 +395,10 @@ async fn account_cursor_revoke(
         revocations.push(record);
     }
 
-    crate::json_ok(crate::wire::CursorRevokeResponse {
+    crate::json_ok(cokret_sdk::AccountCursorRevokeOutcome {
         revoked: true,
-        expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        expires_at,
+        revoke_scope_effective: Some(scope),
     })
 }
 
@@ -449,8 +451,8 @@ fn delta_is_empty(response: &cokret_sdk::model::SyncOutcome) -> bool {
         && response.presence.is_empty()
 }
 
-fn account_subscribe_query(req: &mut Request) -> ClientSyncRequest {
-    ClientSyncRequest {
+fn account_subscribe_query(req: &mut Request) -> ClientSyncRequestBody {
+    ClientSyncRequestBody {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
@@ -496,7 +498,7 @@ fn account_reconnect_control_frame(
 fn account_subscribe_scope_key(
     req: &Request,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequest,
+    body: &ClientSyncRequestBody,
 ) -> String {
     format!(
         "ck.self.account.subscribe|{}|filter={}",
@@ -553,7 +555,7 @@ fn presence_sync_event_json(record: PresenceRecord) -> Value {
 async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequest,
+    body: &ClientSyncRequestBody,
     after_cursor: &SyncCursor,
 ) -> cokret_sdk::model::SyncOutcome {
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
@@ -582,7 +584,7 @@ async fn build_sync_snapshot(
             let members = roster_members_for_realm(state, realm_entry, session, body);
             visible_realms.push((
                 realm_entry.realm_id.to_string(),
-                realm_entry.name.clone(),
+                realm_entry.title.clone(),
                 realm_entry.description.clone(),
                 realm_entry.tags.clone(),
                 realm_entry.category.clone(),
@@ -825,7 +827,7 @@ fn roster_members_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequest,
+    body: &ClientSyncRequestBody,
 ) -> Vec<Value> {
     let registry = state.member_identity_registry();
     let context = RosterDisclosureContext::new(state, realm_entry, session, body);
@@ -936,7 +938,7 @@ impl<'a> RosterDisclosureContext<'a> {
         state: &'a AppState,
         realm_entry: &'a RealmDirectoryEntry,
         session: Option<&'a SessionRecord>,
-        body: &ClientSyncRequest,
+        body: &ClientSyncRequestBody,
     ) -> Self {
         Self {
             service_did: &state.config.service_did,
@@ -960,7 +962,7 @@ impl<'a> RosterDisclosureContext<'a> {
 fn roster_handle_claim_audience(
     state: &AppState,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequest,
+    body: &ClientSyncRequestBody,
 ) -> String {
     body.filter
         .as_ref()
@@ -3053,7 +3055,7 @@ async fn durable_events_query_from_parts(
     state: &AppState,
     session: &SessionRecord,
     parts: &EventsQueryParts,
-) -> crate::wire::EventsPageResponse {
+) -> EventsQueryOutcome {
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
     let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
     let all_records = state
@@ -3113,15 +3115,15 @@ async fn durable_events_query_from_parts(
     let next_cursor = has_more
         .then(|| page.last().map(|record| record.event_id.clone()))
         .flatten();
-    let frontier = super::event_log::events_frontier_json(&page);
     let events = page
         .iter()
-        .map(|record| super::event_log::event_read_response_for_state(state, record))
+        .filter_map(|record| super::event_log::sdk_event_for_state(state, record).ok())
         .collect();
-    crate::wire::EventsPageResponse {
+    EventsQueryOutcome {
         events,
         next_cursor,
-        frontier,
+        prev_cursor: None,
+        has_more,
     }
 }
 
@@ -3422,8 +3424,8 @@ mod tests {
     const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
     const ROSTER_CALLER: &str = "did:web:bob.example";
 
-    fn roster_body(audience: &str) -> ClientSyncRequest {
-        ClientSyncRequest {
+    fn roster_body(audience: &str) -> ClientSyncRequestBody {
+        ClientSyncRequestBody {
             after: None,
             catchup: None,
             filter: Some(json!({ "audience": audience })),

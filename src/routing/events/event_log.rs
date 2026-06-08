@@ -18,9 +18,13 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
+use cokret_sdk::http::{
+    EventView, EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
+    EventsSubmitOutcome, EventsSubmitStatus,
+};
 use cokret_sdk::{
-    EventsSubmitFederationRequestBody, Hlc, Operation, OperationId, RealmId, TypedTrustDomainId,
-    canonical,
+    Audience, Event, EventId, EventRef, EventsSubmitFederationRequestBody, Hash, Hlc, Operation,
+    OperationId, Proof, RealmId, TypedTrustDomainId, canonical, proof_kind,
 };
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
@@ -41,10 +45,7 @@ use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
-use crate::wire::{
-    EventDescribeResponse, EventReadResponse, EventResolveRequest, EventResolveResponse,
-    EventSubmitResponse, EventsPageResponse, SolandEventsFrontierState,
-};
+use crate::wire::{SolandEventsFrontierState, describe};
 use crate::{artifacts, kinds};
 
 pub(super) fn router() -> Router {
@@ -70,90 +71,30 @@ const MAX_EVENT_SUBMIT_BATCH: usize = 100;
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "events_describe"))]
-async fn events_describe(depot: &mut Depot, res: &mut Response) {
+async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let event_kinds = artifacts::active_local_operation_event_kinds()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    res.render(Json(EventDescribeResponse {
-        service_did: state.config.service_did.clone(),
-        protocol_version: "1.0".to_owned(),
-        primary_write_path: "/_cokret/self/events".to_owned(),
-        event_envelope: json!({
-            "schema": "ck.schema.event.v1",
-            "required_fields": [
-                "event_id",
-                "kind",
-                "realm_id",
-                "actor_id",
-                "actor_seq",
-                "created_at",
-                "prev_refs",
-                "refs",
-                "payload",
-                "proofs"
-            ],
-            "hashing": {
-                "canonical_digest": "server-computed sha256 over Event Envelope JSON with proofs and unsigned removed",
-                "proof_event_digest": "sha256 over Event Envelope JSON with proofs and unsigned removed"
-            },
-            "causality": {
-                "actor_seq": "strictly increasing per actor",
-                "prev_refs": "must reference accepted events",
-                "refs": "semantic references; role=authorized_by must reference accepted authorization events"
-            }
-        }),
-        supported_profiles: vec![
-            "ck.profile.core_event_store.v1".to_owned(),
-            "ck.profile.principal_server_events_api.v1".to_owned(),
-        ],
-        registry: json!({
-            "source": "cokret-spec/spec/v1/artifacts",
-            "event_kind_registry_version": artifacts::event_kind_registry()["version"].clone(),
-            "schema_registry_version": artifacts::schema_registry()["version"].clone(),
-            "operation_registry_version": artifacts::operation_registry()["version"].clone(),
-            "id_kind_registry_version": artifacts::id_kind_registry()["version"].clone(),
-            "event_kinds": event_kinds,
-            "schema_ids": artifacts::schema_ids().into_iter().collect::<Vec<_>>(),
-            "operation_count": artifacts::operation_ids().len(),
-            "id_kind_count": artifacts::id_kind_forms().len(),
-            "id_profile": "ck.id.typed-prefix.v1"
-        }),
-        schema_profile: "ck.schema.core.v1".to_owned(),
-        reducer_profile: "ck.reducer.v1".to_owned(),
-        limits: json!({
-            "max_event_bytes": MAX_EVENT_BYTES,
-            "max_prev_refs": MAX_EVENT_PREV_REFS,
-            "max_refs": MAX_EVENT_REFS,
-            "max_batch_size": MAX_EVENT_SUBMIT_BATCH,
-            "max_resolve": MAX_EVENT_RESOLVE,
-            "max_list_limit": 100
-        }),
-        capabilities: json!({
-            "single_event_submit": true,
-            "batch_submit": true,
-            "federation_submit": false,
-            "batch_receipt": false,
-            "read_by_event_id": true,
-            "resolve": true,
-            "list_by_actor_or_realm": true,
-            "list_by_actor_or_space": true,
-            "frontier": true,
-            "snapshot": false,
-            "witness": false,
-            "high_assurance": false,
-            "member_identity_proof": {
-                "status": "partial",
-                "supported": "plaintext identity_payload.member_identity proof with Ed25519 raw signature",
-                "unsupported": [
-                    "encrypted identity_payload proof verification",
-                    "ES256 / ES384 MemberIdentityProof.signature_algorithm"
-                ],
-                "fail_closed": true
-            }
-        }),
-    }));
+    let mut description = describe(
+        &state.config.service_did,
+        &state.config.public_base_url,
+        state.db.mode(),
+        state.config.development_mode,
+        state.config.oauth_introspection_url.is_some(),
+        state.config.auth_server_url.as_deref(),
+        &state.config.trust_domain,
+    );
+    crate::routing::system::describe::apply_claim_level_partition(
+        &mut description,
+        state.verified_profiles.as_ref(),
+    );
+    if let Some(limits) = description.limits.as_object_mut() {
+        limits.insert("max_event_bytes".to_owned(), json!(MAX_EVENT_BYTES));
+        limits.insert("max_prev_refs".to_owned(), json!(MAX_EVENT_PREV_REFS));
+        limits.insert("max_refs".to_owned(), json!(MAX_EVENT_REFS));
+        limits.insert("max_batch_size".to_owned(), json!(MAX_EVENT_SUBMIT_BATCH));
+        limits.insert("max_resolve".to_owned(), json!(MAX_EVENT_RESOLVE));
+        limits.insert("max_list_limit".to_owned(), json!(100));
+    }
+    json_ok(description)
 }
 
 #[endpoint]
@@ -217,7 +158,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     match submit_event_value(state, &session, envelope).await {
         Ok(response) => {
             maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
-            res.render(Json(response));
+            res.render(Json(response.outcome));
         }
         Err(error) => render_submit_one_error(res, error),
     }
@@ -226,7 +167,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 async fn maybe_delay_test_chaos_breakpoint(
     state: &AppState,
     envelope: &Value,
-    response: &EventSubmitResponse,
+    response: &SubmittedEventOutcome,
 ) {
     if !state.config.development_mode {
         return;
@@ -286,7 +227,7 @@ async fn get_event(
     event_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventReadResponse> {
+) -> JsonResult<EventView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let event_id = event_id.into_inner();
@@ -301,7 +242,7 @@ async fn get_event(
     if !event_visible_to_session(state, &record, &session).await {
         return Err(AppError::not_found("event not found"));
     }
-    json_ok(event_read_response_for_state(state, &record))
+    event_view_for_state(state, &record)
 }
 
 #[endpoint(
@@ -312,10 +253,10 @@ async fn get_event(
 #[tracing::instrument(skip_all, fields(op = "ck.self.events.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
-    body: JsonBody<EventResolveRequest>,
+    body: JsonBody<EventsResolveRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventResolveResponse> {
+) -> JsonResult<EventsResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -329,14 +270,15 @@ async fn resolve_events(
     let mut found = Vec::new();
     let mut missing = Vec::new();
     for event_id in body.event_ids {
-        match store.get(&event_id).await.ok().flatten() {
+        let event_id_string = event_id.to_string();
+        match store.get(&event_id_string).await.ok().flatten() {
             Some(record) if event_visible_to_session(state, &record, &session).await => {
-                found.push(event_read_response_for_state(state, &record));
+                found.push(sdk_event_for_state(state, &record)?);
             }
-            _ => missing.push(event_id),
+            _ => missing.push(event_id_string),
         }
     }
-    json_ok(EventResolveResponse {
+    json_ok(EventsResolveOutcome {
         events: found,
         missing,
         unauthorized: Vec::new(),
@@ -361,14 +303,14 @@ async fn resolve_events(
 /// `actors[]` (no `realms[]`). Both the `#[endpoint]` wrapper and the
 /// sync-side dispatcher call this impl.
 ///
-/// Returns `Result<EventsPageResponse, AppError>` so the wrapper can be a
+/// Returns `Result<EventsQueryOutcome, AppError>` so the wrapper can be a
 /// typed `JsonResult<T>` handler and the sync-side dispatcher can map the
 /// typed result into its own `&mut Response` shape with a single `match`.
 pub(super) async fn events_query_durable_scope_impl(
     state: &AppState,
     session: &SessionRecord,
     req: &Request,
-) -> Result<EventsPageResponse, AppError> {
+) -> Result<EventsQueryOutcome, AppError> {
     // Repeated query-arg selector: `actors[]` ∪ `realms[]`.
     let mut actors = query_param_all(req, "actors");
     if let Some(single) = query_param(req, "actor").or_else(|| query_param(req, "actor_id")) {
@@ -467,15 +409,15 @@ pub(super) async fn events_query_durable_scope_impl(
     let next_cursor = has_more
         .then(|| page.last().map(|record| record.event_id.clone()))
         .flatten();
-    let frontier = events_frontier_json(&page);
     let events = page
         .iter()
-        .map(|record| event_read_response_for_state(state, record))
-        .collect();
-    Ok(EventsPageResponse {
+        .map(|record| sdk_event_for_state(state, record))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(EventsQueryOutcome {
         events,
         next_cursor,
-        frontier,
+        prev_cursor: None,
+        has_more,
     })
 }
 
@@ -493,7 +435,7 @@ async fn events_query_durable_scope(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventsPageResponse> {
+) -> JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let response = events_query_durable_scope_impl(state, &session, req).await?;
@@ -620,6 +562,13 @@ pub(in crate::routing) struct SubmitOneError {
     pub message: String,
 }
 
+#[derive(Debug)]
+pub(in crate::routing) struct SubmittedEventOutcome {
+    pub event_id: String,
+    pub duplicate: bool,
+    pub outcome: EventsSubmitOutcome,
+}
+
 impl SubmitOneError {
     fn new(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -696,7 +645,7 @@ async fn submit_event_batch(
         match submit_event_value(state, session, envelope).await {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
-                if response.status == "duplicate" {
+                if response.duplicate {
                     duplicate.push(response.event_id);
                 }
             }
@@ -709,19 +658,19 @@ async fn submit_event_batch(
     }
 
     let status = if !rejected.is_empty() {
-        "partial"
+        EventsSubmitStatus::Partial
     } else if accepted.len() == duplicate.len() && !duplicate.is_empty() {
-        "duplicate"
+        EventsSubmitStatus::Duplicate
     } else {
-        "accepted"
+        EventsSubmitStatus::Accepted
     };
-    res.render(Json(json!({
-        "status": status,
-        "accepted": accepted,
-        "duplicate": duplicate,
-        "rejected": rejected,
-        "cursor": super::sync::sync_token_for_state(state),
-    })));
+    res.render(Json(events_submit_outcome(
+        status,
+        accepted,
+        duplicate,
+        rejected,
+        Some(super::sync::sync_token_for_state(state)),
+    )));
 }
 
 pub(super) async fn submit_federation_events(
@@ -903,7 +852,7 @@ pub(super) async fn submit_federation_events(
         match submit_event_value(state, &session, envelope).await {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
-                if response.status == "duplicate" {
+                if response.duplicate {
                     duplicate.push(response.event_id);
                 }
             }
@@ -916,12 +865,13 @@ pub(super) async fn submit_federation_events(
     }
 
     let status = if !rejected.is_empty() {
-        "partial"
+        EventsSubmitStatus::Partial
     } else if accepted.len() == duplicate.len() && !duplicate.is_empty() {
-        "duplicate"
+        EventsSubmitStatus::Duplicate
     } else {
-        "accepted"
+        EventsSubmitStatus::Accepted
     };
+    let status_label = events_submit_status_label(status);
     append_audit_log(
         state,
         None,
@@ -934,16 +884,16 @@ pub(super) async fn submit_federation_events(
             "duplicate": duplicate,
             "rejected_count": rejected.len()
         }),
-        status,
+        status_label,
     )
     .await;
-    res.render(Json(json!({
-        "status": status,
-        "accepted": accepted,
-        "duplicate": duplicate,
-        "rejected": rejected,
-        "cursor": super::sync::sync_token_for_state(state),
-    })));
+    res.render(Json(events_submit_outcome(
+        status,
+        accepted,
+        duplicate,
+        rejected,
+        Some(super::sync::sync_token_for_state(state)),
+    )));
 }
 
 fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
@@ -952,11 +902,43 @@ fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
         .and_then(|object| event_string_field(object, &[field]))
 }
 
+fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {
+    match status {
+        EventsSubmitStatus::Accepted => "accepted",
+        EventsSubmitStatus::Duplicate => "duplicate",
+        EventsSubmitStatus::Partial => "partial",
+    }
+}
+
+fn events_submit_outcome(
+    status: EventsSubmitStatus,
+    accepted: Vec<String>,
+    duplicate: Vec<String>,
+    rejected: Vec<Value>,
+    cursor: Option<String>,
+) -> EventsSubmitOutcome {
+    EventsSubmitOutcome {
+        status,
+        accepted: accepted
+            .into_iter()
+            .filter_map(|event_id| EventId::new(event_id).ok())
+            .collect(),
+        duplicate: duplicate
+            .into_iter()
+            .filter_map(|event_id| EventId::new(event_id).ok())
+            .collect(),
+        rejected,
+        actor_frontier: Value::Null,
+        realm_frontier: Value::Null,
+        cursor,
+    }
+}
+
 pub(in crate::routing) async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
     mut envelope: Value,
-) -> Result<EventSubmitResponse, SubmitOneError> {
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -979,11 +961,8 @@ pub(in crate::routing) async fn submit_event_value(
         if existing.canonical_bytes == parsed.canonical_bytes {
             return Ok(event_submit_response(
                 state,
-                "duplicate",
+                EventsSubmitStatus::Duplicate,
                 existing.event_id.clone(),
-                existing.canonical_digest.clone(),
-                existing.received_at,
-                true,
             ));
         }
         append_audit_log(
@@ -1257,11 +1236,8 @@ pub(in crate::routing) async fn submit_event_value(
     .await;
     Ok(event_submit_response(
         state,
-        "accepted",
+        EventsSubmitStatus::Accepted,
         parsed.event_id,
-        parsed.canonical_digest,
-        received_at,
-        false,
     ))
 }
 
@@ -3716,26 +3692,24 @@ fn is_valid_event_id(value: &str) -> bool {
 
 fn event_submit_response(
     state: &AppState,
-    status: &str,
+    status: EventsSubmitStatus,
     event_id: String,
-    canonical_digest: String,
-    received_at: DateTime<Utc>,
-    idempotent: bool,
-) -> EventSubmitResponse {
-    EventSubmitResponse {
-        status: status.to_owned(),
+) -> SubmittedEventOutcome {
+    let duplicate = matches!(status, EventsSubmitStatus::Duplicate);
+    SubmittedEventOutcome {
         event_id: event_id.clone(),
-        canonical_digest: canonical_digest.clone(),
-        sync_token: super::sync::sync_token_for_state(state),
-        received_at,
-        receipt: json!({
-            "service_did": state.config.service_did.clone(),
-            "profile": "ck.profile.core_event_store.v1",
-            "event_id": event_id,
-            "canonical_digest": canonical_digest,
-            "received_at": received_at,
-            "idempotent": idempotent
-        }),
+        duplicate,
+        outcome: events_submit_outcome(
+            status,
+            vec![event_id.clone()],
+            if duplicate {
+                vec![event_id]
+            } else {
+                Vec::new()
+            },
+            Vec::new(),
+            Some(super::sync::sync_token_for_state(state)),
+        ),
     }
 }
 
@@ -3909,39 +3883,6 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     OperationId::new(format!("ck:operation:{suffix}")).ok()
 }
 
-pub(super) fn event_read_response(record: &CanonicalEventRecord) -> EventReadResponse {
-    let realm_id = canonical_realm_id_for_record(record);
-    // CKP-0007 (spec b7d35be) — surface `effective_scope` on read so
-    // clients can branch on Circle vs Realm-default scope without
-    // re-deriving from the envelope. The field is sourced from either
-    // the envelope's top-level `effective_scope` or the payload-side
-    // `scope_circle_id`, whichever the writer populated.
-    let effective_scope = effective_scope_for_envelope(&record.envelope);
-    let mut event = record.envelope.clone();
-    let mut metadata = json!({
-        "event_id": record.event_id.clone(),
-        "actor_id": record.actor_id.clone(),
-        "actor_seq": record.actor_seq,
-        "realm_id": realm_id,
-        "kind": record.kind.clone(),
-        "schema_id": record.schema_id.clone(),
-        "canonical_digest": record.canonical_digest.clone(),
-        "received_at": record.received_at,
-    });
-    if let Some(scope) = effective_scope {
-        metadata
-            .as_object_mut()
-            .expect("metadata is object")
-            .insert("effective_scope".to_owned(), Value::String(scope.clone()));
-        if let Some(object) = event.as_object_mut() {
-            object
-                .entry("effective_scope".to_owned())
-                .or_insert_with(|| Value::String(scope));
-        }
-    }
-    EventReadResponse { event, metadata }
-}
-
 /// CKP-0007 — resolve the canonical `effective_scope` for an Event
 /// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
 /// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
@@ -3977,66 +3918,282 @@ fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     None
 }
 
-pub(super) fn event_read_response_for_state(
+pub(super) fn event_view_for_state(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> EventReadResponse {
-    let mut response = event_read_response(record);
-    if let Some(tombstone) = retention_tombstone_for_event(state, &record.event_id) {
-        if let Some(object) = response.event.as_object_mut() {
-            let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-            object.insert(
-                "payload".to_owned(),
-                retention_tombstone_payload_value(&payload, &tombstone),
-            );
-            object.insert("retention_tombstone".to_owned(), json!(true));
-        }
-        if let Some(metadata) = response.metadata.as_object_mut() {
-            metadata.insert("retention_state".to_owned(), json!("tombstoned"));
-            metadata.insert(
-                "retention_reason".to_owned(),
-                json!(tombstone.reason.as_str()),
-            );
-            metadata.insert(
-                "retention_expired_at".to_owned(),
-                json!(tombstone.expired_at.to_rfc3339()),
-            );
-            metadata.insert(
-                "retention_tombstoned_at".to_owned(),
-                json!(tombstone.tombstoned_at.to_rfc3339()),
-            );
-            metadata.insert(
-                "retention_anchor_preserved".to_owned(),
-                json!(tombstone.anchored),
-            );
-            metadata.insert("physical_delete".to_owned(), json!(false));
-        }
-    }
-    response
+) -> JsonResult<EventView> {
+    json_ok(EventView {
+        event: sdk_event_for_state(state, record)?,
+        visibility: event_visibility_metadata(state, record),
+        receipts: Vec::new(),
+    })
 }
 
-pub(super) fn events_frontier_json(records: &[CanonicalEventRecord]) -> Value {
-    let mut actors: BTreeMap<String, u64> = BTreeMap::new();
-    let mut realms: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
-    for record in records {
-        actors
-            .entry(record.actor_id.clone())
-            .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
-            .or_insert(record.actor_seq);
-        if let Some(realm_id) = canonical_realm_id_for_record(record) {
-            if frontier_entry_is_newer(&realms, &realm_id, record) {
-                realms.insert(realm_id, (record.received_at, record.event_id.clone()));
-            }
-        }
+pub(super) fn sdk_event_for_state(
+    state: &AppState,
+    record: &CanonicalEventRecord,
+) -> Result<Event, AppError> {
+    sdk_event_from_record(
+        record,
+        retention_tombstone_for_event(state, &record.event_id),
+    )
+}
+
+fn sdk_event_from_record(
+    record: &CanonicalEventRecord,
+    tombstone: Option<crate::state::RetentionTombstoneRecord>,
+) -> Result<Event, AppError> {
+    let object = record
+        .envelope
+        .as_object()
+        .ok_or_else(|| AppError::internal("stored event envelope is not an object"))?;
+    let realm_id = canonical_realm_id_for_record(record)
+        .ok_or_else(|| AppError::internal("stored event missing realm_id"))?;
+    let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
+    let event_id = EventId::new(record.event_id.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let actor_id = cokret_sdk::Did::new(record.actor_id.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let created_at = object
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or(record.received_at);
+    let hlc = object
+        .get("hlc")
+        .and_then(Value::as_str)
+        .and_then(|value| Hlc::new(value.to_owned()).ok())
+        .unwrap_or_else(|| synthetic_hlc(record.received_at));
+    let mut payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
+    let mut unsigned: BTreeMap<String, Value> = object
+        .get("unsigned")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    if let Some(tombstone) = tombstone {
+        payload = retention_tombstone_payload_value(&payload, &tombstone);
+        unsigned.insert("retention_tombstone".to_owned(), json!(true));
+        unsigned.insert("retention_state".to_owned(), json!("tombstoned"));
+        unsigned.insert(
+            "retention_reason".to_owned(),
+            json!(tombstone.reason.as_str()),
+        );
+        unsigned.insert(
+            "retention_expired_at".to_owned(),
+            json!(tombstone.expired_at.to_rfc3339()),
+        );
+        unsigned.insert(
+            "retention_tombstoned_at".to_owned(),
+            json!(tombstone.tombstoned_at.to_rfc3339()),
+        );
+        unsigned.insert(
+            "retention_anchor_preserved".to_owned(),
+            json!(tombstone.anchored),
+        );
+        unsigned.insert("physical_delete".to_owned(), json!(false));
     }
-    let realms = realms
-        .into_iter()
-        .map(|(id, (_, event_id))| (id, event_id))
-        .collect::<BTreeMap<_, _>>();
-    json!({
-        "actors": actors,
-        "realms": realms,
-        "event_count": records.len()
+    Ok(Event {
+        event_id,
+        kind: record.kind.clone(),
+        realm_id: realm_id.clone(),
+        actor_id,
+        actor_seq: record.actor_seq,
+        created_at,
+        hlc,
+        prev_refs: event_id_list(object.get("prev_refs"))?,
+        effective_scope: sdk_effective_scope(record, &realm_id),
+        refs: event_refs(object.get("refs")),
+        preconditions: json_array_field(object, "preconditions"),
+        effects: json_array_field(object, "effects"),
+        anchor_ref: object
+            .get("anchor_ref")
+            .and_then(Value::as_str)
+            .and_then(|value| cokret_sdk::AnchorId::new(value.to_owned()).ok()),
+        requirements: object
+            .get("requirements")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default(),
+        redacts: object
+            .get("redacts")
+            .and_then(Value::as_str)
+            .and_then(|value| EventId::new(value.to_owned()).ok()),
+        content: payload,
+        executed_by: object
+            .get("executed_by")
+            .and_then(Value::as_str)
+            .and_then(|value| cokret_sdk::Did::new(value.to_owned()).ok()),
+        authorization_ref: object
+            .get("authorization_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        actor_kind: object
+            .get("actor_kind")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        unsigned,
+        proofs: sdk_event_proofs(record, object, created_at)?,
+    })
+}
+
+fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) -> Value {
+    let mut metadata = json!({
+        "event_id": record.event_id.clone(),
+        "actor_id": record.actor_id.clone(),
+        "actor_seq": record.actor_seq,
+        "realm_id": canonical_realm_id_for_record(record),
+        "kind": record.kind.clone(),
+        "schema_id": record.schema_id.clone(),
+        "canonical_digest": record.canonical_digest.clone(),
+        "received_at": record.received_at,
+    });
+    if let Some(scope) = effective_scope_for_envelope(&record.envelope) {
+        metadata["effective_scope"] = json!(scope);
+    }
+    if let Some(tombstone) = retention_tombstone_for_event(state, &record.event_id) {
+        metadata["retention_state"] = json!("tombstoned");
+        metadata["retention_reason"] = json!(tombstone.reason.as_str());
+        metadata["retention_expired_at"] = json!(tombstone.expired_at.to_rfc3339());
+        metadata["retention_tombstoned_at"] = json!(tombstone.tombstoned_at.to_rfc3339());
+        metadata["retention_anchor_preserved"] = json!(tombstone.anchored);
+        metadata["physical_delete"] = json!(false);
+    }
+    metadata
+}
+
+fn event_id_list(value: Option<&Value>) -> Result<Vec<EventId>, AppError> {
+    let Some(values) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|value| {
+            EventId::new(value.to_owned()).map_err(|error| AppError::internal(error.to_string()))
+        })
+        .collect()
+}
+
+fn event_refs(value: Option<&Value>) -> Vec<EventRef> {
+    value
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn json_array_field<T>(object: &serde_json::Map<String, Value>, field: &str) -> Vec<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    object
+        .get(field)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn sdk_effective_scope(
+    record: &CanonicalEventRecord,
+    realm_id: &RealmId,
+) -> Option<cokret_sdk::model::EffectiveScope> {
+    if let Some(scope) = record
+        .envelope
+        .get("effective_scope")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+    {
+        return Some(scope);
+    }
+    match effective_scope_for_envelope(&record.envelope).as_deref() {
+        Some(scope) if scope.starts_with("ck:circle:") => {
+            cokret_sdk::CircleId::new(scope.to_owned())
+                .ok()
+                .map(|circle_id| cokret_sdk::model::EffectiveScope::Circle {
+                    realm_id: realm_id.clone(),
+                    circle_id,
+                })
+        }
+        Some(scope) if scope.starts_with("realm:") => {
+            Some(cokret_sdk::model::EffectiveScope::Realm {
+                realm_id: realm_id.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn synthetic_hlc(received_at: DateTime<Utc>) -> Hlc {
+    let millis = received_at.timestamp_millis().max(0) as u64;
+    Hlc::new(format!("{millis:012x}-0000-00000000")).expect("synthetic HLC is valid")
+}
+
+fn sdk_event_proofs(
+    record: &CanonicalEventRecord,
+    object: &serde_json::Map<String, Value>,
+    created_at: DateTime<Utc>,
+) -> Result<Vec<Proof>, AppError> {
+    if let Some(proofs) = object
+        .get("proofs")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<Proof>>(value).ok())
+        .filter(|proofs| !proofs.is_empty())
+    {
+        return Ok(proofs);
+    }
+    let proof = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(Value::as_object);
+    let verification_method = proof
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(Value::as_str)
+        .unwrap_or("did:web:soland.local#dev")
+        .to_owned();
+    let domain = proof
+        .and_then(|proof| proof.get("domain"))
+        .or_else(|| object.get("domain"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let audience = proof
+        .and_then(|proof| proof.get("audience"))
+        .or_else(|| object.get("audience"))
+        .and_then(sdk_audience);
+    let event_digest = Hash::new(record.canonical_digest.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(vec![Proof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        alg: proof
+            .and_then(|proof| proof.get("alg"))
+            .and_then(Value::as_str)
+            .unwrap_or("EdDSA")
+            .to_owned(),
+        verification_method,
+        event_digest,
+        created_at,
+        domain,
+        audience,
+        jws: proof
+            .and_then(|proof| proof.get("jws").or_else(|| proof.get("detached_jws")))
+            .and_then(Value::as_str)
+            .unwrap_or("ZGV2..c2ln")
+            .to_owned(),
+    }])
+}
+
+fn sdk_audience(value: &Value) -> Option<Audience> {
+    if let Some(single) = value.as_str() {
+        return Some(Audience::Single(single.to_owned()));
+    }
+    value.as_array().map(|items| {
+        Audience::Multiple(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect(),
+        )
     })
 }
 

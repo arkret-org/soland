@@ -135,7 +135,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
                     .with_wire_code(error.code)
             })?;
 
-    let status = if response.status == "duplicate" {
+    let status = if response.duplicate {
         "duplicate"
     } else {
         "accepted"
@@ -156,12 +156,12 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
     )
     .await;
     let outcome = InviteDeliveryOutcome {
-        status: if response.status == "duplicate" {
+        status: if response.duplicate {
             InviteDeliveryOutcomeStatus::Duplicate
         } else {
             InviteDeliveryOutcomeStatus::Accepted
         },
-        received_at: Some(response.received_at),
+        received_at: Some(now()),
         retry_after_ms: None,
     };
     json_ok(serde_json::to_value(outcome).map_err(|error| {

@@ -31,8 +31,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, PolicyDocumentRecord};
 use crate::wire::{
-    OkOutcome, PolicyBinding, PolicyDocumentResponse, PolicyDocumentsResponse,
-    SolandPolicyCheckOutcome, SolandPolicyCheckRequestBody, UpsertPolicyDocumentRequest,
+    OkOutcome, PolicyBinding, PolicyDocumentOutcome, PolicyDocumentsOutcome,
+    SolandPolicyCheckOutcome, SolandPolicyCheckRequestBody, UpsertPolicyDocumentRequestBody,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -69,7 +69,7 @@ async fn list_policy_documents(
     include_inactive: QueryParam<bool, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentsResponse> {
+) -> JsonResult<PolicyDocumentsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let scope = scope.into_inner();
@@ -91,7 +91,7 @@ async fn list_policy_documents(
         })
         .map(|policy| policy_document_to_response(&policy))
         .collect::<Vec<_>>();
-    json_ok(PolicyDocumentsResponse {
+    json_ok(PolicyDocumentsOutcome {
         policies,
         next_cursor: None,
     })
@@ -108,7 +108,7 @@ async fn get_policy_document(
     policy_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentResponse> {
+) -> JsonResult<PolicyDocumentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
@@ -132,10 +132,10 @@ async fn get_policy_document(
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.upsert"))]
 async fn upsert_policy_document(
     aa: AuthArgs,
-    body: JsonBody<UpsertPolicyDocumentRequest>,
+    body: JsonBody<UpsertPolicyDocumentRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentResponse> {
+) -> JsonResult<PolicyDocumentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -209,7 +209,7 @@ async fn upsert_policy_document(
 /// `{ "$op": "set" | "unset", "value": ... }` form. Updates
 /// `record.updated_at`; idempotent if the same patch is applied twice.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
-pub struct PatchPolicyDocumentRequest {
+pub struct PatchPolicyDocumentRequestBody {
     #[salvo(schema(value_type = serde_json::Value))]
     pub patch: serde_json::Map<String, Value>,
 }
@@ -223,10 +223,10 @@ pub struct PatchPolicyDocumentRequest {
 async fn patch_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
-    body: JsonBody<PatchPolicyDocumentRequest>,
+    body: JsonBody<PatchPolicyDocumentRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PolicyDocumentResponse> {
+) -> JsonResult<PolicyDocumentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
@@ -531,8 +531,8 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     }
 }
 
-pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentResponse {
-    PolicyDocumentResponse {
+pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentOutcome {
+    PolicyDocumentOutcome {
         policy_id: policy.policy_id.clone(),
         owner: policy.owner.clone(),
         scope: policy.scope.clone(),

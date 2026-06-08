@@ -38,7 +38,7 @@ pub(super) fn router() -> Router {
 
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminCellStateResponse {
+pub struct AdminCellStateOutcome {
     /// Canonical wire form of the cell id (`ck:cell:<family>:<subject>`).
     pub cell_id: String,
     /// `"value"` when the cell holds a resolved JSON value; `"bottom"` when
@@ -62,8 +62,8 @@ pub struct AdminCellStateResponse {
 
 /// Response body for `GET /_soland/admin/cells?...` (list).
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminCellListResponse {
-    pub cells: Vec<AdminCellStateResponse>,
+pub struct AdminCellListOutcome {
+    pub cells: Vec<AdminCellStateOutcome>,
     /// Total number of cells matching the filter (before pagination).
     pub total: usize,
     pub limit: usize,
@@ -76,7 +76,7 @@ fn state_response_from(
     state: Option<&CellState>,
     lattice: &str,
     bottom_policy: &str,
-) -> AdminCellStateResponse {
+) -> AdminCellStateOutcome {
     let (state_str, value, bottom) = match state {
         Some(CellState::Value(v)) => ("value".to_owned(), Some(v.clone()), None),
         Some(CellState::Bottom(b)) => {
@@ -87,7 +87,7 @@ fn state_response_from(
         }
         None => ("absent".to_owned(), None, None),
     };
-    AdminCellStateResponse {
+    AdminCellStateOutcome {
         cell_id: cell_id.as_str().to_owned(),
         state: state_str,
         value,
@@ -134,7 +134,7 @@ async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminCellStateResponse> {
+) -> JsonResult<AdminCellStateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
@@ -232,7 +232,7 @@ async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminCellListResponse> {
+) -> JsonResult<AdminCellListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
 
@@ -313,7 +313,7 @@ async fn admin_list_cells(
         ));
     }
 
-    json_ok(AdminCellListResponse {
+    json_ok(AdminCellListOutcome {
         cells: cells_out,
         total,
         limit,

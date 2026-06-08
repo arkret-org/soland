@@ -25,7 +25,7 @@ pub(super) fn router() -> Router {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ProfilePresenceResponse {
+pub struct ProfilePresenceOutcome {
     pub actor: String,
     pub display_name: String,
     pub avatar_url: Option<String>,
@@ -41,7 +41,7 @@ pub struct ProfilePresenceResponse {
 async fn profile_presence(
     did: QueryParam<String, false>,
     depot: &mut Depot,
-) -> JsonResult<ProfilePresenceResponse> {
+) -> JsonResult<ProfilePresenceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did
         .into_inner()
@@ -59,7 +59,7 @@ async fn profile_presence(
     let presence_json = presence
         .map(presence_record_json)
         .unwrap_or_else(|| json!({"status": "offline", "updated_at": now()}));
-    json_ok(ProfilePresenceResponse {
+    json_ok(ProfilePresenceOutcome {
         actor: did.clone(),
         display_name: account
             .and_then(|account| account.display_name)

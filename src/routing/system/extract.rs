@@ -24,7 +24,7 @@ use crate::state::{AppState, SessionRecord};
 /// pub async fn list_contacts(
 ///     aa: AuthArgs,
 ///     depot: &mut Depot,
-/// ) -> JsonResult<ContactsResponse> {
+/// ) -> JsonResult<ContactList> {
 ///     let state = depot.obtain::<AppState>().expect("state injected");
 ///     let session = aa.authenticated_session(state)?;
 ///     // ... use session.actor / session.device_id ...

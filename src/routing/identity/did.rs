@@ -86,7 +86,7 @@ pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct EmbeddedWebvhRegisterRequest {
+pub struct EmbeddedWebvhRegisterRequestBody {
     #[serde(default)]
     pub local_id: Option<String>,
     pub did_public_key_multibase: String,
@@ -104,7 +104,7 @@ pub struct EmbeddedWebvhRegisterRequest {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct EmbeddedWebvhRegisterResponse {
+pub struct EmbeddedWebvhRegisterOutcome {
     pub status: String,
     pub provider_id: String,
     pub did: String,
@@ -131,8 +131,8 @@ pub(super) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-    body: JsonBody<EmbeddedWebvhRegisterRequest>,
-) -> JsonResult<EmbeddedWebvhRegisterResponse> {
+    body: JsonBody<EmbeddedWebvhRegisterRequestBody>,
+) -> JsonResult<EmbeddedWebvhRegisterOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     if !state.config.embedded_webvh_provider_enabled {
         return Err(AppError::not_found(
@@ -313,7 +313,7 @@ pub(super) async fn embedded_webvh_register(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(EmbeddedWebvhRegisterResponse {
+    json_ok(EmbeddedWebvhRegisterOutcome {
         status: "created".to_owned(),
         provider_id: "soland.embedded".to_owned(),
         did: location.did,

@@ -24,7 +24,7 @@ use crate::state::{
 use crate::{JsonResult, json_ok};
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct UpsertOrganizationRequest {
+struct UpsertOrganizationRequestBody {
     #[serde(default)]
     organization_id: Option<String>,
     organization_did: String,
@@ -41,7 +41,7 @@ struct UpsertOrganizationRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-struct LinkOrganizationRealmRequest {
+struct LinkOrganizationRealmRequestBody {
     realm_id: String,
 }
 
@@ -101,7 +101,7 @@ async fn upsert_organization(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<UpsertOrganizationRequest>,
+    body: JsonBody<UpsertOrganizationRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -282,7 +282,7 @@ async fn link_organization_realm(
     depot: &mut Depot,
     req: &mut Request,
     organization_id: PathParam<String>,
-    body: JsonBody<LinkOrganizationRealmRequest>,
+    body: JsonBody<LinkOrganizationRealmRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

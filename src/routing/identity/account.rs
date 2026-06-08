@@ -14,6 +14,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
+use cokret_sdk::http::{
+    ContactList, ContactListRow, ContactRequestOutcome, ContactRequestRequestBody,
+    ContactRespondOutcome, ContactRespondRequestBody, ContactState, DirectConversationBindingState,
+    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
+    DirectConversationResolveState, DirectConversationSummary,
+};
 use cokret_sdk::{
     AccountDeviceSummary, AccountView, DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
 };
@@ -41,12 +47,9 @@ use crate::state::{
     DirectConversationBindingRecord, RealmDirectoryEntry,
 };
 use crate::wire::{
-    ClaimHandleRequest, ClaimHandleResponse, ContactListRow, ContactResponse, ContactState,
-    ContactsResponse, DirectConversationBindingState, DirectConversationSummary,
-    RegisterAccountRequest, SolandAccountRegisterOutcome, SolandAccountUpdateProfileOutcome,
-    SolandAccountUpdateProfileRequestBody, SolandContactRequestRequestBody,
-    SolandContactRespondRequestBody, SolandDirectConversationResolveOutcome,
-    SolandDirectConversationResolveRequestBody, TransferHandleRequest, TransferHandleResponse,
+    ClaimHandleOutcome, ClaimHandleRequestBody, RegisterAccountRequestBody,
+    SolandAccountRegisterOutcome, SolandAccountUpdateProfileOutcome,
+    SolandAccountUpdateProfileRequestBody, TransferHandleOutcome, TransferHandleRequestBody,
 };
 
 /// Grace period after a handle is released before another actor may claim
@@ -160,7 +163,7 @@ async fn account_viewer(
 async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
-    body: JsonBody<RegisterAccountRequest>,
+    body: JsonBody<RegisterAccountRequestBody>,
 ) -> JsonResult<SolandAccountRegisterOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
@@ -279,8 +282,8 @@ async fn claim_handle(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<ClaimHandleRequest>,
-) -> JsonResult<ClaimHandleResponse> {
+    body: JsonBody<ClaimHandleRequestBody>,
+) -> JsonResult<ClaimHandleOutcome> {
     // Spec: identity/identity-handles.md §2 — handles MUST be globally
     // unique (per directory service), normalized to lowercase, and must
     // match the `@<alnum/-_.>+` shape. Renaming MUST be explicit and
@@ -300,7 +303,7 @@ async fn claim_handle(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
     if current.handle == normalized {
-        return json_ok(ClaimHandleResponse {
+        return json_ok(ClaimHandleOutcome {
             did: current.did,
             handle: current.handle,
             previous_handle: None,
@@ -345,7 +348,7 @@ async fn claim_handle(
         "accepted",
     )
     .await;
-    json_ok(ClaimHandleResponse {
+    json_ok(ClaimHandleOutcome {
         did: current.did,
         handle: current.handle,
         previous_handle: Some(previous_handle),
@@ -441,8 +444,8 @@ async fn transfer_handle(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<TransferHandleRequest>,
-) -> JsonResult<TransferHandleResponse> {
+    body: JsonBody<TransferHandleRequestBody>,
+) -> JsonResult<TransferHandleOutcome> {
     // Spec: identity/identity-handles.md — handle transfer is a dual
     // operation: the source actor's handle clears (replaced with a
     // synthetic DID-derived placeholder); the target actor gets the
@@ -516,7 +519,7 @@ async fn transfer_handle(
         "accepted",
     )
     .await;
-    json_ok(TransferHandleResponse {
+    json_ok(TransferHandleOutcome {
         handle: transferred,
         from_did: source.did,
         from_handle: source.handle,
@@ -1800,51 +1803,52 @@ async fn notifications_mark_all_read(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.contacts.request",
+    operation_id = "ck.self.contact.request",
     tags("contacts"),
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.request"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.request"))]
 async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-    body: JsonBody<SolandContactRequestRequestBody>,
-) -> JsonResult<ContactResponse> {
+    body: JsonBody<ContactRequestRequestBody>,
+) -> JsonResult<ContactRequestOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_did(&body.target).is_err() || body.target == session.actor {
+    if body.target.as_str() == session.actor {
         return Err(AppError::invalid_param("invalid contact target"));
     }
+    let target = body.target.as_str().to_owned();
     let target_account = state
         .persistence
         .accounts()
-        .get(&body.target)
+        .get(&target)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if target_account.is_none() {
         return Err(AppError::not_found("not found"));
     }
     let scope = contact_request_scope(&body)?;
-    grant_contact_managed_consent(state, &session.actor, &body.target, &scope, now());
+    grant_contact_managed_consent(state, &session.actor, &target, &scope, now());
     let contact_status =
-        if has_active_consent_for_scope(state, &body.target, &session.actor, &scope, now()) {
+        if has_active_consent_for_scope(state, &target, &session.actor, &scope, now()) {
             "accepted"
         } else {
-            record_pending_request(state, &body.target, &session.actor, &scope, now());
+            record_pending_request(state, &target, &session.actor, &scope, now());
             "pending"
         };
     let store = state.persistence.contacts();
     if let Some(mut existing) = store
-        .get_scoped(&session.actor, &body.target, &scope)
+        .get_scoped(&session.actor, &target, &scope)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         if existing.status == "rejected" {
-            return json_ok(contact_response(existing));
+            return json_ok(contact_request_outcome(&existing, &session.actor));
         }
         if existing.status != contact_status {
             existing.status = contact_status.to_owned();
@@ -1854,10 +1858,10 @@ async fn contact_request(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
         }
-        return json_ok(contact_response(existing));
+        return json_ok(contact_request_outcome(&existing, &session.actor));
     }
     if store
-        .get_scoped(&body.target, &session.actor, &scope)
+        .get_scoped(&target, &session.actor, &scope)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
@@ -1869,7 +1873,7 @@ async fn contact_request(
     }
     let contact = ContactRecord {
         requester: session.actor,
-        target: body.target,
+        target,
         scope,
         status: contact_status.to_owned(),
         created_at: now(),
@@ -1880,21 +1884,21 @@ async fn contact_request(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     res.status_code(StatusCode::CREATED);
-    json_ok(contact_response(contact))
+    json_ok(contact_request_outcome(&contact, &contact.requester))
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.contacts.respond",
+    operation_id = "ck.self.contact.respond",
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.respond"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.respond"))]
 async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SolandContactRespondRequestBody>,
-) -> JsonResult<ContactResponse> {
+    body: JsonBody<ContactRespondRequestBody>,
+) -> JsonResult<ContactRespondOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -1903,7 +1907,7 @@ async fn contact_respond(
     }
     let store = state.persistence.contacts();
     let Some(mut contact) = store
-        .get(&body.requester, &session.actor)
+        .get(body.requester.as_str(), &session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -1916,7 +1920,7 @@ async fn contact_respond(
             "rejected"
         };
         if contact.status == requested_status {
-            return json_ok(contact_response(contact));
+            return json_ok(contact_respond_outcome(&contact));
         }
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -1937,20 +1941,20 @@ async fn contact_respond(
         .put(&contact)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(contact_response(contact))
+    json_ok(contact_respond_outcome(&contact))
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.contacts.list",
+    operation_id = "ck.self.contact.list",
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.contacts.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.list"))]
 async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ContactsResponse> {
+) -> JsonResult<ContactList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
@@ -1960,7 +1964,7 @@ async fn list_contacts(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let contacts = contact_list_rows(state, &session.actor, records);
-    json_ok(ContactsResponse {
+    json_ok(ContactList {
         contacts,
         has_more: false,
         next_cursor: None,
@@ -1977,54 +1981,62 @@ async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SolandDirectConversationResolveRequestBody>,
-) -> JsonResult<SolandDirectConversationResolveOutcome> {
+    body: JsonBody<DirectConversationResolveRequestBody>,
+) -> JsonResult<DirectConversationResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_did(&body.peer).is_err() || body.peer == session.actor {
+    if body.peer.as_str() == session.actor {
         return Err(AppError::invalid_param("invalid direct conversation peer"));
     }
+    let peer = body.peer.as_str().to_owned();
     let peer_account = state
         .persistence
         .accounts()
-        .get(&body.peer)
+        .get(&peer)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if peer_account.is_none() {
         return Err(AppError::not_found("peer account not found"));
     }
     let scope = normalize_scope(Some("direct_message"))?;
-    let Some(_contact) =
-        accepted_contact_for_pair(state, &session.actor, &body.peer, &scope).await?
+    let Some(_contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
     else {
         return Err(direct_resolve_precondition(
             crate::error::reasons::CONTACT_NOT_ACCEPTED,
             "direct conversation requires an accepted contact",
         ));
     };
-    if !has_active_consent_for_scope(state, &body.peer, &session.actor, &scope, now()) {
+    if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
         return Err(direct_resolve_precondition(
             crate::error::reasons::CONTACT_CONSENT_MISSING,
             "direct conversation requires peer direct_message consent",
         ));
     }
-    let pair_key = direct_pair_key(&session.actor, &body.peer);
+    let pair_key = direct_pair_key(&session.actor, &peer);
     if let Some(binding) = active_direct_binding(state, &pair_key) {
-        return json_ok(direct_resolve_response(binding, false, "found"));
+        return json_ok(direct_resolve_response(
+            binding,
+            false,
+            DirectConversationResolveState::Found,
+        ));
     }
     if !body.create {
-        return json_ok(SolandDirectConversationResolveOutcome {
-            state: "not_found".to_owned(),
+        return json_ok(DirectConversationResolveOutcome {
+            state: DirectConversationResolveState::NotFound,
             realm_id: None,
             main_flow_id: None,
             binding_event_ref: None,
-            created: false,
+            created: Some(false),
         });
     }
-    let (binding, created) = create_direct_binding(state, &pair_key, &session.actor, &body.peer)?;
-    let state_name = if created { "created" } else { "found" };
-    json_ok(direct_resolve_response(binding, created, state_name))
+    let (binding, created) = create_direct_binding(state, &pair_key, &session.actor, &peer)?;
+    let resolve_state = if created {
+        DirectConversationResolveState::Created
+    } else {
+        DirectConversationResolveState::Found
+    };
+    json_ok(direct_resolve_response(binding, created, resolve_state))
 }
 
 /// `GET /_soland/self/account/{did}/principal-realm` response.
@@ -2045,7 +2057,7 @@ async fn direct_conversation_resolve(
 /// `stashed` indicates the result was persisted to the audit log as a
 /// follow-up hook.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PrincipalRealmResponse {
+pub struct PrincipalRealmOutcome {
     pub did: String,
     pub realm_id: String,
     pub mapping_kind: String,
@@ -2068,7 +2080,7 @@ async fn account_principal_realm(
     depot: &mut Depot,
     req: &mut Request,
     did: PathParam<String>,
-) -> JsonResult<PrincipalRealmResponse> {
+) -> JsonResult<PrincipalRealmOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let did = did.into_inner();
@@ -2084,7 +2096,7 @@ async fn account_principal_realm(
         "accepted",
     )
     .await;
-    json_ok(PrincipalRealmResponse {
+    json_ok(PrincipalRealmOutcome {
         did,
         realm_id,
         mapping_kind: "deterministic".to_owned(),
@@ -2143,18 +2155,17 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
     })
 }
 
-fn contact_request_scope(body: &SolandContactRequestRequestBody) -> Result<String, AppError> {
+fn contact_request_scope(body: &ContactRequestRequestBody) -> Result<String, AppError> {
     let candidate = body
         .requested_scopes
         .first()
         .map(String::as_str)
-        .or(body.scope.as_deref())
         .unwrap_or("direct_message");
     normalize_scope(Some(candidate))
 }
 
 fn contact_respond_scopes(
-    body: &SolandContactRespondRequestBody,
+    body: &ContactRespondRequestBody,
     fallback_scope: &str,
 ) -> Result<Vec<String>, AppError> {
     if body.granted_scopes.is_empty() {
@@ -2170,15 +2181,24 @@ fn contact_respond_scopes(
     Ok(scopes)
 }
 
-fn contact_response(contact: ContactRecord) -> ContactResponse {
-    ContactResponse {
-        requester: contact.requester,
-        target: contact.target,
-        scope: contact.scope,
-        status: contact.status,
-        created_at: contact.created_at,
-        updated_at: contact.updated_at,
+fn contact_request_outcome(contact: &ContactRecord, actor: &str) -> ContactRequestOutcome {
+    ContactRequestOutcome {
+        request_event_ref: synthetic_contact_event_ref(),
+        requester_consent_refs: Vec::new(),
+        state: directional_contact_state(actor, contact),
     }
+}
+
+fn contact_respond_outcome(contact: &ContactRecord) -> ContactRespondOutcome {
+    ContactRespondOutcome {
+        response_event_ref: synthetic_contact_event_ref(),
+        consent_grant_refs: Vec::new(),
+        state: directional_contact_state(&contact.target, contact),
+    }
+}
+
+fn synthetic_contact_event_ref() -> EventId {
+    EventId::new(crate::ids::generate_event_id()).expect("generated contact event id is valid")
 }
 
 fn contact_list_rows(
@@ -2401,14 +2421,20 @@ fn direct_conversation_binding_state(state: &str) -> DirectConversationBindingSt
 fn direct_resolve_response(
     binding: DirectConversationBindingRecord,
     created: bool,
-    state_name: &str,
-) -> SolandDirectConversationResolveOutcome {
-    SolandDirectConversationResolveOutcome {
-        state: state_name.to_owned(),
-        realm_id: Some(binding.realm_id),
-        main_flow_id: Some(binding.main_flow_id),
-        binding_event_ref: Some(binding.binding_event_ref),
-        created,
+    state: DirectConversationResolveState,
+) -> DirectConversationResolveOutcome {
+    DirectConversationResolveOutcome {
+        state,
+        realm_id: Some(
+            RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
+        ),
+        main_flow_id: Some(
+            FlowId::new(binding.main_flow_id).expect("direct conversation flow id is valid"),
+        ),
+        binding_event_ref: Some(
+            EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
+        ),
+        created: Some(created),
     }
 }
 

@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use cokret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletPackage, AppletWireNamespaces, Did,
-    EffectiveScope, Event, EventRef, GhostActorProfileRequest, Hash, Hlc, InstallCommitRequest,
-    InstallPreviewRequest, InstallRevokeRequest, Proof, RealmId, canonical,
+    EffectiveScope, Event, EventRef, GhostActorProfileRequest, Hash, Hlc, InstallCommitRequestBody,
+    InstallPreviewRequestBody, InstallRevokeRequestBody, Proof, RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -83,7 +83,7 @@ pub struct GhostActorRecord {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GhostActorProvisionRequest {
+struct GhostActorProvisionRequestBody {
     schema: String,
     applet_id: String,
     service_did: String,
@@ -202,7 +202,8 @@ async fn install_preview_endpoint(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let preview: InstallPreviewRequest = parse_typed_body(body.into_inner(), "install preview")?;
+    let preview: InstallPreviewRequestBody =
+        parse_typed_body(body.into_inner(), "install preview")?;
     validate_applet_package(&preview.applet_package)?;
     let approved_scopes = approved_scopes_from_actions(
         &preview.applet_package,
@@ -242,7 +243,7 @@ async fn install_endpoint(
         ));
     }
     let body_digest = canonical_digest(&body)?;
-    let commit: InstallCommitRequest = parse_typed_body(body.clone(), "install commit")?;
+    let commit: InstallCommitRequestBody = parse_typed_body(body.clone(), "install commit")?;
     validate_applet_package(&commit.applet_package)?;
     let approved_scopes = serde_json::to_value(&commit.approved_scopes)
         .map_err(|error| AppError::internal(format!("approved_scopes serialize: {error}")))?;
@@ -289,7 +290,7 @@ async fn revoke_install_endpoint(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
-    let revoke: InstallRevokeRequest = parse_typed_body(body.into_inner(), "applet revoke")?;
+    let revoke: InstallRevokeRequestBody = parse_typed_body(body.into_inner(), "applet revoke")?;
     let record =
         applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
     if record
@@ -330,7 +331,7 @@ async fn provision_ghost_actor_endpoint(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let path_applet_id = applet_id_param(req)?;
-    let provision: GhostActorProvisionRequest =
+    let provision: GhostActorProvisionRequestBody =
         parse_typed_body(body.into_inner(), "ghost actor provision")?;
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
 
@@ -860,7 +861,7 @@ struct FormalAppletEvent {
 async fn build_ghost_accountability_grant_event(
     state: &AppState,
     record: &AppletBridgeRecord,
-    provision: &GhostActorProvisionRequest,
+    provision: &GhostActorProvisionRequestBody,
     service_did: &Did,
     ghost_actor_did: &Did,
     realm_id: &RealmId,
@@ -929,7 +930,7 @@ async fn build_ghost_accountability_grant_event(
 async fn build_ghost_profile_create_event(
     state: &AppState,
     record: &AppletBridgeRecord,
-    provision: &GhostActorProvisionRequest,
+    provision: &GhostActorProvisionRequestBody,
     applet_id: AppletId,
     service_did: &Did,
     ghost_actor_did: &Did,
@@ -1187,7 +1188,7 @@ fn next_hlc(state: &AppState) -> Result<Hlc, AppError> {
 
 fn validate_ghost_actor_provision_request(
     path_applet_id: &str,
-    provision: &GhostActorProvisionRequest,
+    provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     if provision.schema != GHOST_ACTOR_PROVISION_REQUEST_SCHEMA {
         return Err(AppError::invalid_param(format!(
@@ -1223,7 +1224,7 @@ fn validate_ghost_actor_provision_request(
 
 fn ensure_formal_ghost_provision_allowed(
     record: &AppletBridgeRecord,
-    provision: &GhostActorProvisionRequest,
+    provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     let package = record.package.as_ref().ok_or_else(|| {
         AppError::conflict("formal ghost provisioning requires package install")
@@ -1251,7 +1252,7 @@ fn ensure_formal_ghost_provision_allowed(
 async fn register_package_install(
     state: &AppState,
     owner_actor_did: &str,
-    commit: InstallCommitRequest,
+    commit: InstallCommitRequestBody,
     idempotency_key: String,
     body_digest: String,
     res: &mut Response,

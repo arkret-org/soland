@@ -634,7 +634,7 @@ impl AppConfig {
 
     /// Derive the effective admin-API authentication posture from the
     /// current config. Returned values are stable strings safe to surface
-    /// in `/health` and `/_cokret/describe`:
+    /// in `/health` and the soland-local `/_soland/describe`:
     ///
     ///   - `"development"` — `SOLAND_DEVELOPMENT_MODE=true`; any authenticated session may call
     ///     admin endpoints.
@@ -657,9 +657,9 @@ impl AppConfig {
     }
 
     /// String mirror of [`Self::development_mode`]: `"development"` or
-    /// `"production"`. Exposed on `/health` and `/_cokret/describe`
-    /// so operators can see at a glance whether proof verification is
-    /// running in the relaxed dev-mode path.
+    /// `"production"`. Exposed on `/health` and the soland-local
+    /// `/_soland/describe` so operators can see at a glance whether proof
+    /// verification is running in the relaxed dev-mode path.
     #[inline]
     pub fn proof_verifier_mode(&self) -> &'static str {
         if self.development_mode {

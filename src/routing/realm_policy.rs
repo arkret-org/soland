@@ -36,7 +36,7 @@ pub(crate) fn router() -> Router {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmPolicyServerResponse {
+pub struct RealmPolicyServerOutcome {
     pub realm_id: String,
     pub policy_server_did: String,
     pub policy_server_url: String,
@@ -50,7 +50,7 @@ pub struct RealmPolicyServerResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PutRealmPolicyServerRequest {
+pub struct PutRealmPolicyServerRequestBody {
     pub policy_server_did: String,
     pub policy_server_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,7 +73,7 @@ async fn get_realm_policy_server(
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmPolicyServerResponse> {
+) -> JsonResult<RealmPolicyServerOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -90,7 +90,7 @@ async fn get_realm_policy_server(
             }
         },
     };
-    json_ok(RealmPolicyServerResponse {
+    json_ok(RealmPolicyServerOutcome {
         realm_id: cfg.realm_id,
         policy_server_did: cfg.policy_server_did,
         policy_server_url: cfg.policy_server_url,
@@ -111,10 +111,10 @@ async fn get_realm_policy_server(
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
-    body: JsonBody<PutRealmPolicyServerRequest>,
+    body: JsonBody<PutRealmPolicyServerRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmPolicyServerResponse> {
+) -> JsonResult<RealmPolicyServerOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -154,7 +154,7 @@ async fn put_realm_policy_server(
                 "policy_server projection vanished after accept",
             )
         })?;
-    json_ok(RealmPolicyServerResponse {
+    json_ok(RealmPolicyServerOutcome {
         realm_id: cfg.realm_id,
         policy_server_did: cfg.policy_server_did,
         policy_server_url: cfg.policy_server_url,

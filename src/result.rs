@@ -20,9 +20,9 @@ pub type JsonResult<T> = Result<Json<T>, AppError>;
 /// Plain `Result<T, AppError>` for handlers that drive the response by hand.
 pub type AppResult<T> = Result<T, AppError>;
 
-/// `JsonResult<EmptyResponse>` — endpoints that don't return a payload still
+/// `JsonResult<EmptyOutcome>` — endpoints that don't return a payload still
 /// emit `{}` so the OpenAPI doc has a non-empty schema reference.
-pub type EmptyResult = JsonResult<EmptyResponse>;
+pub type EmptyResult = JsonResult<EmptyOutcome>;
 
 /// Wrap a value in `Json` for `?`-friendly handler returns.
 pub fn json_ok<T>(value: T) -> JsonResult<T> {
@@ -31,11 +31,11 @@ pub fn json_ok<T>(value: T) -> JsonResult<T> {
 
 /// Empty `{}` body, used by side-effect-only endpoints.
 pub fn empty_ok() -> EmptyResult {
-    json_ok(EmptyResponse {})
+    json_ok(EmptyOutcome {})
 }
 
 /// Marker response type used by [`empty_ok`]. Serializes to `{}` and shows
 /// up in OpenAPI as an empty object schema, matching the existing wire
 /// behaviour for endpoints that return no payload.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
-pub struct EmptyResponse {}
+pub struct EmptyOutcome {}

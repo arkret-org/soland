@@ -197,7 +197,7 @@ async fn admit_member(
         .await
         .unwrap();
     assert!(
-        resp["event_id"].is_string(),
+        resp["accepted"][0].is_string(),
         "ck.member.state{{join}} admit failed: {resp:?}"
     );
 }
@@ -243,7 +243,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
         .take_json()
         .await
         .unwrap();
-    assert!(sent["event_id"].is_string(), "send failed: {sent:?}");
+    assert!(sent["accepted"][0].is_string(), "send failed: {sent:?}");
 }
 
 fn install_projected_circle_scope(
@@ -389,7 +389,7 @@ async fn send_circle_scoped_encrypted_message(
         .await
         .unwrap();
     assert_eq!(
-        sent["event_id"], event["event_id"],
+        sent["accepted"][0], event["event_id"],
         "circle scoped encrypted message submit failed: {sent:?}"
     );
     event["event_id"].as_str().unwrap().to_owned()
@@ -438,7 +438,7 @@ async fn submit_projection_event(
         .await
         .unwrap();
     assert!(
-        sent["event_id"].as_str() == Some(event_id.as_str()),
+        sent["accepted"][0].as_str() == Some(event_id.as_str()),
         "{kind} submit failed: {sent:?}"
     );
     event_id

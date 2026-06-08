@@ -22,7 +22,7 @@ use crate::error::AppError;
 use crate::reducer::CHILD_ORDER_CELL_FAMILY;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
-use crate::wire::{RealmLifecycleResponse, now};
+use crate::wire::{RealmLifecycleOutcome, now};
 use crate::{JsonResult, json_ok};
 
 pub(super) fn router() -> Router {
@@ -51,7 +51,7 @@ async fn get_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<RealmLifecycleResponse> {
+) -> JsonResult<RealmLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -267,7 +267,7 @@ fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
 pub async fn realm_lifecycle_response(
     state: &AppState,
     realm_id: &str,
-) -> Result<RealmLifecycleResponse, AppError> {
+) -> Result<RealmLifecycleOutcome, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
@@ -286,7 +286,7 @@ pub async fn realm_lifecycle_response(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    Ok(RealmLifecycleResponse {
+    Ok(RealmLifecycleOutcome {
         ok: true,
         realm_id: realm_id.to_owned(),
         owner: record.owner.clone(),
@@ -616,13 +616,6 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
         .map(|invite| invite.realm_id)
-}
-
-pub async fn realm_search_discoverability(state: &AppState, realm_id: &str) -> bool {
-    matches!(
-        realm_discoverability_for_id(state, realm_id).await.as_str(),
-        "public" | "listed" | "restricted"
-    )
 }
 
 // `realm_id_accessible_for_id` is the visibility path with looser semantics

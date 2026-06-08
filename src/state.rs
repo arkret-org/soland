@@ -201,7 +201,7 @@ pub struct RealmDirectoryQuery {
 )]
 pub struct RealmDirectoryEntry {
     pub realm_id: RealmId,
-    pub name: String,
+    pub title: String,
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
     pub members: BTreeSet<Did>,
@@ -210,10 +210,10 @@ pub struct RealmDirectoryEntry {
 }
 
 impl RealmDirectoryEntry {
-    pub fn new(realm_id: RealmId, name: impl Into<String>) -> Self {
+    pub fn new(realm_id: RealmId, title: impl Into<String>) -> Self {
         Self {
             realm_id,
-            name: name.into(),
+            title: title.into(),
             description: None,
             tags: BTreeSet::new(),
             members: BTreeSet::new(),
@@ -295,7 +295,7 @@ impl RealmDirectoryIndex {
         scored.sort_by(|(left_score, left), (right_score, right)| {
             right_score
                 .cmp(left_score)
-                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.title.cmp(&right.title))
         });
 
         let mut results: Vec<_> = scored.into_iter().map(|(_, entry)| entry).collect();
@@ -309,7 +309,7 @@ impl RealmDirectoryIndex {
 fn realm_directory_text(entry: &RealmDirectoryEntry) -> String {
     format!(
         "{} {} {}",
-        entry.name,
+        entry.title,
         entry.description.as_deref().unwrap_or_default(),
         entry.tags.iter().cloned().collect::<Vec<_>>().join(" ")
     )
@@ -320,7 +320,7 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
     let mut score = 0;
     if let Some(text) = &query.text {
         let text = text.to_lowercase();
-        if entry.name.to_lowercase().contains(&text) {
+        if entry.title.to_lowercase().contains(&text) {
             score += 10;
         }
         if entry

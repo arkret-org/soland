@@ -19,6 +19,8 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
+use cokret_sdk::ServerDescription;
+use cokret_sdk::http::ServerDescribeOutcome;
 use diesel::sql_types::Integer;
 use diesel::{QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
@@ -28,9 +30,9 @@ use serde_json::{Value, json};
 
 use crate::state::AppState;
 use crate::wire::{
-    AuthBridgeAuthDescriptor, AuthBridgeDescribeResponse, AuthBridgeExamples,
-    AuthBridgePushDescriptor, HealthResponse, IntegrationDependencyDescriptor,
-    IntegrationDescribeResponse, IntegrationSurfaceDescriptor, SolandServerDescribeResponse,
+    AuthBridgeAuthDescriptor, AuthBridgeDescribeOutcome, AuthBridgeExamples,
+    AuthBridgePushDescriptor, HealthOutcome, IntegrationDependencyDescriptor,
+    IntegrationDescribeOutcome, IntegrationSurfaceDescriptor, SolandServerDescribeOutcome,
     UnsupportedProfileDescriptor, describe,
 };
 use crate::{JsonResult, json_ok};
@@ -54,8 +56,8 @@ pub(super) fn protocol_router() -> Router {
 
 pub(super) fn legacy_router() -> Router {
     Router::new()
-        // `/_soland/describe` — compatibility copy of root meta.
-        .push(Router::with_path("describe").get(server_describe))
+        // `/_soland/describe` — compatibility copy with soland-local extras.
+        .push(Router::with_path("describe").get(legacy_server_describe))
         // soland-local integration describe → self-scoped.
         .push(Router::with_path("self/integration/describe").get(integration_describe))
 }
@@ -66,14 +68,14 @@ pub(super) fn legacy_router() -> Router {
     summary = "Liveness probe + database / events health snapshot"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.system.health"))]
-async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthResponse> {
+async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let database_ok = database_ready(state).await;
     let ok = database_ok;
     if !ok {
         res.status_code(StatusCode::SERVICE_UNAVAILABLE);
     }
-    json_ok(HealthResponse {
+    json_ok(HealthOutcome {
         ok,
         service: "soland",
         storage: state.db.mode(),
@@ -191,8 +193,37 @@ struct HealthCheckRow {
     summary = "Server capability description"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.server.describe"))]
-async fn server_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeResponse> {
+async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    json_ok(ServerDescribeOutcome(build_server_description(state)))
+}
+
+#[endpoint(
+    operation_id = "ck.extension.soland.server.describe_legacy",
+    tags("server"),
+    summary = "Soland compatibility server capability description"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.server.describe_legacy"))]
+async fn legacy_server_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let description = build_server_description(state);
+    json_ok(SolandServerDescribeOutcome {
+        service: description,
+        unsupported_profiles: vec![UnsupportedProfileDescriptor::unsupported(
+            "ck.profile.soland_limited_server.v1",
+            "limited profile is a limitation descriptor, not a conformance claim",
+        )],
+        proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
+        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
+        // Stream-F (Wave 2C) — advertise the audit erasure-receipts surface.
+        // Spec `realm-and-space.md` §2.5.2 requires this receipt list to be
+        // reachable from server describe.
+        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
+        hardening: state.config.hardening_status(),
+    })
+}
+
+fn build_server_description(state: &AppState) -> ServerDescription {
     let mut description = describe(
         &state.config.service_did,
         &state.config.public_base_url,
@@ -220,21 +251,7 @@ async fn server_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeRe
             "ServiceDescribe validation failed; this is a build-time invariant"
         );
     }
-
-    json_ok(SolandServerDescribeResponse {
-        service: description,
-        unsupported_profiles: vec![UnsupportedProfileDescriptor::unsupported(
-            "ck.profile.soland_limited_server.v1",
-            "limited profile is a limitation descriptor, not a conformance claim",
-        )],
-        proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
-        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
-        // Stream-F (Wave 2C) — advertise the audit erasure-receipts surface.
-        // Spec `realm-and-space.md` §2.5.2 requires this receipt list to be
-        // reachable from server describe.
-        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
-        hardening: state.config.hardening_status(),
-    })
+    description
 }
 
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,
@@ -390,8 +407,8 @@ fn soland_compat_surfaces() -> Vec<cokret_sdk::CompatSurfaceEntry> {
     summary = "Auth bridge contract description (OAuth bearer introspection + push)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.auth.bridge.describe"))]
-pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeResponse> {
-    json_ok(AuthBridgeDescribeResponse {
+pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeOutcome> {
+    json_ok(AuthBridgeDescribeOutcome {
         contract: "cokret.rest.principal_bridge.v1".to_owned(),
         version: "2026-05-12-oauth-introspection".to_owned(),
         api_base_path: "/_soland".to_owned(),
@@ -640,8 +657,8 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
     summary = "Integration manifest (dependencies + service surface inventory)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.integration.describe"))]
-async fn integration_describe() -> JsonResult<IntegrationDescribeResponse> {
-    json_ok(IntegrationDescribeResponse {
+async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
+    json_ok(IntegrationDescribeOutcome {
         contract: "cokret.rest.integration_manifest.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),

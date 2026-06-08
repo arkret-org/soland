@@ -12,6 +12,8 @@
 //! the missing constraint types, the condition.kind types, the
 //! capability lattice, and grant/invite/policy lifecycle integration.
 
+use cokret_sdk::model::{CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteState};
+use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -22,8 +24,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    CreateGrantRequest, CreateGrantResponse, InvitesResponse, RevokeGrantResponse,
-    SolandAuthzCheckOutcome, SolandAuthzCheckRequestBody, SolandGrantList,
+    CreateGrantOutcome, CreateGrantRequestBody, RevokeGrantOutcome, SolandAuthzCheckOutcome,
+    SolandAuthzCheckRequestBody,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -196,7 +198,7 @@ async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<SolandGrantList> {
+) -> crate::result::JsonResult<GrantList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
@@ -211,47 +213,108 @@ async fn effective_grants(
             .unwrap_or_default()
             .into_iter()
             .flat_map(|(sid, _)| state.authz.grants_for_subject(&subject, &sid))
-            .map(|g| {
-                json!({
-                    "grant_id": g.grant_id,
-                    "subject": g.subject,
-                    "actions": g.actions,
-                    "resources": [{"kind": "realm", "realm_id": g.realm_id}]
-                })
-            })
             .collect::<Vec<_>>()
+            .into_iter()
+            .map(capability_grant_from_authz_grant)
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         state
             .authz
             .grants_for_subject(&subject, &realm_id)
-            .iter()
-            .map(|g| {
-                json!({
-                    "grant_id": g.grant_id,
-                    "subject": g.subject,
-                    "actions": g.actions,
-                    "resources": [{"kind": "realm", "realm_id": g.realm_id}]
-                })
-            })
-            .collect::<Vec<_>>()
+            .into_iter()
+            .map(capability_grant_from_authz_grant)
+            .collect::<Result<Vec<_>, _>>()?
     };
     // Include default member grants if the user is a member of any Realm.
-    let default_grants = if grants.is_empty() {
-        vec![json!({
-            "subject": subject,
-            "actions": ["realm.read", "directory.search"],
-            "resources": [{"kind": "realm", "realm_id": "*"}]
-        })]
+    let default_grants = if grants.is_empty()
+        && let Ok(default_grant) = default_member_grant(&subject)
+    {
+        vec![default_grant]
     } else {
         Vec::new()
     };
     let all_grants = [grants, default_grants].concat();
-    crate::result::json_ok(SolandGrantList {
+    crate::result::json_ok(GrantList {
         grants: all_grants,
         state_digest: Some(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+                .map_err(|error| AppError::internal(error.to_string()))?,
         ),
         evaluated_at: now(),
+    })
+}
+
+fn capability_grant_from_authz_grant(
+    grant: crate::authz::Grant,
+) -> Result<CapabilityGrant, AppError> {
+    let realm_id = RealmId::new(grant.realm_id.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let issuer =
+        Did::new(grant.issuer.clone()).map_err(|error| AppError::internal(error.to_string()))?;
+    let subject = Did::new(grant.subject.clone())
+        .map(CapabilitySubject::Did)
+        .unwrap_or_else(|_| CapabilitySubject::Selector(json!(grant.subject)));
+    let constraints = grant
+        .constraints
+        .into_iter()
+        .map(|constraint| {
+            serde_json::to_value(constraint).map_err(|error| AppError::internal(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CapabilityGrant {
+        id: GrantId::new(grant.grant_id.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        schema: "ck.schema.capability_grant.v1".to_owned(),
+        realm_id: Some(realm_id),
+        issuer,
+        subject,
+        actions: grant.actions,
+        resources: vec![json!({
+            "kind": "realm",
+            "realm_id": grant.realm_id,
+            "resource": grant.resource,
+        })],
+        constraints,
+        parent_grant_id: grant
+            .delegated_from
+            .map(GrantId::new)
+            .transpose()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        issued_at: grant.created_at,
+        not_before: None,
+        expires_at: grant.expires_at,
+        updated_by: None,
+        updated_at: None,
+        revoked_by: None,
+        revoked_at: grant.revoked.then_some(now()),
+        proofs: Vec::new(),
+    })
+}
+
+fn default_member_grant(subject: &str) -> Result<CapabilityGrant, AppError> {
+    let subject = Did::new(subject.to_owned())
+        .map(CapabilitySubject::Did)
+        .unwrap_or_else(|_| CapabilitySubject::Selector(json!(subject)));
+    Ok(CapabilityGrant {
+        id: GrantId::new("ck:grant:01904100-0000-7000-8000-000000000001")
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        schema: "ck.schema.capability_grant.v1".to_owned(),
+        realm_id: None,
+        issuer: Did::new("did:web:soland.local".to_owned())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        subject,
+        actions: vec!["realm.read".to_owned(), "directory.search".to_owned()],
+        resources: vec![json!({"kind": "realm", "realm_id": "*"})],
+        constraints: Vec::new(),
+        parent_grant_id: None,
+        issued_at: now(),
+        not_before: None,
+        expires_at: None,
+        updated_by: None,
+        updated_at: None,
+        revoked_by: None,
+        revoked_at: None,
+        proofs: Vec::new(),
     })
 }
 
@@ -265,10 +328,10 @@ async fn effective_grants(
 #[tracing::instrument(skip_all, fields(op = "ck.authz.create_grant"))]
 async fn create_grant(
     aa: AuthArgs,
-    body: JsonBody<CreateGrantRequest>,
+    body: JsonBody<CreateGrantRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CreateGrantResponse> {
+) -> JsonResult<CreateGrantOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -331,7 +394,7 @@ async fn create_grant(
         "accepted",
     )
     .await;
-    json_ok(CreateGrantResponse {
+    json_ok(CreateGrantOutcome {
         grant_id: grant.grant_id,
         subject: grant.subject,
         actions: grant.actions,
@@ -443,7 +506,7 @@ async fn revoke_grant(
     grant_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RevokeGrantResponse> {
+) -> JsonResult<RevokeGrantOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let grant_id = grant_id.into_inner();
@@ -484,7 +547,7 @@ async fn revoke_grant(
             "accepted",
         )
         .await;
-        json_ok(RevokeGrantResponse {
+        json_ok(RevokeGrantOutcome {
             revoked: true,
             grant_id,
             cascade_revoked,
@@ -504,7 +567,7 @@ async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<InvitesResponse> {
+) -> crate::result::JsonResult<AuthzInviteList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let now = now();
@@ -523,23 +586,47 @@ async fn invites(
                     .is_some_and(|invitee| invitee == session.actor)
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
-        .map(|invite| {
-            json!({
-                "invite_id": invite.invite_id,
-                "realm_id": invite.realm_id,
-                "inviter": invite.inviter,
-                "invitee": invite.invitee,
-                "invite_delivery_target": invite.invite_delivery_target,
-                "introduction_evidence_digest": invite.introduction_evidence_digest,
-                "invite_token": invite.invite_token,
-                "status": invite.status,
-                "expires_at": invite.expires_at,
-                "created_at": invite.created_at,
-            })
-        })
-        .collect();
-    crate::result::json_ok(InvitesResponse {
+        .map(invite_record_to_sdk)
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::result::json_ok(AuthzInviteList {
         invites: invite_list,
         next_cursor: None,
     })
+}
+
+fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invite, AppError> {
+    Ok(Invite {
+        schema: "ck.schema.invite.v1".to_owned(),
+        id: InviteId::new(invite.invite_id.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        realm_id: RealmId::new(invite.realm_id.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        inviter: Did::new(invite.inviter.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        invitee: invite
+            .invitee
+            .map(Did::new)
+            .transpose()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        third_party_id: invite.invite_delivery_target.clone(),
+        join_rule_snapshot: json!({
+            "join_rule": "invite",
+            "invite_token": invite.invite_token,
+            "introduction_evidence_digest": invite.introduction_evidence_digest,
+        }),
+        capability_grant_refs: Vec::new(),
+        expires_at: invite.expires_at,
+        state: invite_state_from_record(&invite.status),
+        created_at: invite.created_at,
+    })
+}
+
+fn invite_state_from_record(status: &str) -> InviteState {
+    match status {
+        "accepted" => InviteState::Accepted,
+        "rejected" => InviteState::Rejected,
+        "revoked" => InviteState::Revoked,
+        "expired" => InviteState::Expired,
+        _ => InviteState::Pending,
+    }
 }

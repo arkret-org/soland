@@ -185,7 +185,7 @@ fn verify_jws_shape(
 /// "we've stashed it for the next anchorer batch" from "verifier said no
 /// before we even reached the queue".
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitMoveResponse {
+pub struct SubmitMoveOutcome {
     pub move_id: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,7 +203,7 @@ async fn submit_move(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<Move>,
-) -> JsonResult<SubmitMoveResponse> {
+) -> JsonResult<SubmitMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let move_obj = body.into_inner();
@@ -219,7 +219,7 @@ async fn submit_move(
 
     let verifier = select_jws_verifier(state);
     if let Err(reject) = verify_move(&move_obj, &pre_state, registry, verifier) {
-        return Ok(salvo::writing::Json(SubmitMoveResponse {
+        return Ok(salvo::writing::Json(SubmitMoveOutcome {
             move_id: move_obj.id.as_str().to_owned(),
             state: "rejected".to_owned(),
             reason: Some(reject.to_string()),
@@ -235,7 +235,7 @@ async fn submit_move(
         state.config.jws_replay_window_seconds,
         &state.config.jws_replay_window_per_family,
     ) {
-        return Ok(salvo::writing::Json(SubmitMoveResponse {
+        return Ok(salvo::writing::Json(SubmitMoveOutcome {
             move_id: move_obj.id.as_str().to_owned(),
             state: "rejected".to_owned(),
             reason: Some(format!("replay_window: {reject}")),
@@ -251,7 +251,7 @@ async fn submit_move(
         })?;
     super::federation::broadcast_move_to_peers(state, move_obj.id.as_str()).await;
 
-    json_ok(SubmitMoveResponse {
+    json_ok(SubmitMoveOutcome {
         move_id: move_obj.id.as_str().to_owned(),
         state: "pending".to_owned(),
         reason: None,
@@ -260,7 +260,7 @@ async fn submit_move(
 
 /// Response from `POST /_soland/peer/anchors`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitAnchorResponse {
+pub struct SubmitAnchorOutcome {
     pub anchor_id: String,
     pub accepted_move_ids: Vec<String>,
     pub rejected_moves: Vec<RejectedMoveEntry>,
@@ -284,7 +284,7 @@ async fn submit_anchor(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<Anchor>,
-) -> JsonResult<SubmitAnchorResponse> {
+) -> JsonResult<SubmitAnchorOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let anchor = body.into_inner();
@@ -395,7 +395,7 @@ async fn submit_anchor(
 
     super::federation::broadcast_anchor_to_peers(state, effect.anchor.as_str()).await;
 
-    json_ok(SubmitAnchorResponse {
+    json_ok(SubmitAnchorOutcome {
         anchor_id: effect.anchor.as_str().to_owned(),
         accepted_move_ids: effect
             .accepted_move_ids
@@ -409,7 +409,7 @@ async fn submit_anchor(
 
 /// Request body for `POST /_soland/admin/anchors/sign`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SignAnchorRequest {
+pub struct SignAnchorRequestBody {
     /// Realm whose pending Moves should be batch-anchored.
     pub realm_id: String,
     /// Maximum number of pending Moves to consume in this pass.
@@ -418,10 +418,10 @@ pub struct SignAnchorRequest {
     pub max_moves: Option<usize>,
 }
 
-/// Response body — mirrors `SubmitAnchorResponse` but reports `None` when
+/// Response body — mirrors `SubmitAnchorOutcome` but reports `None` when
 /// there were no pending Moves to anchor.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SignAnchorResponse {
+pub struct SignAnchorOutcome {
     /// `true` if an Anchor was published; `false` if nothing was pending.
     pub published: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -449,11 +449,11 @@ async fn admin_sign_anchor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SignAnchorRequest>,
-) -> JsonResult<SignAnchorResponse> {
+    body: JsonBody<SignAnchorRequestBody>,
+) -> JsonResult<SignAnchorOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let SignAnchorRequest {
+    let SignAnchorRequestBody {
         realm_id,
         max_moves,
     } = body.into_inner();
@@ -474,7 +474,7 @@ async fn admin_sign_anchor(
                     reason,
                 })
                 .collect();
-            json_ok(SignAnchorResponse {
+            json_ok(SignAnchorOutcome {
                 published: true,
                 anchor_id: Some(outcome.anchor_id.as_str().to_owned()),
                 accepted_move_ids: outcome
@@ -486,7 +486,7 @@ async fn admin_sign_anchor(
                 post_state_root: Some(outcome.post_state_root.as_str().to_owned()),
             })
         }
-        Ok(None) => json_ok(SignAnchorResponse {
+        Ok(None) => json_ok(SignAnchorOutcome {
             published: false,
             anchor_id: None,
             accepted_move_ids: vec![],
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn submit_move_response_serializes_pending_without_reason() {
-        let r = SubmitMoveResponse {
+        let r = SubmitMoveOutcome {
             move_id: "sha256:11".to_owned(),
             state: "pending".to_owned(),
             reason: None,
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn submit_move_response_includes_reason_on_reject() {
-        let r = SubmitMoveResponse {
+        let r = SubmitMoveOutcome {
             move_id: "sha256:22".to_owned(),
             state: "rejected".to_owned(),
             reason: Some("payload_digest mismatch".to_owned()),

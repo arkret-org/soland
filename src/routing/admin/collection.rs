@@ -150,7 +150,7 @@ pub(super) async fn admin_collection(
 }
 
 #[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminCreateRealmRequest {
+pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -172,7 +172,7 @@ pub(super) struct AdminCreateRealmRequest {
 #[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realm.create"))]
 pub(super) async fn admin_create_realm(
     aa: AuthArgs,
-    body: JsonBody<AdminCreateRealmRequest>,
+    body: JsonBody<AdminCreateRealmRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -395,7 +395,7 @@ async fn admin_realm_item_value(
 ) -> Value {
     let realm_id = realm.realm_id.as_str().to_owned();
     let flow =
-        flow_projection_for_realm(state, &realm_id, &realm.name, realm.description.as_deref())
+        flow_projection_for_realm(state, &realm_id, &realm.title, realm.description.as_deref())
             .await;
     json!({
         "kind": "realm",
@@ -403,7 +403,7 @@ async fn admin_realm_item_value(
         "flow": flow,
         "flow_id": flow_id_from_realm_id(&realm_id),
         "realm_id": realm_id,
-        "title": realm.name,
+        "title": realm.title,
         "topic": realm.description,
         "category": realm.category,
         "tags": realm.tags,

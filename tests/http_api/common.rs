@@ -558,9 +558,7 @@ pub(crate) fn signed_message_event_envelope(
                         .to_owned(),
                 ),
             );
-            // `encrypted_envelope` carries a legacy `digests` blob that is not
-            // a field of ck.schema.encrypted_envelope.v1 (additionalProperties
-            // is false); drop it so the conforming envelope validates.
+            object.remove("authentication_tag");
             object.remove("digests");
         }
         payload["encrypted_content"] = encrypted_payload;
@@ -693,6 +691,16 @@ pub(crate) async fn submit_message_event(
         .take_json()
         .await
         .unwrap();
+    if response["event_id"].is_null()
+        && let Some(event_id) = response["accepted"]
+            .as_array()
+            .and_then(|events| events.first())
+    {
+        response["event_id"] = event_id.clone();
+    }
+    if response["sync_token"].is_null() && !response["cursor"].is_null() {
+        response["sync_token"] = response["cursor"].clone();
+    }
     if let Some(event_id) = response["event_id"].as_str() {
         let event_id = event_id.to_owned();
         let event_suffix = event_id.strip_prefix("ck:event:").unwrap_or(&event_id);
@@ -705,6 +713,10 @@ pub(crate) async fn submit_message_event(
         response["encrypted"] = Value::Bool(encrypted);
         response["canonical_event_envelope"] = Value::Bool(true);
     }
+    assert!(
+        response["event_id"].as_str().is_some(),
+        "submit_message_event response missing event_id: {response}"
+    );
     response
 }
 

@@ -59,8 +59,7 @@ use spaces::space::{
     invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, prune_expired_typing,
     realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
     realm_has_member, realm_history_visibility, realm_id_accessible, realm_resolvable_to,
-    realm_search_discoverability, realm_search_visible_to, realm_visible_to, touch_realm,
-    typing_ephemeral_for_realm,
+    realm_search_visible_to, realm_visible_to, touch_realm, typing_ephemeral_for_realm,
 };
 use system::extract::AuthArgs;
 use system::util::{
@@ -365,27 +364,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "auth",
         "ck.extension.soland.auth.logout",
         "logout active session",
-    ),
-    (
-        "/_soland/self/contacts/request",
-        PathItemType::Post,
-        "contacts",
-        "ck.extension.soland.contacts.request",
-        "request contact",
-    ),
-    (
-        "/_soland/self/contacts/respond",
-        PathItemType::Post,
-        "contacts",
-        "ck.extension.soland.contacts.respond",
-        "respond to contact request",
-    ),
-    (
-        "/_soland/self/contacts",
-        PathItemType::Get,
-        "contacts",
-        "ck.extension.soland.contacts.list",
-        "list contacts",
     ),
     (
         "/_cokret/describe",
@@ -1459,7 +1437,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
         let realms = state.realms.lock().expect("realms lock");
         let realm = realms.get(&realm_id_value)?;
         (
-            realm.name.clone(),
+            realm.title.clone(),
             realm
                 .members
                 .iter()

@@ -70,11 +70,13 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .take_json()
         .await
         .unwrap();
-    assert_eq!(request["status"], "pending");
+    assert_eq!(request["state"], "pending_outgoing");
+    let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
 
     let accepted: Value = TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
+            "request_id": request_id,
             "requester": "did:web:alice.example",
             "action": "accept",
             "granted_scopes": ["direct_message"]
@@ -84,7 +86,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .take_json()
         .await
         .unwrap();
-    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(accepted["state"], "accepted");
 
     let contacts: Value = TestClient::get("http://server/_cokret/self/contacts")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -158,17 +160,22 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    TestClient::post("http://server/_cokret/self/contacts/request")
+    let request: Value = TestClient::post("http://server/_cokret/self/contacts/request")
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "target": BOB_DID,
             "requested_scopes": ["direct_message"]
         }))
         .send(&app_from_state(state.clone()))
-        .await;
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
     TestClient::post("http://server/_cokret/self/contacts/respond")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
+            "request_id": request_id,
             "requester": "did:web:alice.example",
             "action": "accept",
             "granted_scopes": ["direct_message"]
