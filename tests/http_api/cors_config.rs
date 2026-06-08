@@ -64,6 +64,51 @@ async fn configured_cors_allows_only_explicit_origin() {
 }
 
 #[tokio::test]
+async fn configured_cors_allows_blob_upload_headers() {
+    let mut config = test_config();
+    config.cors_allow_origin = Some("https://app.example".to_owned());
+    let service = app_from_state(AppState::new(config, Db { pool: None }));
+
+    let allowed = TestClient::options("http://server/_cokret/self/blob/upload")
+        .add_header("Origin", "https://app.example", true)
+        .add_header("Access-Control-Request-Method", "POST", true)
+        .add_header(
+            "Access-Control-Request-Headers",
+            "authorization, content-type, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-content-digest, x-cokret-attachment-envelope, x-cokret-realm-id, x-cokret-filename",
+            true,
+        )
+        .send(&service)
+        .await;
+
+    assert_eq!(
+        allowed
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("https://app.example")
+    );
+    let allow_headers = allowed
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    for header in [
+        "x-cokret-blob-encrypted",
+        "x-cokret-blob-purpose",
+        "x-cokret-content-digest",
+        "x-cokret-attachment-envelope",
+        "x-cokret-realm-id",
+        "x-cokret-filename",
+    ] {
+        assert!(
+            allow_headers.contains(header),
+            "blob upload header must be allowed in browser preflight: {header}; got {allow_headers}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
     // The Realm bootstrap flow in yougen emits a
     // `ck.member.state{membership="invite"}` event for each seed member

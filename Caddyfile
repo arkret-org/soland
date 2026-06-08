@@ -4,7 +4,7 @@
 		Access-Control-Allow-Origin "{http.request.header.Origin}"
 		Access-Control-Allow-Credentials "true"
 		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-		Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, range"
+		Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, x-cokret-realm-id, x-cokret-filename, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-purpose, x-cokret-attachment-envelope, range"
 		Access-Control-Expose-Headers "retry-after, x-cokret-wait-for-satisfied, content-range, accept-ranges"
 		Vary "Origin"
 		defer
@@ -21,7 +21,7 @@
 			Access-Control-Allow-Origin "{http.request.header.Origin}"
 			Access-Control-Allow-Credentials "true"
 			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
-			Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, range"
+			Access-Control-Allow-Headers "authorization, content-type, idempotency-key, x-cokret-request-id, x-cokret-wait-for, x-cokret-content-digest, x-cokret-realm-id, x-cokret-filename, x-cokret-blob-encrypted, x-cokret-blob-purpose, x-cokret-purpose, x-cokret-attachment-envelope, range"
 			Access-Control-Expose-Headers "retry-after, x-cokret-wait-for-satisfied, content-range, accept-ranges"
 			Vary "Origin"
 		}
