@@ -21,7 +21,8 @@ use uuid::Uuid;
 use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
-    AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ContactRecord,
+    AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ConsentCellKey,
+    ConsentCellRecord, ConsentGrantDot, ContactRecord, DirectConversationBindingRecord,
     DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
     FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
@@ -116,6 +117,47 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>>;
+}
+
+/// Durable backing for the holder-private consent-cell projection (spec
+/// `consent-model.md` §3 / G3.S4). The in-memory
+/// `AppState::consent_cells` map keyed by `(holder, peer, scope)` remains the
+/// working OR-set projection; this store hydrates it on boot and is written
+/// through after each accepted grant/revoke/pending mutation. `grant_dots` /
+/// `revoked_dots` are persisted as JSONB so the `BTreeMap`/`BTreeSet`
+/// round-trips losslessly.
+#[async_trait]
+pub trait ConsentCellStore: Send + Sync {
+    async fn get(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ConsentCellRecord>>;
+    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
+}
+
+/// Durable backing for the direct-conversation binding projection (spec
+/// `contact-and-direct-conversation.md` §5). The in-memory
+/// `AppState::direct_conversation_bindings` map keyed by the sorted, NUL-joined
+/// participant pair (`participants_key`) remains the working projection; this
+/// store hydrates it on boot and is written through on binding create/update.
+#[async_trait]
+pub trait DirectConversationBindingStore: Send + Sync {
+    async fn get(
+        &self,
+        participants_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationBindingRecord>>;
+    async fn put(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<()>;
+    async fn delete(&self, participants_key: &str) -> PersistenceResult<()>;
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
 
 /// Trait for Realm metadata storage operations.
@@ -1020,6 +1062,8 @@ pub trait PersistenceStore: Send + Sync {
     fn account_data(&self) -> &dyn AccountDataStore;
     fn contacts(&self) -> &dyn ContactStore;
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
+    fn consent_cells(&self) -> &dyn ConsentCellStore;
+    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
@@ -1064,6 +1108,8 @@ pub struct MemoryPersistenceStore {
     account_data: MemoryAccountDataStore,
     contacts: MemoryContactStore,
     invite_receive_policies: MemoryInviteReceivePolicyStore,
+    consent_cells: MemoryConsentCellStore,
+    direct_conversation_bindings: MemoryDirectConversationBindingStore,
     realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
@@ -1109,6 +1155,8 @@ impl MemoryPersistenceStore {
             account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),
             invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
+            consent_cells: MemoryConsentCellStore::new(),
+            direct_conversation_bindings: MemoryDirectConversationBindingStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
@@ -1173,6 +1221,14 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
         &self.invite_receive_policies
+    }
+
+    fn consent_cells(&self) -> &dyn ConsentCellStore {
+        &self.consent_cells
+    }
+
+    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore {
+        &self.direct_conversation_bindings
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
@@ -1692,6 +1748,108 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
+}
+
+// In-memory consent-cell store
+struct MemoryConsentCellStore {
+    data: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+}
+
+impl MemoryConsentCellStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl ConsentCellStore for MemoryConsentCellStore {
+    async fn get(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ConsentCellRecord>> {
+        let key = ConsentCellKey {
+            holder: holder.to_owned(),
+            peer: peer.to_owned(),
+            scope: scope.to_owned(),
+        };
+        Ok(self.data.lock().expect("lock").get(&key).cloned())
+    }
+
+    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()> {
+        let key = ConsentCellKey {
+            holder: record.holder.clone(),
+            peer: record.peer.clone(),
+            scope: record.scope.clone(),
+        };
+        self.data.lock().expect("lock").insert(key, record.clone());
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    }
+}
+
+// In-memory direct-conversation binding store
+struct MemoryDirectConversationBindingStore {
+    data: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
+}
+
+impl MemoryDirectConversationBindingStore {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
+    async fn get(
+        &self,
+        participants_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationBindingRecord>> {
+        Ok(self.data.lock().expect("lock").get(participants_key).cloned())
+    }
+
+    async fn put(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .expect("lock")
+            .insert(participants_key.to_owned(), record.clone());
+        Ok(())
+    }
+
+    async fn delete(&self, participants_key: &str) -> PersistenceResult<()> {
+        self.data.lock().expect("lock").remove(participants_key);
+        Ok(())
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>> {
         Ok(self
             .data
             .lock()
@@ -3878,6 +4036,8 @@ pub struct PgPersistenceStore {
     account_data: PgAccountDataStore,
     contacts: PgContactStore,
     invite_receive_policies: PgInviteReceivePolicyStore,
+    consent_cells: PgConsentCellStore,
+    direct_conversation_bindings: PgDirectConversationBindingStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     federation_transactions: PgFederationTransactionStore,
@@ -3916,6 +4076,8 @@ impl PgPersistenceStore {
             account_data: PgAccountDataStore { pool: pool.clone() },
             contacts: PgContactStore { pool: pool.clone() },
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
+            consent_cells: PgConsentCellStore { pool: pool.clone() },
+            direct_conversation_bindings: PgDirectConversationBindingStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
@@ -3967,6 +4129,14 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
         &self.invite_receive_policies
+    }
+
+    fn consent_cells(&self) -> &dyn ConsentCellStore {
+        &self.consent_cells
+    }
+
+    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore {
+        &self.direct_conversation_bindings
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
@@ -8205,6 +8375,323 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     }
 }
 
+// ── Pg-backed consent-cell store ─────────────────────────────────────────
+// Durable backing for the holder-private consent-cell projection. Column
+// order mirrors `state::ConsentCellRecord`; `grant_dots` is persisted as a
+// JSONB object `{dot -> {dot, expires_at, granted_at}}` and `revoked_dots` as
+// a JSONB string array so the in-memory `BTreeMap`/`BTreeSet` round-trip
+// losslessly.
+struct PgConsentCellStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct ConsentCellRow {
+    #[diesel(sql_type = Text)]
+    holder: String,
+    #[diesel(sql_type = Text)]
+    peer: String,
+    #[diesel(sql_type = Text)]
+    scope: String,
+    #[diesel(sql_type = Text)]
+    cell_id: String,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Jsonb)]
+    grant_dots: Value,
+    #[diesel(sql_type = Jsonb)]
+    revoked_dots: Value,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Decode a persisted `grant_dots` JSONB object back into the in-memory
+/// `BTreeMap<String, ConsentGrantDot>`. Tolerant of a missing `dot` key (falls
+/// back to the map key) so manual / legacy rows survive.
+fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
+    let mut dots = BTreeMap::new();
+    let Some(object) = value.as_object() else {
+        return dots;
+    };
+    for (key, entry) in object {
+        let dot = entry
+            .get("dot")
+            .and_then(Value::as_str)
+            .unwrap_or(key)
+            .to_owned();
+        let granted_at = entry
+            .get("granted_at")
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let expires_at = entry
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        dots.insert(
+            key.clone(),
+            ConsentGrantDot {
+                dot,
+                expires_at,
+                granted_at,
+            },
+        );
+    }
+    dots
+}
+
+/// Encode the in-memory `grant_dots` map into a JSONB object for storage.
+fn encode_grant_dots(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
+    let mut map = serde_json::Map::new();
+    for (key, grant) in dots {
+        map.insert(
+            key.clone(),
+            json_for_grant_dot(grant),
+        );
+    }
+    Value::Object(map)
+}
+
+fn json_for_grant_dot(grant: &ConsentGrantDot) -> Value {
+    serde_json::json!({
+        "dot": grant.dot,
+        "granted_at": grant.granted_at.to_rfc3339(),
+        "expires_at": grant.expires_at.map(|dt| dt.to_rfc3339()),
+    })
+}
+
+impl ConsentCellRow {
+    fn into_pair(self) -> (ConsentCellKey, ConsentCellRecord) {
+        let revoked_dots: BTreeSet<String> = self
+            .revoked_dots
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let key = ConsentCellKey {
+            holder: self.holder.clone(),
+            peer: self.peer.clone(),
+            scope: self.scope.clone(),
+        };
+        let record = ConsentCellRecord {
+            holder: self.holder,
+            peer: self.peer,
+            scope: self.scope,
+            cell_id: self.cell_id,
+            requested_at: self.requested_at,
+            grant_dots: decode_grant_dots(&self.grant_dots),
+            revoked_dots,
+            revoked_at: self.revoked_at,
+            updated_at: self.updated_at,
+        };
+        (key, record)
+    }
+}
+
+const CONSENT_CELL_COLUMNS: &str = "holder, peer, scope, cell_id, requested_at, grant_dots, \
+     revoked_dots, revoked_at, updated_at";
+
+#[async_trait]
+impl ConsentCellStore for PgConsentCellStore {
+    async fn get(
+        &self,
+        holder: &str,
+        peer: &str,
+        scope: &str,
+    ) -> PersistenceResult<Option<ConsentCellRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(format!(
+            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells \
+             WHERE holder = $1 AND peer = $2 AND scope = $3"
+        ))
+        .bind::<Text, _>(holder)
+        .bind::<Text, _>(peer)
+        .bind::<Text, _>(scope)
+        .get_result::<ConsentCellRow>(&mut *conn)
+        .await
+        .optional()?;
+        Ok(row.map(|row| row.into_pair().1))
+    }
+
+    async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()> {
+        let grant_dots = encode_grant_dots(&record.grant_dots);
+        let revoked_dots = Value::Array(
+            record
+                .revoked_dots
+                .iter()
+                .map(|dot| Value::String(dot.clone()))
+                .collect(),
+        );
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO consent_cells \
+             (holder, peer, scope, cell_id, requested_at, grant_dots, revoked_dots, revoked_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (holder, peer, scope) DO UPDATE SET \
+                cell_id = EXCLUDED.cell_id, \
+                requested_at = EXCLUDED.requested_at, \
+                grant_dots = EXCLUDED.grant_dots, \
+                revoked_dots = EXCLUDED.revoked_dots, \
+                revoked_at = EXCLUDED.revoked_at, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&record.holder)
+        .bind::<Text, _>(&record.peer)
+        .bind::<Text, _>(&record.scope)
+        .bind::<Text, _>(&record.cell_id)
+        .bind::<Nullable<Timestamptz>, _>(record.requested_at)
+        .bind::<Jsonb, _>(&grant_dots)
+        .bind::<Jsonb, _>(&revoked_dots)
+        .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(format!("SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells"))
+            .get_results::<ConsentCellRow>(&mut *conn)
+            .await?;
+        Ok(rows.into_iter().map(ConsentCellRow::into_pair).collect())
+    }
+}
+
+// ── Pg-backed direct-conversation binding store ──────────────────────────
+// Durable backing for the DM binding projection. `participants_key` is the
+// sorted, NUL-joined participant pair (the in-memory map key); the remaining
+// columns mirror `state::DirectConversationBindingRecord`.
+struct PgDirectConversationBindingStore {
+    pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct DirectConversationBindingRow {
+    #[diesel(sql_type = Text)]
+    participants_key: String,
+    #[diesel(sql_type = Array<Text>)]
+    participants_unordered: Vec<String>,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    main_flow_id: String,
+    #[diesel(sql_type = Text)]
+    binding_event_ref: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl DirectConversationBindingRow {
+    fn into_pair(self) -> (String, DirectConversationBindingRecord) {
+        (
+            self.participants_key,
+            DirectConversationBindingRecord {
+                participants_unordered: self.participants_unordered,
+                realm_id: self.realm_id,
+                main_flow_id: self.main_flow_id,
+                binding_event_ref: self.binding_event_ref,
+                state: self.state,
+                created_at: self.created_at,
+                updated_at: self.updated_at,
+            },
+        )
+    }
+}
+
+const DIRECT_BINDING_COLUMNS: &str = "participants_key, participants_unordered, realm_id, \
+     main_flow_id, binding_event_ref, state, created_at, updated_at";
+
+#[async_trait]
+impl DirectConversationBindingStore for PgDirectConversationBindingStore {
+    async fn get(
+        &self,
+        participants_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationBindingRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(format!(
+            "SELECT {DIRECT_BINDING_COLUMNS} FROM direct_conversation_bindings \
+             WHERE participants_key = $1"
+        ))
+        .bind::<Text, _>(participants_key)
+        .get_result::<DirectConversationBindingRow>(&mut *conn)
+        .await
+        .optional()?;
+        Ok(row.map(|row| row.into_pair().1))
+    }
+
+    async fn put(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO direct_conversation_bindings \
+             (participants_key, participants_unordered, realm_id, main_flow_id, \
+              binding_event_ref, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (participants_key) DO UPDATE SET \
+                participants_unordered = EXCLUDED.participants_unordered, \
+                realm_id = EXCLUDED.realm_id, \
+                main_flow_id = EXCLUDED.main_flow_id, \
+                binding_event_ref = EXCLUDED.binding_event_ref, \
+                state = EXCLUDED.state, \
+                updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(participants_key)
+        .bind::<Array<Text>, _>(&record.participants_unordered)
+        .bind::<Text, _>(&record.realm_id)
+        .bind::<Text, _>(&record.main_flow_id)
+        .bind::<Text, _>(&record.binding_event_ref)
+        .bind::<Text, _>(&record.state)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn delete(&self, participants_key: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("DELETE FROM direct_conversation_bindings WHERE participants_key = $1")
+            .bind::<Text, _>(participants_key)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::from)
+    }
+
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(format!(
+            "SELECT {DIRECT_BINDING_COLUMNS} FROM direct_conversation_bindings"
+        ))
+        .get_results::<DirectConversationBindingRow>(&mut *conn)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(DirectConversationBindingRow::into_pair)
+            .collect())
+    }
+}
+
 async fn pg_conn(pool: &PgPool) -> PersistenceResult<Object<AsyncPgConnection>> {
     pool.get()
         .await
@@ -9892,5 +10379,110 @@ mod tests {
         let snapshot = store.snapshot_all().await.unwrap();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].0, subject);
+    }
+
+    #[tokio::test]
+    async fn memory_consent_cell_store_put_get_snapshot_round_trip() {
+        let store = MemoryConsentCellStore::new();
+        let now = Utc::now();
+        let mut grant_dots = BTreeMap::new();
+        grant_dots.insert(
+            "ck:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
+            ConsentGrantDot {
+                dot: "ck:event:01904100-0000-7000-8000-000000000001:0".to_owned(),
+                expires_at: Some(now + chrono::Duration::hours(1)),
+                granted_at: now,
+            },
+        );
+        let mut revoked_dots = BTreeSet::new();
+        revoked_dots.insert("ck:event:01904100-0000-7000-8000-0000000000ff:0".to_owned());
+        let record = ConsentCellRecord {
+            holder: "did:web:alice.example".to_owned(),
+            peer: "did:web:bob.example".to_owned(),
+            scope: "invite".to_owned(),
+            cell_id: "ck:cell:ck.component.consent.grant.v1:deadbeef".to_owned(),
+            requested_at: Some(now),
+            grant_dots,
+            revoked_dots,
+            revoked_at: None,
+            updated_at: now,
+        };
+        store.put(&record).await.unwrap();
+
+        let fetched = store
+            .get("did:web:alice.example", "did:web:bob.example", "invite")
+            .await
+            .unwrap()
+            .expect("consent cell round-trips");
+        assert_eq!(fetched.cell_id, record.cell_id);
+        assert_eq!(fetched.grant_dots.len(), 1);
+        assert_eq!(fetched.revoked_dots.len(), 1);
+
+        let snapshot = store.snapshot_all().await.unwrap();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].0.scope, "invite");
+    }
+
+    /// The Pg row encode/decode helpers must round-trip the in-memory
+    /// `grant_dots` map and `revoked_dots` set losslessly through JSONB —
+    /// hydrate-on-boot relies on this re-inflating an active grant as active.
+    #[test]
+    fn consent_cell_jsonb_helpers_round_trip() {
+        let now = Utc::now();
+        let mut grant_dots = BTreeMap::new();
+        grant_dots.insert(
+            "dot-a".to_owned(),
+            ConsentGrantDot {
+                dot: "dot-a".to_owned(),
+                expires_at: Some(now + chrono::Duration::hours(2)),
+                granted_at: now,
+            },
+        );
+        grant_dots.insert(
+            "dot-b".to_owned(),
+            ConsentGrantDot {
+                dot: "dot-b".to_owned(),
+                expires_at: None,
+                granted_at: now,
+            },
+        );
+        let encoded = encode_grant_dots(&grant_dots);
+        let decoded = decode_grant_dots(&encoded);
+        assert_eq!(decoded.len(), 2);
+        let a = decoded.get("dot-a").expect("dot-a survives");
+        assert_eq!(a.dot, "dot-a");
+        assert!(a.expires_at.is_some());
+        let b = decoded.get("dot-b").expect("dot-b survives");
+        assert!(b.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn memory_direct_conversation_binding_store_put_get_delete() {
+        let store = MemoryDirectConversationBindingStore::new();
+        let now = Utc::now();
+        let key = "did:web:alice.example\0did:web:bob.example";
+        let record = DirectConversationBindingRecord {
+            participants_unordered: vec![
+                "did:web:alice.example".to_owned(),
+                "did:web:bob.example".to_owned(),
+            ],
+            realm_id: "ck:realm:01904100-0000-7000-8000-000000000601".to_owned(),
+            main_flow_id: "ck:flow:01904100-0000-7000-8000-000000000601".to_owned(),
+            binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
+            state: "active".to_owned(),
+            created_at: now,
+            updated_at: now,
+        };
+        store.put(key, &record).await.unwrap();
+
+        let fetched = store.get(key).await.unwrap().expect("binding round-trips");
+        assert_eq!(fetched.realm_id, record.realm_id);
+        assert_eq!(fetched.participants_unordered.len(), 2);
+
+        let snapshot = store.snapshot_all().await.unwrap();
+        assert_eq!(snapshot.len(), 1);
+
+        store.delete(key).await.unwrap();
+        assert!(store.get(key).await.unwrap().is_none());
     }
 }

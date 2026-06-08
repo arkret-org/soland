@@ -38,7 +38,7 @@ use serde_json::{Value, json};
 use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
 use super::consent::{
     active_invite_consent_grant_ref, grant_contact_managed_consent, has_active_consent_for_scope,
-    normalize_scope, record_pending_request, revoke_contact_managed_consent,
+    normalize_scope, persist_consent_cell, record_pending_request, revoke_contact_managed_consent,
 };
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
@@ -1865,7 +1865,9 @@ async fn contact_request(
     // contact-managed grant is a real `ck.consent.grant`; its event ref is
     // referenced from the `ck.contact.requested` fact's
     // `requester_consent_refs[]`.
-    let requester_consent_ref = grant_contact_managed_consent(state, &session.actor, &target, &scope, now());
+    let (requester_consent_ref, requester_consent_cell) =
+        grant_contact_managed_consent(state, &session.actor, &target, &scope, now());
+    persist_consent_cell(state, &requester_consent_cell).await;
     let requester_consent_refs = EventId::new(requester_consent_ref)
         .ok()
         .into_iter()
@@ -1878,7 +1880,8 @@ async fn contact_request(
     } else if has_active_consent_for_scope(state, &target, &session.actor, &scope, now()) {
         "accepted"
     } else {
-        record_pending_request(state, &target, &session.actor, &scope, now());
+        let pending = record_pending_request(state, &target, &session.actor, &scope, now());
+        persist_consent_cell(state, &pending).await;
         "pending"
     };
     let store = state.persistence.contacts();
@@ -2048,8 +2051,9 @@ async fn contact_respond(
             // Spec contact-and-direct-conversation.md §3 — each granted scope
             // writes a target-controlled `ck.consent.grant`; its event ref is
             // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
-            let grant_ref =
+            let (grant_ref, grant_cell) =
                 grant_contact_managed_consent(state, &session.actor, &contact.requester, &scope, now());
+            persist_consent_cell(state, &grant_cell).await;
             if let Ok(event_ref) = EventId::new(grant_ref) {
                 consent_grant_refs.push(event_ref);
             }
@@ -2130,8 +2134,11 @@ async fn contact_tombstone(
     // Revoke contact-managed consent dots holder→peer. `complete=false`
     // means the dot enumeration was partial; we MUST then report a partial
     // tombstone rather than a full one.
-    let (revoked_dots, complete) =
+    let (revoked_dots, complete, revoked_cells) =
         revoke_contact_managed_consent(state, &holder, &peer, &body.revoke_scopes, now);
+    for cell in &revoked_cells {
+        persist_consent_cell(state, cell).await;
+    }
 
     // Flip every holder↔peer contact row this holder controls to
     // `tombstoned`. The holder's own outgoing rows are the authoritative
@@ -2820,19 +2827,44 @@ async fn create_direct_binding_with_realm(
     if let Err(error) =
         submit_direct_realm_genesis(state, &realm_id, &main_flow_id, actor, peer).await
     {
-        let mut guard = state
-            .direct_conversation_bindings
-            .lock()
-            .expect("direct_conversation_bindings lock");
-        if guard
-            .get(pair_key)
-            .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref)
+        let removed = {
+            let mut guard = state
+                .direct_conversation_bindings
+                .lock()
+                .expect("direct_conversation_bindings lock");
+            let removed = guard
+                .get(pair_key)
+                .is_some_and(|binding| binding.binding_event_ref == reserved.binding_event_ref);
+            if removed {
+                guard.remove(pair_key);
+            }
+            removed
+        };
+        // Mirror the in-memory rollback into durable storage so a restart
+        // mid-failure doesn't resurrect a binding pointing at an orphan realm.
+        if removed
+            && let Err(error) = state
+                .persistence
+                .direct_conversation_bindings()
+                .delete(pair_key)
+                .await
         {
-            guard.remove(pair_key);
+            tracing::warn!(%error, pair_key, "failed to delete rolled-back direct binding");
         }
         return Err(AppError::internal(format!(
             "direct conversation realm genesis failed: {error}"
         )));
+    }
+
+    // Genesis succeeded — write the binding through to durable storage so the
+    // canonical pair → (realm_id, main_flow_id) projection survives restart.
+    if let Err(error) = state
+        .persistence
+        .direct_conversation_bindings()
+        .put(pair_key, &reserved)
+        .await
+    {
+        tracing::warn!(%error, pair_key, "failed to persist direct binding to durable storage");
     }
 
     // Binding fact (spec §6) — the canonical pair → (realm_id, main_flow_id)

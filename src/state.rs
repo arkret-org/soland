@@ -2156,6 +2156,33 @@ impl AppState {
                 map.entry(subject_id).or_insert(policy);
             }
         }
+
+        // Hydrate the holder-private consent-cell projection from durable
+        // storage. Built off-lock first; the async snapshot read MUST NOT hold
+        // the std Mutex across `.await`.
+        if let Ok(cells) = self.persistence.consent_cells().snapshot_all().await {
+            let mut map = self.consent_cells.lock().expect("consent_cells lock");
+            for (key, record) in cells {
+                map.entry(key).or_insert(record);
+            }
+        }
+
+        // Hydrate the direct-conversation binding projection (sorted
+        // participant pair → binding) from durable storage.
+        if let Ok(bindings) = self
+            .persistence
+            .direct_conversation_bindings()
+            .snapshot_all()
+            .await
+        {
+            let mut map = self
+                .direct_conversation_bindings
+                .lock()
+                .expect("direct_conversation_bindings lock");
+            for (participants_key, record) in bindings {
+                map.entry(participants_key).or_insert(record);
+            }
+        }
     }
 
     /// MID-1..6 — borrow a clone of the in-memory MemberIdentity
