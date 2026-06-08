@@ -8513,6 +8513,8 @@ mod tests {
                 target: "bob".to_owned(),
                 scope: "message".to_owned(),
                 status: "accepted".to_owned(),
+                message: None,
+                peer_service_did: None,
                 created_at: now,
                 updated_at: now,
             })
@@ -8525,6 +8527,8 @@ mod tests {
                 target: "alice".to_owned(),
                 scope: "invite".to_owned(),
                 status: "pending".to_owned(),
+                message: None,
+                peer_service_did: None,
                 created_at: now,
                 updated_at: now,
             })

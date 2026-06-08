@@ -1842,6 +1842,17 @@ pub async fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec
     peers.into_iter().map(|peer| peer.url).collect()
 }
 
+/// Resolve the configured peer base URL for a destination service DID, if the
+/// deployment lists it in `federation_peers` (and the deployment peer policy
+/// does not deny it). Used by federation senders (e.g. contact fact delivery)
+/// that address a target by its home Principal Server service DID.
+pub(crate) fn peer_url_for_service_did(state: &AppState, service_did: &str) -> Option<String> {
+    configured_peer_targets(state)
+        .into_iter()
+        .find(|peer| peer.did == service_did)
+        .map(|peer| peer.url)
+}
+
 fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     use crate::config::FederationPolicy;
     let entries: Vec<String> = match state.config.federation_policy {

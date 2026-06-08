@@ -25,7 +25,7 @@ pub mod extensions;
 pub mod federation;
 mod identity;
 mod interop;
-mod invites;
+pub(crate) mod invites;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
 pub(crate) mod organizations;
@@ -93,16 +93,20 @@ pub fn router_with_rate_limiter_and_request_size_config(
     rate_limiter_config: RateLimiterConfig,
     max_request_size_bytes: usize,
 ) -> Router {
-    let cors_allow_origin = state.config.cors_allow_origin.clone();
+    // NOTE: CORS is NOT a router hoop. Router hoops only run on a matched
+    // route, so any response produced by the Catcher (404/405 on an unmatched
+    // path or wrong method, size/rate-limit short-circuits, handler errors that
+    // fall through to `error_catcher`) would come back WITHOUT
+    // `Access-Control-Allow-Origin` and the browser would report a CORS error
+    // instead of the real status. The CORS layer is therefore attached at the
+    // `Service` level (see `crate::service`), where salvo runs it even when no
+    // route matches — so it can never be missed.
     let rate_limiter = RateLimiter::new(rate_limiter_config);
-    let mut router = Router::new()
+    let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
         .hoop(affix_state::inject(state))
         .hoop(RateLimiterMiddleware::new(rate_limiter));
-    if let Some(origin) = cors_allow_origin {
-        router = router.hoop(cors_handler_for_origin_spec(&origin));
-    }
     let router = router
         .push(system::health_router())
         .push(interop::well_known_router())
@@ -193,7 +197,8 @@ fn api_v1_router() -> Router {
         .push(
             Router::with_path("peer")
                 .push(events::peer_router())
-                .push(invites::peer_router()),
+                .push(invites::peer_router())
+                .push(identity::contact_federation::peer_router()),
         )
         // `open` - unauthenticated, body-only locator handoff surface.
         .push(Router::with_path("open").push(invites::open_router()))
@@ -1346,7 +1351,7 @@ fn pattern_matches_path(pattern: &str, path: &str) -> bool {
 /// - any other value → treat as an explicit origin allow-list (split on `,` for multi-origin
 ///   operators) and enable `allow_credentials` so cookie-bearing browser clients deployed under a
 ///   known origin still work.
-fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
+pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     let entries: Vec<String> = raw
         .split(',')
         .map(|v| v.trim().to_owned())

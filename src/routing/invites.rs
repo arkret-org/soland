@@ -6,14 +6,22 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::Duration;
+// NOTE: `cokret_sdk::DisclosurePolicy` at the crate root resolves to the
+// auth/DID-proof type (re-exported explicitly), which shadows the
+// invite-addressing one from the `model::*` glob. Import the
+// invite-addressing variant via its `model` module path to disambiguate.
+use cokret_sdk::model::DisclosurePolicy;
 use cokret_sdk::{
-    DetachedPayloadProof, Did, Hash, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
-    InviteDeliveryRequest, InviteLocatorResolveRequestBody, PrincipalLocator,
-    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose, canonical,
+    DetachedPayloadProof, Did, DisclosedOutcome, DisclosureLevel, Hash, IntroductionEvidence,
+    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
+    InviteLocatorResolveRequestBody, InviteReceiveAction, InviteReceivePolicy, PrincipalLocator,
+    PrincipalLocatorDisplayHint, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
+    UnknownInviteAction, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -66,12 +74,33 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
     }
 
     validate_invite_delivery_consistency(&body, &delivery, state)?;
-    let evidence_kind = body
-        .pointer("/introduction_evidence/kind")
+
+    // The inviter is the actor that signed the durable `ck.invite.create`
+    // event; it is the `peer` we test `blocked_subjects` and the
+    // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
+    let actor = body
+        .pointer("/invite_event/actor_id")
         .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let receive_action = receive_action_for_evidence(evidence_kind);
-    if receive_action != InviteReceiveAction::Notify {
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event.actor_id is required"))?
+        .to_owned();
+    let inviter = actor.clone();
+    let subject = delivery.invite_address.subject_id.as_str().to_owned();
+
+    // Spec invite-addressing.md §5..§8 — resolve the subject's private
+    // receive policy, derive the effective trust tier (downgrading
+    // `consent_grant` to `explicit_address` when the grant cannot be
+    // verified), then apply blocklist + allowlist + behavior to pick a
+    // receive action and a graded-disclosure outcome.
+    let policy = resolve_invite_receive_policy(state, &subject);
+    let decision = evaluate_invite_receive(
+        state,
+        &policy,
+        &delivery.introduction_evidence,
+        &inviter,
+        &subject,
+    );
+
+    if decision.action != InviteReceiveAction::Notify {
         super::append_audit_log(
             state,
             None,
@@ -80,14 +109,17 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
                 "idempotency_key": delivery.idempotency_key,
                 "invitee": delivery.invite_address.subject_id,
                 "recipient_service_did": delivery.invite_address.recipient_service_did,
-                "introduction_kind": evidence_kind,
-                "receive_action": receive_action.as_str()
+                "introduction_kind": delivery.introduction_evidence.kind(),
+                "effective_kind": decision.effective_kind,
+                "trust_tier": decision.trust_tier.as_str(),
+                "receive_action": receive_action_str(&decision.action),
             }),
             "deferred",
         )
         .await;
         let outcome = InviteDeliveryOutcome {
             status: InviteDeliveryOutcomeStatus::Deferred,
+            disclosed_outcome: decision.disclosed_outcome,
             received_at: Some(now()),
             retry_after_ms: None,
         };
@@ -96,11 +128,6 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
         })?);
     }
 
-    let actor = body
-        .pointer("/invite_event/actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| super::events::peer::schema_violation("invite_event.actor_id is required"))?
-        .to_owned();
     let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
     let trust_headers =
         crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
@@ -149,7 +176,9 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
             "event_id": response.event_id,
             "invitee": delivery.invite_address.subject_id,
             "recipient_service_did": delivery.invite_address.recipient_service_did,
-            "introduction_kind": evidence_kind,
+            "introduction_kind": delivery.introduction_evidence.kind(),
+            "effective_kind": decision.effective_kind,
+            "trust_tier": decision.trust_tier.as_str(),
             "request_canonical_digest": request_hash,
         }),
         status,
@@ -161,6 +190,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
         } else {
             InviteDeliveryOutcomeStatus::Accepted
         },
+        disclosed_outcome: decision.disclosed_outcome,
         received_at: Some(now()),
         retry_after_ms: None,
     };
@@ -285,26 +315,195 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
     )
 }
 
+/// Spec invite-addressing.md §2 — introduction-evidence trust tiers.
+/// High = `{locator_ref, consent_grant, shared_realm}`; Low =
+/// `{same_principal_server, explicit_address, 无/非法 evidence}`. The tier
+/// drives both the receive action and the §5.1 graded disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InviteReceiveAction {
-    Notify,
-    Deferred,
+enum TrustTier {
+    High,
+    Low,
 }
 
-impl InviteReceiveAction {
+impl TrustTier {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Notify => "notify",
-            Self::Deferred => "deferred",
+            Self::High => "high",
+            Self::Low => "low",
         }
     }
 }
 
-fn receive_action_for_evidence(kind: &str) -> InviteReceiveAction {
+fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
+    match action {
+        InviteReceiveAction::Drop => "drop",
+        InviteReceiveAction::Quarantine => "quarantine",
+        InviteReceiveAction::Notify => "notify",
+    }
+}
+
+/// Effective trust tier of an introduction evidence kind, *after* any
+/// `consent_grant` verification downgrade has been resolved by the caller.
+fn trust_tier_for_kind(kind: &str) -> TrustTier {
     match kind {
-        "locator_ref" | "shared_realm" | "same_principal_server" => InviteReceiveAction::Notify,
-        "explicit_address" => InviteReceiveAction::Deferred,
-        _ => InviteReceiveAction::Deferred,
+        "locator_ref" | "consent_grant" | "shared_realm" => TrustTier::High,
+        // same_principal_server / explicit_address / unknown → low
+        _ => TrustTier::Low,
+    }
+}
+
+/// Outcome of applying the subject's `invite_receive_policy` to one
+/// delivery: the receive action, the effective (post-downgrade) evidence
+/// kind, its trust tier, and the graded-disclosure value to echo back.
+struct ReceiveDecision {
+    action: InviteReceiveAction,
+    effective_kind: &'static str,
+    trust_tier: TrustTier,
+    disclosed_outcome: Option<DisclosedOutcome>,
+}
+
+/// Spec invite-addressing.md §5 — the recommended default
+/// `invite_receive_policy` applied to subjects without an explicit
+/// override: `consent_grant` is allowlisted (so already-consented
+/// contacts can invite without a locator URL), explicit addresses are
+/// quarantined, unknown invites dropped, and disclosure is
+/// `high_trust=outcome / low_trust=opaque`.
+pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolicy {
+    InviteReceivePolicy {
+        schema: cokret_sdk::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
+        subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
+            Did::new("did:web:invalid.invalid".to_owned()).expect("placeholder did")
+        }),
+        allowed_introduction_kinds: vec![
+            "locator_ref".to_owned(),
+            "consent_grant".to_owned(),
+            "shared_realm".to_owned(),
+            "same_principal_server".to_owned(),
+        ],
+        explicit_address_behavior: InviteReceiveAction::Quarantine,
+        unknown_invites: UnknownInviteAction::Drop,
+        trusted_realm_ids: Vec::new(),
+        trusted_principal_services: Vec::new(),
+        blocked_principal_services: Vec::new(),
+        blocked_subjects: Vec::new(),
+        disclosure: Some(DisclosurePolicy {
+            high_trust: Some(DisclosureLevel::Outcome),
+            low_trust: Some(DisclosureLevel::Opaque),
+        }),
+    }
+}
+
+/// Read the subject's private `invite_receive_policy`, falling back to the
+/// recommended default. `blocked_subjects` written by
+/// `ck.self.contact.tombstone(block_peer)` are merged from the in-memory
+/// override store.
+fn resolve_invite_receive_policy(state: &AppState, subject: &str) -> InviteReceivePolicy {
+    state
+        .invite_receive_policies
+        .lock()
+        .expect("invite_receive_policies lock")
+        .get(subject)
+        .cloned()
+        .unwrap_or_else(|| default_invite_receive_policy(subject))
+}
+
+/// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
+fn evaluate_invite_receive(
+    state: &AppState,
+    policy: &InviteReceivePolicy,
+    evidence: &IntroductionEvidence,
+    inviter: &str,
+    subject: &str,
+) -> ReceiveDecision {
+    let now = now();
+
+    // §5 — `blocked_subjects` hit: MUST drop and force opaque disclosure so
+    // the blocklist cannot leak through the response side channel.
+    if policy
+        .blocked_subjects
+        .iter()
+        .any(|did| did.as_str() == inviter)
+    {
+        return ReceiveDecision {
+            action: InviteReceiveAction::Drop,
+            effective_kind: evidence.kind(),
+            trust_tier: TrustTier::Low,
+            disclosed_outcome: None,
+        };
+    }
+
+    // §2 — `consent_grant` evidence: verify the referenced grant is an
+    // active `invite`/`any` dot the subject gave the inviter. On failure
+    // MUST downgrade to low-trust `explicit_address`.
+    let effective_kind: &'static str = match evidence {
+        IntroductionEvidence::ConsentGrant {
+            consent_grant_ref,
+            consent_id,
+        } => {
+            if crate::routing::identity::consent::has_active_consent_grant_evidence(
+                state,
+                subject,
+                inviter,
+                consent_grant_ref.as_str(),
+                consent_id.as_deref(),
+                now,
+            ) {
+                "consent_grant"
+            } else {
+                "explicit_address"
+            }
+        }
+        other => other.kind(),
+    };
+
+    let trust_tier = trust_tier_for_kind(effective_kind);
+
+    // §5 — allowlist gate. Evidence kinds not in `allowed_introduction_kinds`
+    // MUST NOT notify; they fall through to the explicit/unknown behavior.
+    let allowlisted = policy
+        .allowed_introduction_kinds
+        .iter()
+        .any(|kind| kind == effective_kind);
+
+    let action = if allowlisted {
+        InviteReceiveAction::Notify
+    } else if effective_kind == "explicit_address" {
+        policy.explicit_address_behavior.clone()
+    } else {
+        match policy.unknown_invites {
+            UnknownInviteAction::Drop => InviteReceiveAction::Drop,
+            UnknownInviteAction::Quarantine => InviteReceiveAction::Quarantine,
+        }
+    };
+
+    // §5.1 — graded disclosure. High-trust + `outcome` echoes the real
+    // result; everything else stays opaque (`disclosed_outcome = None`).
+    let disclosure_level = match trust_tier {
+        TrustTier::High => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.high_trust.clone())
+            .unwrap_or(DisclosureLevel::Outcome),
+        TrustTier::Low => policy
+            .disclosure
+            .as_ref()
+            .and_then(|d| d.low_trust.clone())
+            .unwrap_or(DisclosureLevel::Opaque),
+    };
+    let disclosed_outcome = match disclosure_level {
+        DisclosureLevel::Outcome => Some(match &action {
+            InviteReceiveAction::Notify => DisclosedOutcome::Delivered,
+            InviteReceiveAction::Quarantine => DisclosedOutcome::Quarantined,
+            InviteReceiveAction::Drop => DisclosedOutcome::Blocked,
+        }),
+        DisclosureLevel::Opaque => None,
+    };
+
+    ReceiveDecision {
+        action,
+        effective_kind,
+        trust_tier,
+        disclosed_outcome,
     }
 }
 
@@ -381,7 +580,15 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
             "request body is not canonical-hashable: {error}"
         ))
     })?;
-    let expected = format!("sha-256=:{}:", STANDARD.encode(canonical_bytes));
+    // RFC 9530 Content-Digest is the base64 of the SHA-256 *digest* of the
+    // canonical body bytes, matching the `peer/events` federation surface
+    // (`federation::content_digest_header`) and the signing base every peer
+    // builds. Earlier this hashed nothing and base64'd the raw canonical
+    // bytes, so well-formed `peer/invites` deliveries were rejected.
+    let expected = format!(
+        "sha-256=:{}:",
+        STANDARD.encode(Sha256::digest(&canonical_bytes))
+    );
     if header != expected {
         crate::metrics::record_digest_mismatch("peer_invites_content_digest");
         return Err(super::events::peer::cross_domain_replay(

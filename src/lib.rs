@@ -45,29 +45,63 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID;
 use salvo::catcher::Catcher;
-use salvo::prelude::Service;
+use salvo::prelude::{CatchPanic, Service};
 
 use crate::ratelimit::RateLimiterConfig;
-use crate::routing::error_catcher;
+use crate::routing::{cors_handler_for_origin_spec, error_catcher};
 use crate::state::AppState;
 
+/// Assemble the `Service` with CORS + panic recovery mounted at the `Service`
+/// level.
+///
+/// Both layers live here rather than as router hoops on purpose: salvo runs
+/// service-level hoops on EVERY request — including ones that never match a
+/// route (404/405) or that short-circuit before the matched router runs — so
+/// the `Access-Control-Allow-Origin` header can never be dropped by an error
+/// path. A router hoop, by contrast, only runs on a matched route, which left
+/// every Catcher-rendered response (and unmatched paths) without CORS headers
+/// and surfaced as an opaque "CORS error" in the browser instead of the real
+/// status. `cors_allow_origin` is read from the state config before the state
+/// is moved into the router builder.
+///
+/// Hoop order is load-bearing: CORS is pushed FIRST (outermost), `CatchPanic`
+/// SECOND (inner). A handler panic is caught by `CatchPanic` and rendered as a
+/// 500, which then unwinds back up THROUGH the CORS layer so even the
+/// panic-recovered 500 carries CORS headers — otherwise a panic would reset the
+/// connection and resurface as a browser "CORS error" with no real status.
+fn finish_service(router: salvo::Router, cors_allow_origin: Option<String>) -> Service {
+    let mut service = Service::new(router);
+    if let Some(origin) = cors_allow_origin {
+        service = service.hoop(cors_handler_for_origin_spec(&origin));
+    }
+    service = service.hoop(CatchPanic::new());
+    service.catcher(Catcher::default().hoop(error_catcher))
+}
+
 pub fn service(state: AppState) -> Service {
-    Service::new(router(state)).catcher(Catcher::default().hoop(error_catcher))
+    let cors_allow_origin = state.config.cors_allow_origin.clone();
+    finish_service(router(state), cors_allow_origin)
 }
 
 pub fn service_with_rate_limiter_config(
     state: AppState,
     rate_limiter_config: RateLimiterConfig,
 ) -> Service {
-    Service::new(router_with_rate_limiter_config(state, rate_limiter_config))
-        .catcher(Catcher::default().hoop(error_catcher))
+    let cors_allow_origin = state.config.cors_allow_origin.clone();
+    finish_service(
+        router_with_rate_limiter_config(state, rate_limiter_config),
+        cors_allow_origin,
+    )
 }
 
 pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: usize) -> Service {
-    Service::new(router_with_rate_limiter_and_request_size_config(
-        state,
-        RateLimiterConfig::default(),
-        max_request_size_bytes,
-    ))
-    .catcher(Catcher::default().hoop(error_catcher))
+    let cors_allow_origin = state.config.cors_allow_origin.clone();
+    finish_service(
+        router_with_rate_limiter_and_request_size_config(
+            state,
+            RateLimiterConfig::default(),
+            max_request_size_bytes,
+        ),
+        cors_allow_origin,
+    )
 }

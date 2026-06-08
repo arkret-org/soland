@@ -36,6 +36,8 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
             target: BOB_DID.to_owned(),
             scope: "message".to_owned(),
             status: "accepted".to_owned(),
+            message: None,
+            peer_service_did: None,
             created_at: now,
             updated_at: now,
         })

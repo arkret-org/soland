@@ -1043,6 +1043,8 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
         project_federated_message(state, origin, operation).await;
     } else if kinds::operation_is_invite_create(operation) {
         project_invite_create_operation(state, origin, operation).await;
+    } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
+        project_invite_accept_operation(state, origin, operation).await;
     } else if kinds::operation_is_membership(operation)
         || kinds::operation_is_realm_lifecycle(operation)
     {
@@ -1490,6 +1492,8 @@ async fn project_accepted_operations_inner(
             project_federated_message(state, origin, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
             project_invite_create_operation(state, origin, operation).await;
+        } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
+            project_invite_accept_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ck.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
@@ -2385,6 +2389,91 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let mut registry = state.member_identity.lock().expect("member_identity lock");
     registry.insert(record);
     registry.upsert_handle_claims_from_identity_payload(identity_payload);
+}
+
+/// Spec invite-addressing.md / event-kind-registry — project an accepted
+/// `ck.invite.accept` durable event. The invitee submits it to close the
+/// "拉群" loop:
+///   1. resolve the referenced invite, validating it is still `pending` and that the accepting
+///      sender == the invite's `invitee`;
+///   2. flip the `RealmInviteRecord` to `accepted`;
+///   3. cascade membership — activate the invitee's `ck.member.state(join)` in the target Realm
+///      (in-memory member index) so the capability grants carried on the invite take effect.
+/// Replays and mismatched senders are ignored fail-closed.
+async fn project_invite_accept_operation(state: &AppState, origin: &str, operation: &Operation) {
+    if kinds::canonical_kind_string(operation) != "ck.invite.accept" {
+        return;
+    }
+    let accepter = operation
+        .payload
+        .get("sender")
+        .or_else(|| operation.payload.get("invitee"))
+        .or_else(|| operation.payload.get("actor_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(origin)
+        .to_owned();
+    let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "ck.invite.accept missing valid invite_ref/invite_id"
+        );
+        return;
+    };
+    let invites = state.persistence.realm_invites();
+    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
+        tracing::warn!(invite_id = %invite_id, "ck.invite.accept references unknown invite");
+        return;
+    };
+    if record.invitee.as_deref() != Some(accepter.as_str()) {
+        tracing::warn!(
+            invite_id = %invite_id,
+            accepter = %accepter,
+            "ck.invite.accept sender is not the invitee; ignored"
+        );
+        return;
+    }
+    if record.status != "pending" {
+        tracing::debug!(
+            invite_id = %invite_id,
+            status = %record.status,
+            "ck.invite.accept on non-pending invite; ignored"
+        );
+        return;
+    }
+    if record
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= operation.created_at)
+    {
+        tracing::warn!(invite_id = %invite_id, "ck.invite.accept on expired invite; ignored");
+        return;
+    }
+    record.status = "accepted".to_owned();
+    let realm_id = record.realm_id.clone();
+    if let Err(error) = invites.put(record).await {
+        tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
+        return;
+    }
+    // Cascade membership: activate the invitee's join in the target Realm
+    // member index so subsequent realm-scoped reads include them.
+    if let (Ok(realm_id_typed), Ok(member_did)) =
+        (RealmId::new(realm_id.clone()), Did::new(accepter.clone()))
+    {
+        let mut realms = state.realms.lock().expect("realms lock");
+        if let Some(entry) = realms.get(&realm_id_typed) {
+            let mut updated = entry.clone();
+            if updated.members.insert(member_did) {
+                realms.upsert(updated);
+            }
+        }
+    }
+    touch_realm(state, &realm_id).await;
+    tracing::info!(
+        invite_id = %invite_id,
+        invitee = %accepter,
+        realm_id = %realm_id,
+        "ck.invite.accept projected: invite accepted + membership cascaded"
+    );
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {

@@ -906,6 +906,14 @@ pub struct AppState {
     /// gate; durable Move/Anchor cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
+    /// Per-subject private `invite_receive_policy` overrides keyed by the
+    /// subject (holder) DID. Spec `sync/invite-addressing.md` §5 — the policy
+    /// is subject/private state and MUST NOT enter the durable Realm event
+    /// log; the in-memory map is the bounded fallback until durable holder
+    /// state hydration lands. Subjects without an entry fall back to the
+    /// recommended default policy. `ck.self.contact.tombstone(block_peer)`
+    /// writes the peer DID into the holder entry's `blocked_subjects`.
+    pub invite_receive_policies: Arc<Mutex<BTreeMap<String, cokret_sdk::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
     /// `ck.self.direct_conversation.resolve` until signed
@@ -1263,6 +1271,18 @@ pub struct ContactRecord {
     pub target: String,
     pub scope: String,
     pub status: String,
+    /// Optional free-text greeting carried on `ck.contact.requested`
+    /// (spec 0015 §3.4). NFC-normalized, 1..2000 chars. `None` when the
+    /// request carried no message or the row originated from a consent
+    /// grant rather than an explicit request.
+    pub message: Option<String>,
+    /// Service DID of the Principal Server hosting the contact's *peer* end,
+    /// when learned from a cross-Principal-Server contact delivery
+    /// (`ck.peer.contacts.submit`, `source-service-did` header). `None` for
+    /// same-Principal-Server contacts. In-memory projection only — surfaced on
+    /// `contact_list_row.peer_service_did` so the holder can address
+    /// responses/invites back to the peer's home server.
+    pub peer_service_did: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -2012,6 +2032,7 @@ impl AppState {
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),
+            invite_receive_policies: Arc::new(Mutex::new(BTreeMap::new())),
             direct_conversation_bindings: Arc::new(Mutex::new(BTreeMap::new())),
             sovereign_deployment: Arc::new(Mutex::new(SovereignDeploymentState {
                 upstream_available: true,

@@ -1591,8 +1591,18 @@ async fn validate_event_envelope(
         && !realm_exists_in_index(state, &realm_id);
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
+    // A private cross-PS invite delivery (`POST /_cokret/peer/invites`) submits
+    // the inviter-signed `ck.invite.create` on the *recipient* PS so the local
+    // subject can list + accept it. That realm lives on the inviter's PS, so the
+    // recipient PS has no member record for it — yet it MUST still record the
+    // pending invite for its subject. Admit `ck.invite.create` from its own
+    // inviter into a realm this PS does not host (spec invite-addressing.md §5).
+    let is_foreign_invite_delivery = kind == "ck.invite.create"
+        && invite_create_actor_is_inviter(object, &session.actor)
+        && !realm_exists_in_index(state, &realm_id);
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
+        && !is_foreign_invite_delivery
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
         return Err(event_validation_error(
@@ -3168,24 +3178,56 @@ fn realm_create_actor_is_creator(object: &serde_json::Map<String, Value>, actor:
         .is_some_and(|creator| creator == actor)
 }
 
+/// True when a `ck.invite.create` event is signed by its own inviter. The
+/// inviter is the payload `inviter`/`sender`/`issuer` when present; otherwise
+/// the top-level `actor_id` (the signer) is authoritative. Used to admit a
+/// cross-PS invite delivery on a recipient PS that does not host the realm.
+fn invite_create_actor_is_inviter(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
+    let inviter = object
+        .get("payload")
+        .and_then(|payload| {
+            payload
+                .get("inviter")
+                .or_else(|| payload.get("sender"))
+                .or_else(|| payload.get("issuer"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| object.get("actor_id").and_then(Value::as_str));
+    inviter.is_some_and(|inviter| inviter == actor)
+}
+
 async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str) != Some(kinds::CK_MEMBER_STATE) {
+    let kind = object.get("kind").and_then(Value::as_str);
+    // Two canonical invite-acceptance shapes are admitted for a
+    // not-yet-member invitee (spec invite-addressing.md / event-kind-registry):
+    //   1. `ck.member.state{membership:join, invite_ref}` — the join-cascade form;
+    //   2. `ck.invite.accept{invite_ref|invite_id}` — the dedicated accept event.
+    // Both resolve a *pending* invite whose `invitee == actor`, so a fresh
+    // invitee can close their own invite through either path without first
+    // being a realm member. Previously only (1) was exempt, so a spec-correct
+    // `ck.invite.accept` from the invitee was rejected with `capability_denied`.
+    let is_member_state_join = kind == Some(kinds::CK_MEMBER_STATE);
+    let is_invite_accept = kind == Some("ck.invite.accept");
+    if !is_member_state_join && !is_invite_accept {
         return false;
     }
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    if payload.get("membership").and_then(Value::as_str) != Some("join") {
+    if is_member_state_join
+        && payload.get("membership").and_then(Value::as_str) != Some("join")
+    {
         return false;
     }
     let target_actor = payload
         .get("actor_id")
         .or_else(|| payload.get("member"))
+        .or_else(|| payload.get("invitee"))
         .and_then(Value::as_str)
         .unwrap_or(actor);
     if target_actor != actor {

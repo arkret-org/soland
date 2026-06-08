@@ -393,14 +393,210 @@ pub(super) fn has_active_consent_for_scope(
     })
 }
 
+/// Spec `sync/invite-addressing.md` §2 — verify a `consent_grant`
+/// introduction evidence. The `consent_grant_ref` (and optional
+/// `consent_id`) MUST resolve to an **active** grant dot in `subject`'s
+/// (the invitee's) consent cell with `peer == inviter` and
+/// `consent_scope ∈ {invite, any}`, unrevoked and unexpired. Returns
+/// `true` only when such a dot exists. On any mismatch the caller MUST
+/// downgrade the delivery to the low-trust `explicit_address` path.
+pub(crate) fn has_active_consent_grant_evidence(
+    state: &AppState,
+    subject: &str,
+    inviter: &str,
+    consent_grant_ref: &str,
+    consent_id: Option<&str>,
+    at: DateTime<Utc>,
+) -> bool {
+    let grant_ref = consent_grant_ref.trim();
+    if grant_ref.is_empty() {
+        return false;
+    }
+    let expected_cell_id = consent_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(consent_cell_id_for_consent_id);
+    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    cells.values().any(|cell| {
+        if cell.holder != subject || cell.peer != inviter {
+            return false;
+        }
+        if !matches!(cell.scope.as_str(), "invite" | "any") {
+            return false;
+        }
+        if let Some(expected) = &expected_cell_id
+            && &cell.cell_id != expected
+        {
+            return false;
+        }
+        active_grant_dots(cell, at)
+            .iter()
+            .any(|dot| grant_dot_matches_ref(dot, grant_ref))
+    })
+}
+
+/// A consent grant dot is minted as `{event_id}:{actor_seq}`,
+/// `{actor}#{actor_seq}` or `{consent_id}#{operation_id}` (see
+/// `consent_grant_dot`). The `consent_grant_ref` carried in the
+/// introduction evidence is the originating **event id**; match it against
+/// the dot's event-id segment as well as the whole dot string.
+fn grant_dot_matches_ref(dot: &str, grant_ref: &str) -> bool {
+    if dot == grant_ref {
+        return true;
+    }
+    event_ref_for_dot(dot).is_some_and(|event_ref| event_ref == grant_ref)
+}
+
+/// Extract the canonical `ck:event:<uuid>` event ref encoded in a grant
+/// dot, if any. Only the `{event_id}:{actor_seq}` mint form (and a bare
+/// `ck:event:<uuid>` dot) carries a real event id; the `{actor}#{seq}` and
+/// `{consent_id}#{op}` forms encode a DID / consent-cell id in their head
+/// segment, not an event ref, so they yield `None`.
+///
+/// `EventId` values are themselves `:`-delimited (`ck:event:<uuid>`), so we
+/// strip only the trailing `:<actor_seq>` segment rather than splitting on
+/// the first `:`. The result is validated through `EventId::new` so callers
+/// can rely on it being a well-formed event ref.
+pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
+    if dot.contains('#') {
+        // `{actor}#{seq}` / `{consent_id}#{op}` — head is not an event id.
+        return None;
+    }
+    // A bare event-id dot, or the `{event_id}:{actor_seq}` mint form.
+    let candidate = match dot.rsplit_once(':') {
+        // Trailing segment is the numeric `actor_seq`; the prefix is the id.
+        Some((prefix, seq)) if seq.chars().all(|c| c.is_ascii_digit()) && !seq.is_empty() => prefix,
+        _ => dot,
+    };
+    cokret_sdk::EventId::new(candidate).ok().map(|_| candidate)
+}
+
+/// Spec invite-addressing.md §2 / contact-operations.schema.json — resolve
+/// the event ref of an **active** `invite`/`any` consent grant the `holder`
+/// gave the `peer`. Used by the contact-list projection to populate
+/// `invite_consent_grant_ref`: the holder hands this ref to `peer` as
+/// `consent_grant` introduction evidence so the peer's server can verify it
+/// via [`has_active_consent_grant_evidence`] without a locator URL.
+///
+/// Returns the first active dot (deterministic `BTreeMap` order) whose dot
+/// string carries a resolvable `ck:event:<uuid>` event ref; dots minted in
+/// the non-event `{actor}#{seq}` / `{consent_id}#{op}` forms are skipped.
+pub(crate) fn active_invite_consent_grant_ref(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    at: DateTime<Utc>,
+) -> Option<String> {
+    let cells = state.consent_cells.lock().expect("consent_cells lock");
+    for scope in ["invite", "any"] {
+        if let Some(cell) = cells.get(&consent_key(holder, peer, scope)) {
+            for dot in active_grant_dots(cell, at) {
+                if let Some(event_ref) = event_ref_for_dot(&dot) {
+                    return Some(event_ref.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Spec `contact-and-direct-conversation.md` §3 — a contact accept (and the
+/// requester-side grant a contact request opens) MUST write a real
+/// target/requester-controlled `ck.consent.grant` whose **event ref** is
+/// referenced from `consent_grant_refs[]` / `requester_consent_refs[]`.
+///
+/// The minted grant dot therefore uses the event-bearing
+/// `{event_id}:{actor_seq}` form (same shape `consent_grant_operation`
+/// projection mints), so [`event_ref_for_dot`] resolves a canonical
+/// `ck:event:<uuid>` ref and the contact-list projection can populate
+/// `invite_consent_grant_ref` with it. The returned `EventId` string is the
+/// grant event ref the caller records in the fact's `*_consent_refs[]`.
+///
+/// Only contact-managed grants are routed through this event-minting helper;
+/// the standalone `POST .../consent/cells/{holder}/grant` REST endpoint keeps
+/// minting opaque `ck:consent:<uuid>` dots via [`grant_cell`], so its existing
+/// behavior (and tests) are untouched.
 pub(crate) fn grant_contact_managed_consent(
     state: &AppState,
     holder: &str,
     peer: &str,
     scope: &str,
     granted_at: DateTime<Utc>,
-) -> ConsentCellRecord {
-    grant_cell(state, holder, peer, scope, None, granted_at)
+) -> String {
+    let event_id = ids::generate_event_id();
+    // actor_seq is a per-actor monotonic counter on the originating event;
+    // contact-managed grants are minted server-side without a real event log
+    // seq, so we pin seq=0. `event_ref_for_dot` strips the trailing numeric
+    // segment and recovers `event_id` regardless of the seq value.
+    let dot = format!("{event_id}:0");
+    grant_cell_with_dot(state, holder, peer, scope, dot, None, None, granted_at);
+    event_id
+}
+
+/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.tombstone`
+/// MUST enumerate and revoke the holder's contact-managed active grant
+/// dots toward `peer`. When `scopes` is empty, default to every scope the
+/// holder currently grants `peer` (the recommended `revoke_scopes` default).
+///
+/// Returns `(revoked_dot_refs, complete)`. `complete` is `false` when a
+/// cell carried no enumerable active dots yet was non-empty — the caller
+/// MUST then report a partial / fail-closed tombstone rather than a full
+/// one. Revoking contact-managed dots only; non-contact-managed consent
+/// (e.g. standalone org invite grants) is left untouched unless the caller
+/// performs a separate full peer revoke.
+pub(crate) fn revoke_contact_managed_consent(
+    state: &AppState,
+    holder: &str,
+    peer: &str,
+    scopes: &[String],
+    revoked_at: DateTime<Utc>,
+) -> (Vec<String>, bool) {
+    // Resolve the target scope set: explicit `revoke_scopes` (normalized)
+    // or every scope the holder currently has a cell for toward `peer`.
+    let target_scopes: Vec<String> = if scopes.is_empty() {
+        let cells = state.consent_cells.lock().expect("consent_cells lock");
+        cells
+            .values()
+            .filter(|cell| cell.holder == holder && cell.peer == peer)
+            .map(|cell| cell.scope.clone())
+            .collect()
+    } else {
+        let mut normalized = Vec::new();
+        for scope in scopes {
+            if let Ok(scope) = normalize_scope(Some(scope))
+                && !normalized.contains(&scope)
+            {
+                normalized.push(scope);
+            }
+        }
+        normalized
+    };
+
+    let mut revoked_refs = Vec::new();
+    let mut complete = true;
+    for scope in target_scopes {
+        let active_before = {
+            let cells = state.consent_cells.lock().expect("consent_cells lock");
+            cells
+                .get(&consent_key(holder, peer, &scope))
+                .map(|cell| active_grant_dots(cell, revoked_at))
+                .unwrap_or_default()
+        };
+        if active_before.is_empty() {
+            continue;
+        }
+        let updated = revoke_cell(state, holder, peer, &scope, revoked_at);
+        // Confirm every previously-active dot is now revoked; otherwise the
+        // enumeration was incomplete and we MUST flag partial.
+        for dot in &active_before {
+            if updated.revoked_dots.contains(dot) {
+                revoked_refs.push(dot.clone());
+            } else {
+                complete = false;
+            }
+        }
+    }
+    (revoked_refs, complete)
 }
 
 fn grant_cell(
@@ -524,6 +720,8 @@ async fn upsert_contact_status_at(
             target: target.to_owned(),
             scope: scope.to_owned(),
             status: status.to_owned(),
+            message: None,
+            peer_service_did: None,
             created_at: updated_at,
             updated_at,
         });
@@ -891,11 +1089,114 @@ impl ConsentRevokeInvalidationChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AppConfig, FederationPolicy, LogFormat, ObjectStorageConfig};
+    use crate::db::Db;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
 
     #[test]
     fn consent_revoke_cascade_table_stable() {
         // Sanity — 5 channels, 5 cascade scopes.
         assert_eq!(ConsentRevokeInvalidationChannel::ALL.len(), 5);
         assert_eq!(CONSENT_SCOPE_CASCADE.len(), 5);
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            metrics_bind: SocketAddr::from_str("127.0.0.1:0").unwrap(),
+            public_base_url: "http://test".to_owned(),
+            service_did: "did:web:test.local".to_owned(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            database_url: None,
+            object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
+            cors_allow_origin: None,
+            auth_server_url: None,
+            development_mode: true,
+            oauth_introspection_url: None,
+            oauth_introspection_bearer: None,
+            session_grant_introspection_url: None,
+            session_grant_introspection_bearer: None,
+            did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
+            embedded_webvh_provider_enabled: false,
+            embedded_webvh_registration_bearer: None,
+            external_webvh_provider_url: None,
+            external_webvh_provider_active: false,
+            default_webvh_provider_id: None,
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            anchorer_signing_key_seed: None,
+            agent_audit_binding_signing_seed: None,
+            use_keystore: false,
+            federation_policy: FederationPolicy::Mesh,
+            federation_peers: Vec::new(),
+            federation_outbound_enabled: false,
+            admin_default_page_limit: 100,
+            admin_max_page_limit: 1000,
+            admin_principal_dids: Vec::new(),
+            push_bridge_cache_ttl_seconds: 900,
+            push_bridge_trusted_service_dids: Vec::new(),
+            compaction_min_anchor_age_seconds: 0,
+            compaction_min_witnesses: 0,
+            compaction_preserve_genesis: false,
+            compaction_prune_only_singleton_successors: false,
+            compaction_prune_walk_interval_seconds: 0,
+            compaction_prune_walk_per_realm_limit: 50,
+            seed_demo_data: false,
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            sovereign_enclave_enabled: false,
+            sovereign_enclave_allowed_outbound_hosts: Vec::new(),
+            erasure_propagation_window_ms: 604_800_000,
+            log_format: LogFormat::Plain,
+        }
+    }
+
+    /// Spec contact-and-direct-conversation.md §3 / invite-addressing.md §2 —
+    /// the contact-managed grant minted by `grant_contact_managed_consent`
+    /// MUST carry a resolvable `ck:event:<uuid>` ref so the holder's contact
+    /// row surfaces it (`active_invite_consent_grant_ref`) AND the peer's
+    /// server accepts it back as `consent_grant` evidence
+    /// (`has_active_consent_grant_evidence`). This pins both directions to the
+    /// same `{event_id}:{seq}` dot form.
+    #[test]
+    fn contact_managed_invite_grant_round_trips_as_consent_evidence() {
+        let state = AppState::new(test_config(), Db { pool: None });
+        let bob = "did:web:cm-bob.example"; // consent-cell holder
+        let alice = "did:web:cm-alice.example"; // peer / inviter
+        let now = Utc::now();
+
+        // bob grants alice an `invite`-scope contact-managed consent.
+        let grant_ref = grant_contact_managed_consent(&state, bob, alice, "invite", now);
+        assert!(
+            grant_ref.starts_with("ck:event:"),
+            "grant ref is a canonical event id: {grant_ref}"
+        );
+
+        // The contact-list projection (holder=bob, peer=alice) surfaces it.
+        let surfaced = active_invite_consent_grant_ref(&state, bob, alice, now)
+            .expect("active invite grant ref is surfaced");
+        assert_eq!(surfaced, grant_ref);
+
+        // The dot helpers agree with the new `{event_id}:{seq}` form.
+        let dot = format!("{grant_ref}:0");
+        assert_eq!(event_ref_for_dot(&dot), Some(grant_ref.as_str()));
+        assert!(grant_dot_matches_ref(&dot, &grant_ref));
+
+        // alice's server accepts the ref as `consent_grant` evidence:
+        // subject=bob gave inviter=alice an active invite grant.
+        assert!(
+            has_active_consent_grant_evidence(&state, bob, alice, &grant_ref, None, now),
+            "the surfaced ref verifies as active consent_grant evidence"
+        );
+        // A bogus ref does not verify.
+        assert!(!has_active_consent_grant_evidence(
+            &state,
+            bob,
+            alice,
+            "ck:event:00000000-0000-7000-8000-000000000000",
+            None,
+            now
+        ));
     }
 }

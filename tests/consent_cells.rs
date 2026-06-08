@@ -85,6 +85,39 @@ async fn request_contact(app: &salvo::Service, token: &str, target: &str, scope:
         .unwrap()
 }
 
+async fn respond_contact(
+    app: &salvo::Service,
+    token: &str,
+    requester: &str,
+    request_id: &str,
+    action: &str,
+    granted_scopes: &[&str],
+) -> Value {
+    TestClient::post("http://server/_soland/self/contacts/respond")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "request_id": request_id,
+            "requester": requester,
+            "action": action,
+            "granted_scopes": granted_scopes,
+        }))
+        .send(app)
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
+async fn get_contacts(app: &salvo::Service, token: &str) -> Value {
+    TestClient::get("http://server/_cokret/self/contacts")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(app)
+        .await
+        .take_json()
+        .await
+        .unwrap()
+}
+
 async fn get_cell(
     app: &salvo::Service,
     token: &str,
@@ -422,5 +455,223 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
     assert_eq!(
         get_cell(&app, &alice_token, alice, bob, "message").await["state"],
         "pending"
+    );
+}
+
+/// contact-operations.schema.json — when `peer` (bob) gives the holder
+/// (alice) an active `invite` consent grant via the reducer path, the
+/// holder's `GET /_cokret/self/contacts` row for bob MUST surface that
+/// grant's event ref in `invite_consent_grant_ref`. The ref is the event
+/// id of bob's `ck.consent.grant`, so alice can hand it back to bob as
+/// `consent_grant` introduction evidence. Direction self-check: the row is
+/// alice's view of a bob→alice grant; when alice later invites bob into a
+/// Realm, bob's server verifies "subject=bob gave inviter=alice an
+/// invite/any grant" — exactly this cell.
+#[tokio::test]
+async fn contact_row_surfaces_invite_consent_grant_ref() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state);
+    let alice = "did:web:icgr-alice.example";
+    let bob = "did:web:icgr-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+    // bob (the consent-cell holder) grants alice (peer) an `invite` scope.
+    let realm_id = create_realm(&app, &bob_token, bob).await;
+
+    // Open the contact relationship so a row exists for alice's list.
+    request_contact(&app, &alice_token, bob, "invite").await;
+
+    let consent_id = ids::generate("consent");
+    let grant_seq = 2_u64;
+    let grant_response = submit_event(
+        &app,
+        &bob_token,
+        bob,
+        &realm_id,
+        "ck.consent.grant",
+        grant_seq,
+        serde_json::json!({
+            "consent_id": consent_id,
+            "peer": alice,
+            "consent_scope": "invite",
+            "expires_at": (Utc::now() + Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true),
+        }),
+    )
+    .await;
+    let grant_event_id = grant_response["accepted"][0].as_str().unwrap().to_owned();
+
+    // alice's contact list row for bob carries the bob-issued grant event ref.
+    let alice_contacts: Value = TestClient::get("http://server/_cokret/self/contacts")
+        .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let rows = alice_contacts["contacts"].as_array().unwrap();
+    let bob_row = rows
+        .iter()
+        .find(|row| row["peer"] == bob)
+        .expect("alice has a contact row for bob");
+    assert!(
+        bob_row["granted_to_me"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|scope| scope == "invite"),
+        "bob granted alice invite scope: {bob_row}"
+    );
+    assert_eq!(
+        bob_row["invite_consent_grant_ref"], grant_event_id,
+        "row carries bob's ck.consent.grant event ref: {bob_row}"
+    );
+    assert!(
+        grant_event_id.starts_with("ck:event:"),
+        "the surfaced ref is a canonical event id"
+    );
+}
+
+/// invite-addressing.md §5 — `GET`/`POST /_cokret/self/invite-receive-policy`
+/// round-trip the subject's private policy through the same in-memory store
+/// the tombstone `blocked_subjects` writes to, and reject a mismatched
+/// `subject_id` with an authorization error.
+#[tokio::test]
+async fn invite_receive_policy_get_set_round_trips() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state);
+    let alice = "did:web:irp-alice.example";
+    let mallory = "did:web:irp-mallory.example";
+    let alice_token = dev_token(&app, alice).await;
+
+    // Default policy is returned before any override is set.
+    let default_policy: Value = TestClient::get("http://server/_cokret/self/invite-receive-policy")
+        .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(default_policy["subject_id"], alice);
+    assert!(default_policy["allowed_introduction_kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|kind| kind == "consent_grant"));
+
+    // Set a custom override blocking mallory.
+    let custom = serde_json::json!({
+        "schema": default_policy["schema"],
+        "subject_id": alice,
+        "allowed_introduction_kinds": ["consent_grant"],
+        "explicit_address_behavior": "drop",
+        "unknown_invites": "drop",
+        "blocked_subjects": [mallory],
+    });
+    let stored: Value = TestClient::post("http://server/_cokret/self/invite-receive-policy")
+        .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .json(&custom)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(stored["explicit_address_behavior"], "drop");
+    assert_eq!(stored["blocked_subjects"][0], mallory);
+
+    // GET now reflects the stored override.
+    let reread: Value = TestClient::get("http://server/_cokret/self/invite-receive-policy")
+        .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .send(&app)
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(reread["explicit_address_behavior"], "drop");
+    assert_eq!(reread["blocked_subjects"][0], mallory);
+
+    // A policy whose subject_id is not the session actor is rejected.
+    let mismatched = serde_json::json!({
+        "schema": default_policy["schema"],
+        "subject_id": mallory,
+        "allowed_introduction_kinds": ["consent_grant"],
+        "explicit_address_behavior": "quarantine",
+        "unknown_invites": "drop",
+    });
+    let rejected = TestClient::post("http://server/_cokret/self/invite-receive-policy")
+        .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .json(&mismatched)
+        .send(&app)
+        .await;
+    assert_eq!(rejected.status_code.unwrap().as_u16(), 403);
+}
+
+/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.respond(accept)`
+/// MUST write a target-controlled `ck.consent.grant` per granted scope. The
+/// minted grant dot uses the event-bearing `{event_id}:{seq}` form, so the
+/// holder's `GET /_cokret/self/contacts` row for the peer surfaces a canonical
+/// `ck:event:<uuid>` `invite_consent_grant_ref` (no longer `None`). End to end:
+/// alice requests bob with `invite` scope, bob accepts, alice's contact row
+/// for bob carries bob's grant event ref — usable as `consent_grant`
+/// introduction evidence to invite bob into a Realm.
+#[tokio::test]
+async fn contact_accept_grants_event_backed_invite_consent_ref() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let app = service(state);
+    let alice = "did:web:cagebir-alice.example";
+    let bob = "did:web:cagebir-bob.example";
+    let alice_token = dev_token(&app, alice).await;
+    let bob_token = dev_token(&app, bob).await;
+
+    // alice requests bob with the `invite` scope.
+    let requested = request_contact(&app, &alice_token, bob, "invite").await;
+    assert_eq!(requested["state"], "pending_outgoing");
+    // The requester-side contact-managed grant is referenced as a real event.
+    let requester_refs = requested["requester_consent_refs"].as_array().unwrap();
+    assert_eq!(requester_refs.len(), 1, "requester_consent_refs populated");
+    assert!(
+        requester_refs[0]
+            .as_str()
+            .unwrap()
+            .starts_with("ck:event:"),
+        "requester consent ref is a canonical event id: {requested}"
+    );
+
+    // bob accepts, granting the `invite` scope back to alice. The respond
+    // body MUST reference the original request event id.
+    let request_id = requested["request_event_ref"].as_str().unwrap();
+    let responded = respond_contact(&app, &bob_token, alice, request_id, "accept", &["invite"]).await;
+    assert_eq!(responded["state"], "accepted");
+    let grant_refs = responded["consent_grant_refs"].as_array().unwrap();
+    assert_eq!(grant_refs.len(), 1, "consent_grant_refs populated on accept");
+    let bob_grant_ref = grant_refs[0].as_str().unwrap().to_owned();
+    assert!(
+        bob_grant_ref.starts_with("ck:event:"),
+        "accept consent ref is a canonical event id: {responded}"
+    );
+
+    // alice's contact row for bob surfaces bob's grant event ref (not None).
+    let alice_contacts = get_contacts(&app, &alice_token).await;
+    let rows = alice_contacts["contacts"].as_array().unwrap();
+    let bob_row = rows
+        .iter()
+        .find(|row| row["peer"] == bob)
+        .expect("alice has a contact row for bob");
+    assert!(
+        bob_row["granted_to_me"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|scope| scope == "invite"),
+        "bob granted alice invite scope: {bob_row}"
+    );
+    let surfaced_ref = bob_row["invite_consent_grant_ref"].as_str();
+    assert_eq!(
+        surfaced_ref,
+        Some(bob_grant_ref.as_str()),
+        "row carries bob's accept grant event ref: {bob_row}"
+    );
+    assert!(
+        surfaced_ref.unwrap().starts_with("ck:event:"),
+        "the surfaced ref is a canonical event id"
     );
 }

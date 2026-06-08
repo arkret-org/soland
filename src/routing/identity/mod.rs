@@ -2,6 +2,7 @@ use salvo::prelude::*;
 
 pub(super) mod account;
 pub(super) mod account_data;
+pub(crate) mod contact_federation;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod consent;
