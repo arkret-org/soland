@@ -273,6 +273,9 @@ pub(super) async fn embedded_webvh_register(
                 "scid": location.scid,
                 "updateKeys": [body.update_public_key_multibase.clone()],
             }),
+            // 新鲜度证据由 put_document 落库时以 ingest 时刻权威覆盖,此处给占位。
+            fetched_at: now,
+            expires_at: now,
             updated_at: now,
         })
         .await
@@ -667,6 +670,9 @@ pub(super) async fn identity_submit_did_operation(
             key_log_head: Some(event_digest.clone()),
             seq: next_seq,
             method_evidence,
+            // 新鲜度证据由 put_document 落库时以 ingest 时刻权威覆盖,此处给占位。
+            fetched_at: submitted_at,
+            expires_at: submitted_at,
             updated_at: submitted_at,
         })
         .await
@@ -1243,6 +1249,10 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
             key_log_head: None,
             seq: 0,
             method_evidence: json!({"mode": "extension_actor_registry"}),
+            // 本地即时生成的临时投影,视为新鲜(不入高风险持久化门禁)。
+            fetched_at: now(),
+            expires_at: now()
+                + chrono::Duration::seconds(crate::persistence::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
             updated_at: now(),
         };
     }
@@ -1259,6 +1269,10 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
             key_log_head: None,
             seq: 0,
             method_evidence: json!({"mode": "development_local"}),
+            // 本地默认文档(dev fallback),视为新鲜。
+            fetched_at: now(),
+            expires_at: now()
+                + chrono::Duration::seconds(crate::persistence::WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS),
             updated_at: now(),
         })
 }

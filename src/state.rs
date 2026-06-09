@@ -1253,6 +1253,16 @@ pub struct WebvhDocumentRecord {
     pub key_log_head: Option<String>,
     pub seq: u64,
     pub method_evidence: Value,
+    /// 本记录被本节点 ingest(写入)的时刻。高风险验签路径据此判断缓存
+    /// 公钥是否陈旧(`age = now - fetched_at` 与调用方传入的 `max_age` 比较,
+    /// 见 `verify_did_document_freshness`)。写入即 ingest:`put_document`
+    /// 落库时以"现在"为基线写入本字段,因此持久化的记录恒有新鲜度证据。
+    pub fetched_at: chrono::DateTime<chrono::Utc>,
+    /// 高风险基线过期点,通常等于 `fetched_at + 高风险基线 TTL`(15min)。
+    /// 仅作存储与按过期点清理的索引提示(规范 §3.4:缓存 MUST 绑定 expiry);
+    /// 实际新鲜度判定以 `age vs max_age` 为准,degraded 只读路径可用更大的
+    /// `max_age`(24h)读取已过 `expires_at` 的记录并打标。
+    pub expires_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -2147,7 +2157,12 @@ impl AppState {
         // Hydrate per-subject invite_receive_policy overrides from durable
         // storage into the in-memory working map (built off-lock first; the
         // async snapshot read MUST NOT hold the std Mutex across `.await`).
-        if let Ok(policies) = self.persistence.invite_receive_policies().snapshot_all().await {
+        if let Ok(policies) = self
+            .persistence
+            .invite_receive_policies()
+            .snapshot_all()
+            .await
+        {
             let mut map = self
                 .invite_receive_policies
                 .lock()

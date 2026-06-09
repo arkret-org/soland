@@ -22,9 +22,9 @@ use crate::db::PgPool;
 use crate::ids;
 use crate::state::{
     AccountDataRecord, AccountRecord, BlobRecord, CanonicalEventRecord, ConsentCellKey,
-    ConsentCellRecord, ConsentGrantDot, ContactRecord, DirectConversationBindingRecord,
-    DeviceInventoryRecord, DeviceMessageRecord, FederationOutboxDeadLetterRecord,
-    FederationOutboxRecord, FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
+    ConsentCellRecord, ConsentGrantDot, ContactRecord, DeviceInventoryRecord, DeviceMessageRecord,
+    DirectConversationBindingRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
+    FederationTransactionRecord, MessageRecord, MultisigPendingRecord,
     OutboundPushBridgeCacheRecord, PolicyDocumentRecord, PresenceRecord, ProjectionEventRecord,
     PushRuleRecord, RealmInviteRecord, RealmMetaRecord, RecoveryPolicyRecord,
     RecoveryReceiptRecord, RecoverySessionRecord, SessionRecord, TypingRecord, WebrtcSessionRecord,
@@ -387,6 +387,238 @@ pub trait AuditStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
 }
 
+/// CKP-0010 — agent participation policy persistence. Controller
+/// selections (`ck.agent.participation.v1`) and the governance ceiling
+/// projection are stored as JSON records mirroring the
+/// `cokret_core::AgentParticipation*` wire shape (keys:
+/// agent_principal_id, scope, scope_kind, scope_key, realm_id, reply,
+/// accept_third_party_mention, act_on_behalf).
+#[async_trait]
+pub trait AgentParticipationStore: Send + Sync {
+    /// Upsert a controller selection keyed by (agent_principal_id, scope_key).
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()>;
+    /// All selections for one agent.
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>>;
+    /// Ceiling rows whose scope_key is in `scope_keys`.
+    async fn ceilings_for_scope_keys(&self, scope_keys: &[String])
+    -> PersistenceResult<Vec<Value>>;
+}
+
+fn agent_participation_record_key(record: &Value) -> (Option<String>, Option<String>) {
+    (
+        record
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        record
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    )
+}
+
+#[derive(Default)]
+struct MemoryAgentParticipationStore {
+    selections: Mutex<Vec<Value>>,
+    ceilings: Mutex<Vec<Value>>,
+}
+
+impl MemoryAgentParticipationStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl AgentParticipationStore for MemoryAgentParticipationStore {
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
+        let target = agent_participation_record_key(&record);
+        let mut guard = self.selections.lock().expect("agent participation lock");
+        guard.retain(|existing| agent_participation_record_key(existing) != target);
+        guard.push(record);
+        Ok(())
+    }
+
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .selections
+            .lock()
+            .expect("agent participation lock")
+            .iter()
+            .filter(|row| {
+                row.get("agent_principal_id").and_then(Value::as_str) == Some(agent_principal_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn ceilings_for_scope_keys(
+        &self,
+        scope_keys: &[String],
+    ) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .ceilings
+            .lock()
+            .expect("agent participation ceiling lock")
+            .iter()
+            .filter(|row| {
+                row.get("scope_key")
+                    .and_then(Value::as_str)
+                    .map(|key| scope_keys.iter().any(|candidate| candidate == key))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentParticipationRow {
+    #[diesel(sql_type = Text)]
+    agent_principal_id: String,
+    #[diesel(sql_type = Text)]
+    scope_kind: String,
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    scope: Value,
+    #[diesel(sql_type = Bool)]
+    reply: bool,
+    #[diesel(sql_type = Bool)]
+    accept_third_party_mention: bool,
+    #[diesel(sql_type = Bool)]
+    act_on_behalf: bool,
+}
+
+impl From<AgentParticipationRow> for Value {
+    fn from(row: AgentParticipationRow) -> Self {
+        serde_json::json!({
+            "agent_principal_id": row.agent_principal_id,
+            "scope_kind": row.scope_kind,
+            "scope_key": row.scope_key,
+            "realm_id": row.realm_id,
+            "scope": row.scope,
+            "reply": row.reply,
+            "accept_third_party_mention": row.accept_third_party_mention,
+            "act_on_behalf": row.act_on_behalf,
+        })
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentParticipationCeilingRow {
+    #[diesel(sql_type = Text)]
+    scope_kind: String,
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Bool)]
+    reply: bool,
+    #[diesel(sql_type = Bool)]
+    accept_third_party_mention: bool,
+    #[diesel(sql_type = Bool)]
+    act_on_behalf: bool,
+}
+
+impl From<AgentParticipationCeilingRow> for Value {
+    fn from(row: AgentParticipationCeilingRow) -> Self {
+        serde_json::json!({
+            "scope_kind": row.scope_kind,
+            "scope_key": row.scope_key,
+            "realm_id": row.realm_id,
+            "reply": row.reply,
+            "accept_third_party_mention": row.accept_third_party_mention,
+            "act_on_behalf": row.act_on_behalf,
+        })
+    }
+}
+
+struct PgAgentParticipationStore {
+    pool: PgPool,
+}
+
+#[async_trait]
+impl AgentParticipationStore for PgAgentParticipationStore {
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!("agent participation record missing {key}"))
+                })
+        };
+        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let agent_principal_id = get_str("agent_principal_id")?;
+        let scope_kind = get_str("scope_kind")?;
+        let scope_key = get_str("scope_key")?;
+        let realm_id = get_str("realm_id")?;
+        let scope = record.get("scope").cloned().unwrap_or(Value::Null);
+        sql_query(
+            "INSERT INTO agent_participation \
+             (agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
+              accept_third_party_mention, act_on_behalf, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
+             ON CONFLICT (agent_principal_id, scope_key) DO UPDATE SET \
+             scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
+             scope = EXCLUDED.scope, reply = EXCLUDED.reply, \
+             accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
+             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
+        )
+        .bind::<Text, _>(&agent_principal_id)
+        .bind::<Text, _>(&scope_kind)
+        .bind::<Text, _>(&scope_key)
+        .bind::<Text, _>(&realm_id)
+        .bind::<Jsonb, _>(&scope)
+        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
+        .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
+             accept_third_party_mention, act_on_behalf FROM agent_participation \
+             WHERE agent_principal_id = $1 ORDER BY scope_key",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .load::<AgentParticipationRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn ceilings_for_scope_keys(
+        &self,
+        scope_keys: &[String],
+    ) -> PersistenceResult<Vec<Value>> {
+        if scope_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT scope_kind, scope_key, realm_id, reply, accept_third_party_mention, \
+             act_on_behalf FROM agent_participation_ceiling WHERE scope_key = ANY($1) \
+             ORDER BY scope_key",
+        )
+        .bind::<Array<Text>, _>(scope_keys.to_vec())
+        .load::<AgentParticipationCeilingRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+}
+
 /// Moderation reports + assigned actions + decisions + appeals + queue items.
 ///
 /// Reports and actions are append-only (back-compat). The newer methods
@@ -630,6 +862,79 @@ pub type SignalBuilder<'a> = Box<dyn FnOnce(u64) -> WebrtcSignalRecord + Send + 
 #[derive(Debug, Clone)]
 pub struct WebrtcAppendSignal {
     pub seq: u64,
+}
+
+/// 高风险验签路径的 DID 文档新鲜度基线 TTL(15 分钟)。
+///
+/// `put_document` 写入时以 `expires_at = fetched_at + 此值` 标注记录;
+/// 高风险阈值默认同样取此值(见 `verify_did_document_freshness` 的
+/// `max_age` 调用约定)。选 15min 与 push 合约新鲜度门禁的保守取值一致,
+/// 因为 soland 本身不做按需网络拉取——缓存的公钥越新越好。
+pub const WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
+
+/// degraded 只读放宽窗口(24h)。复用
+/// `routing::identity::webvh_validation::WEBVH_DEGRADED_NO_WITNESS_MAX_SECS`
+/// 的同一时长。仅供读侧(非高风险)在 degraded 模式下放行并打标使用;
+/// 高风险写入路径绝不走此窗口。
+pub const WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS: i64 = 24 * 60 * 60;
+
+/// `verify_did_document_freshness` 的判定结果。语义对齐
+/// [`DriftResult`]:高风险路径将除 `Fresh` 外的一切视为 fail-closed。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    /// 记录年龄在 `max_age` 内,可放行。
+    Fresh,
+    /// 记录年龄已超过 `max_age`,高风险须拒绝。
+    Stale,
+}
+
+impl Freshness {
+    /// 稳定字符串标签,用于审计 `outcome` 字段与拒绝响应。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Freshness::Fresh => "fresh",
+            Freshness::Stale => "stale",
+        }
+    }
+}
+
+/// 判定一条 [`WebvhDocumentRecord`] 在 `now` 时刻、给定 `max_age` 下的
+/// 新鲜度。风格对齐 [`verify_contract_freshness`] / [`evaluate_drift`]:
+/// 纯函数,fail-closed 语义集中在一处。
+///
+/// 判定以 `age = now - record.fetched_at` 与 `max_age` 比较为准:
+/// `age > max_age` → [`Freshness::Stale`],否则 [`Freshness::Fresh`]。
+///
+/// 不直接看 `record.expires_at`:`expires_at` 是写入时固化的高风险过期提示
+/// (= fetched_at + 15min,仅用于存储与清理索引,见 §3.4 "缓存 MUST 绑定
+/// expiry")。由调用方按路径风险选择 `max_age`——高风险传 15min(等价于
+/// `expires_at`),degraded 只读传 24h 以放行已过 `expires_at` 的记录并打标。
+/// 持久化记录恒有 `fetched_at`(`put_document` 落库时写入),故无 "Missing"
+/// 状态;"无任何 ingest 记录" 的 fail-closed 由调用方在 `get_document` 返回
+/// `None` 时处理(见 `enforce_high_risk_did_freshness`)。
+pub fn verify_did_document_freshness(
+    record: &WebvhDocumentRecord,
+    now: chrono::DateTime<Utc>,
+    max_age: chrono::Duration,
+) -> Freshness {
+    let age = now.signed_duration_since(record.fetched_at);
+    if age > max_age {
+        Freshness::Stale
+    } else {
+        Freshness::Fresh
+    }
+}
+
+/// 计算 `put_document` 落库时写入的新鲜度证据 `(fetched_at, expires_at)`。
+///
+/// 写入即 ingest:权威地以"现在"为基线标注——`fetched_at = now`、
+/// `expires_at = now + WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS`。调用方在构造
+/// `WebvhDocumentRecord` 时填的两字段值会被此处覆盖(它们无法预知真正的
+/// ingest 时刻)。Memory 与 Pg 两个 backend 共用此函数,确保写入语义不漂移。
+fn webvh_freshness_on_put() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
+    let fetched_at = Utc::now();
+    let expires_at = fetched_at + chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS);
+    (fetched_at, expires_at)
 }
 
 /// DID documents + their key-log events. The two are coupled: every accepted
@@ -1099,6 +1404,8 @@ pub trait PersistenceStore: Send + Sync {
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
     fn mls_welcomes(&self) -> &dyn MlsWelcomeStore;
     fn mls_commits(&self) -> &dyn MlsCommitStore;
+    // CKP-0010 — agent participation policy.
+    fn agent_participation(&self) -> &dyn AgentParticipationStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -1145,6 +1452,7 @@ pub struct MemoryPersistenceStore {
     mls_key_packages: MemoryMlsKeyPackageStore,
     mls_welcomes: MemoryMlsWelcomeStore,
     mls_commits: MemoryMlsCommitStore,
+    agent_participation: MemoryAgentParticipationStore,
 }
 
 impl MemoryPersistenceStore {
@@ -1192,6 +1500,7 @@ impl MemoryPersistenceStore {
             mls_key_packages: MemoryMlsKeyPackageStore::new(),
             mls_welcomes: MemoryMlsWelcomeStore::new(),
             mls_commits: MemoryMlsCommitStore::new(),
+            agent_participation: MemoryAgentParticipationStore::new(),
         }
     }
 }
@@ -1366,6 +1675,10 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn mls_commits(&self) -> &dyn MlsCommitStore {
         &self.mls_commits
+    }
+
+    fn agent_participation(&self) -> &dyn AgentParticipationStore {
+        &self.agent_participation
     }
 }
 
@@ -1827,7 +2140,12 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
         &self,
         participants_key: &str,
     ) -> PersistenceResult<Option<DirectConversationBindingRecord>> {
-        Ok(self.data.lock().expect("lock").get(participants_key).cloned())
+        Ok(self
+            .data
+            .lock()
+            .expect("lock")
+            .get(participants_key)
+            .cloned())
     }
 
     async fn put(
@@ -3291,7 +3609,11 @@ impl WebvhStore for MemoryWebvhStore {
             .cloned())
     }
 
-    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
+    async fn put_document(&self, mut record: WebvhDocumentRecord) -> PersistenceResult<()> {
+        // 写入即 ingest:以"现在"为基线权威标注新鲜度证据,与 Pg backend 一致。
+        let (fetched_at, expires_at) = webvh_freshness_on_put();
+        record.fetched_at = fetched_at;
+        record.expires_at = expires_at;
         let did = record.did.clone();
         self.documents
             .lock()
@@ -4065,6 +4387,7 @@ pub struct PgPersistenceStore {
     mls_key_packages: PgMlsKeyPackageStore,
     mls_welcomes: PgMlsWelcomeStore,
     mls_commits: PgMlsCommitStore,
+    agent_participation: PgAgentParticipationStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -4104,7 +4427,8 @@ impl PgPersistenceStore {
             projection_events: PgProjectionEventStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
             mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
-            mls_commits: PgMlsCommitStore { pool },
+            mls_commits: PgMlsCommitStore { pool: pool.clone() },
+            agent_participation: PgAgentParticipationStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -4273,6 +4597,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn mls_commits(&self) -> &dyn MlsCommitStore {
         &self.mls_commits
+    }
+
+    fn agent_participation(&self) -> &dyn AgentParticipationStore {
+        &self.agent_participation
     }
 }
 
@@ -6300,6 +6628,10 @@ struct WebvhDocumentRow {
     #[diesel(sql_type = Jsonb)]
     method_evidence: Value,
     #[diesel(sql_type = Timestamptz)]
+    fetched_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -6311,6 +6643,8 @@ impl From<WebvhDocumentRow> for WebvhDocumentRecord {
             key_log_head: row.key_log_head,
             seq: row.seq.max(0) as u64,
             method_evidence: row.method_evidence,
+            fetched_at: row.fetched_at,
+            expires_at: row.expires_at,
             updated_at: row.updated_at,
         }
     }
@@ -6347,7 +6681,8 @@ impl WebvhStore for PgWebvhStore {
     async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
+            "SELECT did, did_document, key_log_head, seq, method_evidence, \
+             fetched_at, expires_at, updated_at \
              FROM webvh_documents WHERE did = $1",
         )
         .bind::<Text, _>(did)
@@ -6364,7 +6699,8 @@ impl WebvhStore for PgWebvhStore {
     ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT did, did_document, key_log_head, seq, method_evidence, updated_at \
+            "SELECT did, did_document, key_log_head, seq, method_evidence, \
+             fetched_at, expires_at, updated_at \
              FROM webvh_documents \
              WHERE method_evidence->>'mode' = 'embedded_webvh_provider' \
                AND method_evidence->>'local_id' = $1 \
@@ -6381,15 +6717,21 @@ impl WebvhStore for PgWebvhStore {
 
     async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
+        // 写入即 ingest:以"现在"为基线权威标注新鲜度证据
+        // (`fetched_at = now`、`expires_at = now + 高风险基线 TTL`)。
+        let (fetched_at, expires_at) = webvh_freshness_on_put();
         sql_query(
             "INSERT INTO webvh_documents \
-             (did, did_document, key_log_head, seq, method_evidence, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
+             (did, did_document, key_log_head, seq, method_evidence, \
+              fetched_at, expires_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (did) DO UPDATE SET \
                 did_document = EXCLUDED.did_document, \
                 key_log_head = EXCLUDED.key_log_head, \
                 seq = EXCLUDED.seq, \
                 method_evidence = EXCLUDED.method_evidence, \
+                fetched_at = EXCLUDED.fetched_at, \
+                expires_at = EXCLUDED.expires_at, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(&record.did)
@@ -6397,6 +6739,8 @@ impl WebvhStore for PgWebvhStore {
         .bind::<Nullable<Text>, _>(&record.key_log_head)
         .bind::<BigInt, _>(record.seq as i64)
         .bind::<Jsonb, _>(&record.method_evidence)
+        .bind::<Timestamptz, _>(fetched_at)
+        .bind::<Timestamptz, _>(expires_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -8306,13 +8650,13 @@ struct InviteReceivePolicyRow {
 
 impl InviteReceivePolicyRow {
     fn into_pair(self) -> PersistenceResult<(String, cokret_sdk::InviteReceivePolicy)> {
-        let policy: cokret_sdk::InviteReceivePolicy =
-            serde_json::from_value(self.policy_payload).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "invite_receive_policy `{}` payload decode: {error}",
-                    self.subject_id
-                ))
-            })?;
+        let policy: cokret_sdk::InviteReceivePolicy = serde_json::from_value(self.policy_payload)
+            .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "invite_receive_policy `{}` payload decode: {error}",
+                self.subject_id
+            ))
+        })?;
         Ok((self.subject_id, policy))
     }
 }
@@ -8371,7 +8715,9 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         let rows = sql_query("SELECT subject_id, policy_payload FROM invite_receive_policies")
             .get_results::<InviteReceivePolicyRow>(&mut *conn)
             .await?;
-        rows.into_iter().map(InviteReceivePolicyRow::into_pair).collect()
+        rows.into_iter()
+            .map(InviteReceivePolicyRow::into_pair)
+            .collect()
     }
 }
 
@@ -8448,10 +8794,7 @@ fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
 fn encode_grant_dots(dots: &BTreeMap<String, ConsentGrantDot>) -> Value {
     let mut map = serde_json::Map::new();
     for (key, grant) in dots {
-        map.insert(
-            key.clone(),
-            json_for_grant_dot(grant),
-        );
+        map.insert(key.clone(), json_for_grant_dot(grant));
     }
     Value::Object(map)
 }
@@ -9881,6 +10224,9 @@ mod tests {
             key_log_head: Some("sha256:head".to_owned()),
             seq: 1,
             method_evidence: serde_json::json!({"method": "key-rotation"}),
+            // 构造值会被 put_document 以 ingest 时刻覆盖,这里给占位即可。
+            fetched_at: now,
+            expires_at: now,
             updated_at: now,
         };
         store.put_document(doc.clone()).await.unwrap();
@@ -9934,6 +10280,102 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    // ---- L3:DID 文档新鲜度判定 ----
+
+    fn webvh_record_with_freshness(
+        fetched_at: chrono::DateTime<Utc>,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> WebvhDocumentRecord {
+        WebvhDocumentRecord {
+            did: "did:web:alice.example".to_owned(),
+            did_document: serde_json::json!({"id": "did:web:alice.example"}),
+            key_log_head: None,
+            seq: 1,
+            method_evidence: serde_json::json!({}),
+            fetched_at,
+            expires_at,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn freshness_fresh_when_recently_fetched() {
+        let now = Utc::now();
+        let record = webvh_record_with_freshness(
+            now - chrono::Duration::seconds(60),
+            now + chrono::Duration::seconds(60),
+        );
+        let result =
+            verify_did_document_freshness(&record, now, chrono::Duration::seconds(15 * 60));
+        assert_eq!(result, Freshness::Fresh);
+    }
+
+    #[test]
+    fn freshness_stale_when_age_exceeds_max_age() {
+        let now = Utc::now();
+        // fetched_at 已超过 15min max_age → Stale(expires_at 不参与判定)。
+        let record = webvh_record_with_freshness(
+            now - chrono::Duration::seconds(20 * 60),
+            now - chrono::Duration::seconds(5 * 60),
+        );
+        let result =
+            verify_did_document_freshness(&record, now, chrono::Duration::seconds(15 * 60));
+        assert_eq!(result, Freshness::Stale);
+    }
+
+    #[test]
+    fn freshness_degraded_read_window_within_24h() {
+        // degraded 只读放宽:用 24h 阈值时,2h 前 ingest 的记录仍判 Fresh
+        // (供读侧打标放行;高风险写入路径不传此阈值)。即便记录的 expires_at
+        // (高风险 15min 过期点)早已过,degraded 仍以更大的 max_age 放行。
+        let now = Utc::now();
+        let record = webvh_record_with_freshness(
+            now - chrono::Duration::hours(2),
+            now - chrono::Duration::hours(2) + chrono::Duration::seconds(15 * 60),
+        );
+        let degraded = chrono::Duration::seconds(WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS);
+        assert_eq!(
+            verify_did_document_freshness(&record, now, degraded),
+            Freshness::Fresh
+        );
+        // 但同一记录在高风险 15min 阈值下判 Stale。
+        assert_eq!(
+            verify_did_document_freshness(
+                &record,
+                now,
+                chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS)
+            ),
+            Freshness::Stale
+        );
+    }
+
+    #[tokio::test]
+    async fn put_document_stamps_freshness_at_ingest() {
+        // put_document 落库时以 ingest 时刻权威覆盖 fetched_at/expires_at,
+        // 无论构造时填了什么(这里故意填很旧的占位值)。
+        let store = MemoryWebvhStore::new();
+        let stale = Utc::now() - chrono::Duration::hours(3);
+        let record = webvh_record_with_freshness(stale, stale);
+        store.put_document(record).await.unwrap();
+        let stored = store
+            .get_document("did:web:alice.example")
+            .await
+            .unwrap()
+            .expect("document present");
+        // expires_at ≈ fetched_at + 高风险基线 TTL。
+        let delta = stored.expires_at.signed_duration_since(stored.fetched_at);
+        assert_eq!(delta.num_seconds(), WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS);
+        // 旧占位值已被 ingest 时刻覆盖:落库后立即按高风险阈值判定应为 Fresh。
+        assert_eq!(
+            verify_did_document_freshness(
+                &stored,
+                Utc::now(),
+                chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS)
+            ),
+            Freshness::Fresh
         );
     }
 
@@ -10352,10 +10794,7 @@ mod tests {
         );
 
         // list_for_actor surfaces the row for either end.
-        assert_eq!(
-            store.list_for_actor(&record.target).await.unwrap().len(),
-            1
-        );
+        assert_eq!(store.list_for_actor(&record.target).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

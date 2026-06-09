@@ -181,6 +181,8 @@ diesel::table! {
         key_log_head -> Nullable<Text>,
         seq -> Int8,
         method_evidence -> Jsonb,
+        fetched_at -> Timestamptz,
+        expires_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
 }

@@ -1438,7 +1438,9 @@ async fn verify_federation_actor_signature(
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = parse_federation_actor_signature(&body.signature)?;
-    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+    // 高风险:federation receive 验签前强制 DID 文档新鲜度门禁
+    // (fail-closed-on-stale)。
+    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &body.actor_id,
         &actor_signature.verification_method,

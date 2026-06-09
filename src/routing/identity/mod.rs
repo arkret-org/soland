@@ -2,10 +2,10 @@ use salvo::prelude::*;
 
 pub(super) mod account;
 pub(super) mod account_data;
-pub(crate) mod contact_federation;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod consent;
+pub(crate) mod contact_federation;
 pub(crate) mod cross_signing;
 mod device;
 pub(super) mod device_messages;

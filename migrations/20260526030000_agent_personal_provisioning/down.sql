@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS agent_participation_ceiling;
+DROP TABLE IF EXISTS agent_participation;
 DROP TABLE IF EXISTS pending_agent_drafts;
 DROP TABLE IF EXISTS recovery_session;
 DROP TABLE IF EXISTS backup_series;

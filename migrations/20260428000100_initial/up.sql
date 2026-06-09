@@ -220,8 +220,19 @@ CREATE TABLE IF NOT EXISTS webvh_documents (
     key_log_head TEXT,
     seq BIGINT NOT NULL DEFAULT 0,
     method_evidence JSONB NOT NULL DEFAULT '{}'::JSONB,
+    -- DID 文档新鲜度证据(高风险验签 fail-closed-on-stale 门禁所需)。
+    -- fetched_at:本节点 ingest 该记录的时刻;expires_at:高风险基线过期点
+    -- (= fetched_at + 15min)。两列由 put_document 落库时以"现在"为基线写入。
+    -- 新鲜度判定以 age vs max_age 为准(高风险 15min / degraded 只读 24h),
+    -- expires_at 仅作存储与按过期点清理的索引键(规范 §3.4:缓存 MUST 绑定 expiry)。
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '15 minutes',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 高风险路径与后台清理可能按过期点筛选,建过期点索引。
+CREATE INDEX IF NOT EXISTS webvh_documents_expires_at_idx
+    ON webvh_documents (expires_at);
 
 CREATE TABLE IF NOT EXISTS webvh_log_events (
     event_digest TEXT PRIMARY KEY,

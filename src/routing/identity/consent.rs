@@ -1119,11 +1119,12 @@ impl ConsentRevokeInvalidationChannel {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
     use super::*;
     use crate::config::{AppConfig, FederationPolicy, LogFormat, ObjectStorageConfig};
     use crate::db::Db;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
 
     #[test]
     fn consent_revoke_cascade_table_stable() {
@@ -1247,7 +1248,12 @@ mod tests {
         persist_consent_cell(&state, &cell).await;
 
         // Persistence holds the cell.
-        let snapshot = state.persistence.consent_cells().snapshot_all().await.unwrap();
+        let snapshot = state
+            .persistence
+            .consent_cells()
+            .snapshot_all()
+            .await
+            .unwrap();
         assert_eq!(snapshot.len(), 1, "one cell persisted");
 
         // A fresh AppState that shares the same persistence store re-hydrates

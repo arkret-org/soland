@@ -1144,7 +1144,7 @@ fn key_backup_delete_proof_canonical_bytes(
     })
 }
 
-fn verify_key_backup_delete_jws_proof(
+async fn verify_key_backup_delete_jws_proof(
     state: &AppState,
     proof: &str,
     backup_id: &str,
@@ -1170,6 +1170,20 @@ fn verify_key_backup_delete_jws_proof(
         ))
     })?;
     let canonical = key_backup_delete_proof_canonical_bytes(actor_id, backup_id)?;
+    // 高风险:key_backup 删除证明验签前强制 DID 文档新鲜度门禁
+    // (fail-closed-on-stale)。
+    let actor_did = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+        AppError::capability_denied(format!(
+            "key backup delete proof actor_id is not a valid DID: {error}"
+        ))
+    })?;
+    crate::jws_verify::enforce_high_risk_did_freshness(state, &actor_did)
+        .await
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "key backup delete proof DID document stale or unavailable: {error}"
+            ))
+        })?;
     crate::jws_verify::verify_jws_ed25519(
         &canonical,
         &proof.jws,
@@ -1188,7 +1202,7 @@ fn is_development_delete_proof(proof: &str, backup_id: &str, actor_id: &str) -> 
     proof == format!("dev-ssk-delete:v1:{actor_id}:{backup_id}")
 }
 
-fn verify_delete_ownership_proof(
+async fn verify_delete_ownership_proof(
     state: &AppState,
     req: &Request,
     backup_id: &str,
@@ -1214,7 +1228,7 @@ fn verify_delete_ownership_proof(
             "development key-backup delete proofs are disabled outside development_mode",
         ));
     }
-    verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id)
+    verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id).await
 }
 
 fn key_backup_duplicate_for_actor(
@@ -1472,7 +1486,7 @@ async fn delete_key_backup(
             todos: Vec::new(),
         });
     };
-    verify_delete_ownership_proof(state, req, &backup_id, &session.actor)?;
+    verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
     ensure_key_backup_delete_is_series_tail(state, &session.actor, &backup).await?;
     let deleted = store.delete(&backup_id).await.unwrap_or(false);
     if deleted {

@@ -24,7 +24,15 @@ use cokret_sdk::identity::{DidDocument, DidResolver};
 use cokret_sdk::{Did, Hash};
 use ed25519_dalek::VerifyingKey;
 
+use crate::persistence::{
+    Freshness, WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, verify_did_document_freshness,
+};
 use crate::state::AppState;
+
+/// 高风险验签路径的 DID 文档新鲜度阈值。等于持久化层的基线 TTL
+/// (15min)。超过此年龄、或缺少新鲜度证据(旧记录),高风险路径即
+/// fail-closed——因 soland 不做按需网络拉取,无法刷新即视为不可用。
+pub const HIGH_RISK_DID_FRESHNESS_MAX_SECS: i64 = WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS;
 
 /// Resolved Ed25519 verification key with the document metadata that
 /// endpoints need to report or bind into audit records.
@@ -139,6 +147,57 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
         return Err("resolved DID document id does not match requested DID".to_owned());
     }
     Ok(document)
+}
+
+/// 高风险路径的 DID 文档新鲜度门禁(fail-closed-on-stale)。
+///
+/// 从持久化层取该 DID 的 [`WebvhDocumentRecord`](即"已 ingest 的文档"),
+/// 用 [`verify_did_document_freshness`] 判定:
+///
+/// * [`Freshness::Fresh`] → `Ok(())`,放行。
+/// * [`Freshness::Stale`] → `Err`,缓存公钥已超过高风险 TTL,fail-closed。
+///
+/// 若该 DID 在持久化层没有任何记录(`get_document` 返回 `None`):说明没有
+/// 任何可信的 ingest 证据可用于高风险验签,同样 fail-closed。注意:dev /
+/// extension 等本地即时文档不入此持久化路径,故不受影响——它们由
+/// `verify_jws_ed25519` 内部的 SDK resolver 直接处理,本门禁仅约束"缓存的
+/// 远端/已提交文档"。
+///
+/// soland 不做按需网络拉取,因此"陈旧"等价于"不可用":这是高风险写入路径
+/// 刻意的保守取舍,degraded 只读放宽不适用于此。
+pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
+    let max_age = chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
+    let record = state
+        .persistence
+        .webvh()
+        .get_document(did.as_str())
+        .await
+        .map_err(|error| format!("DID freshness lookup failed: {error}"))?;
+    let Some(record) = record else {
+        // 无任何 ingest 记录:高风险路径无可信新鲜度证据,fail-closed。
+        return Err(format!(
+            "DID document freshness unavailable for high-risk verification: no ingested record for {did}"
+        ));
+    };
+    match verify_did_document_freshness(&record, chrono::Utc::now(), max_age) {
+        Freshness::Fresh => Ok(()),
+        Freshness::Stale => Err(format!(
+            "DID document is stale for high-risk verification (exceeded {HIGH_RISK_DID_FRESHNESS_MAX_SECS}s freshness window): {did}"
+        )),
+    }
+}
+
+/// [`resolve_ed25519_verification_key_for_did`] 的高风险变体:在解析公钥
+/// 之前(或之后)强制执行新鲜度门禁。federation receive / recovery 等高风险
+/// 调用点改用此变体。读侧若不需 fail-closed,仍可调用非 `_fresh` 版本。
+pub async fn resolve_ed25519_verification_key_for_did_fresh(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> Result<ResolvedVerificationKey, String> {
+    // 先做新鲜度门禁:陈旧/缺失证据直接拒绝,不再解析公钥。
+    enforce_high_risk_did_freshness(state, did).await?;
+    resolve_ed25519_verification_key_for_did(state, did, verification_method).await
 }
 
 pub fn require_verification_method_in_document(

@@ -712,7 +712,8 @@ async fn verify_principal_signing_proof(
         .ok_or_else(|| AppError::invalid_param("proof.verification_method is required"))?;
     let principal_did = Did::new(record.principal_id.clone())
         .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
-    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+    // 高风险:recovery 验签前强制 DID 文档新鲜度门禁(fail-closed-on-stale)。
+    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &principal_did,
         verification_method,
@@ -1713,7 +1714,8 @@ async fn verify_recovery_auth_signature(
         .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
     let principal_did = Did::new(principal_id.to_owned())
         .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
-    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+    // 高风险:recovery 验签前强制 DID 文档新鲜度门禁(fail-closed-on-stale)。
+    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &principal_did,
         verification_method,

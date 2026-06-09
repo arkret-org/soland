@@ -2329,8 +2329,8 @@ fn find_capability_grant(
 ///
 /// Accepted shapes (any one suffices):
 ///   - `manage_capability_verified: true`
-///   - `actor_capability: { action: "ck.circle.member.manage",
-///        circle_id: "ck:circle:…", allowed: true }`
+///   - `actor_capability: { action: "ck.circle.member.manage", circle_id: "ck:circle:…", allowed:
+///     true }`
 fn payload_asserts_circle_manage(payload: &Value, circle_id: &str) -> bool {
     if payload
         .get("manage_capability_verified")

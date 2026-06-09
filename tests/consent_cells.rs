@@ -552,11 +552,13 @@ async fn invite_receive_policy_get_set_round_trips() {
         .await
         .unwrap();
     assert_eq!(default_policy["subject_id"], alice);
-    assert!(default_policy["allowed_introduction_kinds"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|kind| kind == "consent_grant"));
+    assert!(
+        default_policy["allowed_introduction_kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|kind| kind == "consent_grant")
+    );
 
     // Set a custom override blocking mallory.
     let custom = serde_json::json!({
@@ -629,20 +631,22 @@ async fn contact_accept_grants_event_backed_invite_consent_ref() {
     let requester_refs = requested["requester_consent_refs"].as_array().unwrap();
     assert_eq!(requester_refs.len(), 1, "requester_consent_refs populated");
     assert!(
-        requester_refs[0]
-            .as_str()
-            .unwrap()
-            .starts_with("ck:event:"),
+        requester_refs[0].as_str().unwrap().starts_with("ck:event:"),
         "requester consent ref is a canonical event id: {requested}"
     );
 
     // bob accepts, granting the `invite` scope back to alice. The respond
     // body MUST reference the original request event id.
     let request_id = requested["request_event_ref"].as_str().unwrap();
-    let responded = respond_contact(&app, &bob_token, alice, request_id, "accept", &["invite"]).await;
+    let responded =
+        respond_contact(&app, &bob_token, alice, request_id, "accept", &["invite"]).await;
     assert_eq!(responded["state"], "accepted");
     let grant_refs = responded["consent_grant_refs"].as_array().unwrap();
-    assert_eq!(grant_refs.len(), 1, "consent_grant_refs populated on accept");
+    assert_eq!(
+        grant_refs.len(),
+        1,
+        "consent_grant_refs populated on accept"
+    );
     let bob_grant_ref = grant_refs[0].as_str().unwrap().to_owned();
     assert!(
         bob_grant_ref.starts_with("ck:event:"),

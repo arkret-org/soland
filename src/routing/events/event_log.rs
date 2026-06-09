@@ -1740,7 +1740,7 @@ async fn validate_event_envelope(
         &canonical_digest,
     )
     .await?;
-    validate_event_proofs(object, state, session, &actor_id, &canonical_digest)?;
+    validate_event_proofs(object, state, session, &actor_id, &canonical_digest).await?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
 
@@ -2955,7 +2955,7 @@ fn validate_event_audience_fields(
     Ok(())
 }
 
-fn validate_event_proofs(
+async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
     session: &SessionRecord,
@@ -3113,6 +3113,25 @@ fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
+            // 高风险:event proof 验签前强制 DID 文档新鲜度门禁
+            // (fail-closed-on-stale)。陈旧/缺证据的缓存公钥不得用于验签。
+            let actor_did = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    format!("event proof actor_id is not a valid DID: {error}"),
+                )
+            })?;
+            crate::jws_verify::enforce_high_risk_did_freshness(state, &actor_did)
+                .await
+                .map_err(|reason| {
+                    tracing::debug!(%reason, "event proof DID freshness gate failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "stale_did_document",
+                        "event proof DID document is stale or unavailable for verification",
+                    )
+                })?;
             crate::jws_verify::verify_jws_ed25519(
                 &proof_binding_bytes,
                 &jws,
@@ -3219,9 +3238,7 @@ async fn member_join_accepts_pending_invite(
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    if is_member_state_join
-        && payload.get("membership").and_then(Value::as_str) != Some("join")
-    {
+    if is_member_state_join && payload.get("membership").and_then(Value::as_str) != Some("join") {
         return false;
     }
     let target_actor = payload
@@ -5085,6 +5102,28 @@ mod proof_strictness_tests {
         }
     }
 
+    /// 测试辅助:为 `did` ingest 一条新鲜的 webvh 文档(put_document 会以
+    /// ingest 时刻权威标注 fetched_at/expires_at),使高风险新鲜度门禁通过。
+    async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
+        let now = chrono::Utc::now();
+        state
+            .persistence
+            .webvh()
+            .put_document(crate::state::WebvhDocumentRecord {
+                did: did.to_owned(),
+                did_document: json!({ "id": did, "verificationMethod": [] }),
+                key_log_head: Some("sha256:head".to_owned()),
+                seq: 1,
+                method_evidence: json!({ "mode": "test" }),
+                // 占位值,put_document 会以 ingest 时刻覆盖。
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("ingest fresh webvh document");
+    }
+
     fn did_key_for(signing_key: &ed25519_dalek::SigningKey) -> String {
         let mut bytes = Vec::with_capacity(34);
         bytes.extend_from_slice(&[0xed, 0x01]);
@@ -5740,8 +5779,8 @@ mod proof_strictness_tests {
         assert_eq!(err.code, "incompatible_history_with_encryption");
     }
 
-    #[test]
-    fn production_rejects_dev_proof_type_field() {
+    #[tokio::test]
+    async fn production_rejects_dev_proof_type_field() {
         let state = make_state(false);
         let session = session();
         let object = dev_proof_envelope();
@@ -5752,13 +5791,14 @@ mod proof_strictness_tests {
             "did:web:alice.example",
             "sha256:dead",
         )
+        .await
         .expect_err("production must reject dev-proof shape");
         // Missing strict-JWS fields trips `invalid_proof` first.
         assert_eq!(err.code, "invalid_proof");
     }
 
-    #[test]
-    fn development_accepts_dev_proof_type_field_when_hash_matches() {
+    #[tokio::test]
+    async fn development_accepts_dev_proof_type_field_when_hash_matches() {
         let state = make_state(true);
         let session = session();
         let mut object = dev_proof_envelope();
@@ -5779,17 +5819,21 @@ mod proof_strictness_tests {
             &session,
             "did:web:alice.example",
             "sha256:dead",
-        );
+        )
+        .await;
         assert!(
             result.is_ok(),
             "development mode should accept matching dev-proof: {result:?}"
         );
     }
 
-    #[test]
-    fn production_rejects_full_proof_without_valid_jws_signature() {
+    #[tokio::test]
+    async fn production_rejects_full_proof_without_valid_jws_signature() {
         let state = make_state(false);
         let session = session();
+        // 先 ingest 一条新鲜的 webvh 文档,使高风险新鲜度门禁通过,
+        // 从而让本测试聚焦于其本意:JWS 签名验证失败。
+        ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
         let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
         let mut object = serde_json::Map::new();
@@ -5813,6 +5857,7 @@ mod proof_strictness_tests {
             "did:web:alice.example",
             &format!("sha256:{}", sha256_hex(canonical_bytes)),
         )
+        .await
         .expect_err("production must reject unsigned/fake JWS proofs");
         assert_eq!(err.code, "invalid_proof");
         assert!(
@@ -5820,6 +5865,41 @@ mod proof_strictness_tests {
             "unexpected message: {}",
             err.message
         );
+    }
+
+    /// L3 — 高风险 event proof 路径在 DID 文档陈旧/无 ingest 记录时
+    /// fail-closed,且在 JWS 验签之前先被新鲜度门禁拦下。
+    #[tokio::test]
+    async fn production_event_proof_fails_closed_when_did_document_stale() {
+        let state = make_state(false);
+        let session = session();
+        // 刻意不 ingest 任何 webvh 文档:actor 在持久化层无新鲜度证据。
+        let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
+        let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "proofs".to_owned(),
+            json!([{
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": "did:web:alice.example#k1",
+                "event_digest": event_digest,
+                "created_at": "2026-05-17T00:00:00Z",
+                "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
+            }]),
+        );
+        object.insert("payload".to_owned(), json!({"body": "hello"}));
+
+        let err = validate_event_proofs(
+            &object,
+            &state,
+            &session,
+            "did:web:alice.example",
+            &format!("sha256:{}", sha256_hex(canonical_bytes)),
+        )
+        .await
+        .expect_err("stale/missing DID document must fail closed before JWS verify");
+        assert_eq!(err.code, "stale_did_document");
     }
 
     /// T5.3 (Round 22) — pin the SDK production-verifier surface used by

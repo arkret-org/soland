@@ -21,13 +21,13 @@ use cokret_sdk::http::{
     DirectConversationResolveRequestBody, DirectConversationResolveState,
     DirectConversationSummary,
 };
-use cokret_sdk::{
-    AccountDeviceSummary, AccountView, DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
-};
 // `cokret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
 use cokret_sdk::model::InviteReceivePolicy;
+use cokret_sdk::{
+    AccountDeviceSummary, AccountView, DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
+};
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -1891,7 +1891,11 @@ async fn contact_request(
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         if existing.status == "rejected" {
-            return json_ok(contact_request_outcome(&existing, &session.actor, Vec::new()));
+            return json_ok(contact_request_outcome(
+                &existing,
+                &session.actor,
+                Vec::new(),
+            ));
         }
         let status_changed = existing.status != contact_status;
         // A re-sent request MAY refresh the greeting; keep the prior one
@@ -2051,8 +2055,13 @@ async fn contact_respond(
             // Spec contact-and-direct-conversation.md §3 — each granted scope
             // writes a target-controlled `ck.consent.grant`; its event ref is
             // referenced from the `ck.contact.accepted` `consent_grant_refs[]`.
-            let (grant_ref, grant_cell) =
-                grant_contact_managed_consent(state, &session.actor, &contact.requester, &scope, now());
+            let (grant_ref, grant_cell) = grant_contact_managed_consent(
+                state,
+                &session.actor,
+                &contact.requester,
+                &scope,
+                now(),
+            );
             persist_consent_cell(state, &grant_cell).await;
             if let Ok(event_ref) = EventId::new(grant_ref) {
                 consent_grant_refs.push(event_ref);
@@ -2188,7 +2197,12 @@ async fn contact_tombstone(
         if let Some(policy) = block_peer_in_invite_policy(state, &holder, &peer) {
             // Write the hard-block through to durable storage so it survives
             // restarts (hydrated back by `AppState::hydrate`).
-            if let Err(error) = state.persistence.invite_receive_policies().put(&policy).await {
+            if let Err(error) = state
+                .persistence
+                .invite_receive_policies()
+                .put(&policy)
+                .await
+            {
                 tracing::warn!(%error, holder = %holder, "failed to persist invite_receive_policy block");
             }
         }
@@ -2305,9 +2319,7 @@ async fn get_invite_receive_policy(
         .expect("invite_receive_policies lock")
         .get(&session.actor)
         .cloned()
-        .unwrap_or_else(|| {
-            crate::routing::invites::default_invite_receive_policy(&session.actor)
-        });
+        .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(&session.actor));
     json_ok(policy)
 }
 
@@ -2343,7 +2355,12 @@ async fn set_invite_receive_policy(
         .insert(session.actor.clone(), policy.clone());
     // Write through to durable storage so the override survives restarts
     // (hydrated back into the in-memory map by `AppState::hydrate`).
-    if let Err(error) = state.persistence.invite_receive_policies().put(&policy).await {
+    if let Err(error) = state
+        .persistence
+        .invite_receive_policies()
+        .put(&policy)
+        .await
+    {
         tracing::warn!(%error, actor = %session.actor, "failed to persist invite_receive_policy");
     }
     json_ok(policy)
@@ -2911,8 +2928,7 @@ async fn submit_direct_realm_genesis(
     // encryption profile, fail-closed join rule, direct-conversation
     // discriminator in `fields`. The creator is treated as a member by the
     // genesis bootstrap.
-    let realm_op =
-        direct_realm_create_operation(state, realm_scope.clone(), realm_id, actor)?;
+    let realm_op = direct_realm_create_operation(state, realm_scope.clone(), realm_id, actor)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&realm_op)).await?;
 
     // ck.member.state{join} — add the peer so both participants are active

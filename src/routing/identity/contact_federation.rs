@@ -10,10 +10,10 @@
 //! projection without re-signing it.
 //!
 //! Surfaces:
-//! - sender: [`federate_contact_fact`] — enqueue a durable outbound delivery
-//!   when the addressed holder is hosted on a configured federation peer.
-//! - receiver: [`peer_contacts_submit`] — accept a delivered fact and project
-//!   it into the local target holder's contact projection.
+//! - sender: [`federate_contact_fact`] — enqueue a durable outbound delivery when the addressed
+//!   holder is hosted on a configured federation peer.
+//! - receiver: [`peer_contacts_submit`] — accept a delivered fact and project it into the local
+//!   target holder's contact projection.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -61,9 +61,10 @@ pub(crate) async fn federate_contact_fact(
         // already projected the fact for both holders.
         return Ok(false);
     }
-    let Some(peer_url) =
-        crate::routing::federation::federation::peer_url_for_service_did(state, recipient_service_did)
-    else {
+    let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_did(
+        state,
+        recipient_service_did,
+    ) else {
         tracing::warn!(
             recipient_service_did,
             issuer,
@@ -507,11 +508,12 @@ fn validate_content_digest(req: &Request, body: &Value) -> Result<(), AppError> 
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
     use super::*;
     use crate::config::{AppConfig, FederationPolicy, LogFormat, ObjectStorageConfig};
     use crate::db::Db;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
 
     fn test_config() -> AppConfig {
         AppConfig {

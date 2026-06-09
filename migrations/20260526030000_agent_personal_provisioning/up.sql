@@ -140,3 +140,41 @@ CREATE TABLE pending_agent_drafts (
 CREATE INDEX pending_agent_drafts_principal_idx ON pending_agent_drafts(agent_principal_id);
 CREATE INDEX pending_agent_drafts_controller_idx ON pending_agent_drafts(controller_did);
 CREATE INDEX pending_agent_drafts_state_idx ON pending_agent_drafts(state);
+
+-- CKP-0010 — agent participation policy.
+-- Controller-set per-scope selection (`ck.agent.participation.v1`).
+-- Booleans mirror cokret_core::AgentParticipation field order
+-- (reply, accept_third_party_mention, act_on_behalf).
+CREATE TABLE agent_participation (
+    agent_principal_id          TEXT NOT NULL REFERENCES agent_principal(agent_principal_id)
+                                ON DELETE CASCADE,
+    scope_kind                  TEXT NOT NULL
+        CHECK (scope_kind IN ('realm', 'circle', 'flow')),
+    scope_key                   TEXT NOT NULL,
+    realm_id                    TEXT NOT NULL,
+    scope                       JSONB NOT NULL,
+    reply                       BOOLEAN NOT NULL DEFAULT FALSE,
+    accept_third_party_mention  BOOLEAN NOT NULL DEFAULT FALSE,
+    act_on_behalf               BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at                  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (agent_principal_id, scope_key)
+);
+
+CREATE INDEX agent_participation_realm_idx ON agent_participation(realm_id);
+
+-- Governance ceiling per scope (deployment ⊇ Realm ⊇ Circle ⊇ Flow,
+-- tighten-only). One row per scope_key; reducer enforces the monotone
+-- invariant against the parent scope on write.
+CREATE TABLE agent_participation_ceiling (
+    scope_kind                  TEXT NOT NULL
+        CHECK (scope_kind IN ('realm', 'circle', 'flow')),
+    scope_key                   TEXT NOT NULL,
+    realm_id                    TEXT NOT NULL,
+    reply                       BOOLEAN NOT NULL DEFAULT FALSE,
+    accept_third_party_mention  BOOLEAN NOT NULL DEFAULT FALSE,
+    act_on_behalf               BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at                  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (scope_key)
+);
+
+CREATE INDEX agent_participation_ceiling_realm_idx ON agent_participation_ceiling(realm_id);
