@@ -1,9 +1,9 @@
 //! Applet bridge runtime.
 //!
-//! When a client emits `ck.applet.protocol_session.start` against an
+//! When a client emits `ck.applet.interop_session.start` against an
 //! applet that has registered a `ck.applet.registration` row, the
 //! bridge layer surfaces a corresponding
-//! `ck.applet.protocol_session.status` event so the caller observes
+//! `ck.applet.interop_session.status` event so the caller observes
 //! the lifecycle.
 //!
 //! Two dispatch modes:
@@ -52,7 +52,7 @@ fn lookup_bridge_url(state: &AppState, applet_id: &str) -> Option<String> {
 }
 
 /// Inspect `operation` and, when it carries a
-/// `ck.applet.protocol_session.start` payload, dispatch the
+/// `ck.applet.interop_session.start` payload, dispatch the
 /// invocation. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -64,7 +64,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
-    if kind != kinds::CK_APPLET_PROTOCOL_SESSION_START {
+    if kind != kinds::CK_APPLET_INTEROP_SESSION_START {
         return;
     }
     let body = match operation.payload.as_object() {
@@ -131,7 +131,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
     let record = ProjectionEventRecord {
         event_id: synthetic_event_id,
         realm_id: realm_id_str,
-        event_kind: kinds::CK_APPLET_PROTOCOL_SESSION_STATUS.to_owned(),
+        event_kind: kinds::CK_APPLET_INTEROP_SESSION_STATUS.to_owned(),
         operation_type: "echo_bridge_response".to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -227,7 +227,7 @@ async fn forward_to_applet_bridge(
     }
 }
 
-/// Emit either `ck.applet.protocol_session.status` (success) or
+/// Emit either `ck.applet.interop_session.status` (success) or
 /// `ck.applet.bridge_error` (failure) based on the outcome.
 async fn emit_applet_outcome_event(
     state: &AppState,
@@ -240,7 +240,7 @@ async fn emit_applet_outcome_event(
 ) {
     let (event_kind, payload, op_type) = match outcome {
         AppletBridgeOutcome::UpstreamSuccess { response_body } => (
-            kinds::CK_APPLET_PROTOCOL_SESSION_STATUS,
+            kinds::CK_APPLET_INTEROP_SESSION_STATUS,
             json!({
                 "session_id": session_id,
                 "status": "completed",

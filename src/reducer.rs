@@ -173,14 +173,14 @@ pub struct ProjectionState {
     /// `ck.applet.registration` (initial registration / re-registration)
     /// and updated by `ck.applet.discovery` (manifest refresh). Used by
     /// `GET /_soland/admin/applets` admin snapshot. Protocol-session
-    /// events (`ck.applet.protocol_session.{start,status}`,
+    /// events (`ck.applet.interop_session.{start,status}`,
     /// `ck.applet.bridge_error`) are NOT mirrored here — sessions are
     /// ephemeral and the applet bridge state machine lives client-side.
     pub applets: BTreeMap<String, AppletProjection>,
     /// Server-side Agent registry projection, keyed by `agent_id`.
     /// Same shape as `applets`. Populated by `ck.agent.endpoint`.
     /// Protocol-session events for agents
-    /// (`ck.agent.protocol_session.{start,status,result}`) are also not
+    /// (`ck.agent.interop_session.{start,status,result}`) are also not
     /// mirrored — see `applets` rationale.
     pub agents: BTreeMap<String, SolandAgentProjection>,
     /// R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — FSM lifecycle
@@ -215,9 +215,6 @@ pub struct ProjectionState {
     /// `capability_id`. Cas-register semantics — last write wins per
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
-    /// R3.3 — `ck.realm.audit_policy_downgrade` audit log. Append-only
-    /// list of downgrade events per Realm.
-    pub realm_audit_downgrades: BTreeMap<String, Vec<RealmAuditDowngradeEntry>>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
     /// row is per `(actor_did, device_id)`; the `claimed_by` /
     /// `consumed_at` slots flip on a successful CAS claim.
@@ -413,17 +410,6 @@ pub struct CapabilityDerivedState {
     pub effective_resources: Vec<Value>,
     pub effective_capability_bundles: Vec<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// R3.3 — single audit_policy_downgrade entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmAuditDowngradeEntry {
-    pub realm_id: String,
-    pub from_policy: Option<String>,
-    pub to_policy: Option<String>,
-    pub reason: Option<String>,
-    pub approver: Option<String>,
-    pub recorded_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// G3.S1 — KeyPackage lifetime window. MLS KeyPackages carry a
@@ -725,7 +711,7 @@ pub struct AppletProjection {
 /// OPTIONAL on the wire (older clients + DID-only agents that resolve
 /// via did:web service entry won't set it), but when present the
 /// reference bridge echoes it back in the
-/// `ck.agent.protocol_session.result` envelope's `detail.endpoint_url`
+/// `ck.agent.interop_session.result` envelope's `detail.endpoint_url`
 /// so timeline consumers see which endpoint answered the invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolandAgentProjection {
@@ -1305,12 +1291,6 @@ pub enum ProjectionEffect {
     /// `ck.component.capability.derived.v1` cas-register cell.
     CapabilityDerivedProjected {
         capability_id: String,
-        realm_id: String,
-    },
-    /// R3.3 — `ck.realm.audit_policy_downgrade` event was appended to
-    /// the `ck.component.realm.audit_policy_downgrade.v1` ordered-log
-    /// audit cell + the structured side-band cache.
-    RealmAuditPolicyDowngradeProjected {
         realm_id: String,
     },
     /// Agent registry projection updated (endpoint). Keyed by the
@@ -2547,17 +2527,6 @@ fn apply_capability_derived_dispatch(
     s.apply_capability_derived(op, op.created_at)
 }
 
-/// R3.3 — dispatch for `ck.realm.audit_policy_downgrade`. Appends the
-/// downgrade entry to the ordered-log audit cell + the structured
-/// side-band cache.
-fn apply_realm_audit_policy_downgrade_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_audit_policy_downgrade(op, op.created_at)
-}
-
 // ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
 //
 // Each adapter forwards to the free function in `reducer::mls`. The
@@ -2976,10 +2945,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_inheritance_policy_dispatch,
     );
     m.insert(CK_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
-    m.insert(
-        CK_REALM_AUDIT_POLICY_DOWNGRADE,
-        apply_realm_audit_policy_downgrade_dispatch,
-    );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
     // governance covered-frontier accumulation.
@@ -5367,78 +5332,6 @@ impl ProjectionState {
             capability_id: capability_id.to_owned(),
             realm_id,
         }
-    }
-
-    /// R3.3 — project a `ck.realm.audit_policy_downgrade` event into the
-    /// `ck.component.realm.audit_policy_downgrade.v1` ordered-log cell
-    /// + the `realm_audit_downgrades` audit cache.
-    ///
-    /// Full audit closure (notify `ck.realm.notification.audit` holder,
-    /// trigger UI banner) is pending — see
-    /// `kinds.rs::CK_REALM_AUDIT_POLICY_DOWNGRADE` for the broader
-    /// attestation-chain pipeline that drives this downgrade.
-    fn apply_realm_audit_policy_downgrade(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let realm_id = operation.realm_id.to_string();
-        let from_policy = operation
-            .payload
-            .get("from_policy")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let to_policy = operation
-            .payload
-            .get("to_policy")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let reason = operation
-            .payload
-            .get("reason")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let approver = operation
-            .payload
-            .get("approver")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-
-        let entry = serde_json::json!({
-            "from_policy": from_policy,
-            "to_policy": to_policy,
-            "reason": reason,
-            "approver": approver,
-            "recorded_at": now.to_rfc3339(),
-            "operation_id": operation.operation_id.as_str(),
-        });
-        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
-            "ck:cell:ck.component.realm.audit_policy_downgrade.v1:{realm_id}"
-        )) {
-            let new_log = match self.cells.get(&cell_id) {
-                Some(CellState::Value(Value::Array(existing))) => {
-                    let mut log = existing.clone();
-                    log.push(entry);
-                    CellState::Value(Value::Array(log))
-                }
-                _ => CellState::Value(Value::Array(vec![entry])),
-            };
-            self.cells.insert(cell_id, new_log);
-        }
-
-        self.realm_audit_downgrades
-            .entry(realm_id.clone())
-            .or_default()
-            .push(RealmAuditDowngradeEntry {
-                realm_id: realm_id.clone(),
-                from_policy,
-                to_policy,
-                reason,
-                approver,
-                recorded_at: now,
-            });
-
-        ProjectionEffect::RealmAuditPolicyDowngradeProjected { realm_id }
     }
 
     fn apply_membership(
@@ -8294,7 +8187,7 @@ impl ProjectionState {
     /// Apply `ck.agent.endpoint`. Upserts the SolandAgentProjection keyed by
     /// `agent_id`. If the payload carries an endpoint URL field it
     /// is captured into the projection so the bridge can echo it back
-    /// on `protocol_session.result`.
+    /// on `interop_session.result`.
     fn apply_agent_endpoint(
         &mut self,
         operation: &Operation,
@@ -8869,15 +8762,6 @@ impl ProjectionState {
             cursor = next;
         }
         None
-    }
-
-    /// R3.3 — read the ordered audit log of
-    /// `ck.realm.audit_policy_downgrade` entries for a Realm.
-    pub fn realm_audit_downgrades(&self, realm_id: &str) -> &[RealmAuditDowngradeEntry] {
-        self.realm_audit_downgrades
-            .get(realm_id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
     }
 
     /// Read the create-locked Realm encryption profile from the genesis

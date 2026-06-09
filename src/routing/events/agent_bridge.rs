@@ -1,12 +1,12 @@
 //! Reference agent invocation runtime.
 //!
-//! When a client emits `ck.agent.protocol_session.start` against an
+//! When a client emits `ck.agent.interop_session.start` against an
 //! agent registered via `ck.agent.endpoint`, this module fans out the
 //! lifecycle as projection events:
 //!
-//! 1. `ck.agent.protocol_session.status` with `status="working"` once the runtime acknowledges the
+//! 1. `ck.agent.interop_session.status` with `status="working"` once the runtime acknowledges the
 //!    invocation.
-//! 2. `ck.agent.protocol_session.result` carrying the terminal payload plus an Ed25519-signed
+//! 2. `ck.agent.interop_session.result` carrying the terminal payload plus an Ed25519-signed
 //!    `audit_binding` block (signature is computed by
 //!    `cokret_sdk::agent_binding::sign_ed25519_audit_binding` over the canonical subject
 //!    `{session_id, agent_principal_id, result.echo, actor}`).
@@ -15,8 +15,8 @@
 //!
 //! - The runtime first looks up `counterparty_agent` in `state.projection.lock().agents`. When no
 //!   SolandAgentProjection is present the bridge fails closed with a single
-//!   `ck.agent.protocol_session.result` (`status="failed"` + `error.code="unknown_agent"`) and
-//!   emits no status(working).
+//!   `ck.agent.interop_session.result` (`status="failed"` + `error.code="unknown_agent"`) and emits
+//!   no status(working).
 //! - When the registered agent carries an `endpoint_url`, the runtime POSTs the invocation to it
 //!   via reqwest on a tokio task and emits the result event when the upstream replies. Failures
 //!   (timeout, non-2xx, connection refused) surface as `status="failed"` +
@@ -56,8 +56,8 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] = [
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str = "soland.reference.agent_echo.ed25519_v1";
 
 /// Inspect `operation` and, when it carries a
-/// `ck.agent.protocol_session.start` payload, emit synthetic
-/// `ck.agent.protocol_session.status` + `ck.agent.protocol_session.result`
+/// `ck.agent.interop_session.start` payload, emit synthetic
+/// `ck.agent.interop_session.status` + `ck.agent.interop_session.result`
 /// projection events. Idempotent (no-ops for any other kind).
 ///
 /// Called from `project_accepted_operations` AFTER the `start` event
@@ -74,7 +74,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     operation: &cokret_sdk::Operation,
 ) {
     let kind = kinds::canonical_kind_string(operation);
-    if kind != kinds::CK_AGENT_PROTOCOL_SESSION_START {
+    if kind != kinds::CK_AGENT_INTEROP_SESSION_START {
         return;
     }
     let body = match operation.payload.as_object() {
@@ -123,7 +123,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
         let error_record = ProjectionEventRecord {
             event_id: ids::generate("event"),
             realm_id: operation.realm_id.to_string(),
-            event_kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
+            event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
             operation_type: "agent_echo_bridge_failed".to_owned(),
             operation_id: None,
             sender: Some(origin.to_owned()),
@@ -157,7 +157,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
     let status_record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: operation.realm_id.to_string(),
-        event_kind: kinds::CK_AGENT_PROTOCOL_SESSION_STATUS.to_owned(),
+        event_kind: kinds::CK_AGENT_INTEROP_SESSION_STATUS.to_owned(),
         operation_type: "agent_echo_bridge_status".to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -228,7 +228,7 @@ pub async fn maybe_emit_echo_result_for_session_start(
 }
 
 /// Outcome of an agent invocation as surfaced into the
-/// `ck.agent.protocol_session.result` envelope.
+/// `ck.agent.interop_session.result` envelope.
 enum AgentInvocationOutcome {
     /// In-process reference echo — `result.echo` mirrors the
     /// caller's `params`.
@@ -412,7 +412,7 @@ async fn emit_agent_result_envelope(
     let record = ProjectionEventRecord {
         event_id: ids::generate("event"),
         realm_id: realm_id.to_owned(),
-        event_kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT.to_owned(),
+        event_kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT.to_owned(),
         operation_type: operation_type.to_owned(),
         operation_id: None,
         sender: Some(origin.to_owned()),
@@ -502,7 +502,7 @@ mod tests {
             OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000001".to_owned())
                 .unwrap(),
             RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            kinds::CK_AGENT_PROTOCOL_SESSION_START,
+            kinds::CK_AGENT_INTEROP_SESSION_START,
             json!({
                 "session_id": session_id,
                 "counterparty_agent": agent_principal_id,
@@ -560,7 +560,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_STATUS
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("synthetic status event missing");
@@ -577,7 +577,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("synthetic result event missing");
@@ -619,7 +619,7 @@ mod tests {
 
     /// When the counterparty_agent is not registered (no `ck.agent.endpoint`
     /// accepted), the bridge MUST emit a single
-    /// `ck.agent.protocol_session.result` with `status=failed` +
+    /// `ck.agent.interop_session.result` with `status=failed` +
     /// `error.code=unknown_agent` instead of the status/result
     /// success pair.
     #[tokio::test]
@@ -641,7 +641,7 @@ mod tests {
         // failed before acknowledging the invocation.
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_STATUS
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             }),
             "failed-closed dispatch must skip the status(working) event"
@@ -649,7 +649,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("error result event missing");
@@ -700,7 +700,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -767,7 +767,7 @@ mod tests {
                     .await
                     .expect("snapshot");
                 if let Some(e) = projections.into_iter().find(|e| {
-                    e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
+                    e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
                         && e.payload["session_id"] == session
                 }) {
                     found = Some(e);
@@ -798,7 +798,7 @@ mod tests {
         let status_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_STATUS
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
                     && e.payload["session_id"] == session
             })
             .expect("status(working) event missing");
@@ -827,7 +827,7 @@ mod tests {
         let result_entry = projections
             .iter()
             .find(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
                     && e.payload["session_id"] == session
             })
             .expect("result event missing");
@@ -858,8 +858,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
-                    || e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_STATUS
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
             }),
             "non-session_start operation must not trigger agent echo bridge"
         );
@@ -872,7 +872,7 @@ mod tests {
             OperationId::new("ck:operation:01904100-0000-7bbb-8bbb-000000000003".to_owned())
                 .unwrap(),
             RealmId::new("ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()).unwrap(),
-            kinds::CK_AGENT_PROTOCOL_SESSION_START,
+            kinds::CK_AGENT_INTEROP_SESSION_START,
             json!({"counterparty_agent": "did:web:agent.example"}),
         );
         op.object_id = None;
@@ -885,8 +885,8 @@ mod tests {
             .expect("snapshot");
         assert!(
             !projections.iter().any(|e| {
-                e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_RESULT
-                    || e.event_kind == kinds::CK_AGENT_PROTOCOL_SESSION_STATUS
+                e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_RESULT
+                    || e.event_kind == kinds::CK_AGENT_INTEROP_SESSION_STATUS
             }),
             "agent session_start without session_id must fail closed"
         );

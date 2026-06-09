@@ -404,8 +404,8 @@ const FLOW_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // Spec `extensions/applet-integration.md` + event-kind-registry rows:
 //   `ck.applet.registration` → service_did + namespace + capabilities
 //   `ck.applet.discovery`    → service_did + manifest
-//   `ck.applet.protocol_session.start`  → applet_id + session_id + params
-//   `ck.applet.protocol_session.status` → session_id + status + detail
+//   `ck.applet.interop_session.start`  → applet_id + session_id + params
+//   `ck.applet.interop_session.status` → session_id + status + detail
 //   `ck.applet.bridge_error`            → session_id + errcode + message
 //
 // We require the structurally-identifying fields; richer policy
@@ -423,19 +423,19 @@ const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
 const APPLET_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "applet_id",
-        "applet protocol_session.start requires applet_id",
+        "applet interop_session.start requires applet_id",
     ),
     PayloadRequirement::Required(
         "session_id",
-        "applet protocol_session.start requires session_id",
+        "applet interop_session.start requires session_id",
     ),
 ];
 const APPLET_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "session_id",
-        "applet protocol_session.status requires session_id",
+        "applet interop_session.status requires session_id",
     ),
-    PayloadRequirement::Required("status", "applet protocol_session.status requires status"),
+    PayloadRequirement::Required("status", "applet interop_session.status requires status"),
 ];
 const APPLET_BRIDGE_ERROR_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("session_id", "applet bridge_error requires session_id"),
@@ -452,34 +452,34 @@ const AGENT_ENDPOINT_REQUIREMENTS: &[PayloadRequirement] = &[
 const AGENT_SESSION_START_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "session_id",
-        "agent protocol_session.start requires session_id",
+        "agent interop_session.start requires session_id",
     ),
     PayloadRequirement::Required(
         "counterparty_agent",
-        "agent protocol_session.start requires counterparty_agent",
+        "agent interop_session.start requires counterparty_agent",
     ),
-    PayloadRequirement::Required("protocol", "agent protocol_session.start requires protocol"),
+    PayloadRequirement::Required("protocol", "agent interop_session.start requires protocol"),
     PayloadRequirement::Required(
         "capability_grant",
-        "agent protocol_session.start requires capability_grant",
+        "agent interop_session.start requires capability_grant",
     ),
 ];
 const AGENT_SESSION_STATUS_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "session_id",
-        "agent protocol_session.status requires session_id",
+        "agent interop_session.status requires session_id",
     ),
-    PayloadRequirement::Required("status", "agent protocol_session.status requires status"),
+    PayloadRequirement::Required("status", "agent interop_session.status requires status"),
 ];
 const AGENT_SESSION_RESULT_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "session_id",
-        "agent protocol_session.result requires session_id",
+        "agent interop_session.result requires session_id",
     ),
-    PayloadRequirement::Required("result", "agent protocol_session.result requires result"),
+    PayloadRequirement::Required("result", "agent interop_session.result requires result"),
     PayloadRequirement::Required(
         "audit_binding",
-        "agent protocol_session.result requires audit_binding",
+        "agent interop_session.result requires audit_binding",
     ),
 ];
 
@@ -763,10 +763,10 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // ck.applet.protocol_session.start — round 4 requires the
+        // ck.applet.interop_session.start — round 4 requires the
         // `applet_id` to be either a DID or a strictly-validated
         // `ck:applet:<uuidv7>` typed id.
-        "ck.applet.protocol_session.start" => {
+        "ck.applet.interop_session.start" => {
             if let Some(applet_id) = operation.payload.get("applet_id").and_then(|v| v.as_str()) {
                 validate_applet_id(applet_id).map(|_| ()).map_err(
                     |_| "applet_id must be a DID or ck:applet:<uuidv7> (typed-id wire break)",
@@ -931,34 +931,6 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                         );
                     }
                 }
-            }
-            Ok(())
-        }
-        // REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
-        // `ck.audit.epoch_destruction_failsafe` event cannot serve as a
-        // delayed remediation for an Audit Agent remove batch that lacks
-        // the same-batch `ck.audit.epoch_key_destruction` attestation.
-        // The wire-level check here rejects any failsafe whose payload
-        // names an `epoch_range` that is missing the paired attestation
-        // marker `paired_with_epoch_key_destruction=true`. The full
-        // cross-batch scan (walking prior remove batches in the same
-        // epoch) runs in the reducer once the audit projection lands —
-        // see `_before_todos.md §0.4` for the canonical phrasing.
-        //
-        // TODO(R4): walk the per-epoch remove batch index from the audit
-        // projection and reject when a remove batch lacks an
-        // in-batch attestation AND was committed before this failsafe.
-        "ck.audit.epoch_destruction_failsafe" => {
-            let attestation_paired = operation
-                .payload
-                .get("paired_with_epoch_key_destruction")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !attestation_paired {
-                return Err("audit_agent_destruction_not_paired_with_remove: \
-                     ck.audit.epoch_destruction_failsafe MUST NOT be accepted as delayed \
-                     remediation for an Audit Agent remove batch lacking same-batch \
-                     ck.audit.epoch_key_destruction");
             }
             Ok(())
         }
@@ -1383,11 +1355,11 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: APPLET_DISCOVERY_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_APPLET_PROTOCOL_SESSION_START => OperationPayloadSchema {
+        kinds::CK_APPLET_INTEROP_SESSION_START => OperationPayloadSchema {
             requirements: APPLET_SESSION_START_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_APPLET_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+        kinds::CK_APPLET_INTEROP_SESSION_STATUS => OperationPayloadSchema {
             requirements: APPLET_SESSION_STATUS_REQUIREMENTS,
             validate: None,
         },
@@ -1400,15 +1372,15 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: AGENT_ENDPOINT_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_AGENT_PROTOCOL_SESSION_START => OperationPayloadSchema {
+        kinds::CK_AGENT_INTEROP_SESSION_START => OperationPayloadSchema {
             requirements: AGENT_SESSION_START_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_AGENT_PROTOCOL_SESSION_STATUS => OperationPayloadSchema {
+        kinds::CK_AGENT_INTEROP_SESSION_STATUS => OperationPayloadSchema {
             requirements: AGENT_SESSION_STATUS_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_AGENT_PROTOCOL_SESSION_RESULT => OperationPayloadSchema {
+        kinds::CK_AGENT_INTEROP_SESSION_RESULT => OperationPayloadSchema {
             requirements: AGENT_SESSION_RESULT_REQUIREMENTS,
             validate: None,
         },

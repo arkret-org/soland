@@ -119,12 +119,12 @@ pub const CK_ACCOUNT_DATA_SET: &str = "ck.account_data.set";
 pub use cokret_sdk::events::kinds::{
     AGENT_ENDPOINT as CK_AGENT_ENDPOINT, APPLET_BRIDGE_ERROR as CK_APPLET_BRIDGE_ERROR,
     APPLET_DISCOVERY as CK_APPLET_DISCOVERY,
-    APPLET_PROTOCOL_SESSION_START as CK_APPLET_PROTOCOL_SESSION_START,
-    APPLET_PROTOCOL_SESSION_STATUS as CK_APPLET_PROTOCOL_SESSION_STATUS,
+    APPLET_INTEROP_SESSION_START as CK_APPLET_INTEROP_SESSION_START,
+    APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
     APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
     AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, REDACTION as CK_REDACTION,
 };
-pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.start";
+pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start";
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
 // NOT advance the anchor frontier / actor_seq). Wire-accepted only.
 // R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
@@ -168,19 +168,13 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
-// REDU-8 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — the
-// `ck.audit.epoch_destruction_failsafe` event cannot serve as a delayed
-// remediation for a missing same-batch attestation. The spec wording
-// (see _before_todos.md §0.4) is: the failsafe MUST NOT be accepted in
-// place of the in-batch `ck.audit.epoch_key_destruction` paired with
-// the audit agent remove; soland keeps the existing forced
-// `ck.realm.audit_policy_downgrade` write path described above so the
-// downgrade ratchet stays the only correct remediation.
-// TODO(R3.1): when the failsafe kind reaches the reducer admission
-// pipeline, reject it whenever the matching epoch's
-// `ck.audit.epoch_key_destruction` is missing from the same batch with
-// `audit_agent_destruction_proof_missing` / the canonical attested-
-// hardware reason; do NOT silently accept it as remediation.
+// Audit model migration (spec @ 2026-06-04): the standing-audit-member
+// events `ck.audit.epoch_key_destruction` and `ck.realm.audit_policy_downgrade`
+// (and the `ck.audit.epoch_destruction_failsafe` remediation) were removed
+// from the registry. Cokret v1 audit now uses the Audit Applet Binding +
+// sealed historical release session model (`ck.audit.applet_binding`,
+// `ck.audit.session.*`, `ck.audit.release`); audit applets are not MLS members
+// and no epoch-key-destruction / downgrade event is accepted.
 
 // Round C45 (2026-05-18 main) — new event kinds.
 //
@@ -195,17 +189,6 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 // `ck.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
-// Round C45 (2026-05-18 main; spec 346f347) — registry refactor dropped the
-// `.v1` suffix from these audit event kinds. Wire schema versioning now
-// flows through `requirements.features` (e.g. `ck.feature.audit_destruction_v1`).
-// `attested_hardware` Audit Agent removal MUST emit
-// `ck.audit.epoch_key_destruction` in the same anchor batch as the paired
-// `ck.mls.commit`. If the deadline passes without the attestation, soland
-// forces a `ck.realm.audit_policy_downgrade` event that drops
-// `audit_assurance` from attested_hardware to disclosed_policy and triggers
-// a UI banner. Reducer-level validation lives in `src/reducer.rs` under
-// `apply_audit_epoch_key_destruction` / `apply_audit_policy_downgrade`
-// (still TODO stubs pending full attestation-chain verification).
 // Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
 // governance + per-device push route binding.
 //
@@ -250,14 +233,13 @@ pub const CK_AGENT_PROTOCOL_SESSION_START: &str = "ck.agent.protocol_session.sta
 pub use cokret_sdk::events::kinds::{
     AGENT_ACTION_APPROVE as CK_AGENT_ACTION_APPROVE, AGENT_ACTION_REJECT as CK_AGENT_ACTION_REJECT,
     AGENT_ACTION_REQUEST as CK_AGENT_ACTION_REQUEST, AGENT_DEACTIVATE as CK_AGENT_DEACTIVATE,
-    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE, AGENT_PAUSE as CK_AGENT_PAUSE,
-    AGENT_PROTOCOL_SESSION_RESULT as CK_AGENT_PROTOCOL_SESSION_RESULT,
-    AGENT_PROTOCOL_SESSION_STATUS as CK_AGENT_PROTOCOL_SESSION_STATUS,
+    AGENT_DRAFT_PROPOSE as CK_AGENT_DRAFT_PROPOSE,
+    AGENT_INTEROP_SESSION_RESULT as CK_AGENT_INTEROP_SESSION_RESULT,
+    AGENT_INTEROP_SESSION_STATUS as CK_AGENT_INTEROP_SESSION_STATUS, AGENT_PAUSE as CK_AGENT_PAUSE,
     AGENT_RESUME as CK_AGENT_RESUME, CAPABILITY_DERIVED as CK_CAPABILITY_DERIVED,
     DEVICE_PUSH_ROUTE as CK_DEVICE_PUSH_ROUTE, MLS_COMMIT as CK_MLS_COMMIT,
     MLS_GENESIS as CK_MLS_GENESIS, MLS_KEYPACKAGE as CK_MLS_KEYPACKAGE,
     MLS_WELCOME as CK_MLS_WELCOME, MORPH_SCHEMA_MIGRATE as CK_MORPH_SCHEMA_MIGRATE,
-    REALM_AUDIT_POLICY_DOWNGRADE as CK_REALM_AUDIT_POLICY_DOWNGRADE,
     REALM_DELIVERY_BINDING_POLICY as CK_REALM_DELIVERY_BINDING_POLICY,
     REALM_INHERITANCE_POLICY as CK_REALM_INHERITANCE_POLICY, REALM_LINK as CK_REALM_LINK,
     REALM_POLICY_SERVER as CK_REALM_POLICY_SERVER,
@@ -432,14 +414,14 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // Applet protocol family (round 14e+).
         CK_APPLET_REGISTRATION => Some(CK_APPLET_REGISTRATION),
         CK_APPLET_DISCOVERY => Some(CK_APPLET_DISCOVERY),
-        CK_APPLET_PROTOCOL_SESSION_START => Some(CK_APPLET_PROTOCOL_SESSION_START),
-        CK_APPLET_PROTOCOL_SESSION_STATUS => Some(CK_APPLET_PROTOCOL_SESSION_STATUS),
+        CK_APPLET_INTEROP_SESSION_START => Some(CK_APPLET_INTEROP_SESSION_START),
+        CK_APPLET_INTEROP_SESSION_STATUS => Some(CK_APPLET_INTEROP_SESSION_STATUS),
         CK_APPLET_BRIDGE_ERROR => Some(CK_APPLET_BRIDGE_ERROR),
         // Agent protocol family (round 14e+).
         CK_AGENT_ENDPOINT => Some(CK_AGENT_ENDPOINT),
-        CK_AGENT_PROTOCOL_SESSION_START => Some(CK_AGENT_PROTOCOL_SESSION_START),
-        CK_AGENT_PROTOCOL_SESSION_STATUS => Some(CK_AGENT_PROTOCOL_SESSION_STATUS),
-        CK_AGENT_PROTOCOL_SESSION_RESULT => Some(CK_AGENT_PROTOCOL_SESSION_RESULT),
+        CK_AGENT_INTEROP_SESSION_START => Some(CK_AGENT_INTEROP_SESSION_START),
+        CK_AGENT_INTEROP_SESSION_STATUS => Some(CK_AGENT_INTEROP_SESSION_STATUS),
+        CK_AGENT_INTEROP_SESSION_RESULT => Some(CK_AGENT_INTEROP_SESSION_RESULT),
         // R3 spec-sync — agent lifecycle (FSM, reducer_input=true).
         CK_AGENT_PAUSE => Some(CK_AGENT_PAUSE),
         CK_AGENT_RESUME => Some(CK_AGENT_RESUME),
@@ -449,10 +431,6 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_AGENT_ACTION_REQUEST => Some(CK_AGENT_ACTION_REQUEST),
         CK_AGENT_ACTION_APPROVE => Some(CK_AGENT_ACTION_APPROVE),
         CK_AGENT_ACTION_REJECT => Some(CK_AGENT_ACTION_REJECT),
-        // Tier-0 S6 audit kinds (C44 wire-valid, C45 renamed off `.v1`).
-        // Projection is currently `Ignored` pending full attestation-chain
-        // verification.
-        CK_REALM_AUDIT_POLICY_DOWNGRADE => Some(CK_REALM_AUDIT_POLICY_DOWNGRADE),
         // Round C45 — new event kinds. Wire-valid; reducer dispatch is TODO
         // (morph.schema_migrate enforces capability + compatibility_class gate).
         CK_MORPH_SCHEMA_MIGRATE => Some(CK_MORPH_SCHEMA_MIGRATE),
@@ -490,8 +468,8 @@ pub fn is_applet_kind(kind: &str) -> bool {
         kind,
         CK_APPLET_REGISTRATION
             | CK_APPLET_DISCOVERY
-            | CK_APPLET_PROTOCOL_SESSION_START
-            | CK_APPLET_PROTOCOL_SESSION_STATUS
+            | CK_APPLET_INTEROP_SESSION_START
+            | CK_APPLET_INTEROP_SESSION_STATUS
             | CK_APPLET_BRIDGE_ERROR
     )
 }
@@ -500,9 +478,9 @@ pub fn is_agent_kind(kind: &str) -> bool {
     matches!(
         kind,
         CK_AGENT_ENDPOINT
-            | CK_AGENT_PROTOCOL_SESSION_START
-            | CK_AGENT_PROTOCOL_SESSION_STATUS
-            | CK_AGENT_PROTOCOL_SESSION_RESULT
+            | CK_AGENT_INTEROP_SESSION_START
+            | CK_AGENT_INTEROP_SESSION_STATUS
+            | CK_AGENT_INTEROP_SESSION_RESULT
             | CK_AGENT_PAUSE
             | CK_AGENT_RESUME
             | CK_AGENT_DEACTIVATE

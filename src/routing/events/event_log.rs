@@ -5683,7 +5683,6 @@ mod proof_strictness_tests {
             "ck.morph.update",
             "ck.space.update",
             "ck.profile.update",
-            "ck.profile.realm_override",
         ];
         let missing = catalog.missing_payload_validators_for(object_patch_kinds);
         assert!(
@@ -5723,6 +5722,24 @@ mod proof_strictness_tests {
                 "{event_kind} must reject patch ops outside ck.patch.v1"
             );
         }
+
+        // ck.profile.realm_override carries a Realm-scoped override and uses the
+        // dedicated profile_realm_override_payload (target_ref + target_realm_id
+        // + patch), not the generic object_patch_payload.
+        catalog
+            .validate_payload(
+                "ck.profile.realm_override",
+                &json!({
+                    "target_ref": "ck:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                    "target_realm_id": "ck:realm:01904100-0000-7000-8000-f10dc0000002",
+                    "patch": { "title": { "$op": "set", "value": "Roadmap" } }
+                }),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "ck.profile.realm_override must accept profile_realm_override_payload: {err}"
+                );
+            });
 
         catalog
             .validate_payload(

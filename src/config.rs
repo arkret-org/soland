@@ -98,7 +98,7 @@ pub struct AppConfig {
     /// fails fast at startup with a clear error.
     pub anchorer_signing_key_seed: Option<[u8; 32]>,
     /// Per-deployment Ed25519 seed used by the reference agent runtime
-    /// to sign `audit_binding` blocks on `ck.agent.protocol_session.result`
+    /// to sign `audit_binding` blocks on `ck.agent.interop_session.result`
     /// events. When `None` (default), the bridge falls back to
     /// `REFERENCE_AGENT_AUDIT_ED25519_SEED` — fine for dev / reference
     /// deployments but provides no real authentication because every

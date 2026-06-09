@@ -2014,7 +2014,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet session start",
-                kind: kinds::CK_APPLET_PROTOCOL_SESSION_START,
+                kind: kinds::CK_APPLET_INTEROP_SESSION_START,
                 payload: json!({
                     "applet_id": "ck:applet:01904100-0000-7000-8000-aa55aa55aa55",
                     "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
@@ -2024,7 +2024,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "applet session status",
-                kind: kinds::CK_APPLET_PROTOCOL_SESSION_STATUS,
+                kind: kinds::CK_APPLET_INTEROP_SESSION_STATUS,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-aa55aa55aa55",
                     "status": "running",
@@ -2060,7 +2060,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session start",
-                kind: kinds::CK_AGENT_PROTOCOL_SESSION_START,
+                kind: kinds::CK_AGENT_INTEROP_SESSION_START,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
@@ -2071,7 +2071,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session start missing capability_grant",
-                kind: kinds::CK_AGENT_PROTOCOL_SESSION_START,
+                kind: kinds::CK_AGENT_INTEROP_SESSION_START,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "counterparty_agent": "did:web:agent.example",
@@ -2081,7 +2081,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session status",
-                kind: kinds::CK_AGENT_PROTOCOL_SESSION_STATUS,
+                kind: kinds::CK_AGENT_INTEROP_SESSION_STATUS,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "status": "working",
@@ -2091,7 +2091,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session result",
-                kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT,
+                kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},
@@ -2101,7 +2101,7 @@ mod operation_conformance_tests {
             },
             OperationVector {
                 name: "agent session result missing audit_binding",
-                kind: kinds::CK_AGENT_PROTOCOL_SESSION_RESULT,
+                kind: kinds::CK_AGENT_INTEROP_SESSION_RESULT,
                 payload: json!({
                     "session_id": "ck:session:01904100-0000-7000-8000-bb66bb66bb66",
                     "result": {"summary": "ok"},

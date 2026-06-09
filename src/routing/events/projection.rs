@@ -1598,8 +1598,8 @@ async fn project_accepted_operations_inner(
             );
         }
         // Reference applet bridge: if the accepted operation is
-        // `ck.applet.protocol_session.start`, emit a synthetic
-        // `ck.applet.protocol_session.status` (echo response)
+        // `ck.applet.interop_session.start`, emit a synthetic
+        // `ck.applet.interop_session.status` (echo response)
         // immediately afterwards so the timeline observes the full
         // round trip without a real applet service plugged in. See
         // `routing::events::applet_bridge::maybe_emit_echo_status_for_session_start`
@@ -1607,9 +1607,9 @@ async fn project_accepted_operations_inner(
         super::applet_bridge::maybe_emit_echo_status_for_session_start(state, origin, operation)
             .await;
         // Reference agent runtime: if the accepted operation is
-        // `ck.agent.protocol_session.start`, fan out a synthetic
-        // `ck.agent.protocol_session.status` (running) followed by a
-        // terminal `ck.agent.protocol_session.result` (completed) with
+        // `ck.agent.interop_session.start`, fan out a synthetic
+        // `ck.agent.interop_session.status` (running) followed by a
+        // terminal `ck.agent.interop_session.result` (completed) with
         // an `audit_binding` placeholder so the lifecycle is observable
         // end-to-end. See
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
