@@ -4073,7 +4073,7 @@ fn sdk_event_from_record(
     }
     Ok(Event {
         event_id,
-        kind: record.kind.clone(),
+        kind: record.kind.clone().into(),
         realm_id: realm_id.clone(),
         actor_id,
         actor_seq: record.actor_seq,
