@@ -1068,7 +1068,7 @@ fn formal_event_from_sdk_event(
         actor_id,
         actor_seq,
         realm_id: Some(realm_id.clone()),
-        kind: kind.clone(),
+        kind: kind.as_str().to_owned(),
         schema_id: EVENT_SCHEMA_ID.to_owned(),
         canonical_digest,
         canonical_bytes,
@@ -1078,7 +1078,7 @@ fn formal_event_from_sdk_event(
     let projection = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id,
-        event_kind: kind,
+        event_kind: kind.as_str().to_owned(),
         operation_type: operation_type.to_owned(),
         operation_id: Some(ids::generate_operation_id()),
         sender: sender.map(ToOwned::to_owned),
