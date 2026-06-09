@@ -36,7 +36,8 @@ use super::projection::{retention_tombstone_for_event, retention_tombstone_paylo
 use super::{
     append_audit_log, auth_or_render, is_valid_sha256_digest, now, query_param, query_param_all,
     realm_allows_plaintext_service, realm_event_visible_to_session, realm_has_member, render_error,
-    sha256_hex, validate_content_encryption_floor, validate_did, validate_operation_policy,
+    sha256_hex, validate_agent_participation_ceiling, validate_agent_reply_participation,
+    validate_content_encryption_floor, validate_did, validate_operation_policy,
     validate_operation_semantics, validate_space_id,
 };
 use crate::error::{AppError, ErrorCode, error_http_status};
@@ -1036,6 +1037,24 @@ pub(in crate::routing) async fn submit_event_value(
                 reason,
                 reason,
             ));
+        }
+        // CKP-0016 — reject agent_participation ceiling writes that widen
+        // the parent scope's ceiling (tighten-only invariant).
+        if let Err(reason) =
+            validate_agent_participation_ceiling(state, std::slice::from_ref(operation)).await
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
+                reason,
+            ));
+        }
+        // CKP-0016 §5.2 — a native personal agent may only author messages
+        // where its effective participation `reply` bit is true.
+        if let Err(reason) =
+            validate_agent_reply_participation(state, std::slice::from_ref(operation)).await
+        {
+            return Err(SubmitOneError::new(StatusCode::FORBIDDEN, reason, reason));
         }
         if let Err(message) =
             validate_operation_policy(state, std::slice::from_ref(operation)).await

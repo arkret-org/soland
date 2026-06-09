@@ -1490,6 +1490,9 @@ async fn project_accepted_operations_inner(
         ensure_projected_realm(state, origin, operation).await;
         if kinds::operation_is_message_create(operation) {
             project_federated_message(state, origin, operation).await;
+            // CKP-0016 §9.4.5 — derive mention notifications with the agent
+            // third-party mention gate.
+            super::notify::dispatch_message_notifications(state, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
             project_invite_create_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ck.invite.accept" {
@@ -1557,6 +1560,21 @@ async fn project_accepted_operations_inner(
         // Mirrors the canonical wire kinds the reducer dispatches into
         // `ProjectionState::{space_containers,flows,morphs}`.
         write_through_projection(state, operation).await;
+        // CKP-0016 — mirror agent_participation ceiling changes into the
+        // agent_participation_ceiling projection table (read by
+        // participation.set / .get ceiling resolution).
+        if let Some(record) =
+            crate::routing::events::operations::agent_participation_ceiling_record(operation)
+        {
+            if let Err(error) = state
+                .persistence
+                .agent_participation()
+                .put_ceiling(record)
+                .await
+            {
+                tracing::warn!(%error, "failed to persist agent participation ceiling");
+            }
+        }
         let projected = projection_event_from_operation(operation, Some(origin));
         // Broadcast every accepted projection
         // event to live subscribers on ck.events.subscribe. Subscribers

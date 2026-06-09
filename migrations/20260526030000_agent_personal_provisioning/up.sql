@@ -178,3 +178,19 @@ CREATE TABLE agent_participation_ceiling (
 );
 
 CREATE INDEX agent_participation_ceiling_realm_idx ON agent_participation_ceiling(realm_id);
+
+-- CKP-0016 §9.4.5 — per-recipient notification projection. Derived from
+-- ck.message.create mention fanout; native agents are gated by their
+-- effective accept_third_party_mention bit before a row is written.
+CREATE TABLE notification (
+    notification_id    TEXT PRIMARY KEY,
+    recipient_id       TEXT NOT NULL,
+    realm_id           TEXT NOT NULL,
+    source_event_id    TEXT NOT NULL,
+    notification_type  TEXT NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL,
+    read_at            TIMESTAMPTZ
+);
+
+CREATE INDEX notification_recipient_idx ON notification(recipient_id, created_at DESC);
+CREATE INDEX notification_source_idx ON notification(source_event_id);

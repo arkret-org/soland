@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS notification;
 DROP TABLE IF EXISTS agent_participation_ceiling;
 DROP TABLE IF EXISTS agent_participation;
 DROP TABLE IF EXISTS pending_agent_drafts;

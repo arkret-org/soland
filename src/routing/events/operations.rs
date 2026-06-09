@@ -2562,6 +2562,253 @@ pub async fn validate_content_encryption_floor(
     Ok(())
 }
 
+// ── CKP-0016 — agent participation ceiling (admission validate + projection write) ──
+
+fn ap_uuid_part(typed_id: &str) -> &str {
+    typed_id.rsplit(':').next().unwrap_or(typed_id)
+}
+
+fn ap_bool(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Extract the agent_participation ceiling a realm-policy / circle / flow
+/// operation carries, plus the parent scope_key chain to validate
+/// tighten-only against. Returns `(scope_kind, scope_key, child_ceiling,
+/// parent_scope_keys)` or None when the operation carries no ceiling.
+fn agent_participation_ceiling_change(
+    operation: &Operation,
+) -> Option<(
+    &'static str,
+    String,
+    cokret_sdk::model::AgentParticipation,
+    Vec<String>,
+)> {
+    use cokret_sdk::model::AgentParticipation;
+    let payload = &operation.payload;
+    let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
+    let find = |native: bool| -> Option<Value> {
+        let base = payload
+            .get("agent_participation")
+            .or_else(|| {
+                payload
+                    .get("patch")
+                    .and_then(|p| p.get("agent_participation"))
+            })
+            .or_else(|| {
+                payload
+                    .get("state")
+                    .and_then(|p| p.get("agent_participation"))
+            })
+            .or_else(|| {
+                payload
+                    .get("object")
+                    .and_then(|p| p.get("agent_participation"))
+            })?;
+        if native {
+            base.get("native_agent").cloned()
+        } else {
+            Some(base.clone())
+        }
+    };
+    let to_part = |value: &Value| AgentParticipation {
+        reply: ap_bool(value, "reply"),
+        accept_third_party_mention: ap_bool(value, "accept_third_party_mention"),
+        act_on_behalf: ap_bool(value, "act_on_behalf"),
+    };
+    let id_of = |key: &str| -> Option<String> {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .or_else(|| {
+                payload
+                    .get("patch")
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_str)
+            })
+            .or_else(|| {
+                payload
+                    .get("object")
+                    .and_then(|p| p.get("id"))
+                    .and_then(Value::as_str)
+            })
+            .map(ToOwned::to_owned)
+    };
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(kinds::CK_REALM_POLICY_COMPONENTS) => {
+            let value = find(true)?;
+            Some((
+                "realm",
+                format!("realm:{realm_uuid}"),
+                to_part(&value),
+                Vec::new(),
+            ))
+        }
+        Some(kinds::CK_CIRCLE_CREATE) | Some(kinds::CK_CIRCLE_UPDATE) => {
+            let value = find(false)?;
+            let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
+            Some((
+                "circle",
+                format!("circle:{realm_uuid}:{circle_uuid}"),
+                to_part(&value),
+                vec![format!("realm:{realm_uuid}")],
+            ))
+        }
+        Some(kinds::CK_FLOW_CREATE) | Some(kinds::CK_FLOW_UPDATE) => {
+            let value = find(false)?;
+            let flow_uuid = ap_uuid_part(&id_of("flow_id")?).to_owned();
+            Some((
+                "flow",
+                format!("flow:{realm_uuid}:{flow_uuid}"),
+                to_part(&value),
+                vec![format!("realm:{realm_uuid}")],
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Admission gate (CKP-0016 §3 invariant 1): an inner-scope
+/// `agent_participation` ceiling MUST NOT widen its parent ceiling. The
+/// parent ceiling is the deployment default (`ALL` in dev) intersected
+/// with any persisted parent-scope ceiling rows.
+pub async fn validate_agent_participation_ceiling(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    use cokret_sdk::model::{AgentParticipation, validate_agent_participation_tightens};
+    for operation in operations {
+        let Some((_scope_kind, _scope_key, child, parent_keys)) =
+            agent_participation_ceiling_change(operation)
+        else {
+            continue;
+        };
+        let mut parent = AgentParticipation::ALL;
+        if !parent_keys.is_empty() {
+            let rows = state
+                .persistence
+                .agent_participation()
+                .ceilings_for_scope_keys(&parent_keys)
+                .await
+                .unwrap_or_default();
+            for row in &rows {
+                parent = parent.intersect(AgentParticipation {
+                    reply: ap_bool(row, "reply"),
+                    accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
+                    act_on_behalf: ap_bool(row, "act_on_behalf"),
+                });
+            }
+        }
+        if validate_agent_participation_tightens(parent, child).is_err() {
+            return Err("agent_participation_ceiling_widen");
+        }
+    }
+    Ok(())
+}
+
+/// The `agent_participation_ceiling` row to UPSERT after an event with a
+/// ceiling change is accepted (projection write), or None.
+pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Option<Value> {
+    let (scope_kind, scope_key, child, _parents) = agent_participation_ceiling_change(operation)?;
+    Some(serde_json::json!({
+        "scope_kind": scope_kind,
+        "scope_key": scope_key,
+        "realm_id": operation.realm_id.as_str(),
+        "reply": child.reply,
+        "accept_third_party_mention": child.accept_third_party_mention,
+        "act_on_behalf": child.act_on_behalf,
+    }))
+}
+
+fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::model::AgentParticipation) -> bool {
+    ap_bool(selection, "reply") && ceiling.reply
+}
+
+/// CKP-0016 §5.2 enforcement (soland-native): a native personal agent may
+/// only author `ck.message.create` / `ck.reaction.add` in a scope where
+/// its effective participation `reply` bit is true (selection ∩ ceiling).
+/// Non-agent actors are unaffected — they fall through to standard authz.
+/// The agent's most-specific selection (flow over realm) governs; an agent
+/// with no reply-enabled selection covering the scope is rejected
+/// (least-privilege, CKP-0008 §4.9).
+pub async fn validate_agent_reply_participation(
+    state: &AppState,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    use cokret_sdk::model::AgentParticipation;
+    for operation in operations {
+        match kinds::canonical_kind_for_operation(operation) {
+            Some(kinds::CK_MESSAGE_CREATE) | Some(kinds::CK_REACTION_ADD) => {}
+            _ => continue,
+        }
+        let Some(actor) = operation.payload.get("sender").and_then(Value::as_str) else {
+            continue;
+        };
+        // Only native personal agents are gated.
+        let is_agent = state
+            .persistence
+            .agents()
+            .get(actor)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !is_agent {
+            continue;
+        }
+        let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
+        let realm_key = format!("realm:{realm_uuid}");
+        let flow_key = operation
+            .payload
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .or_else(|| operation.payload.get("thread_id").and_then(Value::as_str))
+            .map(|f| format!("flow:{realm_uuid}:{}", ap_uuid_part(f)));
+        let selections = state
+            .persistence
+            .agent_participation()
+            .list_selections(actor)
+            .await
+            .unwrap_or_default();
+        let find = |key: &str| {
+            selections
+                .iter()
+                .find(|r| r.get("scope_key").and_then(Value::as_str) == Some(key))
+                .cloned()
+        };
+        let selection = flow_key
+            .as_deref()
+            .and_then(find)
+            .or_else(|| find(&realm_key));
+        let Some(selection) = selection else {
+            return Err("agent_reply_not_permitted");
+        };
+        let selection_scope_key = selection
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .unwrap_or(realm_key.as_str())
+            .to_owned();
+        let ceiling_rows = state
+            .persistence
+            .agent_participation()
+            .ceilings_for_scope_keys(&[realm_key.clone(), selection_scope_key])
+            .await
+            .unwrap_or_default();
+        let mut ceiling = AgentParticipation::ALL;
+        for row in &ceiling_rows {
+            ceiling = ceiling.intersect(AgentParticipation {
+                reply: ap_bool(row, "reply"),
+                accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
+                act_on_behalf: ap_bool(row, "act_on_behalf"),
+            });
+        }
+        if !ap_effective_reply(&selection, ceiling) {
+            return Err("agent_reply_not_permitted");
+        }
+    }
+    Ok(())
+}
+
 fn validate_direct_conversation_realm_policy(
     state: &AppState,
     operation: &Operation,

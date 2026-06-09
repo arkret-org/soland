@@ -129,6 +129,32 @@ fn generate_agent_principal_did() -> String {
     format!("did:web:agent-{}.agents.example", uuid::Uuid::now_v7())
 }
 
+/// Map a persisted agent_principal JSON record to the wire `SolandAgentView`.
+fn agent_view_from_record(record: &Value) -> SolandAgentView {
+    let field = |key: &str| {
+        record
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    SolandAgentView {
+        agent_principal_id: field("agent_principal_id"),
+        controller_did: field("controller_did"),
+        agent_id: field("agent_id"),
+        display_name: field("display_name"),
+        state: record
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+            .to_owned(),
+        created_at: field("created_at"),
+        updated_at: field("updated_at"),
+        grants: Vec::new(),
+        todos: Vec::new(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // CKP-0010 — agent participation policy (set / get).
 //
@@ -448,6 +474,22 @@ async fn provision_agent(
     }
     let agent_principal_id = generate_agent_principal_did();
     let timestamp = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // Persist the agent_principal row so list/get/lifecycle + grant/session
+    // paths have a real principal to operate on (CKP-0008).
+    state
+        .persistence
+        .agents()
+        .put(json!({
+            "agent_principal_id": agent_principal_id,
+            "controller_did": controller_did,
+            "agent_id": agent_id,
+            "display_name": body.display_name,
+            "state": "active",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }))
+        .await
+        .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -471,11 +513,7 @@ async fn provision_agent(
         created_at: timestamp.clone(),
         updated_at: timestamp,
         grants: body.initial_grants,
-        todos: vec![
-            "P2-impl: persist agent_principal row + emit ck.self.agent.provision event".to_owned(),
-            "P2-impl: orchestrate DID Document registration + first key authorize".to_owned(),
-            "P2-impl: process initial_grants[] through ck.capability.grant pipeline".to_owned(),
-        ],
+        todos: Vec::new(),
     })
 }
 
@@ -492,17 +530,17 @@ async fn list_agents(
     req: &mut Request,
 ) -> JsonResult<SolandAgentList> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    // TODO(P2-impl): query the agent_principal projection scoped to the
-    // controller's DID. For now we return an empty stable shape so
-    // sodmin/yougen can wire the endpoint without 404.
+    let session = aa.authenticated_session(state, req).await?;
+    let records = state
+        .persistence
+        .agents()
+        .list_for_controller(&session.actor)
+        .await
+        .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
     json_ok(SolandAgentList {
-        agents: Vec::new(),
+        agents: records.iter().map(agent_view_from_record).collect(),
         next_cursor: None,
-        todos: vec![
-            "P2-impl: implement agent_principal projection query".to_owned(),
-            "P2-impl: enforce controller-self only".to_owned(),
-        ],
+        todos: Vec::new(),
     })
 }
 
@@ -520,14 +558,21 @@ async fn get_agent(
     req: &mut Request,
 ) -> JsonResult<SolandAgentView> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
-    // TODO(P2-impl): look up agent_principal row, 404 when absent / not
-    // owned by the controller. For now any well-formed id returns the
-    // canonical "stub" response so the cross-project HTTP shape stays
-    // stable.
-    Err(AppError::not_found("agent lookup not yet wired (P2-impl)"))
+    let record = state
+        .persistence
+        .agents()
+        .get(&agent_id)
+        .await
+        .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
+        .ok_or_else(|| AppError::not_found("agent not found"))?;
+    // Controller-self only: hide others' agents behind 404 to avoid enumeration.
+    if record.get("controller_did").and_then(Value::as_str) != Some(session.actor.as_str()) {
+        return Err(AppError::not_found("agent not found"));
+    }
+    json_ok(agent_view_from_record(&record))
 }
 
 async fn lifecycle_transition(
@@ -586,6 +631,12 @@ async fn lifecycle_transition(
             .expect("payload object")
             .insert("reason".to_owned(), Value::String(reason.clone()));
     }
+    // Persist the lifecycle state transition on the agent_principal row.
+    let _ = state
+        .persistence
+        .agents()
+        .set_state(&agent_id, new_state, &status_changed_at)
+        .await;
     append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     let mut todos = vec![format!(
         "P2-impl: emit {event_kind} event + fan-out capability cache invalidation"

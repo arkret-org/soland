@@ -402,6 +402,8 @@ pub trait AgentParticipationStore: Send + Sync {
     /// Ceiling rows whose scope_key is in `scope_keys`.
     async fn ceilings_for_scope_keys(&self, scope_keys: &[String])
     -> PersistenceResult<Vec<Value>>;
+    /// Upsert a governance ceiling row keyed by scope_key.
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()>;
 }
 
 fn agent_participation_record_key(record: &Value) -> (Option<String>, Option<String>) {
@@ -469,6 +471,26 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
             })
             .cloned()
             .collect())
+    }
+
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()> {
+        let key = record
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let mut guard = self
+            .ceilings
+            .lock()
+            .expect("agent participation ceiling lock");
+        guard.retain(|existing| {
+            existing
+                .get("scope_key")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                != key
+        });
+        guard.push(record);
+        Ok(())
     }
 }
 
@@ -613,6 +635,377 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         )
         .bind::<Array<Text>, _>(scope_keys.to_vec())
         .load::<AgentParticipationCeilingRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!(
+                        "agent participation ceiling record missing {key}"
+                    ))
+                })
+        };
+        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let scope_kind = get_str("scope_kind")?;
+        let scope_key = get_str("scope_key")?;
+        let realm_id = get_str("realm_id")?;
+        sql_query(
+            "INSERT INTO agent_participation_ceiling \
+             (scope_kind, scope_key, realm_id, reply, accept_third_party_mention, \
+              act_on_behalf, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+             ON CONFLICT (scope_key) DO UPDATE SET \
+             scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
+             reply = EXCLUDED.reply, \
+             accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
+             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
+        )
+        .bind::<Text, _>(&scope_kind)
+        .bind::<Text, _>(&scope_key)
+        .bind::<Text, _>(&realm_id)
+        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
+        .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+}
+
+/// CKP-0008 — native personal agent principal persistence (provision /
+/// list / get / lifecycle). JSON Value records mirror SolandAgentView:
+/// agent_principal_id, controller_did, agent_id, display_name, state,
+/// created_at, updated_at.
+#[async_trait]
+pub trait AgentStore: Send + Sync {
+    async fn put(&self, record: Value) -> PersistenceResult<()>;
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>>;
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        changed_at: &str,
+    ) -> PersistenceResult<bool>;
+}
+
+#[derive(Default)]
+struct MemoryAgentStore {
+    data: Mutex<std::collections::BTreeMap<String, Value>>,
+}
+
+impl MemoryAgentStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl AgentStore for MemoryAgentStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        let Some(id) = record
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return Err(PersistenceError::Internal(
+                "agent record missing agent_principal_id".to_owned(),
+            ));
+        };
+        self.data.lock().expect("agent lock").insert(id, record);
+        Ok(())
+    }
+
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("agent lock")
+            .get(agent_principal_id)
+            .cloned())
+    }
+
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("agent lock")
+            .values()
+            .filter(|r| r.get("controller_did").and_then(Value::as_str) == Some(controller_did))
+            .cloned()
+            .collect())
+    }
+
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        changed_at: &str,
+    ) -> PersistenceResult<bool> {
+        let mut guard = self.data.lock().expect("agent lock");
+        if let Some(record) = guard.get_mut(agent_principal_id) {
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("state".to_owned(), Value::String(state.to_owned()));
+                obj.insert(
+                    "updated_at".to_owned(),
+                    Value::String(changed_at.to_owned()),
+                );
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentPrincipalRow {
+    #[diesel(sql_type = Text)]
+    agent_principal_id: String,
+    #[diesel(sql_type = Text)]
+    controller_did: String,
+    #[diesel(sql_type = Text)]
+    agent_id: String,
+    #[diesel(sql_type = Text)]
+    display_name: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<AgentPrincipalRow> for Value {
+    fn from(row: AgentPrincipalRow) -> Self {
+        serde_json::json!({
+            "agent_principal_id": row.agent_principal_id,
+            "controller_did": row.controller_did,
+            "agent_id": row.agent_id,
+            "display_name": row.display_name,
+            "state": row.state,
+            "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        })
+    }
+}
+
+struct PgAgentStore {
+    pool: PgPool,
+}
+
+#[async_trait]
+impl AgentStore for PgAgentStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| PersistenceError::Internal(format!("agent record missing {key}")))
+        };
+        let agent_principal_id = get_str("agent_principal_id")?;
+        let controller_did = get_str("controller_did")?;
+        let agent_id = get_str("agent_id")?;
+        let display_name = get_str("display_name")?;
+        let state = record
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+            .to_owned();
+        sql_query(
+            "INSERT INTO agent_principal \
+             (agent_principal_id, controller_did, agent_id, display_name, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) \
+             ON CONFLICT (agent_principal_id) DO UPDATE SET \
+             controller_did = EXCLUDED.controller_did, agent_id = EXCLUDED.agent_id, \
+             display_name = EXCLUDED.display_name, state = EXCLUDED.state, updated_at = NOW()",
+        )
+        .bind::<Text, _>(&agent_principal_id)
+        .bind::<Text, _>(&controller_did)
+        .bind::<Text, _>(&agent_id)
+        .bind::<Text, _>(&display_name)
+        .bind::<Text, _>(&state)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT agent_principal_id, controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principal WHERE agent_principal_id = $1",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .get_result::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Value::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT agent_principal_id, controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principal WHERE controller_did = $1 \
+             ORDER BY created_at",
+        )
+        .bind::<Text, _>(controller_did)
+        .load::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        _changed_at: &str,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let updated = sql_query(
+            "UPDATE agent_principal SET state = $2, state_changed_at = NOW(), updated_at = NOW() \
+             WHERE agent_principal_id = $1",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .bind::<Text, _>(state)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(updated > 0)
+    }
+}
+
+/// CKP-0016 §9.4.5 — per-recipient notification projection (mention
+/// fanout output). Native agents are gated by their effective
+/// accept_third_party_mention bit before a row is written here.
+#[async_trait]
+pub trait NotificationStore: Send + Sync {
+    async fn put(&self, record: Value) -> PersistenceResult<()>;
+    async fn list_for_recipient(&self, recipient_id: &str) -> PersistenceResult<Vec<Value>>;
+}
+
+#[derive(Default)]
+struct MemoryNotificationStore {
+    data: Mutex<Vec<Value>>,
+}
+
+impl MemoryNotificationStore {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl NotificationStore for MemoryNotificationStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        self.data.lock().expect("notification lock").push(record);
+        Ok(())
+    }
+
+    async fn list_for_recipient(&self, recipient_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("notification lock")
+            .iter()
+            .filter(|r| r.get("recipient_id").and_then(Value::as_str) == Some(recipient_id))
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(QueryableByName)]
+struct NotificationRow {
+    #[diesel(sql_type = Text)]
+    notification_id: String,
+    #[diesel(sql_type = Text)]
+    recipient_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    source_event_id: String,
+    #[diesel(sql_type = Text)]
+    notification_type: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<NotificationRow> for Value {
+    fn from(row: NotificationRow) -> Self {
+        serde_json::json!({
+            "notification_id": row.notification_id,
+            "recipient_id": row.recipient_id,
+            "realm_id": row.realm_id,
+            "source_event_id": row.source_event_id,
+            "notification_type": row.notification_type,
+            "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        })
+    }
+}
+
+struct PgNotificationStore {
+    pool: PgPool,
+}
+
+#[async_trait]
+impl NotificationStore for PgNotificationStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!("notification record missing {key}"))
+                })
+        };
+        let notification_id = get_str("notification_id")?;
+        let recipient_id = get_str("recipient_id")?;
+        let realm_id = get_str("realm_id")?;
+        let source_event_id = get_str("source_event_id")?;
+        let notification_type = get_str("notification_type")?;
+        sql_query(
+            "INSERT INTO notification \
+             (notification_id, recipient_id, realm_id, source_event_id, notification_type, \
+              created_at) \
+             VALUES ($1, $2, $3, $4, $5, NOW()) \
+             ON CONFLICT (notification_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&notification_id)
+        .bind::<Text, _>(&recipient_id)
+        .bind::<Text, _>(&realm_id)
+        .bind::<Text, _>(&source_event_id)
+        .bind::<Text, _>(&notification_type)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_recipient(&self, recipient_id: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT notification_id, recipient_id, realm_id, source_event_id, notification_type, \
+             created_at FROM notification WHERE recipient_id = $1 ORDER BY created_at DESC",
+        )
+        .bind::<Text, _>(recipient_id)
+        .load::<NotificationRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(Value::from).collect())
         .map_err(PersistenceError::from)
@@ -1406,6 +1799,10 @@ pub trait PersistenceStore: Send + Sync {
     fn mls_commits(&self) -> &dyn MlsCommitStore;
     // CKP-0010 — agent participation policy.
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
+    // CKP-0008 — native personal agent principals.
+    fn agents(&self) -> &dyn AgentStore;
+    // CKP-0016 — per-recipient notification projection.
+    fn notifications(&self) -> &dyn NotificationStore;
 }
 
 /// In-memory implementation of persistence store.
@@ -1453,6 +1850,8 @@ pub struct MemoryPersistenceStore {
     mls_welcomes: MemoryMlsWelcomeStore,
     mls_commits: MemoryMlsCommitStore,
     agent_participation: MemoryAgentParticipationStore,
+    agents: MemoryAgentStore,
+    notifications: MemoryNotificationStore,
 }
 
 impl MemoryPersistenceStore {
@@ -1501,6 +1900,8 @@ impl MemoryPersistenceStore {
             mls_welcomes: MemoryMlsWelcomeStore::new(),
             mls_commits: MemoryMlsCommitStore::new(),
             agent_participation: MemoryAgentParticipationStore::new(),
+            agents: MemoryAgentStore::new(),
+            notifications: MemoryNotificationStore::new(),
         }
     }
 }
@@ -1679,6 +2080,14 @@ impl PersistenceStore for MemoryPersistenceStore {
 
     fn agent_participation(&self) -> &dyn AgentParticipationStore {
         &self.agent_participation
+    }
+
+    fn agents(&self) -> &dyn AgentStore {
+        &self.agents
+    }
+
+    fn notifications(&self) -> &dyn NotificationStore {
+        &self.notifications
     }
 }
 
@@ -4388,6 +4797,8 @@ pub struct PgPersistenceStore {
     mls_welcomes: PgMlsWelcomeStore,
     mls_commits: PgMlsCommitStore,
     agent_participation: PgAgentParticipationStore,
+    agents: PgAgentStore,
+    notifications: PgNotificationStore,
     fallback: MemoryPersistenceStore,
 }
 
@@ -4428,7 +4839,9 @@ impl PgPersistenceStore {
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
             mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
             mls_commits: PgMlsCommitStore { pool: pool.clone() },
-            agent_participation: PgAgentParticipationStore { pool },
+            agent_participation: PgAgentParticipationStore { pool: pool.clone() },
+            agents: PgAgentStore { pool: pool.clone() },
+            notifications: PgNotificationStore { pool },
             fallback: MemoryPersistenceStore::new(),
         }
     }
@@ -4601,6 +5014,14 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn agent_participation(&self) -> &dyn AgentParticipationStore {
         &self.agent_participation
+    }
+
+    fn agents(&self) -> &dyn AgentStore {
+        &self.agents
+    }
+
+    fn notifications(&self) -> &dyn NotificationStore {
+        &self.notifications
     }
 }
 

@@ -9,6 +9,7 @@ pub(super) mod peer;
 // facade can reuse the canonical space→flow mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Cokret timeline.
 pub(crate) mod flow;
+pub(super) mod notify;
 pub(super) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
@@ -19,6 +20,7 @@ use flow::{
     flow_id_from_realm_id, flow_projection_for_realm, message_id_from_event_id,
 };
 use operations::{
+    validate_agent_participation_ceiling, validate_agent_reply_participation,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use projection::{
