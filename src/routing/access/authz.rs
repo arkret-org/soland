@@ -130,7 +130,7 @@ async fn authz_check(
         (owner, members)
     };
     let result = state.authz.check(
-        &body.actor,
+        &body.actor_id,
         &body.action,
         &resource_str,
         &realm_id,
@@ -161,7 +161,7 @@ async fn authz_check(
         grants: matched_grants.clone(),
         obligations: Vec::new(),
         decision_trace: json!({
-            "actor": body.actor,
+            "actor_id": body.actor_id,
             "action": body.action,
             "resource": resource_str,
             "realm_id": realm_id,

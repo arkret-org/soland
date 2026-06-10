@@ -630,7 +630,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let authz: Value = TestClient::post("http://server/_cokret/self/authz/check")
         .json(&serde_json::json!({
-            "actor": "did:web:alice.example",
+            "actor_id": "did:web:alice.example",
             "action": "realm.read",
             "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
@@ -640,7 +640,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .await
         .unwrap();
     assert_eq!(authz["allowed"], true);
-    assert_eq!(authz["decision_trace"]["actor"], "did:web:alice.example");
+    assert_eq!(authz["decision_trace"]["actor_id"], "did:web:alice.example");
     assert_eq!(authz["decision_trace"]["action"], "realm.read");
     assert_eq!(authz["decision_trace"]["realm_id"], DEMO_REALM_ID);
     assert!(authz["decision_trace"]["matched_grants"].is_array());

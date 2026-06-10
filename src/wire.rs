@@ -592,7 +592,7 @@ pub struct SolandSnapshotHeadState {
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandAuthzCheckRequestBody {
-    pub actor: String,
+    pub actor_id: String,
     pub action: String,
     pub resource: Value,
     #[serde(default)]
