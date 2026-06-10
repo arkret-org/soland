@@ -375,15 +375,15 @@ async fn provision_ghost_actor_endpoint(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    let mut response = json!({
-        "ghost_actor_id": ghost_actor_id,
-        "profile_event_ref": profile_event.event_id,
-        "accountability_grant_ref": authorization_ref,
-        "authorization_ref": authorization_ref,
-    });
-    if let Some(display_name) = provision.display_name {
-        response["display_name"] = json!(display_name);
-    }
+    let outcome = GhostActorProvisionOutcome {
+        ghost_actor_id,
+        profile_event_ref: profile_event.event_id.clone(),
+        accountability_grant_ref: authorization_ref.clone(),
+        authorization_ref,
+        display_name: provision.display_name,
+    };
+    let response = serde_json::to_value(&outcome)
+        .map_err(|error| AppError::internal(format!("ghost provision outcome serialize: {error}")))?;
     json_ok(response)
 }
 
@@ -1171,12 +1171,13 @@ fn validate_ghost_actor_provision_request(
     path_applet_id: &str,
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
-    if provision.schema != GHOST_ACTOR_PROVISION_REQUEST_SCHEMA {
+    if provision.schema != GhostActorProvisionRequestBody::SCHEMA {
         return Err(AppError::invalid_param(format!(
-            "schema must be {GHOST_ACTOR_PROVISION_REQUEST_SCHEMA}"
+            "schema must be {}",
+            GhostActorProvisionRequestBody::SCHEMA
         )));
     }
-    if provision.applet_id != path_applet_id {
+    if provision.applet_id.as_str() != path_applet_id {
         return Err(AppError::invalid_param(
             "body applet_id must match applet_id path segment",
         ));
@@ -1211,12 +1212,12 @@ fn ensure_formal_ghost_provision_allowed(
         AppError::conflict("formal ghost provisioning requires package install")
             .with_wire_code("applet_install_required")
     })?;
-    if package.service_did.to_string() != provision.service_did {
+    if package.service_did != provision.service_did {
         return Err(AppError::capability_denied(
             "service_did does not match installed applet package",
         ));
     }
-    if record.portal_realm_id != provision.realm_id {
+    if record.portal_realm_id != provision.realm_id.as_str() {
         return Err(
             AppError::conflict("realm_id does not match installed applet effective scope")
                 .with_wire_code("applet_effective_scope_mismatch"),
