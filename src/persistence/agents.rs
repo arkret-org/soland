@@ -1,0 +1,505 @@
+use super::*;
+
+/// CKP-0010 — agent participation policy persistence. Controller
+/// selections (`ck.agent.participation.v1`) and the governance ceiling
+/// projection are stored as JSON records mirroring the
+/// `cokret_core::AgentParticipation*` wire shape (keys:
+/// agent_principal_id, scope, scope_kind, scope_key, realm_id, reply,
+/// accept_third_party_mention, act_on_behalf).
+#[async_trait]
+pub trait AgentParticipationStore: Send + Sync {
+    /// Upsert a controller selection keyed by (agent_principal_id, scope_key).
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()>;
+    /// All selections for one agent.
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>>;
+    /// Ceiling rows whose scope_key is in `scope_keys`.
+    async fn ceilings_for_scope_keys(&self, scope_keys: &[String])
+    -> PersistenceResult<Vec<Value>>;
+    /// Upsert a governance ceiling row keyed by scope_key.
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()>;
+}
+
+fn agent_participation_record_key(record: &Value) -> (Option<String>, Option<String>) {
+    (
+        record
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        record
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    )
+}
+
+#[derive(Default)]
+pub(crate) struct MemoryAgentParticipationStore {
+    selections: Mutex<Vec<Value>>,
+    ceilings: Mutex<Vec<Value>>,
+}
+
+impl MemoryAgentParticipationStore {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl AgentParticipationStore for MemoryAgentParticipationStore {
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
+        let target = agent_participation_record_key(&record);
+        let mut guard = self.selections.lock().expect("agent participation lock");
+        guard.retain(|existing| agent_participation_record_key(existing) != target);
+        guard.push(record);
+        Ok(())
+    }
+
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .selections
+            .lock()
+            .expect("agent participation lock")
+            .iter()
+            .filter(|row| {
+                row.get("agent_principal_id").and_then(Value::as_str) == Some(agent_principal_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn ceilings_for_scope_keys(
+        &self,
+        scope_keys: &[String],
+    ) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .ceilings
+            .lock()
+            .expect("agent participation ceiling lock")
+            .iter()
+            .filter(|row| {
+                row.get("scope_key")
+                    .and_then(Value::as_str)
+                    .map(|key| scope_keys.iter().any(|candidate| candidate == key))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()> {
+        let key = record
+            .get("scope_key")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let mut guard = self
+            .ceilings
+            .lock()
+            .expect("agent participation ceiling lock");
+        guard.retain(|existing| {
+            existing
+                .get("scope_key")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                != key
+        });
+        guard.push(record);
+        Ok(())
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentParticipationRow {
+    #[diesel(sql_type = Text)]
+    agent_principal_id: String,
+    #[diesel(sql_type = Text)]
+    scope_kind: String,
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
+    #[diesel(sql_type = Jsonb)]
+    scope: Value,
+    #[diesel(sql_type = Bool)]
+    reply: bool,
+    #[diesel(sql_type = Bool)]
+    accept_third_party_mention: bool,
+    #[diesel(sql_type = Bool)]
+    act_on_behalf: bool,
+}
+
+impl From<AgentParticipationRow> for Value {
+    fn from(row: AgentParticipationRow) -> Self {
+        serde_json::json!({
+            "agent_principal_id": row.agent_principal_id,
+            "scope_kind": row.scope_kind,
+            "scope_key": row.scope_key,
+            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
+            "scope": row.scope,
+            "reply": row.reply,
+            "accept_third_party_mention": row.accept_third_party_mention,
+            "act_on_behalf": row.act_on_behalf,
+        })
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentParticipationCeilingRow {
+    #[diesel(sql_type = Text)]
+    scope_kind: String,
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
+    #[diesel(sql_type = Bool)]
+    reply: bool,
+    #[diesel(sql_type = Bool)]
+    accept_third_party_mention: bool,
+    #[diesel(sql_type = Bool)]
+    act_on_behalf: bool,
+}
+
+impl From<AgentParticipationCeilingRow> for Value {
+    fn from(row: AgentParticipationCeilingRow) -> Self {
+        serde_json::json!({
+            "scope_kind": row.scope_kind,
+            "scope_key": row.scope_key,
+            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
+            "reply": row.reply,
+            "accept_third_party_mention": row.accept_third_party_mention,
+            "act_on_behalf": row.act_on_behalf,
+        })
+    }
+}
+
+pub(crate) struct PgAgentParticipationStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl AgentParticipationStore for PgAgentParticipationStore {
+    async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!("agent participation record missing {key}"))
+                })
+        };
+        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let agent_principal_id = get_str("agent_principal_id")?;
+        let scope_kind = get_str("scope_kind")?;
+        let scope_key = get_str("scope_key")?;
+        let realm_id = get_str("realm_id")?;
+        let scope = record.get("scope").cloned().unwrap_or(Value::Null);
+        sql_query(
+            "INSERT INTO agent_participation \
+             (id, agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
+              accept_third_party_mention, act_on_behalf, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
+             ON CONFLICT (agent_principal_id, scope_key) DO UPDATE SET \
+             scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
+             scope = EXCLUDED.scope, reply = EXCLUDED.reply, \
+             accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
+             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&agent_principal_id)
+        .bind::<Text, _>(&scope_kind)
+        .bind::<Text, _>(&scope_key)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
+        .bind::<Jsonb, _>(&scope)
+        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
+        .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_selections(&self, agent_principal_id: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
+             accept_third_party_mention, act_on_behalf FROM agent_participation \
+             WHERE agent_principal_id = $1 ORDER BY scope_key",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .load::<AgentParticipationRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn ceilings_for_scope_keys(
+        &self,
+        scope_keys: &[String],
+    ) -> PersistenceResult<Vec<Value>> {
+        if scope_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT scope_kind, id AS scope_key, realm_id, reply, accept_third_party_mention, \
+             act_on_behalf FROM agent_participation_ceiling WHERE id = ANY($1) \
+             ORDER BY id",
+        )
+        .bind::<Array<Text>, _>(scope_keys.to_vec())
+        .load::<AgentParticipationCeilingRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!(
+                        "agent participation ceiling record missing {key}"
+                    ))
+                })
+        };
+        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let scope_kind = get_str("scope_kind")?;
+        let scope_key = get_str("scope_key")?;
+        let realm_id = get_str("realm_id")?;
+        sql_query(
+            "INSERT INTO agent_participation_ceiling \
+             (scope_kind, id, realm_id, reply, accept_third_party_mention, \
+              act_on_behalf, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+             ON CONFLICT (id) DO UPDATE SET \
+             scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
+             reply = EXCLUDED.reply, \
+             accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
+             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
+        )
+        .bind::<Text, _>(&scope_kind)
+        .bind::<Text, _>(&scope_key)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
+        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
+        .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+}
+
+/// CKP-0008 — native personal agent principal persistence (provision /
+/// list / get / lifecycle). JSON Value records mirror SolandAgentView:
+/// agent_principal_id, controller_did, agent_id, display_name, state,
+/// created_at, updated_at.
+#[async_trait]
+pub trait AgentStore: Send + Sync {
+    async fn put(&self, record: Value) -> PersistenceResult<()>;
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>>;
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>>;
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        changed_at: &str,
+    ) -> PersistenceResult<bool>;
+}
+
+#[derive(Default)]
+pub(crate) struct MemoryAgentStore {
+    data: Mutex<std::collections::BTreeMap<String, Value>>,
+}
+
+impl MemoryAgentStore {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl AgentStore for MemoryAgentStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        let Some(id) = record
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return Err(PersistenceError::Internal(
+                "agent record missing agent_principal_id".to_owned(),
+            ));
+        };
+        self.data.lock().expect("agent lock").insert(id, record);
+        Ok(())
+    }
+
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("agent lock")
+            .get(agent_principal_id)
+            .cloned())
+    }
+
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
+        Ok(self
+            .data
+            .lock()
+            .expect("agent lock")
+            .values()
+            .filter(|r| r.get("controller_did").and_then(Value::as_str) == Some(controller_did))
+            .cloned()
+            .collect())
+    }
+
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        changed_at: &str,
+    ) -> PersistenceResult<bool> {
+        let mut guard = self.data.lock().expect("agent lock");
+        if let Some(record) = guard.get_mut(agent_principal_id) {
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert("state".to_owned(), Value::String(state.to_owned()));
+                obj.insert(
+                    "updated_at".to_owned(),
+                    Value::String(changed_at.to_owned()),
+                );
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct AgentPrincipalRow {
+    #[diesel(sql_type = Text)]
+    agent_principal_id: String,
+    #[diesel(sql_type = Text)]
+    controller_did: String,
+    #[diesel(sql_type = Text)]
+    agent_id: String,
+    #[diesel(sql_type = Text)]
+    display_name: String,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<AgentPrincipalRow> for Value {
+    fn from(row: AgentPrincipalRow) -> Self {
+        serde_json::json!({
+            "agent_principal_id": row.agent_principal_id,
+            "controller_did": row.controller_did,
+            "agent_id": row.agent_id,
+            "display_name": row.display_name,
+            "state": row.state,
+            "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        })
+    }
+}
+
+pub(crate) struct PgAgentStore {
+    pub(crate) pool: PgPool,
+}
+
+#[async_trait]
+impl AgentStore for PgAgentStore {
+    async fn put(&self, record: Value) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let get_str = |key: &str| -> PersistenceResult<String> {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| PersistenceError::Internal(format!("agent record missing {key}")))
+        };
+        let agent_principal_id = get_str("agent_principal_id")?;
+        let controller_did = get_str("controller_did")?;
+        let agent_id = get_str("agent_id")?;
+        let display_name = get_str("display_name")?;
+        let state = record
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("active")
+            .to_owned();
+        sql_query(
+            "INSERT INTO agent_principals \
+             (id, controller_id, agent_id, display_name, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) \
+             ON CONFLICT (id) DO UPDATE SET \
+             controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
+             display_name = EXCLUDED.display_name, state = EXCLUDED.state, updated_at = NOW()",
+        )
+        .bind::<Text, _>(&agent_principal_id)
+        .bind::<Text, _>(&controller_did)
+        .bind::<Text, _>(&agent_id)
+        .bind::<Text, _>(&display_name)
+        .bind::<Text, _>(&state)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principals WHERE id = $1",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .get_result::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(Value::from))
+        .map_err(PersistenceError::from)
+    }
+
+    async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
+             ORDER BY created_at",
+        )
+        .bind::<Text, _>(controller_did)
+        .load::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(Value::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn set_state(
+        &self,
+        agent_principal_id: &str,
+        state: &str,
+        _changed_at: &str,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let updated = sql_query(
+            "UPDATE agent_principals SET state = $2, state_changed_at = NOW(), updated_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind::<Text, _>(agent_principal_id)
+        .bind::<Text, _>(state)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(updated > 0)
+    }
+}
