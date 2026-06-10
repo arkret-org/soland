@@ -145,11 +145,11 @@ async fn moderation_report(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.moderation.reports",
+    operation_id = "org.cokret.soland.moderation.reports",
     tags("moderation"),
     summary = "List moderation reports visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.moderation.reports"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moderation.reports"))]
 async fn moderation_reports(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -520,11 +520,11 @@ pub struct ModerationAppealSubmitOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.moderation.appeal.submit",
+    operation_id = "org.cokret.soland.moderation.appeal.submit",
     tags("moderation"),
     summary = "Submit a moderation appeal against a prior decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.moderation.appeal.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moderation.appeal.submit"))]
 async fn moderation_appeal_submit(
     aa: AuthArgs,
     body: JsonBody<ModerationAppealSubmitRequestBody>,

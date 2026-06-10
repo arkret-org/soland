@@ -151,11 +151,11 @@ async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "ck.mimi.room_notify",
+    operation_id = "org.cokret.soland.mimi.room_notify",
     tags("mimi"),
     summary = "Fan out a MIMI room notify (broadcasts a `ck.open.mimi.notify` ephemeral)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.mimi.room_notify"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.mimi.room_notify"))]
 async fn mimi_room_notify(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,

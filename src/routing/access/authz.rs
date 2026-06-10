@@ -321,11 +321,11 @@ fn default_member_grant(subject: &str) -> Result<CapabilityGrant, AppError> {
 // ── Grant CRUD ──
 
 #[endpoint(
-    operation_id = "ck.authz.create_grant",
+    operation_id = "org.cokret.soland.authz.create_grant",
     tags("authz"),
     summary = "Create an owner-issued or delegated authorization grant"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.authz.create_grant"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.authz.create_grant"))]
 async fn create_grant(
     aa: AuthArgs,
     body: JsonBody<CreateGrantRequestBody>,
@@ -496,11 +496,11 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
 }
 
 #[endpoint(
-    operation_id = "ck.authz.revoke_grant",
+    operation_id = "org.cokret.soland.authz.revoke_grant",
     tags("authz"),
     summary = "Revoke an existing authorization grant by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.authz.revoke_grant"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.authz.revoke_grant"))]
 async fn revoke_grant(
     aa: AuthArgs,
     grant_id: PathParam<String>,

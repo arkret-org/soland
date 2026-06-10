@@ -8,7 +8,7 @@
 //! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.claim` (atomically
 //!   claim a published KeyPackage; second claim of the same id returns `409 cas_conflict`).
 //! - `GET  /_cokret/self/keys/keypackages/welcomes/pending` — extension op
-//!   `ck.extension.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
+//!   `org.cokret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
 //!   50 per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
 //!   redeliver). This is a soland-specific extension (not in the canonical spec registry).
 //!
@@ -395,11 +395,11 @@ async fn revoke_keypackages(
 // ── welcomes/pending ──────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ck.extension.soland.mls.welcomes.pending",
+    operation_id = "org.cokret.soland.mls.welcomes.pending",
     tags("keys"),
     summary = "Drain the calling device's MLS Welcome queue (G3.S1; soland extension)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.mls.welcomes.pending"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.mls.welcomes.pending"))]
 async fn pending_welcomes(
     aa: AuthArgs,
     limit: QueryParam<usize, false>,

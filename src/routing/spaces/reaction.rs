@@ -25,11 +25,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.reactions.add",
+    operation_id = "org.cokret.soland.reactions.add",
     tags("reactions"),
     summary = "Add a reaction to an event"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.reactions.add"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.reactions.add"))]
 async fn add_reaction(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -63,11 +63,11 @@ async fn add_reaction(
 }
 
 #[endpoint(
-    operation_id = "ck.reactions.remove",
+    operation_id = "org.cokret.soland.reactions.remove",
     tags("reactions"),
     summary = "Remove a previously-added reaction"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.reactions.remove"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.reactions.remove"))]
 async fn remove_reaction(
     aa: AuthArgs,
     depot: &mut Depot,

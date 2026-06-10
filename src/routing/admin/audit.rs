@@ -28,11 +28,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.audit.franking.verify",
+    operation_id = "org.cokret.soland.audit.franking.verify",
     tags("audit"),
     summary = "Verify a ck.moderation.franking_proof integrity digest"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.audit.franking.verify"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.franking.verify"))]
 async fn verify_franking_proof(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -68,13 +68,13 @@ async fn verify_franking_proof(
 /// receipt envelopes — issuer / subject / outcome / scope — which are
 /// the auditable surface by design).
 #[endpoint(
-    operation_id = "ck.extension.soland.audit.erasure_receipts.list",
+    operation_id = "org.cokret.soland.audit.erasure_receipts.list",
     tags("audit"),
     summary = "List ck.audit.erasure_receipt projection rows + fanout state"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.audit.erasure_receipts.list")
+    fields(op = "org.cokret.soland.audit.erasure_receipts.list")
 )]
 async fn audit_erasure_receipts(
     aa: AuthArgs,
@@ -140,11 +140,11 @@ async fn audit_erasure_receipts(
 /// via `append_audit_log` so it shows up in the same `audit/events`
 /// query a sodmin operator already runs.
 #[endpoint(
-    operation_id = "ck.extension.soland.audit.user_action",
+    operation_id = "org.cokret.soland.audit.user_action",
     tags("audit"),
     summary = "Append a client-side user-action audit entry"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.audit.user_action"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.user_action"))]
 async fn post_user_action(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -190,11 +190,11 @@ async fn post_user_action(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.audit.events",
+    operation_id = "org.cokret.soland.audit.events",
     tags("audit"),
     summary = "Actor-scoped audit query (cursor-paginated; actor MUST match session)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.audit.events"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.events"))]
 async fn audit_events(
     aa: AuthArgs,
     actor: QueryParam<String, false>,

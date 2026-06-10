@@ -193,11 +193,11 @@ pub struct SubmitMoveOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.moves.submit",
+    operation_id = "org.cokret.soland.moves.submit",
     tags("moves"),
     summary = "Submit a Move for the next Anchor batch"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.moves.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moves.submit"))]
 async fn submit_move(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -274,11 +274,11 @@ pub struct RejectedMoveEntry {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.anchors.submit",
+    operation_id = "org.cokret.soland.anchors.submit",
     tags("anchors"),
     summary = "Submit an Anchor; runs apply_anchor end-to-end"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.anchors.submit"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.anchors.submit"))]
 async fn submit_anchor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -440,11 +440,11 @@ pub struct SignAnchorOutcome {
 /// background ticker. Production deploys will eventually wire a
 /// periodic ticker to call the same worker function.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.anchors.sign",
+    operation_id = "org.cokret.soland.admin.anchors.sign",
     tags("admin", "anchors"),
     summary = "Trigger one anchorer signing pass for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.anchors.sign"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.anchors.sign"))]
 async fn admin_sign_anchor(
     aa: AuthArgs,
     depot: &mut Depot,

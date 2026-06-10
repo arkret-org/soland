@@ -99,7 +99,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     for typed_only in [
         "ck.auth.bridge.describe",
         "ck.authz.describe",
-        "ck.extension.soland.policies.describe",
+        "org.cokret.soland.policies.describe",
         "ck.device_messages.describe",
         "ck.keys.backups.describe",
         "ck.integration.describe",
@@ -226,11 +226,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.extension.soland.federation.transaction",
-        "ck.extension.soland.federation.push_operations",
-        "ck.extension.soland.federation.pull_operations",
-        "ck.extension.soland.federation.realm_members",
-        "ck.extension.soland.federation.verify_actor",
+        "org.cokret.soland.federation.transaction",
+        "org.cokret.soland.federation.push_operations",
+        "org.cokret.soland.federation.pull_operations",
+        "org.cokret.soland.federation.realm_members",
+        "org.cokret.soland.federation.verify_actor",
         "ck.self.events.frontier",
     ] {
         assert!(
@@ -268,10 +268,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.edge.push.unregister_device",
         "ck.push.delete_rule",
         "ck.edge.push.notify",
-        "ck.extension.soland.webrtc.create_session",
-        "ck.extension.soland.webrtc.send_signal",
-        "ck.extension.soland.webrtc.get_signals",
-        "ck.extension.soland.webrtc.close_session",
+        "org.cokret.soland.webrtc.create_session",
+        "org.cokret.soland.webrtc.send_signal",
+        "org.cokret.soland.webrtc.get_signals",
+        "org.cokret.soland.webrtc.close_session",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -300,10 +300,10 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
     for operation_id in [
-        "ck.extension.soland.policies.list",
-        "ck.extension.soland.policies.get",
-        "ck.extension.soland.policies.upsert",
-        "ck.extension.soland.policies.delete",
+        "org.cokret.soland.policies.list",
+        "org.cokret.soland.policies.get",
+        "org.cokret.soland.policies.upsert",
+        "org.cokret.soland.policies.delete",
         "ck.self.policy.check",
         "ck.self.authz.check",
     ] {
@@ -452,23 +452,23 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "ck.relation.create",
         "ck.relation.tombstone",
         "ck.relation.list",
-        "ck.extension.soland.index.object",
-        "ck.extension.soland.index.thread",
-        "ck.extension.soland.index.notifications",
-        "ck.extension.soland.index.search",
-        "ck.extension.soland.index.space_hierarchy",
-        "ck.extension.soland.index.query",
-        "ck.extension.soland.index.debug_reducer",
+        "org.cokret.soland.index.object",
+        "org.cokret.soland.index.thread",
+        "org.cokret.soland.index.notifications",
+        "org.cokret.soland.index.search",
+        "org.cokret.soland.index.space_hierarchy",
+        "org.cokret.soland.index.query",
+        "org.cokret.soland.index.debug_reducer",
         "ck.edge.push.register_device",
         "ck.push.rules",
         "ck.push.upsert_rule",
-        "ck.extension.soland.push.outbound_bridge_resolve",
-        "ck.extension.soland.push.outbound_bridge_fetch",
-        "ck.extension.soland.push.outbound_bridge_cache_import",
-        "ck.extension.soland.push.outbound_bridge_cache_invalidate",
-        "ck.extension.soland.audit.user_action",
-        "ck.extension.soland.audit.events",
-        "ck.extension.soland.admin.collection",
+        "org.cokret.soland.push.outbound_bridge_resolve",
+        "org.cokret.soland.push.outbound_bridge_fetch",
+        "org.cokret.soland.push.outbound_bridge_cache_import",
+        "org.cokret.soland.push.outbound_bridge_cache_invalidate",
+        "org.cokret.soland.audit.user_action",
+        "org.cokret.soland.audit.events",
+        "org.cokret.soland.admin.collection",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
@@ -555,15 +555,15 @@ async fn typed_describe_handlers_publish_response_schemas() {
     //
     // Note: snapshot_head / snapshot_chunk get their operation_ids from
     // the SOLAND_EXTENSION_OPERATIONS registry (`ck.self.snapshot.head`
-    // / `ck.extension.soland.sync.snapshot_chunk`), not from my handler annotation.
+    // / `org.cokret.soland.sync.snapshot_chunk`), not from my handler annotation.
     for operation_id in [
         "ck.self.events.get",
         "ck.self.events.resolve",
         "ck.self.account.subscribe",
         "ck.self.events.query",
-        "ck.extension.soland.sync.backfill_gap",
+        "org.cokret.soland.sync.backfill_gap",
         "ck.self.snapshot.head",
-        "ck.extension.soland.sync.snapshot_chunk",
+        "org.cokret.soland.sync.snapshot_chunk",
     ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),

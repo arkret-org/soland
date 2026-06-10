@@ -114,11 +114,11 @@ impl From<&RealmLinkState> for RealmLinkResponseEntry {
 }
 
 #[endpoint(
-    operation_id = "ck.realms.links.list",
+    operation_id = "org.cokret.soland.realms.links.list",
     tags("realms"),
     summary = "List typed cross-Realm links projected from ck.realm.link"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.links.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.links.list"))]
 async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -173,11 +173,11 @@ async fn list_realm_links(
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (cycle detection, kind validation, self-reference rejection) all run.
 #[endpoint(
-    operation_id = "ck.realms.links.create",
+    operation_id = "org.cokret.soland.realms.links.create",
     tags("realms"),
     summary = "Submit a ck.realm.link Move (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.links.create"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.links.create"))]
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -258,11 +258,11 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// to `governed_by` (the most common case — admin tooling cleaning up
 /// a governance link).
 #[endpoint(
-    operation_id = "ck.realms.links.delete",
+    operation_id = "org.cokret.soland.realms.links.delete",
     tags("realms"),
     summary = "Tombstone a ck.realm.link (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.links.delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.links.delete"))]
 async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -334,11 +334,11 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "ck.realms.effective_policy.get",
+    operation_id = "org.cokret.soland.realms.effective_policy.get",
     tags("realms"),
     summary = "Read the merged effective policy after walking inheritance (G3.S5)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.effective_policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.effective_policy.get"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

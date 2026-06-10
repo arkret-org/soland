@@ -94,11 +94,11 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.encode",
+    operation_id = "org.cokret.soland.conformance.encode",
     tags("conformance"),
     summary = "Run a canonical-JSON / digest conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.encode"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.encode"))]
 pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -119,11 +119,11 @@ pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.sign",
+    operation_id = "org.cokret.soland.conformance.sign",
     tags("conformance"),
     summary = "Run a signature-binding conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.sign"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.sign"))]
 pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -176,11 +176,11 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.hlc_merge",
+    operation_id = "org.cokret.soland.conformance.hlc_merge",
     tags("conformance"),
     summary = "Run an HLC ordering conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.hlc_merge"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.hlc_merge"))]
 pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -226,11 +226,11 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.cursor",
+    operation_id = "org.cokret.soland.conformance.cursor",
     tags("conformance"),
     summary = "Run an opaque-cursor conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.cursor"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.cursor"))]
 pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -273,11 +273,11 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.envelope",
+    operation_id = "org.cokret.soland.conformance.envelope",
     tags("conformance"),
     summary = "Run an encrypted-envelope canonical-digest conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.envelope"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.envelope"))]
 pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -295,11 +295,11 @@ pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.redact",
+    operation_id = "org.cokret.soland.conformance.redact",
     tags("conformance"),
     summary = "Run a redaction visibility / projection conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.redact"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.redact"))]
 pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -355,11 +355,11 @@ pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.snapshot",
+    operation_id = "org.cokret.soland.conformance.snapshot",
     tags("conformance"),
     summary = "Run a snapshot manifest / chunk integrity conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.snapshot"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.snapshot"))]
 pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -454,11 +454,11 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.query",
+    operation_id = "org.cokret.soland.conformance.query",
     tags("conformance"),
     summary = "Run a query filter / sort / pagination conformance vector"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.conformance.query"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.query"))]
 pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let body = body.into_inner();
@@ -520,13 +520,13 @@ pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.conformance.chaos_operation",
+    operation_id = "org.cokret.soland.conformance.chaos_operation",
     tags("conformance"),
     summary = "Inspect a committed operation during local chaos testing"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.conformance.chaos_operation")
+    fields(op = "org.cokret.soland.conformance.chaos_operation")
 )]
 pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Value> {
     super::ensure_enabled()?;

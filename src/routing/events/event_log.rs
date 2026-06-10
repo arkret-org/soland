@@ -427,11 +427,11 @@ pub(super) async fn events_query_durable_scope_impl(
 /// (currently used only as a fallback dispatched from `routing::events::sync::events_query`
 /// when the selector has no `realms[]`).
 #[endpoint(
-    operation_id = "ck.events.query_durable",
+    operation_id = "org.cokret.soland.events.query_durable",
     tags("events"),
     summary = "Durable-store reader (bypasses projection; actor-scoped audit queries)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.events.query_durable"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.events.query_durable"))]
 async fn events_query_durable_scope(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -165,12 +165,12 @@ async fn account_viewer(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.register",
+    operation_id = "org.cokret.soland.account.register",
     tags("account"),
     summary = "Register a new account record",
     status_codes(201, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.register"))]
 async fn account_register(
     depot: &mut Depot,
     res: &mut Response,
@@ -258,11 +258,11 @@ async fn account_register(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.me",
+    operation_id = "org.cokret.soland.account.me",
     tags("account"),
     summary = "Get the authenticated principal's account record"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.me"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.me"))]
 async fn account_me(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -283,12 +283,12 @@ async fn account_me(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.claim_handle",
+    operation_id = "org.cokret.soland.account.claim_handle",
     tags("account"),
     summary = "Claim or rename the authenticated principal's handle",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.claim_handle"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.claim_handle"))]
 async fn claim_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -367,12 +367,12 @@ async fn claim_handle(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.update_profile",
+    operation_id = "org.cokret.soland.account.update_profile",
     tags("account"),
     summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.update_profile"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -445,12 +445,12 @@ fn empty_to_none(value: String) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.transfer_handle",
+    operation_id = "org.cokret.soland.account.transfer_handle",
     tags("account"),
     summary = "Transfer the authenticated principal's handle to another account",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.transfer_handle"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.transfer_handle"))]
 async fn transfer_handle(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -539,12 +539,12 @@ async fn transfer_handle(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.export",
+    operation_id = "org.cokret.soland.account.export",
     tags("account"),
     summary = "GDPR export: assemble the authenticated principal's data bundle",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.export"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.export"))]
 async fn export_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -812,12 +812,12 @@ async fn append_account_state_change_audit(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.deactivate",
+    operation_id = "org.cokret.soland.account.deactivate",
     tags("account"),
     summary = "Deactivate the authenticated principal and revoke active access",
     status_codes(200, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.deactivate"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.deactivate"))]
 async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -845,12 +845,12 @@ async fn deactivate_account(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.account.erase",
+    operation_id = "org.cokret.soland.account.erase",
     tags("account"),
     summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.erase"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.erase"))]
 async fn erase_account(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1281,11 +1281,11 @@ fn short_actor_tag(did: &str) -> String {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.notifications.list",
+    operation_id = "org.cokret.soland.notifications.list",
     tags("notifications"),
     summary = "List notifications visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.notifications.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.notifications.list"))]
 async fn list_notifications(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1766,13 +1766,13 @@ fn mention_token_matches(text: &str, actor: &str, actor_handle: &str) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.notifications.mark_all_read",
+    operation_id = "org.cokret.soland.notifications.mark_all_read",
     tags("notifications"),
     summary = "Stamp the authenticated actor's `last_read_at` marker to Utc::now()"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.notifications.mark_all_read")
+    fields(op = "org.cokret.soland.notifications.mark_all_read")
 )]
 async fn notifications_mark_all_read(
     aa: AuthArgs,
@@ -2491,11 +2491,11 @@ pub struct PrincipalRealmOutcome {
 ///
 /// Side-effect: appends an audit-log entry (`account.principal_realm.lookup`).
 #[endpoint(
-    operation_id = "ck.extension.soland.account.principal_realm",
+    operation_id = "org.cokret.soland.account.principal_realm",
     tags("account"),
     summary = "Resolve the principal control Realm for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.account.principal_realm"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.principal_realm"))]
 async fn account_principal_realm(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -167,11 +167,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.bots.register",
+    operation_id = "org.cokret.soland.extensions.bots.register",
     tags("extensions"),
     summary = "Register a bot or ghost actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.extensions.bots.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -213,11 +213,11 @@ async fn register_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.bots.list",
+    operation_id = "org.cokret.soland.extensions.bots.list",
     tags("extensions"),
     summary = "List bots / ghost actors owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.extensions.bots.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.list"))]
 async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -226,11 +226,11 @@ async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Js
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.bots.revoke",
+    operation_id = "org.cokret.soland.extensions.bots.revoke",
     tags("extensions"),
     summary = "Revoke a bot / ghost actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.extensions.bots.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;

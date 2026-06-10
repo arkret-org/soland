@@ -167,13 +167,13 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.push.outbound_bridge_resolve",
+    operation_id = "org.cokret.soland.push.outbound_bridge_resolve",
     tags("push"),
     summary = "Resolve a push gateway URL to a cached contract snapshot"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.push.outbound_bridge_resolve")
+    fields(op = "org.cokret.soland.push.outbound_bridge_resolve")
 )]
 async fn outbound_push_bridge_resolve(
     body: JsonBody<OutboundPushBridgeResolveRequestBody>,
@@ -237,13 +237,13 @@ async fn outbound_push_bridge_resolve(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.push.outbound_bridge_fetch",
+    operation_id = "org.cokret.soland.push.outbound_bridge_fetch",
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.push.outbound_bridge_fetch")
+    fields(op = "org.cokret.soland.push.outbound_bridge_fetch")
 )]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequestBody>,
@@ -424,13 +424,13 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.push.outbound_bridge_cache_import",
+    operation_id = "org.cokret.soland.push.outbound_bridge_cache_import",
     tags("push"),
     summary = "Import push bridge cache snapshots (replace_existing toggle)"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.push.outbound_bridge_cache_import")
+    fields(op = "org.cokret.soland.push.outbound_bridge_cache_import")
 )]
 async fn outbound_push_bridge_cache_import(
     body: JsonBody<OutboundPushBridgeCacheImportRequestBody>,
@@ -491,13 +491,13 @@ async fn outbound_push_bridge_cache_import(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.push.outbound_bridge_cache_invalidate",
+    operation_id = "org.cokret.soland.push.outbound_bridge_cache_invalidate",
     tags("push"),
     summary = "Invalidate one or all push bridge cache entries"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.push.outbound_bridge_cache_invalidate")
+    fields(op = "org.cokret.soland.push.outbound_bridge_cache_invalidate")
 )]
 async fn outbound_push_bridge_cache_invalidate(
     body: JsonBody<OutboundPushBridgeCacheInvalidateRequestBody>,

@@ -125,11 +125,11 @@ fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.cells.get",
+    operation_id = "org.cokret.soland.admin.cells.get",
     tags("admin", "cells"),
     summary = "Get one cell's resolved state"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.get"))]
 async fn admin_get_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -223,11 +223,11 @@ async fn admin_get_cell(
 ///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
 ///   to `0`.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.cells.list",
+    operation_id = "org.cokret.soland.admin.cells.list",
     tags("admin", "cells"),
     summary = "List cells matching a Realm + family prefix filter"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.cells.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.cells.list"))]
 async fn admin_list_cells(
     aa: AuthArgs,
     depot: &mut Depot,

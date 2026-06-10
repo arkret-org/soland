@@ -19,11 +19,11 @@ pub fn well_known_cokret_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.well_known.cokret",
+    operation_id = "org.cokret.soland.well_known.cokret",
     tags("federation"),
     summary = "Server description for federation discovery"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.well_known.cokret"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.well_known.cokret"))]
 async fn well_known_cokret(depot: &mut Depot) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Spec: B.3 — server description endpoint. Returns the small set

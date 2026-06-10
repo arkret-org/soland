@@ -43,11 +43,11 @@ struct FederationPeerTarget {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.transaction",
+    operation_id = "org.cokret.soland.federation.transaction",
     tags("federation"),
     summary = "Idempotent inbound server-to-server federation transaction"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.transaction"))]
 pub(super) async fn federation_transaction(
     txn_id: PathParam<String>,
     body: JsonBody<cokret_sdk::FederationTransactionRequestBody>,
@@ -234,13 +234,13 @@ pub(super) async fn federation_transaction(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.push_operations",
+    operation_id = "org.cokret.soland.federation.push_operations",
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.federation.push_operations")
+    fields(op = "org.cokret.soland.federation.push_operations")
 )]
 pub(super) async fn federation_push_operations(
     body: JsonBody<cokret_sdk::FederationPushOperationsRequestBody>,
@@ -277,11 +277,11 @@ pub(super) async fn federation_push_operations(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.actor_events",
+    operation_id = "org.cokret.soland.federation.actor_events",
     tags("federation"),
     summary = "Debug/read model: list projection events for a federated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.actor_events"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.actor_events"))]
 pub(super) async fn federation_actor_events(
     actor_id: PathParam<String>,
     depot: &mut Depot,
@@ -603,13 +603,13 @@ fn operation_actor_did(operation: &Operation) -> Option<&str> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.pull_operations",
+    operation_id = "org.cokret.soland.federation.pull_operations",
     tags("federation"),
     summary = "Pull a page of operations for a federated Realm, with optional snapshot bootstrap"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.federation.pull_operations")
+    fields(op = "org.cokret.soland.federation.pull_operations")
 )]
 pub(super) async fn federation_pull_operations(
     realm_id: QueryParam<String, true>,
@@ -696,13 +696,13 @@ pub(super) async fn federation_pull_operations(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.backfill_operations",
+    operation_id = "org.cokret.soland.federation.backfill_operations",
     tags("federation"),
     summary = "Pull missing operations from a configured federation peer and ingest them locally"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.federation.backfill_operations")
+    fields(op = "org.cokret.soland.federation.backfill_operations")
 )]
 pub(super) async fn federation_backfill_operations(
     body: JsonBody<Value>,
@@ -773,13 +773,13 @@ pub(super) async fn federation_backfill_operations(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.operation_frontier",
+    operation_id = "org.cokret.soland.federation.operation_frontier",
     tags("federation"),
     summary = "Return the operation frontier used by federation pull/backfill convergence checks"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.federation.operation_frontier")
+    fields(op = "org.cokret.soland.federation.operation_frontier")
 )]
 pub(super) async fn federation_operation_frontier(
     realm_id: QueryParam<String, true>,
@@ -794,11 +794,11 @@ pub(super) async fn federation_operation_frontier(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.realm_members",
+    operation_id = "org.cokret.soland.federation.realm_members",
     tags("federation"),
     summary = "List Realm memberships for a federated Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.realm_members"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.realm_members"))]
 pub(super) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
@@ -830,11 +830,11 @@ pub(super) async fn federation_realm_members(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.verify_actor",
+    operation_id = "org.cokret.soland.federation.verify_actor",
     tags("federation"),
     summary = "Verify a federated actor's signature against the local DID resolver"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.verify_actor"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.verify_actor"))]
 pub(super) async fn federation_verify_actor(
     body: JsonBody<cokret_sdk::FederationVerifyActorRequestBody>,
     depot: &mut Depot,
@@ -1725,11 +1725,11 @@ pub struct FederationAnchorsPushOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.anchors.pull",
+    operation_id = "org.cokret.soland.federation.anchors.pull",
     tags("federation"),
     summary = "Pull locally-held Anchors for a Realm (federation peer-pull)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.pull"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.anchors.pull"))]
 pub(super) async fn federation_anchors_pull(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
@@ -1755,11 +1755,11 @@ pub(super) async fn federation_anchors_pull(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.federation.anchors.push",
+    operation_id = "org.cokret.soland.federation.anchors.push",
     tags("federation"),
     summary = "Accept Anchor envelopes from a federation peer (peer-push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.federation.anchors.push"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.anchors.push"))]
 pub(super) async fn federation_anchors_push(
     depot: &mut Depot,
     body: JsonBody<FederationAnchorsPushRequestBody>,

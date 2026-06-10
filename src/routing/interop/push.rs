@@ -191,11 +191,11 @@ pub(super) async fn push_unregister(
 }
 
 #[endpoint(
-    operation_id = "ck.push.rules",
+    operation_id = "org.cokret.soland.push.rules",
     tags("push"),
     summary = "List push notification rules for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.push.rules"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.rules"))]
 pub(super) async fn push_rules(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -215,11 +215,11 @@ pub(super) async fn push_rules(
 }
 
 #[endpoint(
-    operation_id = "ck.push.upsert_rule",
+    operation_id = "org.cokret.soland.push.upsert_rule",
     tags("push"),
     summary = "Idempotently create or update a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.push.upsert_rule"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.upsert_rule"))]
 pub(super) async fn upsert_push_rule(
     aa: AuthArgs,
     body: JsonBody<UpsertPushRuleRequestBody>,
@@ -275,11 +275,11 @@ pub(super) async fn upsert_push_rule(
 }
 
 #[endpoint(
-    operation_id = "ck.push.delete_rule",
+    operation_id = "org.cokret.soland.push.delete_rule",
     tags("push"),
     summary = "Delete a push notification rule"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.push.delete_rule"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.delete_rule"))]
 pub(super) async fn delete_push_rule(
     aa: AuthArgs,
     rule_id: PathParam<String>,

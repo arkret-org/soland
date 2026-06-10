@@ -169,11 +169,11 @@ fn account_existing_session_error(
 }
 
 #[endpoint(
-    operation_id = "ck.auth.dev_login",
+    operation_id = "org.cokret.soland.auth.dev_login",
     tags("auth"),
     summary = "Development bearer-token login"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.auth.dev_login"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.dev_login"))]
 async fn dev_login(
     depot: &mut Depot,
     body: JsonBody<DevLoginRequestBody>,
@@ -297,11 +297,11 @@ async fn dev_login(
 }
 
 #[endpoint(
-    operation_id = "ck.auth.exchange_session_grant",
+    operation_id = "org.cokret.soland.auth.exchange_session_grant",
     tags("auth"),
     summary = "Exchange a coauth session-grant for a principal-server bearer session"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.auth.exchange_session_grant"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.exchange_session_grant"))]
 async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequestBody>,
@@ -593,11 +593,11 @@ pub(crate) async fn validate_session_grant_binding(
 }
 
 #[endpoint(
-    operation_id = "ck.auth.logout",
+    operation_id = "org.cokret.soland.auth.logout",
     tags("auth"),
     summary = "Revoke the current bearer session and bound device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.auth.logout"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.logout"))]
 async fn logout(
     aa: super::AuthArgs,
     depot: &mut Depot,

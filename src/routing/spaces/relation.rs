@@ -37,11 +37,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.relation.create",
+    operation_id = "org.cokret.soland.relation.create",
     tags("relations"),
     summary = "Create a relation between two refs in a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.relation.create"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.relation.create"))]
 async fn create_relation(
     aa: AuthArgs,
     body: JsonBody<CreateRelationRequestBody>,
@@ -112,11 +112,11 @@ async fn create_relation(
 }
 
 #[endpoint(
-    operation_id = "ck.relation.tombstone",
+    operation_id = "org.cokret.soland.relation.tombstone",
     tags("relations"),
     summary = "Tombstone a relation by relation_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.relation.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.relation.tombstone"))]
 async fn tombstone_relation(
     aa: AuthArgs,
     relation_id: PathParam<String>,
@@ -148,11 +148,11 @@ async fn tombstone_relation(
 }
 
 #[endpoint(
-    operation_id = "ck.relation.list",
+    operation_id = "org.cokret.soland.relation.list",
     tags("relations"),
     summary = "List relations for a Realm, optionally filtered by `kind`"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.relation.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.relation.list"))]
 async fn list_relations(
     aa: AuthArgs,
     kind: QueryParam<String, false>,

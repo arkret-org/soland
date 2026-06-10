@@ -121,12 +121,12 @@ pub struct EmbeddedWebvhRegisterOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.identity.webvh.register",
+    operation_id = "org.cokret.soland.identity.webvh.register",
     tags("identity"),
     summary = "Register through the embedded did:webvh provider",
     status_codes(201, 400, 401, 404, 409, 500, 503)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.identity.webvh.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.identity.webvh.register"))]
 pub(super) async fn embedded_webvh_register(
     depot: &mut Depot,
     req: &mut Request,
@@ -477,13 +477,13 @@ pub(super) async fn identity_document(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.get_path_did_document",
+    operation_id = "org.cokret.soland.identity.get_path_did_document",
     tags("identity"),
     summary = "Fetch a DID document by DID path segment"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.get_path_did_document")
+    fields(op = "org.cokret.soland.identity.get_path_did_document")
 )]
 pub(super) async fn identity_did_document(
     req: &mut Request,

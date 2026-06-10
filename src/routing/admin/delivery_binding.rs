@@ -96,13 +96,13 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
 /// caller DID MUST appear in `admin_principal_dids` (gated via
 /// `super::require_admin_principal`).
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realms.delivery_binding_policy.get",
+    operation_id = "org.cokret.soland.admin.realms.delivery_binding_policy.get",
     tags("admin", "realm", "delivery_binding_policy"),
     summary = "Get effective Realm delivery-binding-policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.realms.delivery_binding_policy.get")
+    fields(op = "org.cokret.soland.admin.realms.delivery_binding_policy.get")
 )]
 pub(super) async fn admin_get_realm_delivery_binding_policy(
     aa: AuthArgs,

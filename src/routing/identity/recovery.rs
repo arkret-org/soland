@@ -180,14 +180,14 @@ fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_policy.get",
+    operation_id = "org.cokret.soland.identity.recovery_policy.get",
     tags("identity", "recovery"),
     summary = "Read the currently accepted recovery policy (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_policy.get")
+    fields(op = "org.cokret.soland.identity.recovery_policy.get")
 )]
 async fn recovery_policy_get(
     aa: AuthArgs,
@@ -208,14 +208,14 @@ async fn recovery_policy_get(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_policies.get",
+    operation_id = "org.cokret.soland.identity.recovery_policies.get",
     tags("identity", "recovery"),
     summary = "List recovery policy history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_policies.get")
+    fields(op = "org.cokret.soland.identity.recovery_policies.get")
 )]
 async fn recovery_policies_get(
     aa: AuthArgs,
@@ -237,14 +237,14 @@ async fn recovery_policies_get(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_receipts.get",
+    operation_id = "org.cokret.soland.identity.recovery_receipts.get",
     tags("identity", "recovery"),
     summary = "List recovery receipt history newest-first (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_receipts.get")
+    fields(op = "org.cokret.soland.identity.recovery_receipts.get")
 )]
 async fn recovery_receipts_get(
     aa: AuthArgs,
@@ -399,14 +399,14 @@ async fn load_owned_recovery_session(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_session.create",
+    operation_id = "org.cokret.soland.identity.recovery_session.create",
     tags("identity", "recovery"),
     summary = "Open a recovery session bound to the active policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_session.create")
+    fields(op = "org.cokret.soland.identity.recovery_session.create")
 )]
 async fn recovery_session_create(
     aa: AuthArgs,
@@ -522,7 +522,7 @@ async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.extension.soland.identity.recovery_session.create",
+        "org.cokret.soland.identity.recovery_session.create",
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -538,14 +538,14 @@ async fn recovery_session_create(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_session.get",
+    operation_id = "org.cokret.soland.identity.recovery_session.get",
     tags("identity", "recovery"),
     summary = "Read a recovery session status (REC-1)",
     status_codes(200, 401, 403, 404, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_session.get")
+    fields(op = "org.cokret.soland.identity.recovery_session.get")
 )]
 async fn recovery_session_get(
     aa: AuthArgs,
@@ -561,14 +561,14 @@ async fn recovery_session_get(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_session.proof_submit",
+    operation_id = "org.cokret.soland.identity.recovery_session.proof_submit",
     tags("identity", "recovery"),
     summary = "Submit a recovery proof for a pending session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_session.proof_submit")
+    fields(op = "org.cokret.soland.identity.recovery_session.proof_submit")
 )]
 async fn recovery_session_proof_submit(
     aa: AuthArgs,
@@ -771,14 +771,14 @@ fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Valu
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_session.complete",
+    operation_id = "org.cokret.soland.identity.recovery_session.complete",
     tags("identity", "recovery"),
     summary = "Finalize a verified recovery session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_session.complete")
+    fields(op = "org.cokret.soland.identity.recovery_session.complete")
 )]
 async fn recovery_session_complete(
     aa: AuthArgs,
@@ -954,7 +954,7 @@ async fn recovery_session_complete(
     append_audit_log(
         state,
         Some(&completed.principal_id),
-        "ck.extension.soland.identity.recovery_session.complete",
+        "org.cokret.soland.identity.recovery_session.complete",
         json!({
             "recovery_session_id": completed.recovery_session_id,
             "device_id": completed.requesting_device_id,
@@ -1085,14 +1085,14 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_policy.put",
+    operation_id = "org.cokret.soland.identity.recovery_policy.put",
     tags("identity", "recovery"),
     summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_policy.put")
+    fields(op = "org.cokret.soland.identity.recovery_policy.put")
 )]
 async fn recovery_policy_put(
     aa: AuthArgs,
@@ -1163,7 +1163,7 @@ async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.extension.soland.identity.recovery_policy.put",
+        "org.cokret.soland.identity.recovery_policy.put",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -1185,14 +1185,14 @@ async fn recovery_policy_put(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.identity.recovery_receipt.put",
+    operation_id = "org.cokret.soland.identity.recovery_receipt.put",
     tags("identity", "recovery"),
     summary = "Record a ck.schema.recovery_receipt.v1 receipt (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.identity.recovery_receipt.put")
+    fields(op = "org.cokret.soland.identity.recovery_receipt.put")
 )]
 async fn recovery_receipt_put(
     aa: AuthArgs,
@@ -1291,7 +1291,7 @@ async fn recovery_receipt_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.extension.soland.identity.recovery_receipt.put",
+        "org.cokret.soland.identity.recovery_receipt.put",
         json!({
             "receipt_id": record.receipt_id.clone(),
             "principal_id": record.principal_id.clone(),

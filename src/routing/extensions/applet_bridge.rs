@@ -315,12 +315,12 @@ async fn revoke_install_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.ghost_actor.provision",
+    operation_id = "org.cokret.soland.self.applet.ghost_actor.provision",
     tags("applet"),
     summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
     status_codes(200, 201, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.ghost_actor.provision"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.self.applet.ghost_actor.provision"))]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -615,12 +615,12 @@ async fn third_party_locations_endpoint(req: &mut Request) -> JsonResult<Value> 
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.applets.register",
+    operation_id = "org.cokret.soland.applets.register",
     tags("extensions"),
     summary = "Register a verified applet manifest and issue a bot actor DID",
     status_codes(200, 201, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.register"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -653,11 +653,11 @@ async fn register_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.applets.get",
+    operation_id = "org.cokret.soland.applets.get",
     tags("extensions"),
     summary = "Read applet bridge registration state"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.get"))]
 async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
     let applet_id = applet_id_param(req)?;
     let record =
@@ -666,11 +666,11 @@ async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.applets.ghosts.provision",
+    operation_id = "org.cokret.soland.applets.ghosts.provision",
     tags("extensions"),
     summary = "Provision or reuse a ghost actor and optionally route a portal message"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.ghosts.provision"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.ghosts.provision"))]
 async fn ghost_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -704,11 +704,11 @@ async fn ghost_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.applets.bot.message",
+    operation_id = "org.cokret.soland.applets.bot.message",
     tags("extensions"),
     summary = "Write a portal message as the applet bot actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.bot.message"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.bot.message"))]
 async fn bot_message_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -745,11 +745,11 @@ async fn bot_message_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.applets.revoke",
+    operation_id = "org.cokret.soland.applets.revoke",
     tags("extensions"),
     summary = "Revoke an applet's bot and ghost capabilities"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.applets.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.revoke"))]
 async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

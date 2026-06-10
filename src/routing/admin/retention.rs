@@ -28,13 +28,13 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.retention.policy.configure",
+    operation_id = "org.cokret.soland.admin.retention.policy.configure",
     tags("admin", "retention"),
     summary = "Configure a local Realm retention TTL policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.retention.policy.configure")
+    fields(op = "org.cokret.soland.admin.retention.policy.configure")
 )]
 async fn configure_retention_policy(
     aa: AuthArgs,
@@ -74,11 +74,11 @@ async fn configure_retention_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.retention.sweep",
+    operation_id = "org.cokret.soland.admin.retention.sweep",
     tags("admin", "retention"),
     summary = "Sweep expired retention-policy events into tombstones"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.retention.sweep"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.retention.sweep"))]
 async fn sweep_retention_policy(
     aa: AuthArgs,
     depot: &mut Depot,

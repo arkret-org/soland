@@ -641,11 +641,11 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 /// `GET /_soland/admin/realms/{realm_id}/anchorer` — read current
 /// anchorer cell value.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realms.anchorer.get",
+    operation_id = "org.cokret.soland.admin.realms.anchorer.get",
     tags("admin", "anchorer"),
     summary = "Get current anchorer cell value"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realms.anchorer.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.anchorer.get"))]
 pub(super) async fn admin_get_anchorer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -685,13 +685,13 @@ pub(super) async fn admin_get_anchorer(
 /// the signing identity is still the service signer so Moves chain off the
 /// AnchorerWorker key.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realms.anchorer.reconfigure",
+    operation_id = "org.cokret.soland.admin.realms.anchorer.reconfigure",
     tags("admin", "anchorer"),
     summary = "Submit anchorer reconfiguration Move"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.realms.anchorer.reconfigure")
+    fields(op = "org.cokret.soland.admin.realms.anchorer.reconfigure")
 )]
 pub(super) async fn admin_reconfigure_anchorer(
     aa: AuthArgs,
@@ -834,11 +834,11 @@ pub(super) async fn admin_reconfigure_anchorer(
 /// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
 /// this Realm.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realms.bottom.list",
+    operation_id = "org.cokret.soland.admin.realms.bottom.list",
     tags("admin", "bottom"),
     summary = "List Bottom cells in a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realms.bottom.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.list"))]
 pub(super) async fn admin_list_realm_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -856,11 +856,11 @@ pub(super) async fn admin_list_realm_bottom(
 
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.bottom.list_global",
+    operation_id = "org.cokret.soland.admin.bottom.list_global",
     tags("admin", "bottom"),
     summary = "List Bottom cells across every Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.bottom.list_global"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.bottom.list_global"))]
 pub(super) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -895,13 +895,13 @@ pub(super) async fn admin_list_bottom_global(
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer flow.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realms.bottom.repair",
+    operation_id = "org.cokret.soland.admin.realms.bottom.repair",
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.realms.bottom.repair")
+    fields(op = "org.cokret.soland.admin.realms.bottom.repair")
 )]
 pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
@@ -1106,13 +1106,13 @@ pub(super) async fn admin_repair_bottom(
 /// `GET /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier
 /// + state_root snapshot built from the live `AnchorStore`.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.get",
+    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.get",
     tags("admin", "anchor-dag"),
     summary = "Get Anchor DAG snapshot for a Space"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.get")
+    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.get")
 )]
 pub(super) async fn admin_get_anchor_dag(
     aa: AuthArgs,
@@ -1196,13 +1196,13 @@ pub(super) async fn admin_get_anchor_dag(
 /// structurally-correct response so sodmin's UI flow is unblocked.
 /// `max_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.compact",
+    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.compact",
     tags("admin", "anchor-dag"),
     summary = "Trigger signed compaction Anchor"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.compact")
+    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.compact")
 )]
 pub(super) async fn admin_compact_anchor_dag(
     aa: AuthArgs,
@@ -1330,13 +1330,13 @@ pub(super) async fn admin_compact_anchor_dag(
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.anchor_dag.prune",
+    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.prune",
     tags("admin", "anchor-dag"),
     summary = "Evaluate + prune a historical Anchor"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.admin.spaces.anchor_dag.prune")
+    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.prune")
 )]
 pub(super) async fn admin_prune_anchor_dag(
     aa: AuthArgs,
@@ -1576,7 +1576,7 @@ pub struct MultisigPendingOutcome {
 /// Anchor; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
 #[salvo::oapi::endpoint(
-    operation_id = "ck.extension.soland.admin.multisig.partial",
+    operation_id = "org.cokret.soland.admin.multisig.partial",
     tags("admin", "multisig")
 )]
 pub(super) async fn admin_submit_multisig_partial(
@@ -1696,7 +1696,7 @@ pub(super) async fn admin_submit_multisig_partial(
 
 /// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
 #[salvo::oapi::endpoint(
-    operation_id = "ck.extension.soland.admin.multisig.pending",
+    operation_id = "org.cokret.soland.admin.multisig.pending",
     tags("admin", "multisig")
 )]
 pub(super) async fn admin_list_multisig_pending(
@@ -1784,7 +1784,7 @@ pub struct RotateSigningKeyOutcome {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ck.extension.soland.admin.realms.anchorer.rotate_signing_key",
+    operation_id = "org.cokret.soland.admin.realms.anchorer.rotate_signing_key",
     tags("admin", "anchorer"),
     summary = "Rotate the AnchorerWorker signing key"
 )]
@@ -1946,7 +1946,7 @@ pub struct GcCandidatesOutcome {
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
 #[salvo::oapi::endpoint(
-    operation_id = "ck.extension.soland.admin.spaces.gc_candidates",
+    operation_id = "org.cokret.soland.admin.spaces.gc_candidates",
     tags("admin", "gc"),
     summary = "List GC-eligible Moves for a Space"
 )]

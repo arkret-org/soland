@@ -558,11 +558,11 @@ async fn list_morph_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.projection.document",
+    operation_id = "org.cokret.soland.projection.document",
     tags("projection"),
     summary = "Read a document Morph projection with body, versions, relations, comments, and cursor presence"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.projection.document"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.projection.document"))]
 async fn read_document_projection(
     aa: AuthArgs,
     depot: &mut Depot,

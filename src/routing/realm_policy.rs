@@ -63,11 +63,11 @@ pub struct PutRealmPolicyServerRequestBody {
 }
 
 #[endpoint(
-    operation_id = "ck.realms.policy_server.get",
+    operation_id = "org.cokret.soland.realms.policy_server.get",
     tags("realms"),
     summary = "Read the projected ck.realm.policy_server config (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.policy_server.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -103,11 +103,11 @@ async fn get_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ck.realms.policy_server.put",
+    operation_id = "org.cokret.soland.realms.policy_server.put",
     tags("realms"),
     summary = "Submit a ck.realm.policy_server Move (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.put"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.policy_server.put"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -167,11 +167,11 @@ async fn put_realm_policy_server(
 }
 
 #[endpoint(
-    operation_id = "ck.realms.policy_server.delete",
+    operation_id = "org.cokret.soland.realms.policy_server.delete",
     tags("realms"),
     summary = "Tombstone the ck.realm.policy_server cell (G3.S2)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.realms.policy_server.delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.policy_server.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,

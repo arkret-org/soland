@@ -59,11 +59,11 @@ pub(crate) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.list",
+    operation_id = "org.cokret.soland.organizations.list",
     tags("organizations"),
     summary = "List locally known organizations"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.list"))]
 async fn list_organizations(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -92,11 +92,11 @@ async fn list_organizations(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.upsert",
+    operation_id = "org.cokret.soland.organizations.upsert",
     tags("organizations"),
     summary = "Create or update a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.upsert"))]
 async fn upsert_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -145,11 +145,11 @@ async fn upsert_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.get",
+    operation_id = "org.cokret.soland.organizations.get",
     tags("organizations"),
     summary = "Read a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.get"))]
 async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -170,11 +170,11 @@ async fn get_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.policy.get",
+    operation_id = "org.cokret.soland.organizations.policy.get",
     tags("organizations", "policy"),
     summary = "Read the current organization moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.policy.get"))]
 async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -195,13 +195,13 @@ async fn get_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.policy.upsert",
+    operation_id = "org.cokret.soland.organizations.policy.upsert",
     tags("organizations", "policy"),
     summary = "Publish an organization moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.organizations.policy.upsert")
+    fields(op = "org.cokret.soland.organizations.policy.upsert")
 )]
 async fn upsert_organization_policy(
     aa: AuthArgs,
@@ -272,11 +272,11 @@ async fn upsert_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.organizations.realms.link",
+    operation_id = "org.cokret.soland.organizations.realms.link",
     tags("organizations", "realms"),
     summary = "Link a Realm to an organization policy source"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.organizations.realms.link"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.realms.link"))]
 async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,

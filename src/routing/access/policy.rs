@@ -57,11 +57,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.policies.list",
+    operation_id = "org.cokret.soland.policies.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -98,11 +98,11 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.policies.get",
+    operation_id = "org.cokret.soland.policies.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.get"))]
 async fn get_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -125,11 +125,11 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.policies.upsert",
+    operation_id = "org.cokret.soland.policies.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.upsert"))]
 async fn upsert_policy_document(
     aa: AuthArgs,
     body: JsonBody<UpsertPolicyDocumentRequestBody>,
@@ -215,11 +215,11 @@ pub struct PatchPolicyDocumentRequestBody {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.policies.patch",
+    operation_id = "org.cokret.soland.policies.patch",
     tags("policy"),
     summary = "Apply a ck.schema.patch.v1 patch to a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.patch"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.patch"))]
 async fn patch_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -299,11 +299,11 @@ async fn patch_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.policies.delete",
+    operation_id = "org.cokret.soland.policies.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.policies.delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.delete"))]
 async fn delete_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,

@@ -3303,11 +3303,11 @@ async fn durable_events_query_from_parts(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.sync.backfill_gap",
+    operation_id = "org.cokret.soland.sync.backfill_gap",
     tags("sync"),
     summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.sync.backfill_gap"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.backfill_gap"))]
 async fn sync_gap_backfill(
     realm_id: salvo::oapi::extract::QueryParam<String, true>,
     limit: salvo::oapi::extract::QueryParam<usize, false>,
@@ -3442,11 +3442,11 @@ async fn snapshot_head(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.sync.snapshot_chunk",
+    operation_id = "org.cokret.soland.sync.snapshot_chunk",
     tags("sync"),
     summary = "Read one chunk of a snapshot-v1 bundle (with audit_path proving merkle membership)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.sync.snapshot_chunk"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.snapshot_chunk"))]
 async fn snapshot_chunk(
     snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
     chunk_id: salvo::oapi::extract::QueryParam<u32, false>,

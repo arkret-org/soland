@@ -274,13 +274,13 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.tsp.transports.declare",
+    operation_id = "org.cokret.soland.extensions.tsp.transports.declare",
     tags("extensions"),
     summary = "Declare a TSP transport"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.extensions.tsp.transports.declare")
+    fields(op = "org.cokret.soland.extensions.tsp.transports.declare")
 )]
 async fn declare_transport_endpoint(
     aa: AuthArgs,
@@ -327,13 +327,13 @@ async fn declare_transport_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.tsp.transports.list",
+    operation_id = "org.cokret.soland.extensions.tsp.transports.list",
     tags("extensions"),
     summary = "List TSP transports owned by the authenticated actor"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.extensions.tsp.transports.list")
+    fields(op = "org.cokret.soland.extensions.tsp.transports.list")
 )]
 async fn list_transports_endpoint(
     aa: AuthArgs,
@@ -347,13 +347,13 @@ async fn list_transports_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.tsp.routes.establish",
+    operation_id = "org.cokret.soland.extensions.tsp.routes.establish",
     tags("extensions"),
     summary = "Establish a TSP route"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.extensions.tsp.routes.establish")
+    fields(op = "org.cokret.soland.extensions.tsp.routes.establish")
 )]
 async fn establish_route_endpoint(
     aa: AuthArgs,
@@ -399,13 +399,13 @@ async fn establish_route_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.extensions.tsp.routes.audit",
+    operation_id = "org.cokret.soland.extensions.tsp.routes.audit",
     tags("extensions"),
     summary = "Fetch the audit chain for a TSP route"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.extensions.tsp.routes.audit")
+    fields(op = "org.cokret.soland.extensions.tsp.routes.audit")
 )]
 async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");

@@ -1,5 +1,5 @@
 //! Conformance gate: every operation_id used by soland is either in the
-//! canonical registry OR namespaced as ck.extension.soland.*
+//! canonical registry OR namespaced as org.cokret.soland.*
 //!
 //! Stream J of `_claude_todos.md`. The goal is to prevent regressions
 //! where a new HTTP endpoint silently invents an `operation_id` that
@@ -36,30 +36,6 @@ fn spec_artifact(path: &str) -> PathBuf {
 /// soland's `src/` directory — root of the recursive scan.
 fn soland_src_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
-}
-
-/// Stream J / J2 grandfathered allowlist of `ck.*` operation_ids that
-/// soland emits today but that are NOT yet in the canonical registry.
-/// See `scripts/operation_id_baseline.json` for rationale and exit
-/// criteria. Returns `BTreeSet<String>` so membership is O(log n).
-fn load_grandfathered_operation_ids() -> BTreeSet<String> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/operation_id_baseline.json");
-    let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("read baseline {}: {err}", path.display()));
-    let value: Value = serde_json::from_str(&raw)
-        .unwrap_or_else(|err| panic!("parse baseline {}: {err}", path.display()));
-    let mut out = BTreeSet::new();
-    if let Some(array) = value
-        .get("grandfathered_operation_ids")
-        .and_then(Value::as_array)
-    {
-        for entry in array {
-            if let Some(s) = entry.as_str() {
-                out.insert(s.to_owned());
-            }
-        }
-    }
-    out
 }
 
 /// Load every canonical `operation_id` from
@@ -175,12 +151,17 @@ fn code_portion(line: &str) -> &str {
 #[test]
 fn operation_ids_are_registered_or_namespaced() {
     let canonical = load_canonical_operation_ids();
-    let grandfathered = load_grandfathered_operation_ids();
+    // Capture EVERY operation_id literal, regardless of prefix: the gate
+    // is a strict two-way partition — `ck.*` MUST be in the canonical
+    // registry (the `ck.` namespace belongs to the protocol), and
+    // soland-private product/operator operations MUST live under the
+    // reverse-domain extension namespace `org.cokret.soland.*` per the
+    // spec extension convention (schema-registry.md §5). Anything else
+    // (a bare ck.* invention or a third prefix) fails the gate.
     let pattern =
-        Regex::new(r#"operation_id\s*=\s*"(ck\.[A-Za-z0-9_.]+)""#).expect("regex compiles");
+        Regex::new(r#"operation_id\s*=\s*"([A-Za-z][A-Za-z0-9_.]+)""#).expect("regex compiles");
 
     let mut offenders: Vec<String> = Vec::new();
-    let mut seen_grandfathered: BTreeSet<String> = BTreeSet::new();
     for path in rust_files(&soland_src_root()) {
         let raw = match fs::read_to_string(&path) {
             Ok(s) => s,
@@ -193,20 +174,15 @@ fn operation_ids_are_registered_or_namespaced() {
             let scanned = code_portion(line);
             for cap in pattern.captures_iter(scanned) {
                 let op = &cap[1];
-                if op.starts_with("ck.extension.soland.") {
+                if op.starts_with("org.cokret.soland.") {
                     continue;
                 }
                 if canonical.contains(op) {
                     continue;
                 }
-                if grandfathered.contains(op) {
-                    seen_grandfathered.insert(op.to_owned());
-                    continue;
-                }
                 offenders.push(format!(
-                    "{}:{}: unregistered operation_id `{op}` (not in canonical \
-                     registry, not in scripts/operation_id_baseline.json, \
-                     and not namespaced as ck.extension.soland.*)",
+                    "{}:{}: unregistered operation_id `{op}` (not in the canonical \
+                     registry and not namespaced as org.cokret.soland.*)",
                     path.display(),
                     idx + 1
                 ));
@@ -217,26 +193,8 @@ fn operation_ids_are_registered_or_namespaced() {
     assert!(
         offenders.is_empty(),
         "soland source declares operation_id values that are neither \
-         in the canonical registry, in the grandfathered allowlist, nor \
-         namespaced as ck.extension.soland.*:\n  {}",
+         in the canonical registry nor namespaced as org.cokret.soland.*:\n  {}",
         offenders.join("\n  ")
-    );
-
-    // Catch baseline drift in the other direction: an entry that was
-    // grandfathered but has since been removed from the source (or
-    // renamed) should be pruned from `scripts/operation_id_baseline.json`
-    // so the file stays a true source of remaining work, not a stale
-    // graveyard. We fail loudly when an unused entry is present.
-    let stale: Vec<_> = grandfathered
-        .difference(&seen_grandfathered)
-        .cloned()
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "scripts/operation_id_baseline.json lists operation_id values \
-         that no longer appear in soland source — please prune the \
-         baseline file: {}",
-        stale.join(", ")
     );
 }
 

@@ -32,11 +32,11 @@ use crate::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
 use crate::{ids, kinds};
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.collection",
+    operation_id = "org.cokret.soland.admin.collection",
     tags("admin"),
     summary = "Dev-only paginated admin snapshot of a named collection"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.collection"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.collection"))]
 pub(super) async fn admin_collection(
     aa: AuthArgs,
     resource: PathParam<String>,
@@ -165,11 +165,11 @@ pub(super) struct AdminCreateRealmRequestBody {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realm.create",
+    operation_id = "org.cokret.soland.admin.realm.create",
     tags("admin"),
     summary = "Create a Realm through the canonical operation pipeline"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realm.create"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.create"))]
 pub(super) async fn admin_create_realm(
     aa: AuthArgs,
     body: JsonBody<AdminCreateRealmRequestBody>,
@@ -229,11 +229,11 @@ pub(super) async fn admin_create_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realm.get",
+    operation_id = "org.cokret.soland.admin.realm.get",
     tags("admin"),
     summary = "Read a Realm security-boundary admin row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realm.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.get"))]
 pub(super) async fn admin_get_realm(
     realm_id: PathParam<String>,
     depot: &mut Depot,
@@ -244,11 +244,11 @@ pub(super) async fn admin_get_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realm.delete",
+    operation_id = "org.cokret.soland.admin.realm.delete",
     tags("admin"),
     summary = "Destroy a Realm through the canonical operation pipeline"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realm.delete"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.delete"))]
 pub(super) async fn admin_delete_realm(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -274,11 +274,11 @@ pub(super) async fn admin_delete_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.admin.realm.members",
+    operation_id = "org.cokret.soland.admin.realm.members",
     tags("admin"),
     summary = "List Realm members for the admin surface"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.admin.realm.members"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realm.members"))]
 pub(super) async fn admin_list_realm_members(
     realm_id: PathParam<String>,
     depot: &mut Depot,

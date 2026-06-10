@@ -33,11 +33,11 @@ pub struct ProfilePresenceOutcome {
 }
 
 #[endpoint(
-    operation_id = "ck.profile.presence",
+    operation_id = "org.cokret.soland.profile.presence",
     tags("profile"),
     summary = "Read an actor's presence record + display name"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.profile.presence"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.profile.presence"))]
 async fn profile_presence(
     did: QueryParam<String, false>,
     depot: &mut Depot,

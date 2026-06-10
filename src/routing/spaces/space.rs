@@ -41,11 +41,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.realms.get",
+    operation_id = "org.cokret.soland.realms.get",
     tags("realms"),
     summary = "Get a Realm lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.realms.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.get"))]
 async fn get_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -61,13 +61,13 @@ async fn get_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.realms.moderation_policy.effective.get",
+    operation_id = "org.cokret.soland.realms.moderation_policy.effective.get",
     tags("realms", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.realms.moderation_policy.effective.get")
+    fields(op = "org.cokret.soland.realms.moderation_policy.effective.get")
 )]
 async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
@@ -88,13 +88,13 @@ async fn get_realm_effective_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.realms.moderation_policy.upsert",
+    operation_id = "org.cokret.soland.realms.moderation_policy.upsert",
     tags("realms", "policy"),
     summary = "Set a Realm moderation-policy override"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.extension.soland.realms.moderation_policy.upsert")
+    fields(op = "org.cokret.soland.realms.moderation_policy.upsert")
 )]
 async fn upsert_realm_moderation_policy(
     aa: AuthArgs,
@@ -135,11 +135,11 @@ async fn upsert_realm_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.spaces.cells.get",
+    operation_id = "org.cokret.soland.spaces.cells.get",
     tags("spaces", "cells"),
     summary = "Get a projected Space-container child-order cell"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.spaces.cells.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.spaces.cells.get"))]
 async fn get_space_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -192,11 +192,11 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.realms.export",
+    operation_id = "org.cokret.soland.realms.export",
     tags("realms"),
     summary = "Full event log + projection dump for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.realms.export"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.export"))]
 async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,

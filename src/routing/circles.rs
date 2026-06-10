@@ -165,11 +165,11 @@ impl From<&CircleProjection> for CircleOutcome {
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ck.circles.list",
+    operation_id = "org.cokret.soland.circles.list",
     tags("circles"),
     summary = "List Circles visible to the caller within a given Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.list"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.list"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,
@@ -189,11 +189,11 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.get",
+    operation_id = "org.cokret.soland.circles.get",
     tags("circles"),
     summary = "Fetch a single Circle by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.get"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.get"))]
 async fn get_circle(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -211,11 +211,11 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.create",
+    operation_id = "org.cokret.soland.circles.create",
     tags("circles"),
     summary = "Create a Circle (ck.circle.create)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.create"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.create"))]
 async fn post_circle(
     aa: AuthArgs,
     body: JsonBody<CreateCircleRequestBody>,
@@ -255,11 +255,11 @@ async fn post_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.members.add",
+    operation_id = "org.cokret.soland.circles.members.add",
     tags("circles"),
     summary = "Add or change a Circle member (ck.circle.member.state)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.members.add"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.members.add"))]
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -355,11 +355,11 @@ async fn post_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.members.remove",
+    operation_id = "org.cokret.soland.circles.members.remove",
     tags("circles"),
     summary = "Remove a Circle member (ck.circle.member.state → removed)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.members.remove"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.members.remove"))]
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -392,11 +392,11 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.scope_rotate",
+    operation_id = "org.cokret.soland.circles.scope_rotate",
     tags("circles"),
     summary = "Rotate the Circle's bound MLS group (CKP-0007)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.scope_rotate"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.scope_rotate"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -419,11 +419,11 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.archive",
+    operation_id = "org.cokret.soland.circles.archive",
     tags("circles"),
     summary = "Archive a Circle (ck.circle.archive)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.archive"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.archive"))]
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -434,11 +434,11 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
-    operation_id = "ck.circles.tombstone",
+    operation_id = "org.cokret.soland.circles.tombstone",
     tags("circles"),
     summary = "Tombstone a Circle (ck.circle.tombstone)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.circles.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.circles.tombstone"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,

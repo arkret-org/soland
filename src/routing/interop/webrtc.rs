@@ -91,11 +91,11 @@ async fn cokret_ice_config(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.calls.ice_config",
+    operation_id = "org.cokret.soland.calls.ice_config",
     tags("media", "calls"),
     summary = "Issue signed ICE config through the API namespace"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.calls.ice_config"))]
 async fn api_ice_config(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -108,11 +108,11 @@ async fn api_ice_config(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.calls.ice_config.refresh",
+    operation_id = "org.cokret.soland.calls.ice_config.refresh",
     tags("media", "calls"),
     summary = "Refresh signed ICE / TURN credentials for an active call"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.ice_config.refresh"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.calls.ice_config.refresh"))]
 async fn refresh_ice_config(
     aa: AuthArgs,
     call_id: PathParam<String>,
@@ -304,11 +304,11 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.webrtc.create_session",
+    operation_id = "org.cokret.soland.webrtc.create_session",
     tags("webrtc"),
     summary = "Create a WebRTC signaling session bound to a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.create_session"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
     aa: AuthArgs,
     body: JsonBody<CreateWebrtcSessionRequestBody>,
@@ -382,11 +382,11 @@ async fn create_webrtc_session(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.webrtc.send_signal",
+    operation_id = "org.cokret.soland.webrtc.send_signal",
     tags("webrtc"),
     summary = "Append a WebRTC signaling message (offer/answer/candidate/...) to a session"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.send_signal"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.webrtc.send_signal"))]
 async fn put_webrtc_signal(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -485,11 +485,11 @@ async fn put_webrtc_signal(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.webrtc.get_signals",
+    operation_id = "org.cokret.soland.webrtc.get_signals",
     tags("webrtc"),
     summary = "Page through WebRTC signaling events for a session"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.get_signals"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.webrtc.get_signals"))]
 async fn get_webrtc_signals(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -556,11 +556,11 @@ async fn get_webrtc_signals(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.webrtc.close_session",
+    operation_id = "org.cokret.soland.webrtc.close_session",
     tags("webrtc"),
     summary = "Close (delete) a WebRTC signaling session"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.webrtc.close_session"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.webrtc.close_session"))]
 async fn delete_webrtc_session(
     aa: AuthArgs,
     session_id: PathParam<String>,
@@ -595,11 +595,11 @@ async fn delete_webrtc_session(
 }
 
 #[endpoint(
-    operation_id = "ck.extension.soland.calls.recording.start",
+    operation_id = "org.cokret.soland.calls.recording.start",
     tags("media", "calls"),
     summary = "Start recording for a call when recording_policy allows it"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.extension.soland.calls.recording.start"))]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.calls.recording.start"))]
 async fn start_recording(
     aa: AuthArgs,
     call_id: PathParam<String>,

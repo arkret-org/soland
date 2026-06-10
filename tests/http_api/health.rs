@@ -158,7 +158,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.extension.soland.admin.actors")
+            .any(|operation| operation == "org.cokret.soland.admin.actors")
     );
     assert!(
         describe["limits"]["profile_status"]["supported_operation_catalog"]["derived_surface_groups"]
