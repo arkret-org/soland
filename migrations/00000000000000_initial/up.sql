@@ -34,14 +34,13 @@ CREATE TABLE public.agent_grant (
 );
 
 CREATE TABLE public.agent_key (
-    agent_key_id text NOT NULL,
+    agent_key_id uuid NOT NULL,
     agent_principal_id text NOT NULL,
     verification_method text NOT NULL,
     state text DEFAULT 'authorized'::text NOT NULL,
     authorized_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
     revocation_reason text,
-    CONSTRAINT agent_key_agent_key_id_check CHECK ((agent_key_id ~~ 'ck:agent_key:%'::text)),
     CONSTRAINT agent_key_state_check CHECK ((state = ANY (ARRAY['authorized'::text, 'revoked'::text])))
 );
 
@@ -49,7 +48,7 @@ CREATE TABLE public.agent_participation (
     agent_principal_id text NOT NULL,
     scope_kind text NOT NULL,
     scope_key text NOT NULL,
-    realm_id text NOT NULL,
+    realm_id uuid NOT NULL,
     scope jsonb NOT NULL,
     reply boolean DEFAULT false NOT NULL,
     accept_third_party_mention boolean DEFAULT false NOT NULL,
@@ -61,7 +60,7 @@ CREATE TABLE public.agent_participation (
 CREATE TABLE public.agent_participation_ceiling (
     scope_kind text NOT NULL,
     scope_key text NOT NULL,
-    realm_id text NOT NULL,
+    realm_id uuid NOT NULL,
     reply boolean DEFAULT false NOT NULL,
     accept_third_party_mention boolean DEFAULT false NOT NULL,
     act_on_behalf boolean DEFAULT false NOT NULL,
@@ -83,7 +82,7 @@ CREATE TABLE public.agent_principal (
 );
 
 CREATE TABLE public.agent_session (
-    agent_session_id text NOT NULL,
+    agent_session_id uuid NOT NULL,
     agent_principal_id text NOT NULL,
     verification_method text NOT NULL,
     runtime_attestation jsonb,
@@ -91,7 +90,6 @@ CREATE TABLE public.agent_session (
     created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone,
     revoked_at timestamp with time zone,
-    CONSTRAINT agent_session_agent_session_id_check CHECK ((agent_session_id ~~ 'ck:agent_session:%'::text)),
     CONSTRAINT agent_session_state_check CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text])))
 );
 
@@ -109,18 +107,17 @@ CREATE TABLE public.audit_logs (
 );
 
 CREATE TABLE public.backup_series (
-    series_id text NOT NULL,
+    series_id uuid NOT NULL,
     actor_id text NOT NULL,
     backup_class text NOT NULL,
-    head_backup_id text,
+    head_backup_id uuid,
     head_seq bigint DEFAULT 0 NOT NULL,
     frontier_ref text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     retired_at timestamp with time zone,
     CONSTRAINT backup_series_backup_class_check CHECK ((backup_class = ANY (ARRAY['did_recovery'::text, 'secret_storage'::text, 'mls_history'::text, 'external'::text]))),
-    CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0)),
-    CONSTRAINT backup_series_series_id_check CHECK ((series_id ~~ 'ck:backup_series:%'::text))
+    CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
 );
 
 CREATE TABLE public.blobs (
@@ -266,7 +263,7 @@ CREATE TABLE public.invite_receive_policies (
 );
 
 CREATE TABLE public.key_backups (
-    backup_id text NOT NULL,
+    backup_id uuid NOT NULL,
     actor_id text,
     device_id text,
     backup_class text,
@@ -358,7 +355,7 @@ CREATE TABLE public.notification (
 );
 
 CREATE TABLE public.pending_agent_drafts (
-    draft_id text NOT NULL,
+    draft_id uuid NOT NULL,
     agent_principal_id text NOT NULL,
     controller_did text NOT NULL,
     draft_payload jsonb NOT NULL,
@@ -366,12 +363,11 @@ CREATE TABLE public.pending_agent_drafts (
     proposed_at timestamp with time zone NOT NULL,
     decided_at timestamp with time zone,
     decided_by text,
-    CONSTRAINT pending_agent_drafts_draft_id_check CHECK ((draft_id ~~ 'ck:agent_draft:%'::text)),
     CONSTRAINT pending_agent_drafts_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'expired'::text])))
 );
 
 CREATE TABLE public.policy_documents (
-    policy_id text NOT NULL,
+    policy_id uuid NOT NULL,
     owner text NOT NULL,
     scope text NOT NULL,
     subject_ref text NOT NULL,
@@ -457,7 +453,7 @@ CREATE TABLE public.projection_flow_watches (
 CREATE TABLE public.projection_flows (
     flow_id uuid NOT NULL,
     realm_id uuid NOT NULL,
-    scope_circle_id text,
+    scope_circle_id uuid,
     title text NOT NULL,
     summary text,
     state text DEFAULT 'active'::text NOT NULL,
@@ -484,7 +480,7 @@ CREATE TABLE public.projection_morphs (
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
     versions jsonb DEFAULT '[]'::jsonb NOT NULL,
-    scope_circle_id text,
+    scope_circle_id uuid,
     CONSTRAINT projection_morphs_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 
@@ -494,15 +490,15 @@ CREATE TABLE public.projection_space_containers (
     kind text NOT NULL,
     rank text,
     title text NOT NULL,
-    parent_ref text,
+    parent_ref uuid,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by text NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_by text,
     updated_at timestamp with time zone,
-    scope_circle_id text,
-    default_scope_circle_id text,
+    scope_circle_id uuid,
+    default_scope_circle_id uuid,
     child_scope_policy text,
     CONSTRAINT projection_space_containers_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['free'::text, 'require_scope_circle_id'::text, 'locked'::text]))),
     CONSTRAINT projection_space_containers_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'tombstoned'::text])))
@@ -550,26 +546,25 @@ CREATE TABLE public.realm_invites (
 );
 
 CREATE TABLE public.recovery_policies (
-    policy_id text NOT NULL,
+    policy_id uuid NOT NULL,
     principal_id text NOT NULL,
     version integer NOT NULL,
     trust_domain text NOT NULL,
     allowed_proof_kinds text[] NOT NULL,
-    supersedes text,
+    supersedes uuid,
     expires_at timestamp with time zone,
     issued_at timestamp with time zone NOT NULL,
     verification_method text NOT NULL,
     raw_payload jsonb NOT NULL,
     accepted_at timestamp with time zone NOT NULL,
-    CONSTRAINT recovery_policies_policy_id_check CHECK ((policy_id ~~ 'ck:policy:%'::text)),
     CONSTRAINT recovery_policies_version_check CHECK ((version >= 1))
 );
 
 CREATE TABLE public.recovery_receipts (
-    receipt_id text NOT NULL,
+    receipt_id uuid NOT NULL,
     principal_id text NOT NULL,
-    recovery_session_id text NOT NULL,
-    policy_id text NOT NULL,
+    recovery_session_id uuid NOT NULL,
+    policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
     trust_domain text NOT NULL,
     new_device_id text NOT NULL,
@@ -580,17 +575,15 @@ CREATE TABLE public.recovery_receipts (
     verification_method text NOT NULL,
     raw_payload jsonb NOT NULL,
     accepted_at timestamp with time zone NOT NULL,
-    CONSTRAINT recovery_receipts_policy_version_check CHECK ((policy_version >= 1)),
-    CONSTRAINT recovery_receipts_receipt_id_check CHECK ((receipt_id ~~ 'ck:receipt:%'::text)),
-    CONSTRAINT recovery_receipts_recovery_session_id_check CHECK ((recovery_session_id ~~ 'ck:recovery_session:%'::text))
+    CONSTRAINT recovery_receipts_policy_version_check CHECK ((policy_version >= 1))
 );
 
 CREATE TABLE public.recovery_session (
-    recovery_session_id text NOT NULL,
+    recovery_session_id uuid NOT NULL,
     principal_id text NOT NULL,
     requesting_device_id text NOT NULL,
     trust_domain text NOT NULL,
-    policy_id text NOT NULL,
+    policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
     ssk_generation integer NOT NULL,
     policy_payload jsonb NOT NULL,
@@ -601,7 +594,6 @@ CREATE TABLE public.recovery_session (
     updated_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_session_policy_version_check CHECK ((policy_version >= 1)),
-    CONSTRAINT recovery_session_recovery_session_id_check CHECK ((recovery_session_id ~~ 'ck:recovery_session:%'::text)),
     CONSTRAINT recovery_session_ssk_generation_check CHECK ((ssk_generation >= 1)),
     CONSTRAINT recovery_session_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text])))
 );

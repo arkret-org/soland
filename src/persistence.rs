@@ -502,8 +502,8 @@ struct AgentParticipationRow {
     scope_kind: String,
     #[diesel(sql_type = Text)]
     scope_key: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Jsonb)]
     scope: Value,
     #[diesel(sql_type = Bool)]
@@ -520,7 +520,7 @@ impl From<AgentParticipationRow> for Value {
             "agent_principal_id": row.agent_principal_id,
             "scope_kind": row.scope_kind,
             "scope_key": row.scope_key,
-            "realm_id": row.realm_id,
+            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
             "scope": row.scope,
             "reply": row.reply,
             "accept_third_party_mention": row.accept_third_party_mention,
@@ -535,8 +535,8 @@ struct AgentParticipationCeilingRow {
     scope_kind: String,
     #[diesel(sql_type = Text)]
     scope_key: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Bool)]
     reply: bool,
     #[diesel(sql_type = Bool)]
@@ -550,7 +550,7 @@ impl From<AgentParticipationCeilingRow> for Value {
         serde_json::json!({
             "scope_kind": row.scope_kind,
             "scope_key": row.scope_key,
-            "realm_id": row.realm_id,
+            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
             "reply": row.reply,
             "accept_third_party_mention": row.accept_third_party_mention,
             "act_on_behalf": row.act_on_behalf,
@@ -595,7 +595,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
-        .bind::<Text, _>(&realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
         .bind::<Jsonb, _>(&scope)
         .bind::<Bool, _>(get_bool("reply"))
         .bind::<Bool, _>(get_bool("accept_third_party_mention"))
@@ -670,7 +670,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         )
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
-        .bind::<Text, _>(&realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
         .bind::<Bool, _>(get_bool("reply"))
         .bind::<Bool, _>(get_bool("accept_third_party_mention"))
         .bind::<Bool, _>(get_bool("act_on_behalf"))
@@ -7646,7 +7646,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                 key_material_encrypted = EXCLUDED.key_material_encrypted, \
                 payload = EXCLUDED.payload",
         )
-        .bind::<Text, _>(&backup_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&backup_id))
         .bind::<Nullable<Text>, _>(&account_id)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Nullable<Text>, _>(&scheme)
@@ -7663,11 +7663,11 @@ impl KeyBackupStore for PgKeyBackupStore {
         // last_accessed_at side-effect on read is informational; failure here
         // must not crash the get path.
         let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE backup_id = $1")
-            .bind::<Text, _>(backup_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .execute(&mut *conn)
             .await;
         sql_query("SELECT payload FROM key_backups WHERE backup_id = $1")
-            .bind::<Text, _>(backup_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .get_result::<KeyBackupPayloadRow>(&mut *conn)
             .await
             .optional()
@@ -7678,7 +7678,7 @@ impl KeyBackupStore for PgKeyBackupStore {
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM key_backups WHERE backup_id = $1")
-            .bind::<Text, _>(backup_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)
@@ -8212,8 +8212,8 @@ struct PgPolicyDocumentStore {
 
 #[derive(QueryableByName)]
 struct PolicyDocumentRow {
-    #[diesel(sql_type = Text)]
-    policy_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    policy_id: Uuid,
     #[diesel(sql_type = Text)]
     owner: String,
     #[diesel(sql_type = Text)]
@@ -8233,7 +8233,7 @@ struct PolicyDocumentRow {
 impl From<PolicyDocumentRow> for PolicyDocumentRecord {
     fn from(row: PolicyDocumentRow) -> Self {
         Self {
-            policy_id: row.policy_id,
+            policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             owner: row.owner,
             scope: row.scope,
             subject_ref: row.subject_ref,
@@ -8253,7 +8253,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
              FROM policy_documents WHERE policy_id = $1",
         )
-        .bind::<Text, _>(policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
         .get_result::<PolicyDocumentRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(PolicyDocumentRecord::from))
@@ -8288,7 +8288,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
                 active = EXCLUDED.active, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<Text, _>(&record.policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
         .bind::<Text, _>(&record.owner)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.subject_ref)
@@ -8306,7 +8306,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
     async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM policy_documents WHERE policy_id = $1")
-            .bind::<Text, _>(policy_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)
@@ -8358,8 +8358,8 @@ struct PgRecoveryPolicyStore {
 
 #[derive(QueryableByName)]
 struct RecoveryPolicyRow {
-    #[diesel(sql_type = Text)]
-    policy_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    policy_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: String,
     #[diesel(sql_type = Integer)]
@@ -8368,8 +8368,8 @@ struct RecoveryPolicyRow {
     trust_domain: String,
     #[diesel(sql_type = Array<Text>)]
     allowed_proof_kinds: Vec<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    supersedes: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    supersedes: Option<Uuid>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Timestamptz)]
@@ -8393,12 +8393,14 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             ))
         })?;
         Ok(Self {
-            policy_id: row.policy_id,
+            policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             principal_id: row.principal_id,
             version,
             trust_domain: row.trust_domain,
             allowed_proof_kinds: row.allowed_proof_kinds,
-            supersedes: row.supersedes,
+            supersedes: row
+                .supersedes
+                .map(|u| ids::format_typed_uuid("policy", &u)),
             expires_at: row.expires_at,
             issued_at: row.issued_at,
             raw_payload: row.raw_payload,
@@ -8442,7 +8444,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE policy_id = $1",
         )
-        .bind::<Text, _>(policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
         .get_result::<RecoveryPolicyRow>(&mut *conn)
         .await
         .optional()?
@@ -8532,12 +8534,17 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
               expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
-        .bind::<Text, _>(&record.policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Integer, _>(record.version as i32)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Array<Text>, _>(&record.allowed_proof_kinds)
-        .bind::<Nullable<Text>, _>(&record.supersedes)
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .supersedes
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Timestamptz, _>(record.issued_at)
         .bind::<Text, _>(&record.verification_method)
@@ -8556,14 +8563,14 @@ struct PgRecoveryReceiptStore {
 
 #[derive(QueryableByName)]
 struct RecoveryReceiptRow {
-    #[diesel(sql_type = Text)]
-    receipt_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    receipt_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: String,
-    #[diesel(sql_type = Text)]
-    recovery_session_id: String,
-    #[diesel(sql_type = Text)]
-    policy_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    recovery_session_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    policy_id: Uuid,
     #[diesel(sql_type = Integer)]
     policy_version: i32,
     #[diesel(sql_type = Text)]
@@ -8597,10 +8604,13 @@ impl TryFrom<RecoveryReceiptRow> for RecoveryReceiptRecord {
             ))
         })?;
         Ok(Self {
-            receipt_id: row.receipt_id,
+            receipt_id: ids::format_typed_uuid("receipt", &row.receipt_id),
             principal_id: row.principal_id,
-            recovery_session_id: row.recovery_session_id,
-            policy_id: row.policy_id,
+            recovery_session_id: ids::format_typed_uuid(
+                "recovery_session",
+                &row.recovery_session_id,
+            ),
+            policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             policy_version,
             trust_domain: row.trust_domain,
             new_device_id: row.new_device_id,
@@ -8628,7 +8638,7 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
                     verification_method, raw_payload, accepted_at \
              FROM recovery_receipts WHERE recovery_session_id = $1",
         )
-        .bind::<Text, _>(recovery_session_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(recovery_session_id))
         .get_result::<RecoveryReceiptRow>(&mut *conn)
         .await
         .optional()?
@@ -8675,10 +8685,10 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
               verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind::<Text, _>(&record.receipt_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.receipt_id))
         .bind::<Text, _>(&record.principal_id)
-        .bind::<Text, _>(&record.recovery_session_id)
-        .bind::<Text, _>(&record.policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Text, _>(&record.new_device_id)
@@ -8702,16 +8712,16 @@ struct PgRecoverySessionStore {
 
 #[derive(QueryableByName)]
 struct RecoverySessionRow {
-    #[diesel(sql_type = Text)]
-    recovery_session_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    recovery_session_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: String,
     #[diesel(sql_type = Text)]
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
     trust_domain: String,
-    #[diesel(sql_type = Text)]
-    policy_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    policy_id: Uuid,
     #[diesel(sql_type = Integer)]
     policy_version: i32,
     #[diesel(sql_type = Integer)]
@@ -8749,11 +8759,14 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             ))
         })?;
         Ok(Self {
-            recovery_session_id: row.recovery_session_id,
+            recovery_session_id: ids::format_typed_uuid(
+                "recovery_session",
+                &row.recovery_session_id,
+            ),
             principal_id: row.principal_id,
             requesting_device_id: row.requesting_device_id,
             trust_domain: row.trust_domain,
-            policy_id: row.policy_id,
+            policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             policy_version,
             ssk_generation,
             policy_payload: row.policy_payload,
@@ -8782,7 +8795,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_session \
              WHERE recovery_session_id = $1"
         ))
-        .bind::<Text, _>(recovery_session_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(recovery_session_id))
         .get_result::<RecoverySessionRow>(&mut *conn)
         .await
         .optional()?
@@ -8799,11 +8812,11 @@ impl RecoverySessionStore for PgRecoverySessionStore {
               created_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
-        .bind::<Text, _>(&record.recovery_session_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
         .bind::<Text, _>(&record.principal_id)
         .bind::<Text, _>(&record.requesting_device_id)
         .bind::<Text, _>(&record.trust_domain)
-        .bind::<Text, _>(&record.policy_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Integer, _>(record.ssk_generation as i32)
         .bind::<Jsonb, _>(&record.policy_payload)
@@ -8826,7 +8839,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                 state = $2, proof_payload = $3, updated_at = $4, expires_at = $5 \
              WHERE recovery_session_id = $1",
         )
-        .bind::<Text, _>(&record.recovery_session_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)
@@ -9749,8 +9762,8 @@ struct SpaceContainerProjectionRow {
     kind: String,
     #[diesel(sql_type = Text)]
     title: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    parent_ref: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    parent_ref: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
     rank: Option<String>,
     #[diesel(sql_type = Text)]
@@ -9774,7 +9787,7 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             kind: row.kind,
             title: row.title,
-            parent_ref: row.parent_ref,
+            parent_ref: row.parent_ref.map(|u| ids::format_typed_uuid("space", &u)),
             rank: row.rank,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -9828,7 +9841,12 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.title)
-        .bind::<Nullable<Text>, _>(&record.parent_ref)
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .parent_ref
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
         .bind::<Nullable<Text>, _>(&record.rank)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
@@ -9913,8 +9931,8 @@ struct FlowProjectionRow {
     updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Nullable<Text>)]
-    scope_circle_id: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    scope_circle_id: Option<Uuid>,
 }
 
 impl From<FlowProjectionRow> for FlowProjectionRecord {
@@ -9930,7 +9948,9 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
             created_at: row.created_at,
             updated_by: row.updated_by,
             updated_at: row.updated_at,
-            scope_circle_id: row.scope_circle_id,
+            scope_circle_id: row
+                .scope_circle_id
+                .map(|u| ids::format_typed_uuid("circle", &u)),
         }
     }
 }
@@ -9980,7 +10000,12 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Text>, _>(&record.updated_by)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
-        .bind::<Nullable<Text>, _>(&record.scope_circle_id)
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .scope_circle_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
         .execute(&mut *conn)
         .await
         .map(|_| ())

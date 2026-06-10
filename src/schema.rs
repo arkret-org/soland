@@ -233,7 +233,7 @@ diesel::table! {
 
 diesel::table! {
     key_backups (backup_id) {
-        backup_id -> Text,
+        backup_id -> Uuid,
         account_id -> Nullable<Text>,
         actor_id -> Nullable<Text>,
         device_id -> Nullable<Text>,
@@ -262,7 +262,7 @@ diesel::table! {
 
 diesel::table! {
     policy_documents (policy_id) {
-        policy_id -> Text,
+        policy_id -> Uuid,
         owner -> Text,
         scope -> Text,
         subject_ref -> Text,
@@ -349,7 +349,7 @@ diesel::table! {
         realm_id -> Uuid,
         kind -> Text,
         title -> Text,
-        parent_ref -> Nullable<Text>,
+        parent_ref -> Nullable<Uuid>,
         rank -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
