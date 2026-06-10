@@ -662,6 +662,15 @@ pub(in crate::routing) fn validate_peer_request(
             ));
         }
     }
+    // federation.md §3.2/§6: all `/_cokret/peer/*` requests MUST be authenticated
+    // with an RFC 9421 HTTP Message Signature verified against the sender's
+    // service DID key, and the local peer deny policy MUST be enforced inbound.
+    // The bare trust-header checks above are necessary but not sufficient; the
+    // signature verification (which also re-binds the request-canonical-digest and
+    // runs the deny policy) is the authoritative gate.
+    crate::routing::federation::federation::verify_inbound_peer_http_signature(
+        state, req, body,
+    )?;
     Ok(())
 }
 

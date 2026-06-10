@@ -5,8 +5,11 @@
 //! a peer's quota across the rest of the API surface. We currently
 //! recognize three endpoint classes:
 //!
-//! - `auth`   — `/_cokret/gate/auth/*` (strict, low ceiling): bearer-issuing surface, must be
-//!   hardened against credential-stuffing.
+//! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the
+//!   spec-canonical `/_cokret/gate/account/session-grants` and
+//!   `/_cokret/gate/account/agent-key-pair`, plus the legacy
+//!   `/_soland/gate/auth/*` auth routes. Must be hardened against
+//!   credential-stuffing.
 //! - `api`    — every other `/_cokret/*` request (moderate ceiling).
 //! - `other`  — anything outside `/_cokret/*` (default ceiling).
 //!
@@ -32,8 +35,9 @@ pub struct RateLimiterConfig {
     pub max_requests: u32,
     /// Window duration.
     pub window: Duration,
-    /// Strict ceiling for `/_cokret/gate/auth/*` requests; defaults to a
-    /// low value to harden against credential-stuffing.
+    /// Strict ceiling for the credential/bearer-issuing endpoints (see the
+    /// `Auth` class in [`EndpointClass::classify`]); defaults to a low value
+    /// to harden against credential-stuffing.
     pub auth_max_requests: u32,
     /// Moderate ceiling for the rest of `/_cokret/*`.
     pub api_max_requests: u32,
@@ -72,7 +76,16 @@ enum EndpointClass {
 
 impl EndpointClass {
     fn classify(path: &str) -> Self {
-        if path.starts_with("/_cokret/gate/auth/") {
+        // Credential/bearer-issuing endpoints get the strict `Auth` bucket so the
+        // anti-credential-stuffing quota actually covers them. These do NOT live
+        // under a single `/_cokret/gate/auth/` prefix: the spec-canonical
+        // session-grant exchange and agent-key-pair authorization sit under
+        // `/_cokret/gate/account/*`, and the legacy auth surface lives under
+        // `/_soland/gate/auth/*`. Match the real routes, not a dead prefix.
+        if path == "/_cokret/gate/account/session-grants"
+            || path == "/_cokret/gate/account/agent-key-pair"
+            || path.starts_with("/_soland/gate/auth/")
+        {
             Self::Auth
         } else if path.starts_with("/_cokret/") {
             Self::Api

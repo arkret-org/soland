@@ -507,20 +507,16 @@ pub(crate) async fn validate_session_grant_binding(
         audience: state.config.service_did.as_str(),
         proof: input.proof,
     };
-    let introspection_url = crate::security::validate_http_url_for_egress(
-        introspection_url,
-        "session grant introspection",
-        state.config.development_mode,
-    )
-    .map_err(AppError::capability_denied)?;
-    let client =
-        crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
-            .map_err(|error| {
-                AppError::new(
-                    ErrorCode::TemporarilyUnavailable,
-                    format!("session grant introspection client init failed: {error}"),
-                )
-            })?;
+    // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
+    // TOCTOU window between the egress check and the connection.
+    let (introspection_url, client) =
+        crate::security::validate_http_url_for_egress_with_pinned_client(
+            introspection_url,
+            "session grant introspection",
+            state.config.development_mode,
+            std::time::Duration::from_secs(10),
+        )
+        .map_err(AppError::capability_denied)?;
     let response = client
         .post(introspection_url)
         .bearer_auth(bearer)
@@ -901,22 +897,17 @@ async fn perform_oauth_introspection(
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };
-    let introspection_url = crate::security::validate_http_url_for_egress(
-        introspection_url,
-        "OAuth introspection",
-        development_mode,
-    )
-    .map_err(|error| {
-        tracing::warn!(%error, "OAuth introspection denied by egress policy");
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "auth_unavailable",
-            "OAuth introspection service unavailable",
+    // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
+    // TOCTOU window between the egress check and the connection.
+    let (introspection_url, client) =
+        crate::security::validate_http_url_for_egress_with_pinned_client(
+            introspection_url,
+            "OAuth introspection",
+            development_mode,
+            OAUTH_INTROSPECTION_TIMEOUT,
         )
-    })?;
-    let client = crate::security::build_default_egress_http_client(OAUTH_INTROSPECTION_TIMEOUT)
         .map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection client build failed");
+            tracing::warn!(%error, "OAuth introspection denied by egress policy");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "auth_unavailable",
@@ -990,29 +981,26 @@ fn legacy_blocking_introspection(
         token,
         token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
     };
-    let introspection_url = crate::security::validate_http_url_for_egress(
-        introspection_url,
-        "OAuth introspection",
-        development_mode,
-    )
-    .map_err(|error| {
-        tracing::warn!(%error, "OAuth introspection denied by egress policy");
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "auth_unavailable",
-            "OAuth introspection service unavailable",
+    // SOL-03-002: pin validated IPs into the (blocking) client to close the
+    // DNS-rebinding TOCTOU window, matching the async path. (This legacy
+    // blocking path is only reachable outside the request-serving runtime; see
+    // SOL-08-002/SOL-99-002 for its planned removal.)
+    let (introspection_url, client) =
+        crate::security::validate_http_url_for_egress_with_pinned_blocking_client(
+            introspection_url,
+            "OAuth introspection",
+            development_mode,
+            OAUTH_INTROSPECTION_TIMEOUT,
         )
-    })?;
-    let response =
-        crate::security::build_default_blocking_egress_http_client(OAUTH_INTROSPECTION_TIMEOUT)
-            .map_err(|error| {
-                tracing::warn!(%error, "OAuth introspection client build failed");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
-                    "OAuth introspection service unavailable",
-                )
-            })?
+        .map_err(|error| {
+            tracing::warn!(%error, "OAuth introspection denied by egress policy");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection service unavailable",
+            )
+        })?;
+    let response = client
             .post(introspection_url)
             .bearer_auth(introspection_bearer)
             .form(&request)

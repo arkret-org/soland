@@ -418,9 +418,11 @@ pub struct SolandHandleClaim {
     pub member_delivery_binding: Option<SolandHandleClaimDeliveryBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<Value>,
-    pub created_at: String,
+    // SOL-04-003: field order matches handle-claim.schema.json
+    // (expires_at before created_at).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -590,23 +592,36 @@ pub struct SolandSnapshotHeadState {
     pub generator_proof: Value,
 }
 
+// spec `service-operation-dtos.schema.json#/$defs/AuthzCheckRequestBody`
+// (additionalProperties: false). required: actor_id, action; `resource` is
+// optional because identity-scoped actions (e.g. ck.realm.create) have no
+// Realm-bound target.
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandAuthzCheckRequestBody {
     pub actor_id: String,
     pub action: String,
-    pub resource: Value,
+    #[serde(default)]
+    pub resource: Option<Value>,
     #[serde(default)]
     pub context: Option<Value>,
 }
 
+// spec `service-operation-dtos.schema.json#/$defs/AuthzCheckOutcome`
+// (additionalProperties: false). required: `decision` (five-valued enum:
+// allow / soft_deny / hard_deny / quarantine / require_review). Diagnostic
+// trace data is carried in spec-allowed fields (`matched_grants`,
+// `policy_results`) rather than private `grants`/`reason`/`decision_trace`.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandAuthzCheckOutcome {
-    pub allowed: bool,
-    pub reason_code: Option<String>,
-    pub reason: Option<String>,
-    pub grants: Vec<Value>,
+    pub decision: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub matched_grants: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub policy_results: Vec<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub obligations: Vec<Value>,
-    pub decision_trace: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -663,8 +678,10 @@ pub struct ModerationReportRequestBody {
     pub realm_id: String,
     pub target_ref: String,
     pub report_reason_code: String,
-    pub reporter: String,
+    // SOL-04-002: field order matches moderation-report.schema.json
+    // (description before reporter).
     pub description: Option<String>,
+    pub reporter: String,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
 }
@@ -923,32 +940,32 @@ pub struct SolandIdentityResolveOutcome {
     pub method_evidence: Value,
 }
 
+// spec `keys-operations.schema.json#/$defs/keys_backups_put_outcome`
+// (additionalProperties: false). required: status ∈ {accepted, duplicate},
+// backup_id, ciphertext_digest.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandKeysBackupsPutOutcome {
-    pub ok: bool,
-    pub backup: Value,
-    pub state: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
+    pub status: String,
+    pub backup_id: String,
+    pub ciphertext_digest: String,
 }
 
+// spec `keys-operations.schema.json#/$defs/keys_backups_list`
+// (additionalProperties: false). required: backups, has_more; next_cursor optional.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandKeysBackupsList {
     pub backups: Vec<Value>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
-    pub state: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
 }
 
+// spec `keys-operations.schema.json#/$defs/keys_backups_delete_outcome`
+// (additionalProperties: false). required: deleted (const true); backup_id optional.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandKeysBackupsDeleteOutcome {
-    pub ok: bool,
-    pub backup_id: String,
     pub deleted: bool,
-    pub state: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
+    pub backup_id: String,
 }
 
 // CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent 11 operations.

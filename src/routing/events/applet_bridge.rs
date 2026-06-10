@@ -171,27 +171,22 @@ async fn forward_to_applet_bridge(
     params: &Value,
     development_mode: bool,
 ) -> AppletBridgeOutcome {
-    let bridge_url = match crate::security::validate_http_url_for_egress(
-        bridge_url,
-        "applet bridge",
-        development_mode,
-    ) {
-        Ok(url) => url,
-        Err(error) => {
-            return AppletBridgeOutcome::UpstreamFailure {
-                code: "egress_policy_denied".to_owned(),
-                message: error,
-            };
-        }
-    };
-    let client =
-        match crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
-        {
-            Ok(c) => c,
-            Err(err) => {
+    // SOL-03-002: pin the validated IPs into the connecting client (egress
+    // check and connection resolve to the same addresses), closing the
+    // DNS-rebinding TOCTOU window. Applet bridge URLs come from applet
+    // registration data (lower trust), so this is a priority path.
+    let (bridge_url, client) =
+        match crate::security::validate_http_url_for_egress_with_pinned_client(
+            bridge_url,
+            "applet bridge",
+            development_mode,
+            std::time::Duration::from_secs(10),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
                 return AppletBridgeOutcome::UpstreamFailure {
-                    code: "client_init_failed".to_owned(),
-                    message: format!("reqwest client init: {err}"),
+                    code: "egress_policy_denied".to_owned(),
+                    message: error,
                 };
             }
         };

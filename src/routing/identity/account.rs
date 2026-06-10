@@ -83,7 +83,14 @@ use crate::{JsonResult, json_ok};
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
-        .push(Router::with_path("account").push(Router::with_path("viewer").get(account_viewer)))
+        .push(
+            Router::with_path("account")
+                .push(Router::with_path("viewer").get(account_viewer))
+                // spec `events_sync` surface group (core tier) binds
+                // `ck.self.account.update_profile` to POST /_cokret/self/account/profile;
+                // describe advertises it, so it MUST resolve on the protocol surface.
+                .push(Router::with_path("profile").post(update_profile)),
+        )
         .push(contact_routes())
         .push(direct_conversation_routes())
         .push(

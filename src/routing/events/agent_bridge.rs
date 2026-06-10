@@ -263,27 +263,22 @@ async fn forward_to_agent_endpoint(
     params: &Value,
     development_mode: bool,
 ) -> AgentInvocationOutcome {
-    let endpoint_url = match crate::security::validate_http_url_for_egress(
-        endpoint_url,
-        "agent endpoint",
-        development_mode,
-    ) {
-        Ok(url) => url,
-        Err(error) => {
-            return AgentInvocationOutcome::UpstreamFailure {
-                code: "egress_policy_denied".to_owned(),
-                message: error,
-            };
-        }
-    };
-    let client =
-        match crate::security::build_default_egress_http_client(std::time::Duration::from_secs(10))
-        {
-            Ok(c) => c,
-            Err(err) => {
+    // SOL-03-002: pin the validated IPs into the connecting client so the
+    // egress check and the actual connection use the same addresses, closing
+    // the DNS-rebinding TOCTOU window. Agent endpoint URLs come from
+    // agent-registration data (lower trust), so this is a priority path.
+    let (endpoint_url, client) =
+        match crate::security::validate_http_url_for_egress_with_pinned_client(
+            endpoint_url,
+            "agent endpoint",
+            development_mode,
+            std::time::Duration::from_secs(10),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
                 return AgentInvocationOutcome::UpstreamFailure {
-                    code: "client_init_failed".to_owned(),
-                    message: format!("reqwest client init: {err}"),
+                    code: "egress_policy_denied".to_owned(),
+                    message: error,
                 };
             }
         };

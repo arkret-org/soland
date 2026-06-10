@@ -55,6 +55,9 @@ pub fn protocol_router() -> Router {
                     .push(Router::with_path("receipts").get(did::identity_receipts)),
             ),
         )
+        // SOL-06-001: recovery_session.* is a core-tier protocol surface; mount
+        // the spec-canonical recovery-sessions routes under /_cokret/root.
+        .push(Router::with_path("root").push(recovery::protocol_router()))
         .push(
             Router::with_path("self")
                 .push(account::protocol_router())

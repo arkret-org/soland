@@ -113,6 +113,31 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
+/// Spec-canonical recovery surface mounted under `/_cokret/root/identity`.
+///
+/// Only the four `recovery_session.*` operations are spec protocol bindings
+/// (operation-registry `identity_registry` surface group, core tier:
+/// `POST /_cokret/root/identity/recovery-sessions`, `GET .../{id}`,
+/// `POST .../{id}/proofs`, `POST .../{id}/complete`). The recovery-policy /
+/// recovery-receipt routes remain product-private on the `/_soland` track.
+pub(super) fn protocol_router() -> Router {
+    Router::with_path("identity")
+        .push(
+            Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}").get(recovery_session_get),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
+                .post(recovery_session_proof_submit),
+        )
+        .push(
+            Router::with_path("recovery-sessions/{recovery_session_id}/complete")
+                .post(recovery_session_complete),
+        )
+}
+
 pub(super) fn router() -> Router {
     Router::with_path("identity")
         .push(

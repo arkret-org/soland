@@ -263,26 +263,14 @@ fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
     now + backoff as i64
 }
 
-/// Build the reqwest client the dispatcher uses for every outbound
-/// POST. Pulled out so the integration test can re-use the exact same
-/// timeouts the production worker hits.
-fn build_http_client() -> reqwest::Client {
-    crate::security::build_egress_http_client(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
-        .expect("federation dispatcher reqwest client must build")
-}
-
 /// Background outbound federation dispatcher.
 pub struct FederationDispatcher {
     state: AppState,
-    client: reqwest::Client,
 }
 
 impl FederationDispatcher {
     pub fn new(state: AppState) -> Self {
-        Self {
-            state,
-            client: build_http_client(),
-        }
+        Self { state }
     }
 
     /// Spawn the dispatcher loop on the current tokio runtime. Returns
@@ -327,12 +315,17 @@ impl FederationDispatcher {
     async fn deliver_one(&self, mut row: FederationOutboxRecord) {
         let url = format!("{}{}", row.peer_url, row.endpoint);
         let body_bytes = row.payload_json.as_bytes().to_vec();
-        let parsed_url = match crate::security::validate_http_url_for_egress(
+        // SOL-03-002: build a per-delivery client that pins the validated IPs
+        // (egress check and connection resolve to the same addresses), closing
+        // the DNS-rebinding TOCTOU window. Peer URLs vary per delivery, so the
+        // pinning is per-row rather than on the long-lived `self.client`.
+        let (parsed_url, client) = match crate::security::validate_http_url_for_egress_with_pinned_client(
             &url,
             "federation outbox",
             self.state.config.development_mode,
+            REQUEST_TIMEOUT,
         ) {
-            Ok(url) => url,
+            Ok(pair) => pair,
             Err(error) => {
                 row.attempts = row.attempts.saturating_add(1);
                 row.delivered_at = Some(now_unix_secs());
@@ -397,8 +390,7 @@ impl FederationDispatcher {
         );
         let headers = rfc9421_sign(&self.state, headers, "POST", &url, &body_bytes);
 
-        let response = self
-            .client
+        let response = client
             .post(parsed_url)
             .headers(headers)
             .body(body_bytes)

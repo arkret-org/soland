@@ -63,9 +63,10 @@ async fn authz_check(
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
-    let (resource_str, realm_id, resource_facets) = if let Some(s) = body.resource.as_str() {
+    let resource = body.resource.clone().unwrap_or(Value::Null);
+    let (resource_str, realm_id, resource_facets) = if let Some(s) = resource.as_str() {
         (s.to_owned(), s.to_owned(), Vec::new())
-    } else if let Some(obj) = body.resource.as_object() {
+    } else if let Some(obj) = resource.as_object() {
         let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("realm");
         let sid = obj
             .get("realm_id")
@@ -150,29 +151,33 @@ async fn authz_check(
             })
         })
         .collect::<Vec<_>>();
+    // The local authz engine yields a binary allow/deny verdict. spec §18 models
+    // the decision as a five-valued enum where `quarantine`/`require_review` are
+    // Policy Server-mediated soft outcomes (not produced by the local engine);
+    // a local refusal maps to the conservative terminal `hard_deny`.
+    let decision = if result.allowed { "allow" } else { "hard_deny" }.to_owned();
+    let reason_code = (!result.allowed).then(|| result.reason.clone());
+    // Trace/diagnostic data lives in the spec-allowed `policy_results` array
+    // rather than a private `decision_trace` field.
+    let policy_results = vec![json!({
+        "actor_id": body.actor_id,
+        "action": body.action,
+        "resource": resource_str,
+        "realm_id": realm_id,
+        "reason_detail": result.reason_detail,
+        "constraints": [],
+        "missing_proofs": [],
+        "cache": {
+            "mode": "in_memory",
+            "frontier": Value::Null
+        }
+    })];
     json_ok(SolandAuthzCheckOutcome {
-        allowed: result.allowed,
-        reason_code: (!result.allowed).then(|| result.reason.clone()),
-        reason: if result.allowed {
-            None
-        } else {
-            result.reason_detail.clone()
-        },
-        grants: matched_grants.clone(),
+        decision,
+        matched_grants,
+        policy_results,
         obligations: Vec::new(),
-        decision_trace: json!({
-            "actor_id": body.actor_id,
-            "action": body.action,
-            "resource": resource_str,
-            "realm_id": realm_id,
-            "matched_grants": matched_grants,
-            "constraints": [],
-            "missing_proofs": [],
-            "cache": {
-                "mode": "in_memory",
-                "frontier": Value::Null
-            }
-        }),
+        reason_code,
     })
 }
 

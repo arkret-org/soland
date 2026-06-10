@@ -1064,6 +1064,113 @@ fn verify_inbound_federation_http_signature(
     Ok(())
 }
 
+/// Verify the inbound RFC 9421 HTTP Message Signature for a spec-canonical
+/// `/_cokret/peer/*` request and enforce the local peer deny policy.
+///
+/// Unlike [`verify_inbound_federation_http_signature`] (the private
+/// `/_soland/peer/federation/*` track, which carries a typed body with an
+/// `origin`/`destination` field and an optional relay-inner signature), the
+/// canonical peer surface authenticates purely on the federation trust headers:
+/// the origin is the `source-service-did` header, so there is no relay-inner
+/// hop to verify. The function handles both bodied requests (POST submit /
+/// query_post / resolve / invites / contacts) and bodyless GETs (query /
+/// frontier / snapshot.head), binding the signature to an empty-body
+/// Content-Digest in the latter case.
+pub(in crate::routing) fn verify_inbound_peer_http_signature(
+    state: &AppState,
+    req: &Request,
+    body: Option<&Value>,
+) -> Result<(), AppError> {
+    let body_bytes = match body {
+        Some(value) => cokret_sdk::canonical::canonical_json_bytes(value).map_err(|error| {
+            AppError::new(
+                crate::error::ErrorCode::SchemaViolation,
+                format!("peer request body is not canonical JSON: {error}"),
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?,
+        None => Vec::new(),
+    };
+    let expected_content_digest = content_digest_header(&body_bytes);
+    let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
+    validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
+
+    let content_digest = required_header(req, "content-digest")?;
+    if content_digest != expected_content_digest {
+        crate::metrics::record_digest_mismatch("peer_request_content_digest");
+        return Err(signature_error(
+            "Content-Digest does not match peer canonical request body",
+        ));
+    }
+    let request_digest = required_header(req, "request-canonical-digest")?;
+    if request_digest != expected_request_digest {
+        crate::metrics::record_digest_mismatch("peer_request_request_digest");
+        return Err(signature_error(
+            "Request-Canonical-Digest does not match peer canonical request body",
+        ));
+    }
+
+    let source_service_did = required_header(req, "source-service-did")?;
+    let destination_service_did = required_header(req, "destination-service-did")?;
+    let source_trust_domain = required_header(req, "source-trust-domain")?;
+    let destination_trust_domain = required_header(req, "destination-trust-domain")?;
+
+    // federation.md §5: `deny` MUST be evaluated before `allow` and machine-level
+    // defederation MUST take effect on inbound as well as outbound. Run it after
+    // the source DID is parsed but before the (fail-closed) signature check.
+    if crate::security::federation_origin_denied(&source_service_did) {
+        return Err(AppError::new(
+            crate::error::ErrorCode::CapabilityDenied,
+            "peer is denied by local federation policy",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("federation_peer_denied"));
+    }
+
+    if destination_service_did != state.config.service_did {
+        return Err(signature_error(
+            "Destination-Service-DID does not match this service",
+        ));
+    }
+    if destination_trust_domain != state.config.trust_domain {
+        return Err(signature_error(
+            "Destination-Trust-Domain does not match this service",
+        ));
+    }
+    let expected_source_trust_domain = trust_domain_from_service_did(&source_service_did);
+    if source_trust_domain != expected_source_trust_domain {
+        return Err(signature_error(
+            "Source-Trust-Domain does not match Source-Service-DID",
+        ));
+    }
+
+    let target_uri = signature_target_uri(req, state);
+    let authority = signature_authority(req, state);
+    let method = req.method().as_str().to_ascii_uppercase();
+    let outer_params = signature_params(req, "signature-input")?;
+    validate_signature_params(&outer_params, &source_service_did, "outer")?;
+    let outer_base = federation_http_signature_base(
+        &method,
+        &target_uri,
+        &authority,
+        &content_digest,
+        &source_service_did,
+        &destination_service_did,
+        &source_trust_domain,
+        &destination_trust_domain,
+        &request_digest,
+        &outer_params,
+    );
+    verify_signature_header(
+        state,
+        req,
+        "signature",
+        &source_service_did,
+        &outer_base,
+        "outer",
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn verify_relay_inner_signature(
     state: &AppState,

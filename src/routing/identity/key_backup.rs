@@ -73,8 +73,6 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "pending_welcome",
     "private_account_state",
 ];
-const DELETE_PROOF_HEADER: &str = "x-cokret-key-backup-delete-proof";
-
 /// Spec `identity/key-management.md` §7.8 — resolve the effective
 /// per-principal rolling-24h download quota for full-ciphertext key-backup
 /// reads. Defaults to [`KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT`]; the
@@ -1249,31 +1247,53 @@ fn is_development_delete_proof(proof: &str, backup_id: &str, actor_id: &str) -> 
 
 async fn verify_delete_ownership_proof(
     state: &AppState,
-    req: &Request,
+    req: &mut Request,
     backup_id: &str,
     actor_id: &str,
 ) -> Result<(), AppError> {
-    let Some(proof) = req
-        .headers()
-        .get(salvo::http::header::HeaderName::from_static(
-            DELETE_PROOF_HEADER,
-        ))
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-    else {
-        return Err(AppError::capability_denied(format!(
-            "key backup delete requires `{DELETE_PROOF_HEADER}` ownership proof"
-        )));
-    };
-    if is_development_delete_proof(proof, backup_id, actor_id) {
-        if state.config.development_mode {
-            return Ok(());
+    // spec `keys_backups_delete_request_body` (additionalProperties: false):
+    // the DELETE proof MUST travel in the JSON request body `{proof, reason?}`,
+    // not a header. `proof` is an object (the detached-JWS metadata); the
+    // development form is accepted as a plain string for opt-in dev builds.
+    let body = req.parse_json::<Value>().await.map_err(|_| {
+        AppError::invalid_param("ck.self.keys.backups.delete request body must be JSON")
+    })?;
+    let object = body.as_object().ok_or_else(|| {
+        AppError::invalid_param("ck.self.keys.backups.delete request body must be an object")
+    })?;
+    for key in object.keys() {
+        if !matches!(key.as_str(), "proof" | "reason") {
+            return Err(AppError::invalid_param(
+                "ck.self.keys.backups.delete permits only proof and reason",
+            ));
         }
-        return Err(AppError::capability_denied(
-            "development key-backup delete proofs are disabled outside development_mode",
-        ));
     }
-    verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id).await
+    let proof_value = object.get("proof").ok_or_else(|| {
+        AppError::invalid_param("ck.self.keys.backups.delete requires a proof in the request body")
+    })?;
+    // Dev-mode escape hatch: a bare string proof.
+    if let Some(proof) = proof_value.as_str() {
+        let proof = proof.trim();
+        if is_development_delete_proof(proof, backup_id, actor_id) {
+            if state.config.development_mode {
+                return Ok(());
+            }
+            return Err(AppError::capability_denied(
+                "development key-backup delete proofs are disabled outside development_mode",
+            ));
+        }
+        return verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id).await;
+    }
+    // spec-canonical form: `proof` is a detached-JWS metadata object.
+    if proof_value.is_object() {
+        let proof = serde_json::to_string(proof_value).map_err(|error| {
+            AppError::internal(format!("key backup delete proof re-encode failed: {error}"))
+        })?;
+        return verify_key_backup_delete_jws_proof(state, &proof, backup_id, actor_id).await;
+    }
+    Err(AppError::invalid_param(
+        "ck.self.keys.backups.delete proof must be an object or a development proof string",
+    ))
 }
 
 fn key_backup_duplicate_for_actor(
@@ -1392,13 +1412,9 @@ async fn put_key_backup(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(SolandKeysBackupsPutOutcome {
-        ok: true,
-        backup: serde_json::json!({
-            "backup_id": backup_id,
-            "ciphertext_digest": ciphertext_digest,
-        }),
-        state: if duplicate { "duplicate" } else { "accepted" }.to_owned(),
-        todos: Vec::new(),
+        status: if duplicate { "duplicate" } else { "accepted" }.to_owned(),
+        backup_id,
+        ciphertext_digest,
     })
 }
 
@@ -1461,12 +1477,13 @@ async fn list_key_backups(
         .into_iter()
         .map(key_backup_metadata_for_list)
         .collect();
-    let next_cursor = cursor.into_inner().map(|_| "key-backups-end".to_owned());
+    // The store returns the full owned set in one page, so the list is never
+    // truncated: `has_more` is false and no continuation cursor is emitted.
+    let _ = cursor.into_inner();
     json_ok(SolandKeysBackupsList {
         backups,
-        next_cursor,
-        state: "active".to_owned(),
-        todos: Vec::new(),
+        has_more: false,
+        next_cursor: None,
     })
 }
 
@@ -1558,38 +1575,33 @@ async fn delete_key_backup(
             backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor)
         });
     let Some(backup) = owned_backup else {
-        return json_ok(SolandKeysBackupsDeleteOutcome {
-            ok: true,
-            backup_id,
-            deleted: false,
-            state: "missing".to_owned(),
-            todos: Vec::new(),
-        });
+        // spec `keys_backups_delete_outcome` models `deleted: const true` only;
+        // a backup that does not exist (or is not owned by this actor) cannot be
+        // represented as a success outcome, so report it as not-found.
+        return Err(AppError::not_found("key backup not found"));
     };
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
     ensure_key_backup_delete_is_series_tail(state, &session.actor, &backup).await?;
     let deleted = store.delete(&backup_id).await.unwrap_or(false);
-    if deleted {
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            "ck.key_backup.delete",
-            json!({
-                "backup_id": backup_id.clone(),
-                "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
-                "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
-                "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),
-            }),
-            "deleted",
-        )
-        .await;
+    if !deleted {
+        return Err(AppError::not_found("key backup not found"));
     }
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "ck.key_backup.delete",
+        json!({
+            "backup_id": backup_id.clone(),
+            "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
+            "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
+            "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),
+        }),
+        "deleted",
+    )
+    .await;
     json_ok(SolandKeysBackupsDeleteOutcome {
-        ok: true,
+        deleted: true,
         backup_id,
-        deleted,
-        state: if deleted { "deleted" } else { "missing" }.to_owned(),
-        todos: Vec::new(),
     })
 }
 

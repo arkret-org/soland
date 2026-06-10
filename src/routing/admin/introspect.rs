@@ -150,19 +150,15 @@ pub(crate) async fn introspect_admin_scopes(
             )
         })?;
 
-    let url = crate::security::validate_http_url_for_egress(
+    // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
+    // TOCTOU window between the egress check and the connection.
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         url,
         "admin session grant introspection",
         state.config.development_mode,
+        Duration::from_secs(10),
     )
     .map_err(AppError::capability_denied)?;
-    let client = crate::security::build_default_egress_http_client(Duration::from_secs(10))
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("admin scope introspection client init failed: {error}"),
-            )
-        })?;
     let response = client
         .post(url)
         .bearer_auth(bearer)

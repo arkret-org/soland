@@ -19,6 +19,7 @@ use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use subtle::ConstantTimeEq as _;
 
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
@@ -633,7 +634,13 @@ fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpo
     let Some(token) = query_param(req, "presign_token") else {
         return false;
     };
-    token == presign_token(state, blob_ref, purpose, expires_at)
+    // SOL-03-004: the presign token is the sole access-control credential on
+    // this path (it bypasses `blob_visible_to_session`). Compare it in constant
+    // time so a timing oracle cannot recover a valid token byte by byte.
+    let expected = presign_token(state, blob_ref, purpose, expires_at);
+    let token_bytes = token.as_bytes();
+    let expected_bytes = expected.as_bytes();
+    token_bytes.len() == expected_bytes.len() && bool::from(token_bytes.ct_eq(expected_bytes))
 }
 
 fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i64) -> String {

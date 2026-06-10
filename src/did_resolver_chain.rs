@@ -155,12 +155,14 @@ pub async fn probe_webvh_provider_describe(
 ) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
     let describe_url = format!("{trimmed}/describe");
-    let describe_url = crate::security::validate_http_url_for_egress(
+    // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
+    // TOCTOU window between the egress check and the connection.
+    let (describe_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &describe_url,
         "external webvh provider describe",
         development_mode,
+        timeout,
     )?;
-    let client = crate::security::build_default_egress_http_client(timeout)?;
     let resp = client
         .get(describe_url)
         .send()

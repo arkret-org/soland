@@ -245,17 +245,24 @@ async fn notify_audit_agent_for_report(
         return None;
     }
     let agent_url = agent_url.trim_end_matches('/');
-    let identity_url = match crate::security::validate_http_url_for_egress(
-        &format!("{agent_url}/_cokret/self/audit-agent/identity"),
-        "audit agent identity",
-        state.config.development_mode,
-    ) {
-        Ok(url) => url,
-        Err(error) => {
-            tracing::warn!(%error, "audit agent identity request denied by egress policy");
-            return None;
-        }
-    };
+    // SOL-03-002: all three audit-agent calls target the same `agent_url`
+    // host. Build one client that pins the validated IPs (egress check and
+    // connection resolve to the same addresses), closing the DNS-rebinding
+    // TOCTOU window; the remaining two URLs are validated against the same
+    // egress policy and ride the same pinned host.
+    let (identity_url, client) =
+        match crate::security::validate_http_url_for_egress_with_pinned_client(
+            &format!("{agent_url}/_cokret/self/audit-agent/identity"),
+            "audit agent identity",
+            state.config.development_mode,
+            Duration::from_secs(3),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::warn!(%error, "audit agent identity request denied by egress policy");
+                return None;
+            }
+        };
     let invite_url = match crate::security::validate_http_url_for_egress(
         &format!("{agent_url}/_cokret/self/audit-agent/invite"),
         "audit agent invite",
@@ -278,7 +285,6 @@ async fn notify_audit_agent_for_report(
             return None;
         }
     };
-    let client = crate::security::build_default_egress_http_client(Duration::from_secs(3)).ok()?;
     let identity = match client.get(identity_url).send().await {
         Ok(response) if response.status().is_success() => {
             response.json::<Value>().await.unwrap_or(Value::Null)

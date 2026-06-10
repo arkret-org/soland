@@ -262,7 +262,19 @@ async fn issue_decision(
                 audit_refs.push(json!(decision_id));
                 obj.insert("audit_refs".to_owned(), json!(audit_refs));
             }
-            let _ = state.persistence.moderation().upsert_queue_item(item).await;
+            // SOL-02-006: don't silently drop the upsert error. The decision
+            // audit below records "issued"; if the queue item write fails the
+            // item stays `open` and operators may re-process it, so surface the
+            // divergence in logs/metrics for follow-up.
+            if let Err(error) = state.persistence.moderation().upsert_queue_item(item).await {
+                tracing::warn!(
+                    target = "moderation",
+                    %item_id,
+                    %decision_id,
+                    %error,
+                    "moderation queue item upsert failed after decision; item may remain open"
+                );
+            }
         }
     }
     append_audit_log(
