@@ -1537,8 +1537,8 @@ pub struct FederationTransactionRecord {
 /// G3.S0 — one outbound federation HTTP POST queued for the
 /// `FederationDispatcher` background worker. See
 /// `routing/federation/outbox.rs` for the worker loop and
-/// `migrations/20260520000000_federation_outbox/up.sql` for the durable
-/// schema.
+/// the `federation_outbox` table in `migrations/00000000000000_initial/up.sql`
+/// for the durable schema.
 ///
 /// Timestamps are stored as unix-seconds (`i64`) to match the SQLite-style
 /// schema defined in the spec subset; the Pg-backed store maps them to

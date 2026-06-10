@@ -321,7 +321,7 @@ in the commit author DID, and proof `domain`/`audience` must bind to
 
 `GET /_cokret/root/identity/describe` exposes `did_webvh.providers[]` for coauth.
 When the embedded provider is enabled, coauth can register through
-`POST /_cokret/root/identity/webvh/register` with `Authorization: Bearer
+`POST /_soland/root/identity/webvh/register` with `Authorization: Bearer
 <SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER>`; soland then serves the DID
 document and webvh log from `/webvh/{local_id}/did.json` and `.jsonl`. The
 embedded DID uses the public `did:webvh:<scid>:<host>:webvh:<local_id>` path
