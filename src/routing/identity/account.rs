@@ -208,6 +208,7 @@ async fn account_register(
         ));
     }
     let account = AccountRecord {
+        id: crate::ids::generate_account_id(),
         did: body.did.clone(),
         localpart: normalized_localpart,
         display_name: body.display_name,

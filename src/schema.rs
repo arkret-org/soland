@@ -1,6 +1,7 @@
 diesel::table! {
-    accounts (actor) {
-        actor -> Text,
+    accounts (id) {
+        id -> Uuid,
+        actor_id -> Text,
         localpart -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
@@ -344,8 +345,8 @@ diesel::table! {
 // Server-side Space-container projection state for ck.space.* lifecycle events.
 diesel::table! {
     projection_space_containers (container_space_id) {
-        container_space_id -> Text,
-        realm_id -> Text,
+        container_space_id -> Uuid,
+        realm_id -> Uuid,
         kind -> Text,
         title -> Text,
         parent_ref -> Nullable<Text>,
@@ -366,8 +367,8 @@ diesel::table! {
 // "tombstoned" — Flow / Morph have no dedicated tombstone event).
 diesel::table! {
     projection_flows (flow_id) {
-        flow_id -> Text,
-        realm_id -> Text,
+        flow_id -> Uuid,
+        realm_id -> Uuid,
         title -> Text,
         summary -> Nullable<Text>,
         state -> Text,
@@ -381,8 +382,8 @@ diesel::table! {
 
 diesel::table! {
     projection_morphs (morph_id) {
-        morph_id -> Text,
-        realm_id -> Text,
+        morph_id -> Uuid,
+        realm_id -> Uuid,
         morph_type -> Text,
         title -> Nullable<Text>,
         fields -> Jsonb,
@@ -408,11 +409,11 @@ diesel::table! {
 diesel::table! {
     projection_events (ordinal) {
         ordinal -> BigInt,
-        event_id -> Text,
-        realm_id -> Text,
+        event_id -> Uuid,
+        realm_id -> Uuid,
         event_kind -> Text,
         operation_type -> Text,
-        operation_id -> Nullable<Text>,
+        operation_id -> Nullable<Uuid>,
         sender -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
@@ -450,8 +451,8 @@ diesel::table! {
     direct_conversation_bindings (participants_key) {
         participants_key -> Text,
         participants_unordered -> Array<Text>,
-        realm_id -> Text,
-        main_flow_id -> Text,
+        realm_id -> Uuid,
+        main_flow_id -> Uuid,
         binding_event_ref -> Text,
         state -> Text,
         created_at -> Timestamptz,

@@ -10,7 +10,8 @@ CREATE TABLE public.account_datas (
 );
 
 CREATE TABLE public.accounts (
-    actor text NOT NULL,
+    id uuid NOT NULL,
+    actor_id text NOT NULL,
     localpart text NOT NULL,
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -188,8 +189,8 @@ CREATE TABLE public.devices (
 CREATE TABLE public.direct_conversation_bindings (
     participants_key text NOT NULL,
     participants_unordered text[] NOT NULL,
-    realm_id text NOT NULL,
-    main_flow_id text NOT NULL,
+    realm_id uuid NOT NULL,
+    main_flow_id uuid NOT NULL,
     binding_event_ref text NOT NULL,
     state text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -347,9 +348,9 @@ CREATE TABLE public.multisig_pending (
 );
 
 CREATE TABLE public.notification (
-    notification_id text NOT NULL,
+    notification_id uuid NOT NULL,
     recipient_id text NOT NULL,
-    realm_id text NOT NULL,
+    realm_id uuid NOT NULL,
     source_event_id text NOT NULL,
     notification_type text NOT NULL,
     created_at timestamp with time zone NOT NULL,
@@ -389,7 +390,7 @@ CREATE TABLE public.presence (
 );
 
 CREATE TABLE public.projection_circle_members (
-    circle_id text NOT NULL,
+    circle_id uuid NOT NULL,
     actor_did text NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
     joined_at timestamp with time zone NOT NULL,
@@ -398,8 +399,8 @@ CREATE TABLE public.projection_circle_members (
 );
 
 CREATE TABLE public.projection_circles (
-    circle_id text NOT NULL,
-    realm_id text NOT NULL,
+    circle_id uuid NOT NULL,
+    realm_id uuid NOT NULL,
     title text NOT NULL,
     summary text,
     directory_visibility text DEFAULT 'members'::text NOT NULL,
@@ -415,7 +416,6 @@ CREATE TABLE public.projection_circles (
     created_at timestamp with time zone NOT NULL,
     updated_by text,
     updated_at timestamp with time zone,
-    CONSTRAINT projection_circles_circle_id_check CHECK ((circle_id ~~ 'ck:circle:%'::text)),
     CONSTRAINT projection_circles_content_encryption_floor_check CHECK ((content_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
     CONSTRAINT projection_circles_directory_visibility_check CHECK ((directory_visibility = ANY (ARRAY['members'::text, 'realm_members'::text]))),
     CONSTRAINT projection_circles_join_rule_check CHECK ((join_rule = ANY (ARRAY['invite'::text, 'request'::text, 'open'::text]))),
@@ -425,11 +425,11 @@ CREATE TABLE public.projection_circles (
 
 CREATE TABLE public.projection_events (
     ordinal bigint NOT NULL,
-    event_id text NOT NULL,
-    realm_id text NOT NULL,
+    event_id uuid NOT NULL,
+    realm_id uuid NOT NULL,
     event_kind text NOT NULL,
     operation_type text NOT NULL,
-    operation_id text,
+    operation_id uuid,
     sender text,
     payload jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
@@ -446,7 +446,7 @@ CREATE SEQUENCE public.projection_events_ordinal_seq
 ALTER SEQUENCE public.projection_events_ordinal_seq OWNED BY public.projection_events.ordinal;
 
 CREATE TABLE public.projection_flow_watches (
-    flow_id text NOT NULL,
+    flow_id uuid NOT NULL,
     actor_did text NOT NULL,
     level text,
     level_public boolean DEFAULT false NOT NULL,
@@ -455,8 +455,8 @@ CREATE TABLE public.projection_flow_watches (
 );
 
 CREATE TABLE public.projection_flows (
-    flow_id text NOT NULL,
-    realm_id text NOT NULL,
+    flow_id uuid NOT NULL,
+    realm_id uuid NOT NULL,
     scope_circle_id text,
     title text NOT NULL,
     summary text,
@@ -470,8 +470,8 @@ CREATE TABLE public.projection_flows (
 );
 
 CREATE TABLE public.projection_morphs (
-    morph_id text NOT NULL,
-    realm_id text NOT NULL,
+    morph_id uuid NOT NULL,
+    realm_id uuid NOT NULL,
     morph_type text NOT NULL,
     title text,
     state text DEFAULT 'active'::text NOT NULL,
@@ -489,8 +489,8 @@ CREATE TABLE public.projection_morphs (
 );
 
 CREATE TABLE public.projection_space_containers (
-    container_space_id text NOT NULL,
-    realm_id text NOT NULL,
+    container_space_id uuid NOT NULL,
+    realm_id uuid NOT NULL,
     kind text NOT NULL,
     rank text,
     title text NOT NULL,
@@ -708,10 +708,13 @@ ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_pkey PRIMARY KEY (actor, data_type);
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_localpart_key UNIQUE (localpart);
+    ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_pkey PRIMARY KEY (actor);
+    ADD CONSTRAINT accounts_actor_id_key UNIQUE (actor_id);
+
+ALTER TABLE ONLY public.accounts
+    ADD CONSTRAINT accounts_localpart_key UNIQUE (localpart);
 
 ALTER TABLE ONLY public.agent_grant
     ADD CONSTRAINT agent_grant_pkey PRIMARY KEY (grant_id);

@@ -1057,6 +1057,11 @@ pub struct DeviceInventoryRecord {
 
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
+    /// Surrogate row primary key (`ck:account:<uuid7>`), minted by
+    /// [`crate::ids::generate_account_id`] at account creation. Stable
+    /// internal handle decoupled from the `actor_id` DID (which may rotate).
+    pub id: String,
+    /// The account's protocol identity DID (DB column `actor_id`).
     pub did: String,
     /// Bare handle localpart (`alice` — never `@alice` or `alice:domain`).
     /// The domain half of the canonical `<localpart>:<domain>` handle is
@@ -2181,6 +2186,7 @@ impl AppState {
         if self.config.seed_demo_data {
             let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
             let demo_account = AccountRecord {
+                id: "ck:account:0196419b-0000-7000-8000-000000000001".to_owned(),
                 did: "did:web:alice.example".to_owned(),
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice Example".to_owned()),

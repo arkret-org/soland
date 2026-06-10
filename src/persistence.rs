@@ -931,12 +931,12 @@ impl NotificationStore for MemoryNotificationStore {
 
 #[derive(QueryableByName)]
 struct NotificationRow {
-    #[diesel(sql_type = Text)]
-    notification_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    notification_id: Uuid,
     #[diesel(sql_type = Text)]
     recipient_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Text)]
     source_event_id: String,
     #[diesel(sql_type = Text)]
@@ -948,9 +948,9 @@ struct NotificationRow {
 impl From<NotificationRow> for Value {
     fn from(row: NotificationRow) -> Self {
         serde_json::json!({
-            "notification_id": row.notification_id,
+            "notification_id": ids::format_typed_uuid("notification", &row.notification_id),
             "recipient_id": row.recipient_id,
-            "realm_id": row.realm_id,
+            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
             "source_event_id": row.source_event_id,
             "notification_type": row.notification_type,
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -987,9 +987,9 @@ impl NotificationStore for PgNotificationStore {
              VALUES ($1, $2, $3, $4, $5, NOW()) \
              ON CONFLICT (notification_id) DO NOTHING",
         )
-        .bind::<Text, _>(&notification_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&notification_id))
         .bind::<Text, _>(&recipient_id)
-        .bind::<Text, _>(&realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&realm_id))
         .bind::<Text, _>(&source_event_id)
         .bind::<Text, _>(&notification_type)
         .execute(&mut *conn)
@@ -5677,7 +5677,7 @@ impl AccountStore for PgAccountStore {
     async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor AS did, localpart, display_name, created_at FROM accounts WHERE actor = $1",
+            "SELECT id, actor_id AS did, localpart, display_name, created_at FROM accounts WHERE actor_id = $1",
         )
         .bind::<Text, _>(did)
         .get_result::<AccountRow>(&mut *conn)
@@ -5690,11 +5690,12 @@ impl AccountStore for PgAccountStore {
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO accounts (actor, localpart, display_name, payload, created_at, updated_at) \
-             VALUES ($1, $2, $3, '{}'::jsonb, $4, $4) \
-             ON CONFLICT (actor) DO UPDATE SET localpart = EXCLUDED.localpart, \
+            "INSERT INTO accounts (id, actor_id, localpart, display_name, payload, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $5) \
+             ON CONFLICT (actor_id) DO UPDATE SET localpart = EXCLUDED.localpart, \
              display_name = EXCLUDED.display_name, updated_at = NOW()",
         )
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.id))
         .bind::<Text, _>(&record.did)
         .bind::<Text, _>(&record.localpart)
         .bind::<Nullable<Text>, _>(&record.display_name)
@@ -5708,7 +5709,7 @@ impl AccountStore for PgAccountStore {
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor AS did, localpart, display_name, created_at FROM accounts ORDER BY actor",
+            "SELECT id, actor_id AS did, localpart, display_name, created_at FROM accounts ORDER BY actor_id",
         )
         .load::<AccountRow>(&mut *conn)
         .await
@@ -8845,6 +8846,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
 
 #[derive(QueryableByName)]
 struct AccountRow {
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
     #[diesel(sql_type = Text)]
     did: String,
     #[diesel(sql_type = Text)]
@@ -8858,6 +8861,7 @@ struct AccountRow {
 impl From<AccountRow> for AccountRecord {
     fn from(row: AccountRow) -> Self {
         Self {
+            id: ids::format_typed_uuid("account", &row.id),
             did: row.did,
             localpart: row.localpart,
             display_name: row.display_name,
@@ -9609,10 +9613,10 @@ struct DirectConversationBindingRow {
     participants_key: String,
     #[diesel(sql_type = Array<Text>)]
     participants_unordered: Vec<String>,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Text)]
-    main_flow_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    main_flow_id: Uuid,
     #[diesel(sql_type = Text)]
     binding_event_ref: String,
     #[diesel(sql_type = Text)]
@@ -9629,8 +9633,8 @@ impl DirectConversationBindingRow {
             self.participants_key,
             DirectConversationBindingRecord {
                 participants_unordered: self.participants_unordered,
-                realm_id: self.realm_id,
-                main_flow_id: self.main_flow_id,
+                realm_id: ids::format_typed_uuid("realm", &self.realm_id),
+                main_flow_id: ids::format_typed_uuid("flow", &self.main_flow_id),
                 binding_event_ref: self.binding_event_ref,
                 state: self.state,
                 created_at: self.created_at,
@@ -9682,8 +9686,8 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         )
         .bind::<Text, _>(participants_key)
         .bind::<Array<Text>, _>(&record.participants_unordered)
-        .bind::<Text, _>(&record.realm_id)
-        .bind::<Text, _>(&record.main_flow_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.main_flow_id))
         .bind::<Text, _>(&record.binding_event_ref)
         .bind::<Text, _>(&record.state)
         .bind::<Timestamptz, _>(record.created_at)
@@ -9737,10 +9741,10 @@ struct PgSpaceContainerProjectionStore {
 
 #[derive(QueryableByName)]
 struct SpaceContainerProjectionRow {
-    #[diesel(sql_type = Text)]
-    container_space_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    container_space_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
@@ -9766,8 +9770,8 @@ struct SpaceContainerProjectionRow {
 impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     fn from(row: SpaceContainerProjectionRow) -> Self {
         Self {
-            container_space_id: row.container_space_id,
-            realm_id: row.realm_id,
+            container_space_id: ids::format_typed_uuid("space", &row.container_space_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             kind: row.kind,
             title: row.title,
             parent_ref: row.parent_ref,
@@ -9795,7 +9799,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers WHERE container_space_id = $1"
         ))
-        .bind::<Text, _>(container_space_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
         .get_result::<SpaceContainerProjectionRow>(&mut *conn).await
         .optional()
         .map(|row| row.map(SpaceContainerProjectionRecord::from))
@@ -9820,8 +9824,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
                 updated_by = EXCLUDED.updated_by, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<Text, _>(&record.container_space_id)
-        .bind::<Text, _>(&record.realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.container_space_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.parent_ref)
@@ -9847,7 +9851,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers \
              WHERE realm_id = $1 ORDER BY container_space_id"
         ))
-        .bind::<Text, _>(realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<SpaceContainerProjectionRow>(&mut *conn)
         .await
         .map(|rows| {
@@ -9875,7 +9879,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_space_containers WHERE container_space_id = $1")
-            .bind::<Text, _>(container_space_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -9889,10 +9893,10 @@ struct PgFlowProjectionStore {
 
 #[derive(QueryableByName)]
 struct FlowProjectionRow {
-    #[diesel(sql_type = Text)]
-    flow_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    flow_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Text)]
     title: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -9916,8 +9920,8 @@ struct FlowProjectionRow {
 impl From<FlowProjectionRow> for FlowProjectionRecord {
     fn from(row: FlowProjectionRow) -> Self {
         Self {
-            flow_id: row.flow_id,
-            realm_id: row.realm_id,
+            flow_id: ids::format_typed_uuid("flow", &row.flow_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             title: row.title,
             summary: row.summary,
             state: row.state,
@@ -9941,7 +9945,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE flow_id = $1"
         ))
-        .bind::<Text, _>(flow_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
         .get_result::<FlowProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -9966,8 +9970,8 @@ impl FlowProjectionStore for PgFlowProjectionStore {
                 updated_at = EXCLUDED.updated_at, \
                 scope_circle_id = EXCLUDED.scope_circle_id",
         )
-        .bind::<Text, _>(&record.flow_id)
-        .bind::<Text, _>(&record.realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.flow_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.summary)
         .bind::<Text, _>(&record.state)
@@ -9989,7 +9993,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
              WHERE realm_id = $1 ORDER BY flow_id"
         ))
-        .bind::<Text, _>(realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<FlowProjectionRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
@@ -10010,7 +10014,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
     async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_flows WHERE flow_id = $1")
-            .bind::<Text, _>(flow_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -10024,10 +10028,10 @@ struct PgMorphProjectionStore {
 
 #[derive(QueryableByName)]
 struct MorphProjectionRow {
-    #[diesel(sql_type = Text)]
-    morph_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    morph_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Text)]
     morph_type: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -10057,8 +10061,8 @@ struct MorphProjectionRow {
 impl From<MorphProjectionRow> for MorphProjectionRecord {
     fn from(row: MorphProjectionRow) -> Self {
         Self {
-            morph_id: row.morph_id,
-            realm_id: row.realm_id,
+            morph_id: ids::format_typed_uuid("morph", &row.morph_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             morph_type: row.morph_type,
             title: row.title,
             fields: row.fields,
@@ -10086,7 +10090,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE morph_id = $1"
         ))
-        .bind::<Text, _>(morph_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
         .get_result::<MorphProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -10114,8 +10118,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 updated_by = EXCLUDED.updated_by, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<Text, _>(&record.morph_id)
-        .bind::<Text, _>(&record.realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.morph_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.morph_type)
         .bind::<Nullable<Text>, _>(&record.title)
         .bind::<Jsonb, _>(&record.fields)
@@ -10143,7 +10147,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
              WHERE realm_id = $1 ORDER BY morph_id"
         ))
-        .bind::<Text, _>(realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<MorphProjectionRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(MorphProjectionRecord::from).collect())
@@ -10164,7 +10168,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM projection_morphs WHERE morph_id = $1")
-            .bind::<Text, _>(morph_id)
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -10185,16 +10189,16 @@ struct PgProjectionEventStore {
 
 #[derive(QueryableByName)]
 struct ProjectionEventRow {
-    #[diesel(sql_type = Text)]
-    event_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
+    #[diesel(sql_type = SqlUuid)]
+    event_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    realm_id: Uuid,
     #[diesel(sql_type = Text)]
     event_kind: String,
     #[diesel(sql_type = Text)]
     operation_type: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    operation_id: Option<String>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    operation_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
     sender: Option<String>,
     #[diesel(sql_type = Jsonb)]
@@ -10206,11 +10210,14 @@ struct ProjectionEventRow {
 impl From<ProjectionEventRow> for ProjectionEventRecord {
     fn from(row: ProjectionEventRow) -> Self {
         Self {
-            event_id: row.event_id,
-            realm_id: row.realm_id,
+            event_id: ids::format_typed_uuid("event", &row.event_id),
+            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             event_kind: row.event_kind,
             operation_type: row.operation_type,
-            operation_id: row.operation_id,
+            operation_id: row
+                .operation_id
+                .as_ref()
+                .map(|u| ids::format_typed_uuid("operation", u)),
             sender: row.sender,
             payload: row.payload,
             created_at: row.created_at,
@@ -10227,11 +10234,16 @@ impl ProjectionEventStore for PgProjectionEventStore {
              (event_id, realm_id, event_kind, operation_type, operation_id, sender, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind::<Text, _>(&record.event_id)
-        .bind::<Text, _>(&record.realm_id)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.event_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.event_kind)
         .bind::<Text, _>(&record.operation_type)
-        .bind::<Nullable<Text>, _>(&record.operation_id)
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .operation_id
+                .as_deref()
+                .map(ids::typed_uuid_part_or_panic),
+        )
         .bind::<Nullable<Text>, _>(&record.sender)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.created_at)
@@ -10260,6 +10272,7 @@ mod tests {
     async fn memory_account_store_crud() {
         let store = MemoryAccountStore::new();
         let record = AccountRecord {
+            id: "ck:account:00000000-0000-7000-8000-000000000001".to_owned(),
             did: "did:web:test".to_owned(),
             localpart: "test".to_owned(),
             display_name: Some("Test".to_owned()),

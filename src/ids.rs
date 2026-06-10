@@ -57,6 +57,13 @@ pub fn generate_grant_id() -> String {
     generate("grant")
 }
 
+/// Surrogate primary-key id for the `accounts` row (`ck:account:<uuid7>`).
+/// Distinct from the account's `actor_id` DID: the DID is the protocol
+/// identity, this is the stable internal row handle the PK is built on.
+pub fn generate_account_id() -> String {
+    generate("account")
+}
+
 pub fn generate_install_id() -> String {
     generate("install")
 }

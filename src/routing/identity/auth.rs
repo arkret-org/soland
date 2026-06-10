@@ -213,6 +213,7 @@ async fn dev_login(
             .clone()
             .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
         let record = AccountRecord {
+            id: crate::ids::generate_account_id(),
             did: body.actor.clone(),
             localpart: normalize_localpart(&synthetic_handle),
             display_name: Some(synthetic_display),
@@ -1160,6 +1161,7 @@ async fn ensure_oauth_account(
         localpart = format!("oauth-{}", short_hex(oauth.actor.as_bytes(), 16));
     }
     let account = AccountRecord {
+        id: crate::ids::generate_account_id(),
         did: oauth.actor.clone(),
         localpart,
         display_name: oauth.display_name.clone(),
