@@ -55,7 +55,7 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
     PolicyCheckRequestInput {
         request_id: "polreq_integ".to_owned(),
         realm_id: RealmId::new(REALM_ID).unwrap(),
-        actor: Did::new("did:web:alice.example").unwrap(),
+        actor_id: Did::new("did:web:alice.example").unwrap(),
         action: "ck.message.create".to_owned(),
         source_service_did: Did::new("did:web:soland.local").unwrap(),
         source_service_type: "principal_server".to_owned(),
@@ -93,7 +93,7 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
     PolicyCheckRequestBody {
         request_id: input.request_id.clone(),
         realm_id: input.realm_id.clone(),
-        actor: input.actor.clone(),
+        actor_id: input.actor_id.clone(),
         action: input.action.clone(),
         request_canonical_digest: input.canonical_request_hash(),
         source: PolicyCheckSource {
@@ -120,7 +120,7 @@ fn mock_allow_response(
         decision: AuthzDecision::Allow,
         bound_to: PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
-            actor: request.actor.clone(),
+            actor_id: request.actor_id.clone(),
             action: request.action.clone(),
             request_canonical_digest: request.request_canonical_digest.clone(),
             policy_server_id: Did::new(POLICY_SERVER_DID).unwrap(),

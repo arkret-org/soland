@@ -719,7 +719,7 @@ pub struct SolandPolicyCheckRequestBody {
     pub realm_id: Option<String>,
     pub request_canonical_digest: String,
     pub action: String,
-    pub actor: String,
+    pub actor_id: String,
     pub source: Value,
     #[serde(default)]
     pub event_preview: Option<Value>,
@@ -734,7 +734,7 @@ pub struct SolandPolicyCheckRequestBody {
 /// of the four frontiers move:
 ///   - `realm_id` — scope this binding applies to (canonical `ck:realm:<uuid>` form). May be empty
 ///     string when the request was realm-less (e.g. a global capability check).
-///   - `auth_state_digest` — sha256 hex over canonical JSON `{actor, action, resource,
+///   - `auth_state_digest` — sha256 hex over canonical JSON `{actor_id, action, resource,
 ///     request_canonical_digest}`.
 ///   - `policy_frontier_digest` — sha256 hex over canonical JSON `{policy_documents: [<sorted
 ///     policy_ids>]}`.

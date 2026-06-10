@@ -56,7 +56,7 @@ type VerificationKeyResolver =
 pub struct PolicyCheckRequestInput {
     pub request_id: String,
     pub realm_id: RealmId,
-    pub actor: Did,
+    pub actor_id: Did,
     pub action: String,
     pub source_service_did: Did,
     pub source_service_type: String,
@@ -77,7 +77,7 @@ impl PolicyCheckRequestInput {
         let canonical_input = serde_json::json!({
             "request_id": self.request_id,
             "realm_id": self.realm_id.as_str(),
-            "actor": self.actor.as_str(),
+            "actor_id": self.actor_id.as_str(),
             "action": self.action,
             "source": {
                 "service_did": self.source_service_did.as_str(),
@@ -98,7 +98,7 @@ impl PolicyCheckRequestInput {
         PolicyCheckRequestBody {
             request_id: self.request_id,
             realm_id: self.realm_id,
-            actor: self.actor,
+            actor_id: self.actor_id,
             action: self.action,
             request_canonical_digest,
             source: PolicyCheckSource {
@@ -363,10 +363,10 @@ impl PolicyClient {
         reason_code: &str,
     ) -> PolicyCheckOutcome {
         let policy_server_id =
-            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor.clone());
+            Did::new(self.local_service_did.clone()).unwrap_or_else(|_| request.actor_id.clone());
         let bound_to = PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
-            actor: request.actor.clone(),
+            actor_id: request.actor_id.clone(),
             action: request.action.clone(),
             request_canonical_digest: request.request_canonical_digest.clone(),
             policy_server_id,
@@ -445,11 +445,11 @@ impl PolicyClient {
                 req = request.realm_id.as_str()
             )));
         }
-        if response.bound_to.actor != request.actor {
+        if response.bound_to.actor_id != request.actor_id {
             return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.actor {bt} != request {req}",
-                bt = response.bound_to.actor.as_str(),
-                req = request.actor.as_str()
+                "bound_to.actor_id {bt} != request {req}",
+                bt = response.bound_to.actor_id.as_str(),
+                req = request.actor_id.as_str()
             )));
         }
         if response.bound_to.action != request.action {
@@ -678,7 +678,7 @@ mod tests {
         PolicyCheckRequestInput {
             request_id: "req-1".to_owned(),
             realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            actor: Did::new("did:web:alice.example").unwrap(),
+            actor_id: Did::new("did:web:alice.example").unwrap(),
             action: "ck.message.create".to_owned(),
             source_service_did: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
@@ -696,7 +696,7 @@ mod tests {
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-                actor: Did::new("did:web:alice.example").unwrap(),
+                actor_id: Did::new("did:web:alice.example").unwrap(),
                 action: "ck.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
@@ -756,7 +756,7 @@ mod tests {
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: wire_request.realm_id.clone(),
-                actor: wire_request.actor.clone(),
+                actor_id: wire_request.actor_id.clone(),
                 action: wire_request.action.clone(),
                 request_canonical_digest: wire_request.request_canonical_digest.clone(),
                 policy_server_id: Did::new("did:web:policy.example.com").unwrap(),

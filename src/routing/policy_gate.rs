@@ -184,7 +184,7 @@ fn policy_request_for_operation(
 ) -> Result<PolicyCheckRequestInput, String> {
     let realm_id = RealmId::new(operation.realm_id.to_string())
         .map_err(|error| format!("invalid realm_id for policy check: {error}"))?;
-    let actor =
+    let actor_id =
         Did::new(actor_did.to_owned()).map_err(|error| format!("invalid actor DID: {error}"))?;
     let source_service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| format!("invalid local service DID: {error}"))?;
@@ -200,7 +200,7 @@ fn policy_request_for_operation(
     Ok(PolicyCheckRequestInput {
         request_id: format!("ck:policy_request:{}", ids::generate_event_id()),
         realm_id,
-        actor,
+        actor_id,
         action: action.to_owned(),
         source_service_did,
         source_service_type: "soland".to_owned(),

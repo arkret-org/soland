@@ -17,7 +17,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor": "did:web:alice.example",
+            "actor_id": "did:web:alice.example",
             "source": {"service": "soland"}
         }))
         .send(&app_from_state(state.clone()))
@@ -27,7 +27,7 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(policy["decision"], "allow");
     assert_eq!(policy["decision_trace"]["request_id"], "req1");
-    assert_eq!(policy["decision_trace"]["actor"], "did:web:alice.example");
+    assert_eq!(policy["decision_trace"]["actor_id"], "did:web:alice.example");
     assert_eq!(policy["decision_trace"]["action"], "message.send");
     assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 
@@ -80,7 +80,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor": "did:web:alice.example",
+            "actor_id": "did:web:alice.example",
             "source": {"service": "soland", "kind": "realm"}
         }))
         .send(&app_from_state(state.clone()))
@@ -114,7 +114,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor": "did:web:alice.example",
+            "actor_id": "did:web:alice.example",
             "source": {"service": "soland"}
         }))
         .send(&app_from_state(state.clone()))

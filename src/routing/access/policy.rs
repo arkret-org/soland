@@ -345,8 +345,8 @@ async fn policy_check(
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
-    if validate_did(&body.actor).is_err() {
-        return Err(AppError::invalid_param("invalid actor"));
+    if validate_did(&body.actor_id).is_err() {
+        return Err(AppError::invalid_param("invalid actor_id"));
     }
     if let Some(realm_id) = &body.realm_id
         && RealmId::new(realm_id.clone()).is_err()
@@ -394,7 +394,7 @@ async fn policy_check(
     let bound_realm_id = body.realm_id.clone().unwrap_or_default();
     let resource_value = body.event_preview.clone().unwrap_or(Value::Null);
     let auth_state_value = json!({
-        "actor": body.actor,
+        "actor_id": body.actor_id,
         "action": body.action,
         "resource": resource_value,
         "request_canonical_digest": body.request_canonical_digest,
@@ -404,7 +404,7 @@ async fn policy_check(
     let mut policy_doc_ids: Vec<String> = state
         .persistence
         .policy_documents()
-        .list_for_owner(&body.actor)
+        .list_for_owner(&body.actor_id)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -472,7 +472,7 @@ async fn policy_check(
         obligations: obligations.clone(),
         decision_trace: json!({
             "request_id": body.request_id,
-            "actor": body.actor,
+            "actor_id": body.actor_id,
             "action": body.action,
             "realm_id": body.realm_id,
             "matched_policy": policy_id,
@@ -598,7 +598,7 @@ fn policy_matches_check(
     request: &SolandPolicyCheckRequestBody,
 ) -> bool {
     policy_scope_matches(&policy.scope, request.realm_id.as_deref())
-        && policy_subject_matches(&policy.subject_ref, &request.actor)
+        && policy_subject_matches(&policy.subject_ref, &request.actor_id)
         && (policy.policy_type == "*" || policy.policy_type == request.action)
         && policy_actions_match(&policy.payload["actions"], &request.action)
         && policy_resource_matches(&policy.payload["resource"], request)
