@@ -44,7 +44,7 @@ use events::flow::{
 };
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
-use events::operations::{validate_canonical_json_value, validate_device_message_payload};
+use events::operations::{validate_canonical_json_value, validate_device_message_target};
 use events::projection::{
     accept_local_operations, ingest_federation_operations, operation_is_visible,
     projection_event_from_operation, redaction_targets_from_operations,

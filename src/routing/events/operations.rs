@@ -14,7 +14,7 @@
 //!   shape.
 //! - `validate_encrypted_payload_envelope` — `ck.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
-//! - `validate_device_message_payload` — to-device payload shape.
+//! - `validate_device_message_target` — to-device transport shape (typed `DeviceMessageTarget`).
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields is validated via the SDK
 //!   `cokret_sdk::canonical::validate_timestamp_canonical`.
 //! - `canonical_json_digest` — sha256 over canonical-JSON bytes.
@@ -25,7 +25,7 @@
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
 use cokret_sdk::schema::event_payload_validator_catalog;
-use cokret_sdk::{Hash, Operation};
+use cokret_sdk::{DeviceMessageTarget, Hash, Operation};
 use serde_json::Value;
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
@@ -3702,35 +3702,30 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
         })
 }
 
-pub fn validate_device_message_payload(content: &serde_json::Value) -> Result<(), &'static str> {
-    let Some(message) = content.as_object() else {
-        return Err("device message must be a JSON object");
-    };
-    if message
-        .get("kind")
-        .or_else(|| message.get("type"))
-        .and_then(|value| value.as_str())
-        .is_none_or(|value| value.trim().is_empty())
-    {
+// Transport-shape check for a to-device target. `DeviceMessageTarget` already
+// guarantees the outer object shape, a present `kind`, and a present `content`
+// at deserialization, so the only runtime checks left are a non-blank `kind`
+// and a JSON-object `content`.
+//
+// Per crypto-media/device-lifecycle.md §7, to-device content SHOULD be
+// end-to-end encrypted, but cleartext is explicitly permitted for capability
+// discovery and verification bootstrap (`ck.key.verification.*`), and the
+// secret-share request (`ck.secret.request`) carries only a one-time HPKE
+// public key. The secret response (`ck.secret.send`) is HPKE-sealed but uses
+// its own envelope shape (§10.7), not the MLS Realm `encrypted_envelope`. The
+// to-device queue is zero-knowledge and does not validate E2EE content
+// semantics; it only requires a content object so routing and
+// `DeviceMessageEnvelope` materialization succeed. Forcing the MLS
+// `encrypted_envelope` shape here would reject the very `ck.key.verification.*`
+// flow advertised by the device_messages describe surface.
+pub fn validate_device_message_target(target: &DeviceMessageTarget) -> Result<(), &'static str> {
+    if target.kind.trim().is_empty() {
         return Err("device message requires kind");
     }
-    // Per crypto-media/device-lifecycle.md §7, to-device content SHOULD be
-    // end-to-end encrypted, but cleartext is explicitly permitted for
-    // capability discovery and verification bootstrap (`ck.key.verification.*`),
-    // and the secret-share request (`ck.secret.request`) carries only a
-    // one-time HPKE public key. The secret response (`ck.secret.send`) is
-    // HPKE-sealed but uses its own envelope shape (§10.7), not the MLS Realm
-    // `encrypted_envelope`. The to-device queue is zero-knowledge and does not
-    // validate E2EE content semantics; it only requires a content object so
-    // routing and `DeviceMessageEnvelope` materialization succeed. Forcing the
-    // MLS `encrypted_envelope` shape here would reject the very
-    // `ck.key.verification.*` flow advertised by the device_messages describe
-    // surface.
-    match message.get("content") {
-        Some(value) if value.is_object() => Ok(()),
-        Some(_) => Err("device message content must be a JSON object"),
-        None => Err("device message requires content"),
+    if !target.content.is_object() {
+        return Err("device message content must be a JSON object");
     }
+    Ok(())
 }
 
 pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'static str> {
@@ -5399,17 +5394,24 @@ mod device_message_payload_tests {
 
     use super::*;
 
+    fn device_message_target(kind: &str, content: Value) -> DeviceMessageTarget {
+        DeviceMessageTarget {
+            kind: kind.to_owned(),
+            content,
+            expires_at: "2026-06-10T00:10:00Z".parse().expect("valid timestamp"),
+        }
+    }
+
     /// device-lifecycle.md §7 permits cleartext to-device content for
     /// verification bootstrap; the queue is zero-knowledge and MUST NOT force
     /// the MLS Realm `encrypted_envelope` shape on these.
     #[test]
     fn accepts_cleartext_verification_content() {
-        let payload = json!({
-            "kind": "ck.key.verification.key",
-            "expires_at": "2026-06-10T00:10:00Z",
-            "content": {"transaction_id": "ver_1", "from_device": "ck:device:x", "key": "base64"}
-        });
-        assert!(validate_device_message_payload(&payload).is_ok());
+        let payload = device_message_target(
+            "ck.key.verification.key",
+            json!({"transaction_id": "ver_1", "from_device": "ck:device:x", "key": "base64"}),
+        );
+        assert!(validate_device_message_target(&payload).is_ok());
     }
 
     /// §10.7 `ck.secret.request` carries only a one-time HPKE public key in
@@ -5417,49 +5419,45 @@ mod device_message_payload_tests {
     /// pass the transport-shape validator.
     #[test]
     fn accepts_secret_share_content() {
-        let request = json!({
-            "kind": "ck.secret.request",
-            "expires_at": "2026-06-10T00:30:00Z",
-            "content": {
+        let request = device_message_target(
+            "ck.secret.request",
+            json!({
                 "request_id": "r1",
                 "secret_id": "yougen_mls_account_secret",
                 "from_device": "ck:device:new",
                 "recipient_hpke_public_key": "cHVi"
-            }
-        });
-        assert!(validate_device_message_payload(&request).is_ok());
+            }),
+        );
+        assert!(validate_device_message_target(&request).is_ok());
 
-        let send = json!({
-            "kind": "ck.secret.send",
-            "expires_at": "2026-06-10T00:30:00Z",
-            "content": {
+        let send = device_message_target(
+            "ck.secret.send",
+            json!({
                 "request_id": "r1",
                 "secret_id": "yougen_mls_account_secret",
                 "from_device": "ck:device:old",
                 "scheme": "ck.hpke_x25519_aead_xchacha20poly1305.v1",
                 "enc": "ZW5j",
                 "ciphertext": "Y2lwaGVy"
-            }
-        });
-        assert!(validate_device_message_payload(&send).is_ok());
+            }),
+        );
+        assert!(validate_device_message_target(&send).is_ok());
     }
 
-    /// Transport shape is still enforced: a missing kind or a non-object
-    /// content is rejected.
+    /// Transport shape is still enforced: a blank kind or a non-object content
+    /// is rejected. ("missing content" is now impossible — `DeviceMessageTarget`
+    /// makes `content` a required field, enforced by serde before this runs.)
     #[test]
-    fn rejects_missing_kind_or_non_object_content() {
+    fn rejects_blank_kind_or_non_object_content() {
         assert_eq!(
-            validate_device_message_payload(&json!({"content": {}})),
+            validate_device_message_target(&device_message_target("", json!({}))),
             Err("device message requires kind")
         );
         assert_eq!(
-            validate_device_message_payload(&json!({"kind": "ck.secret.request"})),
-            Err("device message requires content")
-        );
-        assert_eq!(
-            validate_device_message_payload(
-                &json!({"kind": "ck.secret.request", "content": "not-an-object"})
-            ),
+            validate_device_message_target(&device_message_target(
+                "ck.secret.request",
+                json!("not-an-object")
+            )),
             Err("device message content must be a JSON object")
         );
     }

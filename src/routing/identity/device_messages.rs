@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::{
     SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync,
-    validate_device_message_payload,
+    validate_device_message_target,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -75,19 +75,12 @@ async fn send_device_messages(
         .map(|s| s.to_owned())
         .unwrap_or_else(sync_token);
     let body = body.into_inner();
-    for (recipient, devices) in &body.messages {
-        for (device_id, content) in devices {
-            let content_value = json!({
-                "kind": content.kind.clone(),
-                "content": content.content.clone(),
-                "expires_at": content.expires_at,
-            });
-            if let Err(message) = validate_device_message_payload(&content_value) {
+    for devices in body.messages.values() {
+        for target in devices.values() {
+            if let Err(message) = validate_device_message_target(target) {
                 return Err(AppError::invalid_param(message));
             }
-            let _ = device_id;
         }
-        let _ = recipient;
     }
     let device_messages = state.persistence.device_messages();
     let registered = device_messages
