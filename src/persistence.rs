@@ -5677,7 +5677,7 @@ impl AccountStore for PgAccountStore {
     async fn get(&self, did: &str) -> PersistenceResult<Option<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor AS did, handle, display_name, created_at FROM accounts WHERE actor = $1",
+            "SELECT actor AS did, localpart, display_name, created_at FROM accounts WHERE actor = $1",
         )
         .bind::<Text, _>(did)
         .get_result::<AccountRow>(&mut *conn)
@@ -5690,13 +5690,13 @@ impl AccountStore for PgAccountStore {
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO accounts (actor, handle, display_name, payload, created_at, updated_at) \
+            "INSERT INTO accounts (actor, localpart, display_name, payload, created_at, updated_at) \
              VALUES ($1, $2, $3, '{}'::jsonb, $4, $4) \
-             ON CONFLICT (actor) DO UPDATE SET handle = EXCLUDED.handle, \
+             ON CONFLICT (actor) DO UPDATE SET localpart = EXCLUDED.localpart, \
              display_name = EXCLUDED.display_name, updated_at = NOW()",
         )
         .bind::<Text, _>(&record.did)
-        .bind::<Text, _>(&record.handle)
+        .bind::<Text, _>(&record.localpart)
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Timestamptz, _>(record.created_at)
         .execute(&mut *conn)
@@ -5708,7 +5708,7 @@ impl AccountStore for PgAccountStore {
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor AS did, handle, display_name, created_at FROM accounts ORDER BY actor",
+            "SELECT actor AS did, localpart, display_name, created_at FROM accounts ORDER BY actor",
         )
         .load::<AccountRow>(&mut *conn)
         .await
@@ -8848,7 +8848,7 @@ struct AccountRow {
     #[diesel(sql_type = Text)]
     did: String,
     #[diesel(sql_type = Text)]
-    handle: String,
+    localpart: String,
     #[diesel(sql_type = Nullable<Text>)]
     display_name: Option<String>,
     #[diesel(sql_type = Timestamptz)]
@@ -8859,7 +8859,7 @@ impl From<AccountRow> for AccountRecord {
     fn from(row: AccountRow) -> Self {
         Self {
             did: row.did,
-            handle: row.handle,
+            localpart: row.localpart,
             display_name: row.display_name,
             // Pg backend doesn't carry bio / avatar_url yet — the Memory
             // store does. When the Pg projection lands, extend AccountRow
@@ -10261,7 +10261,7 @@ mod tests {
         let store = MemoryAccountStore::new();
         let record = AccountRecord {
             did: "did:web:test".to_owned(),
-            handle: "@test".to_owned(),
+            localpart: "test".to_owned(),
             display_name: Some("Test".to_owned()),
             bio: None,
             avatar_url: None,

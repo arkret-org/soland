@@ -26,7 +26,7 @@ use super::system::describe;
 use super::{
     AuthArgs, SyncCursorError, append_audit_log, bearer_token, classify_handle,
     device_inventory_to_json, handle_for_did, is_device_revoked, is_valid_handle, normalize_handle,
-    now, parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
+    normalize_localpart, now, parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
     sync_token_for_client_sync, validate_device_id, validate_device_message_target, validate_did,
 };
 

@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
-    append_audit_log, bearer_token, handle_for_did, is_valid_handle, normalize_handle, now,
-    render_error, validate_device_id, validate_did,
+    append_audit_log, bearer_token, handle_for_did, is_valid_handle, normalize_handle,
+    normalize_localpart, now, render_error, validate_device_id, validate_did,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
@@ -214,7 +214,7 @@ async fn dev_login(
             .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
         let record = AccountRecord {
             did: body.actor.clone(),
-            handle: normalize_handle(&synthetic_handle),
+            localpart: normalize_localpart(&synthetic_handle),
             display_name: Some(synthetic_display),
             bio: None,
             avatar_url: None,
@@ -230,7 +230,7 @@ async fn dev_login(
             state,
             Some(&body.actor),
             "account.register",
-            json!({"handle": record.handle.clone(), "via": "dev_login"}),
+            json!({"handle": record.handle(), "via": "dev_login"}),
             "accepted",
         )
         .await;
@@ -1139,11 +1139,13 @@ async fn ensure_oauth_account(
         return Ok(());
     }
 
-    let mut handle = oauth
-        .display_name
-        .as_deref()
-        .and_then(sanitized_handle)
-        .unwrap_or_else(|| handle_for_did(&oauth.actor));
+    let mut localpart = normalize_localpart(
+        &oauth
+            .display_name
+            .as_deref()
+            .and_then(sanitized_handle)
+            .unwrap_or_else(|| handle_for_did(&oauth.actor)),
+    );
     let existing = accounts.list().await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1153,13 +1155,13 @@ async fn ensure_oauth_account(
     })?;
     if existing
         .iter()
-        .any(|account| account.handle == handle && account.did != oauth.actor)
+        .any(|account| account.localpart == localpart && account.did != oauth.actor)
     {
-        handle = format!("@oauth-{}", short_hex(oauth.actor.as_bytes(), 16));
+        localpart = format!("oauth-{}", short_hex(oauth.actor.as_bytes(), 16));
     }
     let account = AccountRecord {
         did: oauth.actor.clone(),
-        handle,
+        localpart,
         display_name: oauth.display_name.clone(),
         bio: None,
         avatar_url: None,
@@ -1176,7 +1178,7 @@ async fn ensure_oauth_account(
         state,
         Some(&oauth.actor),
         "auth.oauth_account_autoprovision",
-        json!({"handle": account.handle}),
+        json!({"handle": account.handle()}),
         "accepted",
     )
     .await;

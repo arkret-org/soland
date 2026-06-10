@@ -1,7 +1,7 @@
 diesel::table! {
     accounts (actor) {
         actor -> Text,
-        handle -> Text,
+        localpart -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
         disabled_at -> Nullable<Timestamptz>,

@@ -11,7 +11,7 @@ CREATE TABLE public.account_datas (
 
 CREATE TABLE public.accounts (
     actor text NOT NULL,
-    handle text NOT NULL,
+    localpart text NOT NULL,
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     disabled_at timestamp with time zone,
@@ -708,7 +708,7 @@ ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_pkey PRIMARY KEY (actor, data_type);
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_handle_key UNIQUE (handle);
+    ADD CONSTRAINT accounts_localpart_key UNIQUE (localpart);
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_pkey PRIMARY KEY (actor);

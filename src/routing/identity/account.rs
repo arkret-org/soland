@@ -42,8 +42,8 @@ use super::consent::{
 };
 use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
-    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_handle, now, sha256_hex,
-    validate_did,
+    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_localpart, now,
+    sha256_hex, validate_did,
 };
 use crate::error::AppError;
 use crate::routing::spaces::space::realm_has_member;
@@ -66,18 +66,18 @@ use crate::wire::{
 pub const HANDLE_GRACE_PERIOD_SECONDS: i64 = 5;
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
 
-fn handle_in_grace_period(state: &AppState, handle: &str) -> bool {
+fn handle_in_grace_period(state: &AppState, localpart: &str) -> bool {
     let releases = state.handle_releases.lock().expect("handle_releases lock");
-    let Some(released_at) = releases.get(handle) else {
+    let Some(released_at) = releases.get(localpart) else {
         return false;
     };
     let elapsed = chrono::Utc::now() - *released_at;
     elapsed < chrono::Duration::seconds(HANDLE_GRACE_PERIOD_SECONDS)
 }
 
-fn record_handle_release(state: &AppState, handle: &str) {
+fn record_handle_release(state: &AppState, localpart: &str) {
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
-    releases.insert(handle.to_owned(), chrono::Utc::now());
+    releases.insert(localpart.to_owned(), chrono::Utc::now());
 }
 use crate::{JsonResult, json_ok};
 
@@ -191,7 +191,7 @@ async fn account_register(
         return Err(AppError::invalid_param("invalid device_id"));
     }
 
-    let normalized_handle = normalize_handle(&body.handle);
+    let normalized_localpart = normalize_localpart(&body.handle);
     let accounts = state
         .persistence
         .accounts()
@@ -200,7 +200,7 @@ async fn account_register(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if accounts
         .iter()
-        .any(|account| account.did == body.did || account.handle == normalized_handle)
+        .any(|account| account.did == body.did || account.localpart == normalized_localpart)
     {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -209,7 +209,7 @@ async fn account_register(
     }
     let account = AccountRecord {
         did: body.did.clone(),
-        handle: normalized_handle,
+        localpart: normalized_localpart,
         display_name: body.display_name,
         bio: None,
         avatar_url: None,
@@ -249,7 +249,7 @@ async fn account_register(
         state,
         Some(&body.did),
         "account.register",
-        json!({"handle": account.handle.clone()}),
+        json!({"handle": account.handle()}),
         "accepted",
     )
     .await;
@@ -306,17 +306,17 @@ async fn claim_handle(
     if let Err((reason_code, message)) = classify_handle(&body.handle) {
         return Err(AppError::invalid_param(message).with_wire_code(reason_code));
     }
-    let normalized = normalize_handle(&body.handle);
+    let normalized = normalize_localpart(&body.handle);
     let accounts_store = state.persistence.accounts();
     let mut current = accounts_store
         .get(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("account not found"))?;
-    if current.handle == normalized {
+    if current.localpart == normalized {
         return json_ok(ClaimHandleOutcome {
-            did: current.did,
-            handle: current.handle,
+            did: current.did.clone(),
+            handle: current.handle(),
             previous_handle: None,
         });
     }
@@ -326,7 +326,7 @@ async fn claim_handle(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
-        .any(|account| account.did != session.actor && account.handle == normalized)
+        .any(|account| account.did != session.actor && account.localpart == normalized)
     {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -341,28 +341,28 @@ async fn claim_handle(
         )
         .with_wire_code("handle_in_grace_period"));
     }
-    let previous_handle = current.handle.clone();
-    current.handle = normalized.clone();
+    let previous_localpart = current.localpart.clone();
+    current.localpart = normalized.clone();
     accounts_store
         .put(&current)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    record_handle_release(state, &previous_handle);
+    record_handle_release(state, &previous_localpart);
     append_audit_log(
         state,
         Some(&session.actor),
         "account.handle_claim",
         json!({
-            "previous_handle": previous_handle.clone(),
-            "handle": normalized.clone(),
+            "previous_handle": format!("@{previous_localpart}"),
+            "handle": current.handle(),
         }),
         "accepted",
     )
     .await;
     json_ok(ClaimHandleOutcome {
-        did: current.did,
-        handle: current.handle,
-        previous_handle: Some(previous_handle),
+        did: current.did.clone(),
+        handle: current.handle(),
+        previous_handle: Some(format!("@{previous_localpart}")),
     })
 }
 
@@ -427,8 +427,8 @@ async fn update_profile(
     )
     .await;
     json_ok(SolandAccountUpdateProfileOutcome {
-        did: current.did,
-        handle: current.handle,
+        did: current.did.clone(),
+        handle: current.handle(),
         display_name: current.display_name,
         bio: current.bio,
         avatar_url: current.avatar_url,
@@ -492,14 +492,14 @@ async fn transfer_handle(
     // Park the source on a synthetic DID-derived handle and check it's
     // not already taken by yet a third actor. In practice the synthetic
     // form is unique (it embeds the DID) but we defensively check.
-    let parked_handle = normalize_handle(&super::handle_for_did(&source.did));
+    let parked_localpart = normalize_localpart(&super::handle_for_did(&source.did));
     let all_accounts = accounts_store
         .list()
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if all_accounts
         .iter()
-        .any(|account| account.did != source.did && account.handle == parked_handle)
+        .any(|account| account.did != source.did && account.localpart == parked_localpart)
     {
         return Err(AppError::new(
             crate::error::ErrorCode::DuplicateConflict,
@@ -507,9 +507,9 @@ async fn transfer_handle(
         )
         .with_wire_code("handle_already_claimed"));
     }
-    let transferred = source.handle.clone();
-    source.handle = parked_handle;
-    target.handle = transferred.clone();
+    let transferred = source.localpart.clone();
+    source.localpart = parked_localpart;
+    target.localpart = transferred.clone();
     accounts_store
         .put(&source)
         .await
@@ -523,7 +523,7 @@ async fn transfer_handle(
         Some(&session.actor),
         "account.handle_transfer",
         json!({
-            "transferred_handle": transferred,
+            "transferred_handle": format!("@{transferred}"),
             "from": session.actor.clone(),
             "to": body.target_did.clone(),
         }),
@@ -531,9 +531,9 @@ async fn transfer_handle(
     )
     .await;
     json_ok(TransferHandleOutcome {
-        handle: transferred,
-        from_did: source.did,
-        from_handle: source.handle,
+        handle: format!("@{transferred}"),
+        from_did: source.did.clone(),
+        from_handle: source.handle(),
         to_did: target.did,
     })
 }
@@ -880,13 +880,13 @@ async fn erase_account(
     // avatar_url with placeholders; retain DID + a release-marked
     // handle so foreign references resolve cleanly).
     if let Ok(Some(mut account)) = state.persistence.accounts().get(&actor).await {
-        let previous_handle = account.handle.clone();
+        let previous_localpart = account.localpart.clone();
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
         account.avatar_url = None;
-        account.handle = format!("@erased-{}", short_actor_tag(&actor));
+        account.localpart = format!("erased-{}", short_actor_tag(&actor));
         let _ = state.persistence.accounts().put(&account).await;
-        record_handle_release(state, &previous_handle);
+        record_handle_release(state, &previous_localpart);
     }
 
     // Revoke every device record so other surfaces (key delivery,
@@ -1299,7 +1299,7 @@ async fn list_notifications(
         .get(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .map(|account| account.handle)
+        .map(|account| account.handle())
         .unwrap_or_else(|| handle_for_did(&session.actor));
     let last_read_at = state
         .notification_read_cursors
@@ -2528,8 +2528,8 @@ async fn account_principal_realm(
 fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {
     let lifecycle_state = state.account_lifecycle_state(&account.did);
     SolandAccountRegisterOutcome {
+        handle: account.handle(),
         did: account.did,
-        handle: account.handle,
         display_name: account.display_name,
         state: lifecycle_state,
         created_at: account.created_at,

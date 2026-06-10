@@ -2122,7 +2122,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         }
         actors.push(json!({
             "did": account.did,
-            "handle": account.handle,
+            "handle": account.handle(),
             "display_name": account.display_name.as_deref().unwrap_or(account.did.as_str()),
             "state": account_state.clone(),
             "account_state": account_state,

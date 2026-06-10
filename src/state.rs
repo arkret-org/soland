@@ -849,10 +849,11 @@ pub struct AppState {
     /// reducer projections; durable rehydration rides on the durable event
     /// store (control-realm Phase 3).
     pub cross_signing: Arc<Mutex<cokret_sdk::DeviceManager>>,
-    /// In-memory handle release ledger. Records `released_handle → released_at`
-    /// for every handle vacated by `claim_handle` / `transfer_handle`; new
-    /// claims for a handle still inside `HANDLE_GRACE_PERIOD_SECONDS` are
-    /// rejected with `handle_in_grace_period`. Spec: identity-handles.md
+    /// In-memory handle release ledger keyed by bare localpart. Records
+    /// `released_localpart → released_at` for every handle vacated by
+    /// `claim_handle` / `transfer_handle`; new claims for a localpart still
+    /// inside `HANDLE_GRACE_PERIOD_SECONDS` are rejected with
+    /// `handle_in_grace_period`. Spec: identity-handles.md
     /// (handle release cooldown). The map is server-process-local; persistent
     /// storage lands when the handle CRDT projection ships.
     pub handle_releases: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
@@ -1057,7 +1058,12 @@ pub struct DeviceInventoryRecord {
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
     pub did: String,
-    pub handle: String,
+    /// Bare handle localpart (`alice` — never `@alice` or `alice:domain`).
+    /// The domain half of the canonical `<localpart>:<domain>` handle is
+    /// implicit (always this server's own service domain), so renaming the
+    /// server's domain never rewrites account rows. Wire/display surfaces
+    /// use [`AccountRecord::handle`] for the `@`-prefixed form.
+    pub localpart: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
     /// `POST /_soland/self/account/profile` (operationId `ck.self.account.update_profile`);
@@ -1067,6 +1073,14 @@ pub struct AccountRecord {
     /// link verbatim — no transcoding or caching.
     pub avatar_url: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AccountRecord {
+    /// `@<localpart>` form used by the product API, audit log and
+    /// directory projections.
+    pub fn handle(&self) -> String {
+        format!("@{}", self.localpart)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2168,7 +2182,7 @@ impl AppState {
             let demo_realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
             let demo_account = AccountRecord {
                 did: "did:web:alice.example".to_owned(),
-                handle: "@alice".to_owned(),
+                localpart: "alice".to_owned(),
                 display_name: Some("Alice Example".to_owned()),
                 bio: None,
                 avatar_url: None,
