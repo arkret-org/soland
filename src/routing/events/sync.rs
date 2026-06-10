@@ -52,6 +52,7 @@ use super::{
     typing_ephemeral_for_realm, validate_did,
 };
 use crate::ids;
+use crate::persistence::SyncCursorRecord;
 use crate::reducer::ProjectionState;
 use crate::state::{
     AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, PresenceRecord,
@@ -174,7 +175,9 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             session.as_ref(),
             body.filter.as_ref(),
             chrono::Utc::now().timestamp_millis(),
-        ) {
+        )
+        .await
+        {
             Ok(cursor) => cursor,
             Err(SyncCursorError::Expired) => {
                 crate::error::render_error_code(
@@ -212,6 +215,24 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     } else {
         SyncCursor::default()
     };
+    // Forward-progress cleanup: presenting a valid cursor proves the client
+    // persisted it, so every strictly-older handle row for this stream is
+    // superseded and can go. Keeps the durable table at ~2 rows per active
+    // (principal, device, filter) stream. Best-effort.
+    if let (Some(session), Some(presented_issued_at_ms)) =
+        (session.as_ref(), after_cursor.issued_at_ms)
+    {
+        let _ = state
+            .persistence
+            .sync_cursors()
+            .prune_stream_superseded(
+                &session.actor,
+                &session.device_id,
+                &sync_filter_digest(body.filter.as_ref()),
+                presented_issued_at_ms,
+            )
+            .await;
+    }
     if let Some(presence) = body.set_presence.as_deref()
         && !matches!(presence, "online" | "offline" | "unavailable")
     {
@@ -787,7 +808,8 @@ async fn build_sync_snapshot(
             body.filter.as_ref(),
             positions,
             to_device_position,
-        ),
+        )
+        .await,
         realms: sync_realms,
         left_realms,
         to_device,
@@ -1542,7 +1564,7 @@ pub enum SyncCursorError {
     Revoked,
 }
 
-pub fn sync_token_for_client_sync(
+pub async fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionRecord>,
     filter: Option<&serde_json::Value>,
@@ -1588,21 +1610,35 @@ pub fn sync_token_for_client_sync(
             .expect("stateless sync cursor must be signable");
         return encode_sync_cursor_value(signed);
     }
-    let ctx = json!({
-        "principal_id": principal_id,
-        "device_id": device_id,
-        "service_id": state.config.service_did.clone(),
-        "filter_digest": filter_digest,
-        "issued_at_ms": issued_at_ms
-    });
-    let handle = store_sync_cursor_handle(
-        state,
-        json!({
-            "ctx": ctx,
-            "positions": positions,
-            "expires_at_ms": expires_at_ms
-        }),
+    // Deterministic handle: HMAC over the binding content (positions
+    // included, per-mint `devices` wall-clock stamp excluded), so an
+    // unchanged frontier re-mints the SAME handle and the upsert only
+    // refreshes the row's expiry instead of growing the table.
+    let binding = stream_cursor_handle_binding(
+        &principal_id,
+        &device_id,
+        &state.config.service_did,
+        &filter_digest,
+        &realms_positions,
+        to_device_position,
     );
+    let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
+    upsert_sync_cursor_record(
+        state,
+        SyncCursorRecord {
+            handle: handle.clone(),
+            principal_id: Some(principal_id),
+            device_id: Some(device_id),
+            service_id: state.config.service_did.clone(),
+            filter_digest: Some(filter_digest),
+            purpose: "stream".to_owned(),
+            positions: Some(positions),
+            target: None,
+            issued_at_ms,
+            expires_at_ms,
+        },
+    )
+    .await;
     let cursor = json!({
         "v": "1",
         "purpose": "stream",
@@ -1613,26 +1649,33 @@ pub fn sync_token_for_client_sync(
     encode_sync_cursor_value(cursor)
 }
 
-pub(crate) fn sync_token_for_state(state: &AppState) -> String {
+pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
     let issued_at = chrono::Utc::now();
     let expires_at = issued_at + ChronoDuration::hours(1);
+    let issued_at_ms = issued_at.timestamp_millis();
     let expires_at_ms = expires_at.timestamp_millis();
-    let handle = store_sync_cursor_handle(
+    let binding = generic_cursor_handle_binding(&state.config.service_did);
+    let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, &binding);
+    upsert_sync_cursor_record(
         state,
-        json!({
-            "ctx": {
-                "kind": "generic",
-                "service_id": state.config.service_did.clone(),
-                "issued_at_ms": issued_at.timestamp_millis()
-            },
-            "positions": {
+        SyncCursorRecord {
+            handle: handle.clone(),
+            principal_id: None,
+            device_id: None,
+            service_id: state.config.service_did.clone(),
+            filter_digest: None,
+            purpose: "stream".to_owned(),
+            positions: Some(json!({
                 "realms": {},
                 "devices": {},
                 "to_device": 0
-            },
-            "expires_at_ms": expires_at_ms
-        }),
-    );
+            })),
+            target: None,
+            issued_at_ms,
+            expires_at_ms,
+        },
+    )
+    .await;
     encode_sync_cursor_value(json!({
             "v": "1",
             "purpose": "stream",
@@ -1648,40 +1691,168 @@ pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
     format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn store_sync_cursor_handle(state: &AppState, stored: Value) -> String {
-    loop {
-        let handle = cokret_sdk::cursor::generate_cursor_handle()
-            .unwrap_or_else(|error| fallback_sync_cursor_handle(&error));
-        let mut handles = state
-            .sync_cursor_handles
-            .lock()
-            .expect("sync cursor handles lock");
-        if !handles.contains_key(&handle) {
-            handles.insert(handle.clone(), stored.clone());
-            return handle;
+/// Deterministic, unguessable stateful cursor handle.
+///
+/// `handle = base64url( HMAC-SHA256(cursor_key, canonical_binding)[..16] )`.
+///
+/// Keyed (HMAC, not a bare hash): a bare hash of the binding inputs — all of
+/// which a caller knows (its own/another device id, the realm positions) —
+/// would be forgeable, letting an attacker mint a victim device's handle and
+/// advance its `to_device` ack to prune undelivered Welcomes. The server-secret
+/// `cursor_key` makes the handle unguessable while keeping it deterministic, so
+/// identical bindings (same positions) map to the same handle (no per-poll
+/// churn, no new row). 16 bytes → 128 bits → ≥22 base64url chars, satisfying
+/// `cursor.schema.json` `h`.
+fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = <Hmac<Sha256>>::new_from_slice(cursor_key).expect("HMAC accepts any key length");
+    mac.update(canonical_binding);
+    let tag = mac.finalize().into_bytes();
+    URL_SAFE_NO_PAD.encode(&tag[..16])
+}
+
+/// Canonical byte string a STREAM cursor handle is derived from.
+///
+/// Excludes the per-mint `positions.devices` timestamp (it is a wall-clock
+/// stamp, not a content position; including it would defeat determinism — see
+/// `_cursor_todos.md` C1). Includes every field the integrity check binds, so a
+/// cross-binding handle never collides.
+fn stream_cursor_handle_binding(
+    principal_id: &str,
+    device_id: &str,
+    service_id: &str,
+    filter_digest: &str,
+    realms_positions: &BTreeMap<String, i64>,
+    to_device_position: i64,
+) -> Vec<u8> {
+    let binding = json!({
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "service_id": service_id,
+        "filter_digest": filter_digest,
+        "purpose": "stream",
+        "realms": realms_positions,
+        "to_device": to_device_position,
+    });
+    cokret_sdk::canonical::canonical_json_bytes(&binding)
+        .unwrap_or_else(|_| binding.to_string().into_bytes())
+}
+
+/// Canonical byte string the GENERIC service-level cursor handle is derived
+/// from (`sync_token_for_state`: empty positions, no session binding). Shaped
+/// differently from [`stream_cursor_handle_binding`] so the two namespaces
+/// can never collide.
+fn generic_cursor_handle_binding(service_id: &str) -> Vec<u8> {
+    let binding = json!({
+        "kind": "generic",
+        "purpose": "stream",
+        "service_id": service_id,
+        "realms": {},
+        "to_device": 0,
+    });
+    cokret_sdk::canonical::canonical_json_bytes(&binding)
+        .unwrap_or_else(|_| binding.to_string().into_bytes())
+}
+
+/// How often the durable sync-cursor handle table is swept for expired rows.
+/// Stream cursors live 1h, so a 15-minute cadence keeps the table within a
+/// small constant factor of the active-stream count without measurable load
+/// (one indexed DELETE per pass).
+const SYNC_CURSOR_TTL_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
+
+/// Spawn the periodic TTL sweep for the durable sync-cursor handle table.
+///
+/// Forward-progress pruning (on cursor presentation) already caps per-stream
+/// rows; this sweep is the backstop that clears rows whose client never came
+/// back, replacing the old lookup-time-only lazy deletion that let
+/// superseded handles accumulate until restart.
+pub fn spawn_sync_cursor_ttl_sweeper(
+    state: AppState,
+) -> std::sync::Arc<tokio::task::JoinHandle<()>> {
+    let task = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(SYNC_CURSOR_TTL_SWEEP_INTERVAL);
+        // Skip the immediate first tick so we don't fire mid-boot.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            match state.persistence.sync_cursors().prune_expired(now_ms).await {
+                Ok(0) => {}
+                Ok(pruned) => tracing::debug!(
+                    worker = "sync_cursor_ttl_sweep",
+                    pruned,
+                    "expired sync cursor handles pruned"
+                ),
+                Err(error) => tracing::warn!(
+                    worker = "sync_cursor_ttl_sweep",
+                    %error,
+                    "sync cursor TTL sweep failed"
+                ),
+            }
         }
+    });
+    std::sync::Arc::new(task)
+}
+
+/// Persist (or expiry-refresh) the handle row behind a freshly-minted cursor.
+///
+/// A failed write is downgraded to a warning rather than failing the sync
+/// response: the client still gets its data, and if the row never lands the
+/// next `after=` presentation fails handle lookup and the client recovers
+/// through the spec's full-resync path (client-sync.md §12.3).
+async fn upsert_sync_cursor_record(state: &AppState, record: SyncCursorRecord) {
+    if let Err(error) = state.persistence.sync_cursors().upsert(&record).await {
+        tracing::warn!(%error, handle = %record.handle, "sync cursor handle upsert failed");
     }
 }
 
-fn fallback_sync_cursor_handle(error: &cokret_sdk::Error) -> String {
-    let seed = format!(
-        "soland-sync-cursor-fallback:{}:{:?}",
-        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
-        std::thread::current().id()
-    );
-    let digest = sha256_hex(seed.as_bytes());
-    tracing::error!(%error, "cursor handle RNG unavailable; using deterministic emergency handle");
-    format!("fallback{}", &digest[..54])
+async fn stored_sync_cursor_by_handle(
+    state: &AppState,
+    handle: &str,
+) -> Result<Value, SyncCursorError> {
+    let record = state
+        .persistence
+        .sync_cursors()
+        .get(handle)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, handle, "sync cursor handle lookup failed");
+            SyncCursorError::Integrity("sync cursor handle lookup failed")
+        })?
+        .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))?;
+    Ok(stored_value_from_sync_cursor_record(record))
 }
 
-fn stored_sync_cursor_by_handle(state: &AppState, handle: &str) -> Result<Value, SyncCursorError> {
-    state
-        .sync_cursor_handles
-        .lock()
-        .expect("sync cursor handles lock")
-        .get(handle)
-        .cloned()
-        .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
+/// Rebuild the legacy in-memory `{ctx, positions, target?, expires_at_ms}`
+/// stored shape from a persisted row, so the validation code downstream of
+/// the lookup is byte-compatible with the pre-durability behavior (generic
+/// rows reconstruct a ctx WITHOUT `principal_id`/`device_id`, which
+/// `parse_and_validate_sync_cursor` rejects by construction).
+fn stored_value_from_sync_cursor_record(record: SyncCursorRecord) -> Value {
+    let mut ctx = serde_json::Map::new();
+    if let Some(principal_id) = record.principal_id {
+        ctx.insert("principal_id".to_owned(), Value::String(principal_id));
+    }
+    if let Some(device_id) = record.device_id {
+        ctx.insert("device_id".to_owned(), Value::String(device_id));
+    }
+    ctx.insert("service_id".to_owned(), Value::String(record.service_id));
+    if let Some(filter_digest) = record.filter_digest {
+        ctx.insert("filter_digest".to_owned(), Value::String(filter_digest));
+    }
+    ctx.insert("issued_at_ms".to_owned(), json!(record.issued_at_ms));
+    let mut stored = json!({
+        "ctx": Value::Object(ctx),
+        "expires_at_ms": record.expires_at_ms,
+    });
+    if let Some(positions) = record.positions {
+        stored["positions"] = positions;
+    }
+    if let Some(target) = record.target {
+        stored["target"] = target;
+    }
+    stored
 }
 
 /// CURSOR-1 — is `ck.profile.stateless_cursor.v1` declared by this
@@ -1937,7 +2108,7 @@ fn sync_cursor_from_stateless_value(
     })
 }
 
-pub fn parse_and_validate_sync_cursor(
+pub async fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
     session: Option<&SessionRecord>,
@@ -2004,17 +2175,13 @@ pub fn parse_and_validate_sync_cursor(
     if validate_cursor_handle(handle).is_err() {
         return Err(SyncCursorError::Invalid("invalid cursor handle"));
     }
-    let stored = stored_sync_cursor_by_handle(state, handle)?;
+    let stored = stored_sync_cursor_by_handle(state, handle).await?;
     if stored
         .get("expires_at_ms")
         .and_then(|expires_at| expires_at.as_i64())
         .is_none_or(|expires_at| expires_at <= now_ms)
     {
-        state
-            .sync_cursor_handles
-            .lock()
-            .expect("sync cursor handles lock")
-            .remove(handle);
+        let _ = state.persistence.sync_cursors().delete(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
     let ctx = stored
@@ -2138,6 +2305,7 @@ pub async fn resolve_sync_cursor_to_event_id(
     }
     let checkpoint = if let Some(handle) = value.get("h").and_then(Value::as_str) {
         let stored = stored_sync_cursor_by_handle(state, handle)
+            .await
             .map_err(|_| "sync cursor handle is unknown")?;
         stored
             .get("positions")
@@ -2515,7 +2683,10 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         }
     }
 
-    let catchup_cursor = last_cursor.unwrap_or_else(|| sync_token_for_state(&state));
+    let catchup_cursor = match last_cursor {
+        Some(cursor) => cursor,
+        None => sync_token_for_state(&state).await,
+    };
     let realm_filter: BTreeSet<String> = accessible_realms.iter().cloned().collect();
     let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
     let session_for_stream = session.clone();
@@ -2962,9 +3133,10 @@ async fn events_query_impl(
                     serde_json::to_value(BackfillOutcome {
                         events,
                         prev_cursor: cursor.clone(),
-                        next_cursor: page
-                            .next_cursor
-                            .or_else(|| Some(sync_token_for_state(state))),
+                        next_cursor: match page.next_cursor {
+                            Some(next_cursor) => Some(next_cursor),
+                            None => Some(sync_token_for_state(state).await),
+                        },
                         limited: page.has_more,
                     })
                     .unwrap_or(json!({})),
@@ -2983,7 +3155,7 @@ async fn events_query_impl(
             serde_json::to_value(BackfillOutcome {
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
-                next_cursor: Some(sync_token_for_state(state)),
+                next_cursor: Some(sync_token_for_state(state).await),
                 limited: false,
             })
             .unwrap_or(json!({})),
@@ -3032,14 +3204,17 @@ async fn events_query_impl(
     if page_events.len() > limit {
         page_events.truncate(limit);
     }
-    let next_cursor = limited
+    let next_cursor = match limited
         .then(|| {
             page_events
                 .last()
                 .and_then(|event| event["event_id"].as_str().map(ToOwned::to_owned))
         })
         .flatten()
-        .or_else(|| Some(sync_token_for_state(state)));
+    {
+        Some(next_cursor) => Some(next_cursor),
+        None => Some(sync_token_for_state(state).await),
+    };
     crate::result::json_ok(
         serde_json::to_value(BackfillOutcome {
             events: page_events,
@@ -3327,6 +3502,73 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
+
+    #[test]
+    fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
+        let key = b"test-cursor-key-0123456789abcdef";
+        let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
+        let binding = stream_cursor_handle_binding(
+            "did:web:alice",
+            "ck:device:1",
+            "did:web:host",
+            "fd0",
+            &realms,
+            3,
+        );
+        let h1 = derive_cursor_handle(key, &binding);
+        let h2 = derive_cursor_handle(key, &binding);
+        assert_eq!(h1, h2, "same binding -> same handle");
+        assert!(
+            h1.len() >= cokret_sdk::cursor::CURSOR_HANDLE_MIN_LEN,
+            "handle >= 22 base64url chars"
+        );
+        assert!(
+            h1.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "handle is base64url alphabet"
+        );
+        assert!(
+            validate_cursor_handle(&h1).is_ok(),
+            "derived handle passes schema validation"
+        );
+    }
+
+    #[test]
+    fn derive_cursor_handle_excludes_devices_timestamp() {
+        // The per-mint `devices` timestamp must NOT enter the binding, so two
+        // mints at different wall-clock times but identical realm/to_device
+        // positions yield the SAME handle (determinism / dedup).
+        let key = b"test-cursor-key-0123456789abcdef";
+        let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
+        let a = stream_cursor_handle_binding("p", "d", "s", "f", &realms, 3);
+        let b = stream_cursor_handle_binding("p", "d", "s", "f", &realms, 3);
+        assert_eq!(derive_cursor_handle(key, &a), derive_cursor_handle(key, &b));
+    }
+
+    #[test]
+    fn derive_cursor_handle_separates_bindings_and_keys() {
+        let realms = BTreeMap::from([("ck:realm:a".to_owned(), 7i64)]);
+        let base = stream_cursor_handle_binding("p", "d", "s", "f", &realms, 3);
+        let other_device = stream_cursor_handle_binding("p", "d2", "s", "f", &realms, 3);
+        let advanced = stream_cursor_handle_binding("p", "d", "s", "f", &realms, 4);
+        let k1 = b"key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let k2 = b"key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        assert_ne!(
+            derive_cursor_handle(k1, &base),
+            derive_cursor_handle(k1, &other_device),
+            "different device -> different handle (no cross-device forgery)"
+        );
+        assert_ne!(
+            derive_cursor_handle(k1, &base),
+            derive_cursor_handle(k1, &advanced),
+            "advanced to_device position -> different handle"
+        );
+        assert_ne!(
+            derive_cursor_handle(k1, &base),
+            derive_cursor_handle(k2, &base),
+            "different server key -> different handle (unguessable without key)"
+        );
+    }
 
     #[test]
     fn timeline_position_disambiguates_same_second_events() {
@@ -3732,9 +3974,10 @@ mod tests {
         }
     }
 
+    static CURSOR_PROFILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
     fn stateless_cursor_profile_guard() -> StatelessCursorProfileGuard {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = LOCK
+        let guard = CURSOR_PROFILE_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .expect("stateless cursor test lock");
@@ -3742,14 +3985,26 @@ mod tests {
         StatelessCursorProfileGuard { _guard: guard }
     }
 
-    fn issued_stateless_cursor(state: &AppState) -> Value {
+    /// Serialize against the stateless-profile tests WITHOUT declaring the
+    /// profile, so stateful-handle tests can't race the global flag.
+    fn stateful_cursor_profile_guard() -> MutexGuard<'static, ()> {
+        let guard = CURSOR_PROFILE_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("stateless cursor test lock");
+        TEST_STATELESS_CURSOR_PROFILE_DECLARED.store(false, std::sync::atomic::Ordering::SeqCst);
+        guard
+    }
+
+    async fn issued_stateless_cursor(state: &AppState) -> Value {
         let token = sync_token_for_client_sync(
             state,
             None,
             None,
             BTreeMap::from([("ck:realm:stateless-cursor-test".to_owned(), 7)]),
             12,
-        );
+        )
+        .await;
         decode_sync_cursor_value(&token).expect("issued cursor decodes")
     }
 
@@ -3760,11 +4015,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stateless_cursor_issuance_signs_and_verifies_current_service_cursor() {
+    #[tokio::test]
+    async fn stateless_cursor_issuance_signs_and_verifies_current_service_cursor() {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
-        let cursor = issued_stateless_cursor(&state);
+        let cursor = issued_stateless_cursor(&state).await;
 
         assert_eq!(cursor["issuer_kid"], "did:web:soland.local#anchorer-key");
         assert!(cursor.get("_sig").is_some());
@@ -3778,6 +4033,7 @@ mod tests {
             None,
             chrono::Utc::now().timestamp_millis(),
         )
+        .await
         .expect("signed stateless cursor must verify");
 
         assert_eq!(
@@ -3788,11 +4044,11 @@ mod tests {
         assert!(parsed.issued_at_ms.is_some());
     }
 
-    #[test]
-    fn stateless_cursor_rejects_body_tamper() {
+    #[tokio::test]
+    async fn stateless_cursor_rejects_body_tamper() {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
-        let mut cursor = issued_stateless_cursor(&state);
+        let mut cursor = issued_stateless_cursor(&state).await;
         cursor["positions"]["to_device"] = json!(99);
 
         let token = encode_sync_cursor_value(cursor);
@@ -3803,16 +4059,17 @@ mod tests {
             None,
             chrono::Utc::now().timestamp_millis(),
         )
+        .await
         .expect_err("tampered cursor body must fail verification");
 
         assert_integrity_error(error);
     }
 
-    #[test]
-    fn stateless_cursor_rejects_issuer_kid_tamper() {
+    #[tokio::test]
+    async fn stateless_cursor_rejects_issuer_kid_tamper() {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
-        let mut cursor = issued_stateless_cursor(&state);
+        let mut cursor = issued_stateless_cursor(&state).await;
         cursor["issuer_kid"] = json!("did:web:other.example#anchorer-key");
 
         let token = encode_sync_cursor_value(cursor);
@@ -3823,16 +4080,17 @@ mod tests {
             None,
             chrono::Utc::now().timestamp_millis(),
         )
+        .await
         .expect_err("tampered issuer kid must fail verification");
 
         assert_integrity_error(error);
     }
 
-    #[test]
-    fn stateless_cursor_rejects_missing_signature() {
+    #[tokio::test]
+    async fn stateless_cursor_rejects_missing_signature() {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
-        let mut cursor = issued_stateless_cursor(&state);
+        let mut cursor = issued_stateless_cursor(&state).await;
         cursor.as_object_mut().unwrap().remove("_sig");
 
         let token = encode_sync_cursor_value(cursor);
@@ -3843,13 +4101,99 @@ mod tests {
             None,
             chrono::Utc::now().timestamp_millis(),
         )
+        .await
         .expect_err("unsigned stateless cursor must fail verification");
 
         assert_integrity_error(error);
     }
 
-    #[test]
-    fn revoked_cursor_returns_revoked_error() {
+    #[tokio::test]
+    async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_valid() {
+        let _profile = stateful_cursor_profile_guard();
+        let state = test_state();
+        let session = roster_session(&state, "did:web:alice.example");
+        let positions = BTreeMap::from([("ck:realm:dedup-test".to_owned(), 7i64)]);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let first =
+            sync_token_for_client_sync(&state, Some(&session), None, positions.clone(), 3).await;
+        let second =
+            sync_token_for_client_sync(&state, Some(&session), None, positions.clone(), 3).await;
+        let handle_of = |token: &str| {
+            decode_sync_cursor_value(token).expect("decodes")["h"]
+                .as_str()
+                .expect("handle")
+                .to_owned()
+        };
+        assert_eq!(
+            handle_of(&first),
+            handle_of(&second),
+            "unchanged frontier re-mints the SAME deterministic handle (no churn)"
+        );
+
+        // Frontier advances -> a different handle; the OLD token still
+        // resolves (rows coexist until forward-progress pruning).
+        let advanced = sync_token_for_client_sync(&state, Some(&session), None, positions, 4).await;
+        assert_ne!(handle_of(&first), handle_of(&advanced));
+        let parsed_old =
+            parse_and_validate_sync_cursor(&first, &state, Some(&session), None, now_ms)
+                .await
+                .expect("old cursor still parses after a newer mint");
+        assert_eq!(parsed_old.to_device_position, 3);
+        let parsed_new =
+            parse_and_validate_sync_cursor(&advanced, &state, Some(&session), None, now_ms)
+                .await
+                .expect("advanced cursor parses");
+        assert_eq!(parsed_new.to_device_position, 4);
+    }
+
+    #[tokio::test]
+    async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
+        let _profile = stateful_cursor_profile_guard();
+        let state = test_state();
+        let session = roster_session(&state, "did:web:alice.example");
+        let positions = BTreeMap::from([("ck:realm:prune-test".to_owned(), 1i64)]);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let old_token =
+            sync_token_for_client_sync(&state, Some(&session), None, positions.clone(), 1).await;
+        // Deterministic issued_at_ms is stamped at first mint; ensure the
+        // second mint lands strictly later on the ms clock.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let new_token =
+            sync_token_for_client_sync(&state, Some(&session), None, positions, 2).await;
+
+        let presented =
+            parse_and_validate_sync_cursor(&new_token, &state, Some(&session), None, now_ms)
+                .await
+                .expect("new cursor parses");
+        let pruned = state
+            .persistence
+            .sync_cursors()
+            .prune_stream_superseded(
+                &session.actor,
+                &session.device_id,
+                &sync_filter_digest(None),
+                presented
+                    .issued_at_ms
+                    .expect("stateful cursor carries issued_at_ms"),
+            )
+            .await
+            .expect("prune runs");
+        assert_eq!(pruned, 1, "the superseded older handle row is deleted");
+
+        let error =
+            parse_and_validate_sync_cursor(&old_token, &state, Some(&session), None, now_ms)
+                .await
+                .expect_err("pruned handle no longer resolves");
+        assert_integrity_error(error);
+        parse_and_validate_sync_cursor(&new_token, &state, Some(&session), None, now_ms)
+            .await
+            .expect("presented cursor still parses");
+    }
+
+    #[tokio::test]
+    async fn revoked_cursor_returns_revoked_error() {
         let state = test_state();
         let token = sync_token_for_client_sync(
             &state,
@@ -3857,9 +4201,11 @@ mod tests {
             None,
             BTreeMap::from([("ck:realm:revoke-test".to_owned(), 3)]),
             5,
-        );
+        )
+        .await;
         let now_ms = chrono::Utc::now().timestamp_millis();
         parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .await
             .expect("freshly issued cursor validates");
 
         state
@@ -3877,6 +4223,7 @@ mod tests {
             });
 
         let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .await
             .expect_err("revoked cursor must fail validation");
         assert!(
             matches!(error, SyncCursorError::Revoked),
@@ -3884,8 +4231,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn expired_revocation_entry_is_pruned_and_does_not_block() {
+    #[tokio::test]
+    async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         let state = test_state();
         let token = sync_token_for_client_sync(
             &state,
@@ -3893,7 +4240,8 @@ mod tests {
             None,
             BTreeMap::from([("ck:realm:revoke-gc".to_owned(), 1)]),
             0,
-        );
+        )
+        .await;
         let now_ms = chrono::Utc::now().timestamp_millis();
         state
             .sync_cursor_revocations
@@ -3910,6 +4258,7 @@ mod tests {
             });
 
         parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .await
             .expect("expired revocation entry must be pruned, not block a valid cursor");
         assert!(
             state.sync_cursor_revocations.lock().unwrap().is_empty(),
@@ -3917,8 +4266,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stateless_cursor_rejects_expired_signed_cursor() {
+    #[tokio::test]
+    async fn stateless_cursor_rejects_expired_signed_cursor() {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -3951,6 +4300,7 @@ mod tests {
 
         let token = encode_sync_cursor_value(cursor);
         let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+            .await
             .expect_err("expired signed stateless cursor must fail");
 
         assert!(matches!(error, SyncCursorError::Expired));

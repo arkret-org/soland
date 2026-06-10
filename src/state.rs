@@ -883,18 +883,19 @@ pub struct AppState {
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
     pub notification_read_cursors: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
-    /// Stateful account-sync cursor handle table. The wire cursor only carries
-    /// `{v,purpose,t,x,h}`; this map binds `h` to authenticated context and
-    /// stream positions. Durable storage can replace it without changing the
-    /// account subscribe API.
-    pub sync_cursor_handles: Arc<Mutex<BTreeMap<String, Value>>>,
+    /// Domain-separated HMAC key for the deterministic stateful sync-cursor
+    /// handle (`routing/events/sync.rs::derive_cursor_handle`). The handle
+    /// binding rows themselves live in the durable
+    /// `persistence.sync_cursors()` table, so a restart no longer invalidates
+    /// every client's resume cursor.
+    pub sync_cursor_hmac_key: [u8; 32],
     /// Revoked cursor authorities (`ck.self.account.cursor_revoke`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
     /// cursor's maximum TTL has elapsed (`CursorRevocation::expires_at`). In-memory
-    /// today, symmetric with `sync_cursor_handles`; a durable revocation ledger can
-    /// replace the backing vector without changing the wire contract.
+    /// today; a durable revocation ledger can replace the backing vector without
+    /// changing the wire contract.
     pub sync_cursor_revocations: Arc<Mutex<Vec<CursorRevocation>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
@@ -1972,6 +1973,20 @@ impl AppState {
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
         let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
 
+        // Domain-separated key for the deterministic sync-cursor handle HMAC
+        // (routing/events/sync.rs `derive_cursor_handle`). Derived from the
+        // anchorer seed so it inherits the seed's stability story: stable in
+        // development_mode / with a configured seed, per-boot otherwise. A
+        // changed key only changes which handle an unchanged frontier maps
+        // to — persisted rows still resolve by handle, so old cursors stay
+        // valid across restarts either way.
+        let sync_cursor_hmac_key: [u8; 32] = {
+            let mut hasher = Sha256::new();
+            hasher.update(b"soland:sync-cursor-handle:v1:");
+            hasher.update(signing_seed);
+            hasher.finalize().into()
+        };
+
         // Per-admin signing keys: build a single
         // [`AdminKeyStore`] for this principal. The application_id
         // mirrors the AnchorerWorker pattern (`soland.<service_did>`) so
@@ -2038,7 +2053,7 @@ impl AppState {
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
-            sync_cursor_handles: Arc::new(Mutex::new(BTreeMap::new())),
+            sync_cursor_hmac_key,
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             consent_cells: Arc::new(Mutex::new(BTreeMap::new())),

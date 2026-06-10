@@ -207,8 +207,27 @@ async fn get_device_messages(
             Some(&session),
             None,
             chrono::Utc::now().timestamp_millis(),
-        ) {
-            Ok(cursor) => cursor.to_device_position,
+        )
+        .await
+        {
+            Ok(cursor) => {
+                // Presenting a valid cursor proves the client persisted it;
+                // strictly-older handle rows for this stream are superseded.
+                // Best-effort.
+                if let Some(presented_issued_at_ms) = cursor.issued_at_ms {
+                    let _ = state
+                        .persistence
+                        .sync_cursors()
+                        .prune_stream_superseded(
+                            &session.actor,
+                            &session.device_id,
+                            &crate::routing::events::sync::sync_filter_digest(None),
+                            presented_issued_at_ms,
+                        )
+                        .await;
+                }
+                cursor.to_device_position
+            }
             Err(SyncCursorError::Expired) => {
                 return Err(AppError::new(
                     ErrorCode::CursorExpired,
@@ -252,13 +271,16 @@ async fn get_device_messages(
         .unwrap_or(ack_position);
     json_ok(DeviceMessagesGetOutcome {
         messages,
-        next_cursor: Some(sync_token_for_client_sync(
-            state,
-            Some(&session),
-            None,
-            BTreeMap::new(),
-            to_device_position,
-        )),
+        next_cursor: Some(
+            sync_token_for_client_sync(
+                state,
+                Some(&session),
+                None,
+                BTreeMap::new(),
+                to_device_position,
+            )
+            .await,
+        ),
         has_more: false,
         limited: false,
     })

@@ -38,6 +38,7 @@ salvo-oapi = { version = "0.93.0", features = ["yaml"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
+hmac = "0.12"
 thiserror = "2"
 tokio = { version = "1.48.0", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # events.subscribe streaming. `bytes` for the

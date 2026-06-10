@@ -2025,7 +2025,7 @@ async fn directory_subscribe(
     json_ok(json!({
         "ok": true,
         "subscription_id": ids::generate("directory_subscription"),
-        "cursor": crate::routing::sync_token(state),
+        "cursor": crate::routing::sync_token(state).await,
         "subscriber": session.map(|session| session.actor).unwrap_or_else(|| "anonymous".to_owned()),
         "resource_kinds": body.get("resource_kinds").cloned().unwrap_or_else(|| json!(["realm", "actor", "organization"])),
         "updates": [],

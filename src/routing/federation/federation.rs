@@ -680,10 +680,13 @@ pub(super) async fn federation_pull_operations(
     if has_more {
         operations.truncate(limit);
     }
-    let next_cursor = operations
+    let next_cursor = match operations
         .last()
         .map(|operation| operation.operation_id.to_string())
-        .or_else(|| Some(sync_token(state)));
+    {
+        Some(next_cursor) => Some(next_cursor),
+        None => Some(sync_token(state).await),
+    };
     json_ok(cokret_sdk::FederationPullOperationsOutcome {
         operations,
         snapshot_bootstrap,
@@ -821,7 +824,7 @@ pub(super) async fn federation_realm_members(
         .unwrap_or_default();
     json_ok(cokret_sdk::FederationRealmMemberList {
         members,
-        membership_frontier: sync_token(state),
+        membership_frontier: sync_token(state).await,
         next_cursor: None,
     })
 }

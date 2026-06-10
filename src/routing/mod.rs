@@ -73,8 +73,12 @@ pub fn router(state: AppState) -> Router {
     router_with_rate_limiter_config(state, RateLimiterConfig::default())
 }
 
-pub(crate) fn sync_token(state: &AppState) -> String {
-    events::sync::sync_token_for_state(state)
+/// Boot-time worker re-export (`events` is crate-private; `main` only needs
+/// this one entry point from it).
+pub use events::sync::spawn_sync_cursor_ttl_sweeper;
+
+pub(crate) async fn sync_token(state: &AppState) -> String {
+    events::sync::sync_token_for_state(state).await
 }
 
 pub fn router_with_rate_limiter_config(

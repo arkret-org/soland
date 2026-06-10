@@ -148,6 +148,15 @@ async fn main() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    // TTL backstop for the durable sync-cursor handle table (forward-progress
+    // pruning on cursor presentation handles the steady state; this clears
+    // rows whose client never returned).
+    let _sync_cursor_ttl_sweeper = soland::routing::spawn_sync_cursor_ttl_sweeper(state.clone());
+    tracing::info!(
+        worker = "sync_cursor_ttl_sweep",
+        "background worker configured"
+    );
+
     // G3.S0 — durable outbound federation HTTP delivery worker. No-op
     // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
     // that don't want background HTTP traffic). The dispatcher drains

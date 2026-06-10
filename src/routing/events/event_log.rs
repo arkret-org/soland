@@ -670,7 +670,7 @@ async fn submit_event_batch(
         accepted,
         duplicate,
         rejected,
-        Some(super::sync::sync_token_for_state(state)),
+        Some(super::sync::sync_token_for_state(state).await),
     )));
 }
 
@@ -893,7 +893,7 @@ pub(super) async fn submit_federation_events(
         accepted,
         duplicate,
         rejected,
-        Some(super::sync::sync_token_for_state(state)),
+        Some(super::sync::sync_token_for_state(state).await),
     )));
 }
 
@@ -964,7 +964,8 @@ pub(in crate::routing) async fn submit_event_value(
                 state,
                 EventsSubmitStatus::Duplicate,
                 existing.event_id.clone(),
-            ));
+            )
+            .await);
         }
         append_audit_log(
             state,
@@ -1253,11 +1254,7 @@ pub(in crate::routing) async fn submit_event_value(
         "accepted",
     )
     .await;
-    Ok(event_submit_response(
-        state,
-        EventsSubmitStatus::Accepted,
-        parsed.event_id,
-    ))
+    Ok(event_submit_response(state, EventsSubmitStatus::Accepted, parsed.event_id).await)
 }
 
 async fn enqueue_peer_event_fanout(
@@ -3768,7 +3765,7 @@ fn is_valid_event_id(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
 
-fn event_submit_response(
+async fn event_submit_response(
     state: &AppState,
     status: EventsSubmitStatus,
     event_id: String,
@@ -3786,7 +3783,7 @@ fn event_submit_response(
                 Vec::new()
             },
             Vec::new(),
-            Some(super::sync::sync_token_for_state(state)),
+            Some(super::sync::sync_token_for_state(state).await),
         ),
     }
 }
