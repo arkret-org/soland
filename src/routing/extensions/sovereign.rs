@@ -181,7 +181,7 @@ struct ExternalInviteRequestBody {
 #[derive(Debug, Deserialize, ToSchema)]
 struct AcceptExternalInviteRequestBody {
     invite_token: String,
-    actor_did: String,
+    actor_id: String,
     target_realm: Option<String>,
     target_host: Option<String>,
 }
@@ -502,7 +502,7 @@ async fn accept_external_invite(
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    validate_did_against_roots(state, &body.actor_did, Some("enclave"))?;
+    validate_did_against_roots(state, &body.actor_id, Some("enclave"))?;
     let now = chrono::Utc::now();
     let mut guard = state
         .sovereign_deployment
@@ -522,7 +522,7 @@ async fn accept_external_invite(
         .or(body.target_host)
         .unwrap_or_else(|| state.config.public_base_url.clone());
     if let Some(invite) = invite {
-        if invite.invitee != body.actor_did {
+        if invite.invitee != body.actor_id {
             return Err(AppError::capability_denied("invitee mismatch")
                 .with_status(StatusCode::FORBIDDEN)
                 .with_wire_code("external_invite_actor_mismatch"));
@@ -530,7 +530,7 @@ async fn accept_external_invite(
         invite.accepted = true;
     }
     let record = SovereignExternalAccountRecord {
-        did: body.actor_did.clone(),
+        did: body.actor_id.clone(),
         realm_id: target_realm.clone(),
         bound_node: target_host.clone(),
         trust_chain_profile: "enclave".to_owned(),
@@ -539,10 +539,10 @@ async fn accept_external_invite(
     };
     guard
         .external_accounts
-        .insert(body.actor_did.clone(), record);
+        .insert(body.actor_id.clone(), record);
     audit(
         &mut guard,
-        &body.actor_did,
+        &body.actor_id,
         "external_invite.accept",
         Some(&target_realm),
         "accepted",
@@ -554,7 +554,7 @@ async fn accept_external_invite(
             "realm": target_realm,
             "bound_node": target_host,
             "trust_chain_profile": "enclave",
-            "actor": body.actor_did,
+            "actor": body.actor_id,
         },
     }))
 }

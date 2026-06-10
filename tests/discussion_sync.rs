@@ -326,7 +326,7 @@ fn install_projected_flow_scope(
 async fn send_circle_scoped_encrypted_message(
     state: AppState,
     token: &str,
-    actor_did: &str,
+    actor_id: &str,
     device_id: &str,
     realm_id: &str,
 ) -> String {
@@ -362,7 +362,7 @@ async fn send_circle_scoped_encrypted_message(
         "event_id": event_id,
         "kind": "ck.message.create",
         "schema_id": "ck.schema.message.v1",
-        "actor_id": actor_did,
+        "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
         "device_id": device_id,
@@ -373,7 +373,7 @@ async fn send_circle_scoped_encrypted_message(
         "payload": payload,
         "proofs": [{
             "type": "dev-proof",
-            "verification_method": format!("{actor_did}#{device_id}"),
+            "verification_method": format!("{actor_id}#{device_id}"),
             "device_id": device_id,
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
@@ -399,7 +399,7 @@ async fn send_circle_scoped_encrypted_message(
 async fn submit_projection_event(
     state: AppState,
     token: &str,
-    actor_did: &str,
+    actor_id: &str,
     device_id: &str,
     realm_id: &str,
     kind: &str,
@@ -410,7 +410,7 @@ async fn submit_projection_event(
         "event_id": event_id.clone(),
         "kind": kind,
         "schema_id": "ck.schema.event.v1",
-        "actor_id": actor_did,
+        "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
         "device_id": device_id,
@@ -422,7 +422,7 @@ async fn submit_projection_event(
         "payload": payload,
         "proofs": [{
             "type": "dev-proof",
-            "verification_method": format!("{actor_did}#{device_id}"),
+            "verification_method": format!("{actor_id}#{device_id}"),
             "device_id": device_id,
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",
@@ -448,7 +448,7 @@ async fn submit_projection_event(
 async fn submit_projection_event_status(
     state: AppState,
     token: &str,
-    actor_did: &str,
+    actor_id: &str,
     device_id: &str,
     realm_id: &str,
     kind: &str,
@@ -459,7 +459,7 @@ async fn submit_projection_event_status(
         "event_id": event_id.clone(),
         "kind": kind,
         "schema_id": "ck.schema.event.v1",
-        "actor_id": actor_did,
+        "actor_id": actor_id,
         "actor_seq": TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
         "realm_id": realm_id,
         "device_id": device_id,
@@ -471,7 +471,7 @@ async fn submit_projection_event_status(
         "payload": payload,
         "proofs": [{
             "type": "dev-proof",
-            "verification_method": format!("{actor_did}#{device_id}"),
+            "verification_method": format!("{actor_id}#{device_id}"),
             "device_id": device_id,
             "audience": "did:web:soland.local",
             "domain": "did:web:soland.local",

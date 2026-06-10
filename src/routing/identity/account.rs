@@ -1083,21 +1083,21 @@ async fn erase_account(
 /// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
-    let actor_did = match cokret_sdk::Did::new(actor.to_owned()) {
+    let actor_id = match cokret_sdk::Did::new(actor.to_owned()) {
         Ok(did) => did,
         Err(_) => return 0,
     };
     let mut realms = state.realms.lock().expect("realms lock");
     let realm_ids: Vec<cokret_sdk::RealmId> = realms
         .entries_iter()
-        .filter(|(_id, entry)| entry.members.contains(&actor_did))
+        .filter(|(_id, entry)| entry.members.contains(&actor_id))
         .map(|(id, _entry)| id.clone())
         .collect();
     let mut removed = 0usize;
     for realm_id in realm_ids {
         if let Some(entry) = realms.get(&realm_id) {
             let mut updated = entry.clone();
-            if updated.members.remove(&actor_did) {
+            if updated.members.remove(&actor_id) {
                 realms.upsert(updated);
                 removed += 1;
             }

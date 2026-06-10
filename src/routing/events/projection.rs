@@ -928,10 +928,10 @@ pub async fn load_projected_events_from_pg(
     let mut conn = pool.get().await?;
     let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
     let rows = sql_query(
-        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender, payload, created_at \
+        "SELECT id AS event_id, realm_id, event_type AS event_kind, 'event' AS operation_type, operation_id, sender_id AS sender, payload, created_at \
          FROM events WHERE realm_id = $1 \
          UNION ALL \
-         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender, payload, created_at \
+         SELECT id AS event_id, realm_id, event_type AS event_kind, 'state' AS operation_type, operation_id, sender_id AS sender, payload, created_at \
          FROM space_state_events WHERE realm_id = $1 \
          ORDER BY created_at ASC, event_id ASC",
     )
@@ -1114,7 +1114,7 @@ async fn mirror_mls_effect_to_persistence(
                 .and_then(|projection| projection.mls_key_packages.get(keypackage_id).cloned())
                 .map(|kp| MlsKeyPackageRecord {
                     id: kp.id,
-                    actor_did: kp.actor_did,
+                    actor_id: kp.actor_id,
                     device_id: kp.device_id,
                     lifetime_not_before: kp.lifetime.not_before,
                     lifetime_not_after: kp.lifetime.not_after,
@@ -1145,7 +1145,7 @@ async fn mirror_mls_effect_to_persistence(
         }
         crate::reducer::MlsEffect::WelcomeEnqueued {
             welcome_id,
-            recipient_actor_did,
+            recipient_actor_id,
             recipient_device_id,
             ..
         } => {
@@ -1156,14 +1156,14 @@ async fn mirror_mls_effect_to_persistence(
                 .and_then(|projection| {
                     projection
                         .mls_welcomes
-                        .get(&(recipient_actor_did.clone(), recipient_device_id.clone()))
+                        .get(&(recipient_actor_id.clone(), recipient_device_id.clone()))
                         .and_then(|queue| queue.iter().find(|row| row.id == *welcome_id))
                         .cloned()
                 })
                 .map(|welcome| MlsWelcomeRecord {
                     id: welcome.id,
                     group_id: welcome.group_id,
-                    recipient_actor_did: welcome.recipient_actor_did,
+                    recipient_actor_id: welcome.recipient_actor_id,
                     recipient_device_id: welcome.recipient_device_id,
                     welcome_bytes: welcome.welcome_bytes,
                     key_package_id: welcome.key_package_id,
@@ -1178,7 +1178,7 @@ async fn mirror_mls_effect_to_persistence(
         }
         crate::reducer::MlsEffect::GroupGenesis {
             group_id,
-            creator_actor_did,
+            creator_actor_id,
             covered_frontier,
             ..
         } => {
@@ -1193,7 +1193,7 @@ async fn mirror_mls_effect_to_persistence(
                 .mls_commits()
                 .initialize_genesis(
                     group_id,
-                    creator_actor_did,
+                    creator_actor_id,
                     covered_frontier,
                     &binding,
                     operation.created_at.timestamp(),
@@ -1206,7 +1206,7 @@ async fn mirror_mls_effect_to_persistence(
         crate::reducer::MlsEffect::CommitEpochAdvanced {
             group_id,
             previous_epoch,
-            leader_actor_did,
+            leader_actor_id,
             covered_frontier,
             ..
         } => {
@@ -1222,7 +1222,7 @@ async fn mirror_mls_effect_to_persistence(
                 .try_bump(
                     group_id,
                     *previous_epoch,
-                    leader_actor_did,
+                    leader_actor_id,
                     covered_frontier,
                     &binding,
                     operation.created_at.timestamp(),
@@ -1651,7 +1651,7 @@ pub async fn persist_projected_operation(
         let realm_id_uuid = ids::typed_uuid_part_or_panic(operation.realm_id.as_str());
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         sql_query(
-                "INSERT INTO events (id, realm_id, event_type, sender, thread_id, operation_id, payload, created_at) \
+                "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (id) DO NOTHING",
             )
@@ -1686,7 +1686,7 @@ pub async fn persist_projected_operation(
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation.operation_id.as_str());
         if title.is_some() {
             sql_query(
-                    "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                    "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
                      ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
                 )
@@ -1700,7 +1700,7 @@ pub async fn persist_projected_operation(
                 .execute(&mut *conn).await?;
         } else {
             sql_query(
-                    "INSERT INTO spaces (id, title, summary, owner, discoverability, payload, created_at, updated_at) \
+                    "INSERT INTO spaces (id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
                      ON CONFLICT (id) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
                 )
@@ -1725,10 +1725,11 @@ pub async fn persist_projected_operation(
                 .and_then(|value| value.as_str())
                 .unwrap_or("join");
             sql_query(
-                    "INSERT INTO space_members (realm_id, actor, membership, payload, joined_at, left_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'join' THEN $5 ELSE NULL END, CASE WHEN $3 <> 'join' THEN $5 ELSE NULL END, $5) \
-                     ON CONFLICT (realm_id, actor) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
+                    "INSERT INTO space_members (id, realm_id, actor_id, membership, payload, joined_at, left_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'join' THEN $6 ELSE NULL END, CASE WHEN $4 <> 'join' THEN $6 ELSE NULL END, $6) \
+                     ON CONFLICT (realm_id, actor_id) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
                 )
+                .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
                 .bind::<SqlUuid, _>(realm_id_uuid)
                 .bind::<Text, _>(member)
                 .bind::<Text, _>(membership)
@@ -1742,7 +1743,7 @@ pub async fn persist_projected_operation(
         // The space_state_events row reuses the operation_id as its primary
         // key — same UUID, different typed wire form (operation vs event).
         sql_query(
-                "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender, operation_id, payload, created_at) \
+                "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender_id, operation_id, payload, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
                  ON CONFLICT (id) DO NOTHING",
             )

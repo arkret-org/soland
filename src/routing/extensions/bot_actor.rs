@@ -56,7 +56,7 @@ pub struct BotActor {
     /// stays open to future kinds without a breaking change in the JSON
     /// schema.
     pub kind: String,
-    pub owner_actor_did: String,
+    pub owner_actor_id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -98,14 +98,14 @@ pub fn revoke_bot(did: &str) -> bool {
     false
 }
 
-/// List bots owned by `owner_actor_did`, skipping revoked rows. Used
+/// List bots owned by `owner_actor_id`, skipping revoked rows. Used
 /// by the GET endpoint below.
-pub fn list_bots_owned_by(owner_actor_did: &str) -> Vec<BotActor> {
+pub fn list_bots_owned_by(owner_actor_id: &str) -> Vec<BotActor> {
     BOT_REGISTRY
         .lock()
         .expect("bot registry poisoned")
         .iter()
-        .filter(|b| b.owner_actor_did == owner_actor_did && b.revoked_at.is_none())
+        .filter(|b| b.owner_actor_id == owner_actor_id && b.revoked_at.is_none())
         .cloned()
         .collect()
 }
@@ -133,7 +133,7 @@ pub fn apply_bot_register(op: &Operation) -> Option<BotActor> {
         .unwrap_or(KIND_BOT)
         .to_owned();
     let owner = payload
-        .get("owner_actor_did")
+        .get("owner_actor_id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();
@@ -141,7 +141,7 @@ pub fn apply_bot_register(op: &Operation) -> Option<BotActor> {
         did,
         name,
         kind,
-        owner_actor_did: owner,
+        owner_actor_id: owner,
         created_at: op.created_at,
         revoked_at: None,
     };
@@ -205,7 +205,7 @@ async fn register_endpoint(
         did,
         name,
         kind,
-        owner_actor_did: session.actor.clone(),
+        owner_actor_id: session.actor.clone(),
         created_at: chrono::Utc::now(),
         revoked_at: None,
     });
@@ -263,7 +263,7 @@ mod tests {
             did: did.to_owned(),
             name: "Test Bot".to_owned(),
             kind: KIND_BOT.to_owned(),
-            owner_actor_did: owner.to_owned(),
+            owner_actor_id: owner.to_owned(),
             created_at: chrono::Utc::now(),
             revoked_at: None,
         }

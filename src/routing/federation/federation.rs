@@ -381,7 +381,7 @@ async fn enforce_inbound_operation_batch_policy(
         )?;
         policy_gate::enforce_operation_policy_server(
             state,
-            operation_actor_did(operation).unwrap_or(origin_service_did),
+            operation_actor_id(operation).unwrap_or(origin_service_did),
             operation,
             PolicyGateSurface::FederationInbound {
                 origin_service_did: origin_service_did.to_owned(),
@@ -587,7 +587,7 @@ fn configured_peer_matches(state: &AppState, peer_did: &str, peer_url: Option<&s
         })
 }
 
-fn operation_actor_did(operation: &Operation) -> Option<&str> {
+fn operation_actor_id(operation: &Operation) -> Option<&str> {
     [
         "sender",
         "actor",

@@ -12,8 +12,9 @@ use std::sync::Mutex;
 use cokret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletPackage, AppletWireNamespaces, Did,
-    EffectiveScope, Event, EventRef, GhostActorProfileRequest, Hash, Hlc, InstallCommitRequestBody,
-    InstallPreviewRequestBody, InstallRevokeRequestBody, Proof, RealmId, canonical,
+    EffectiveScope, Event, EventRef, GhostActorProfileRequest, GhostActorProvisionOutcome,
+    GhostActorProvisionRequestBody, Hash, Hlc, InstallCommitRequestBody, InstallPreviewRequestBody,
+    InstallRevokeRequestBody, Proof, RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -35,16 +36,15 @@ use crate::state::{
 };
 use crate::{ids, kinds};
 
-const GHOST_ACTOR_PROVISION_REQUEST_SCHEMA: &str = "ck.applet.ghost_actor.provision_request.v1";
 const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletBridgeRecord {
     pub applet_id: String,
     pub namespace: String,
-    pub owner_actor_did: String,
+    pub owner_actor_id: String,
     pub registry_did: String,
-    pub bot_actor_did: String,
+    pub bot_actor_id: String,
     pub portal_realm_id: String,
     pub capabilities: Vec<String>,
     pub manifest: AppletManifest,
@@ -72,29 +72,13 @@ pub struct AppletBridgeRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GhostActorRecord {
-    pub ghost_actor_did: String,
+    pub ghost_actor_id: String,
     pub external_id: String,
     #[serde(default)]
     pub display_name: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GhostActorProvisionRequestBody {
-    schema: String,
-    applet_id: String,
-    service_did: String,
-    ghost_actor_did: String,
-    protocol: String,
-    tenant: String,
-    external_user_id: String,
-    #[serde(default)]
-    display_name: Option<String>,
-    realm_id: String,
-    external_ref: Value,
 }
 
 static APPLET_BRIDGE_REGISTRY: Mutex<Vec<AppletBridgeRecord>> = Mutex::new(Vec::new());
@@ -335,14 +319,11 @@ async fn provision_ghost_actor_endpoint(
         parse_typed_body(body.into_inner(), "ghost actor provision")?;
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
 
-    let applet_id = AppletId::new(provision.applet_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("applet_id invalid: {error}")))?;
-    let service_did = Did::new(provision.service_did.clone())
-        .map_err(|error| AppError::invalid_param(format!("service_did invalid: {error}")))?;
-    let ghost_actor_did = Did::new(provision.ghost_actor_did.clone())
-        .map_err(|error| AppError::invalid_param(format!("ghost_actor_did invalid: {error}")))?;
-    let realm_id = RealmId::new(provision.realm_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("realm_id invalid: {error}")))?;
+    // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
+    let applet_id = provision.applet_id.clone();
+    let service_did = provision.service_did.clone();
+    let ghost_actor_id = provision.ghost_actor_id.clone();
+    let realm_id = provision.realm_id.clone();
 
     let record = applet_record(&path_applet_id)
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
@@ -355,7 +336,7 @@ async fn provision_ghost_actor_endpoint(
         &record,
         &provision,
         &service_did,
-        &ghost_actor_did,
+        &ghost_actor_id,
         &realm_id,
         now,
     )
@@ -368,7 +349,7 @@ async fn provision_ghost_actor_endpoint(
         &provision,
         applet_id,
         &service_did,
-        &ghost_actor_did,
+        &ghost_actor_id,
         &realm_id,
         &authorization_ref,
     )
@@ -384,7 +365,7 @@ async fn provision_ghost_actor_endpoint(
         json!({
             "applet_id": provision.applet_id,
             "service_did": service_did,
-            "ghost_actor_did": ghost_actor_did,
+            "ghost_actor_id": ghost_actor_id,
             "realm_id": realm_id,
             "profile_event_ref": profile_event.event_id,
             "accountability_grant_ref": authorization_ref,
@@ -395,7 +376,7 @@ async fn provision_ghost_actor_endpoint(
 
     res.status_code(StatusCode::CREATED);
     let mut response = json!({
-        "ghost_actor_did": ghost_actor_did,
+        "ghost_actor_id": ghost_actor_id,
         "profile_event_ref": profile_event.event_id,
         "accountability_grant_ref": authorization_ref,
         "authorization_ref": authorization_ref,
@@ -450,7 +431,7 @@ async fn transaction_endpoint(
                     .with_wire_code("bot_actor_revoked")
             })?;
             let ghost = GhostActorRecord {
-                ghost_actor_did: record.bot_actor_did.clone(),
+                ghost_actor_id: record.bot_actor_id.clone(),
                 external_id: "bot".to_owned(),
                 display_name: Some("Applet Bot".to_owned()),
                 created_at: record.registered_at,
@@ -462,7 +443,7 @@ async fn transaction_endpoint(
     let mut response = json!({
         "ok": true,
         "rejected": [],
-        "ghost_actor_did": ghost.ghost_actor_did,
+        "ghost_actor_id": ghost.ghost_actor_id,
         "accountability": accountability_chain(&record),
     });
     merge_object(&mut response, message_result);
@@ -578,7 +559,7 @@ async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
             {
                 return json_ok(json!({
                     "exists": true,
-                    "actor_id": ghost.ghost_actor_did,
+                    "actor_id": ghost.ghost_actor_id,
                     "external_ref": {"external_id": ghost.external_id, "applet_id": record.applet_id},
                 }));
             }
@@ -688,7 +669,7 @@ async fn ghost_endpoint(
     let (record, ghost) = provision_ghost(&applet_id, &external_id, display_name)?;
     let mut response = json!({
         "applet_id": record.applet_id,
-        "ghost_actor_did": ghost.ghost_actor_did,
+        "ghost_actor_id": ghost.ghost_actor_id,
         "external_id": ghost.external_id,
         "display_name": ghost.display_name,
         "accountability": accountability_chain(&record),
@@ -733,7 +714,7 @@ async fn bot_message_endpoint(
         AppError::invalid_param("payload.kind must be \"message\" and payload.text is required")
     })?;
     let synthetic_ghost = GhostActorRecord {
-        ghost_actor_did: record.bot_actor_did.clone(),
+        ghost_actor_id: record.bot_actor_id.clone(),
         external_id: "bot".to_owned(),
         display_name: Some("Applet Bot".to_owned()),
         created_at: record.registered_at,
@@ -771,7 +752,7 @@ async fn revoke_applet_record(
             .iter_mut()
             .find(|record| record.applet_id == applet_id)
             .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-        if record.owner_actor_did != actor {
+        if record.owner_actor_id != actor {
             return Err(AppError::capability_denied(
                 "only the registering actor can revoke this applet",
             ));
@@ -783,9 +764,9 @@ async fn revoke_applet_record(
         }
         record.clone()
     };
-    bot_actor::revoke_bot(&record.bot_actor_did);
+    bot_actor::revoke_bot(&record.bot_actor_id);
     for ghost in &record.ghosts {
-        bot_actor::revoke_bot(&ghost.ghost_actor_did);
+        bot_actor::revoke_bot(&ghost.ghost_actor_id);
     }
     crate::routing::append_audit_log(
         state,
@@ -793,7 +774,7 @@ async fn revoke_applet_record(
         "extensions.applet.revoke",
         json!({
             "applet_id": record.applet_id,
-            "bot_actor_did": record.bot_actor_did,
+            "bot_actor_id": record.bot_actor_id,
             "ghost_count": record.ghosts.len(),
         }),
         "accepted",
@@ -803,8 +784,8 @@ async fn revoke_applet_record(
         "applet_id": record.applet_id,
         "status": "revoked",
         "revoked_at": now,
-        "bot_actor_did": record.bot_actor_did,
-        "ghost_actor_dids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_did.clone()).collect::<Vec<_>>(),
+        "bot_actor_id": record.bot_actor_id,
+        "ghost_actor_ids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_id.clone()).collect::<Vec<_>>(),
     }))
 }
 
@@ -813,17 +794,17 @@ pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
         .lock()
         .expect("applet bridge registry poisoned");
     for record in guard.iter() {
-        if record.bot_actor_did == did {
+        if record.bot_actor_id == did {
             let status = if record.revoked_at.is_some() {
                 "revoked"
             } else {
                 "active"
             };
-            return Some(extension_actor_did_document(
+            return Some(extension_actor_id_document(
                 did,
                 "bot_actor",
                 status,
-                &record.owner_actor_did,
+                &record.owner_actor_id,
                 record,
                 None,
             ));
@@ -831,18 +812,18 @@ pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
         if let Some(ghost) = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_did == did)
+            .find(|ghost| ghost.ghost_actor_id == did)
         {
             let status = if record.revoked_at.is_some() || ghost.revoked_at.is_some() {
                 "revoked"
             } else {
                 "active"
             };
-            return Some(extension_actor_did_document(
+            return Some(extension_actor_id_document(
                 did,
                 "ghost_actor",
                 status,
-                &record.bot_actor_did,
+                &record.bot_actor_id,
                 record,
                 Some(ghost),
             ));
@@ -863,7 +844,7 @@ async fn build_ghost_accountability_grant_event(
     record: &AppletBridgeRecord,
     provision: &GhostActorProvisionRequestBody,
     service_did: &Did,
-    ghost_actor_did: &Did,
+    ghost_actor_id: &Did,
     realm_id: &RealmId,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<FormalAppletEvent, AppError> {
@@ -873,7 +854,7 @@ async fn build_ghost_accountability_grant_event(
         "applet-accountability-grant",
         &json!({
             "issuer": service_did,
-            "subject": ghost_actor_did,
+            "subject": ghost_actor_id,
             "applet_id": provision.applet_id,
             "realm_id": realm_id,
             "protocol": provision.protocol,
@@ -885,7 +866,7 @@ async fn build_ghost_accountability_grant_event(
     )?;
     let grant = AccountabilityGrantPayload::new(
         service_did.clone(),
-        ghost_actor_did.clone(),
+        ghost_actor_id.clone(),
         AccountabilityScope::Multiple(vec![
             "applet_ghost_actor".to_owned(),
             format!("applet:{}", provision.applet_id),
@@ -918,7 +899,7 @@ async fn build_ghost_accountability_grant_event(
         json!({
             "applet_id": record.applet_id,
             "service_did": service_did,
-            "ghost_actor_did": ghost_actor_did,
+            "ghost_actor_id": ghost_actor_id,
             "protocol": provision.protocol,
             "tenant": provision.tenant,
             "external_user_id": provision.external_user_id,
@@ -933,7 +914,7 @@ async fn build_ghost_profile_create_event(
     provision: &GhostActorProvisionRequestBody,
     applet_id: AppletId,
     service_did: &Did,
-    ghost_actor_did: &Did,
+    ghost_actor_id: &Did,
     realm_id: &RealmId,
     authorization_ref: &str,
 ) -> Result<FormalAppletEvent, AppError> {
@@ -963,7 +944,7 @@ async fn build_ghost_profile_create_event(
     }
     let request = GhostActorProfileRequest::new(
         profile_id,
-        ghost_actor_did.clone(),
+        ghost_actor_id.clone(),
         display_name,
         applet_id.clone(),
     )
@@ -978,7 +959,7 @@ async fn build_ghost_profile_create_event(
     let mut event = request
         .profile_create_event(
             realm_id.clone(),
-            next_actor_seq(state, ghost_actor_did.as_str()).await?,
+            next_actor_seq(state, ghost_actor_id.as_str()).await?,
             next_hlc(state)?,
             Some(&authorization),
         )
@@ -993,11 +974,11 @@ async fn build_ghost_profile_create_event(
         event,
         service_did,
         "applet_ghost_profile_create",
-        Some(ghost_actor_did.as_str()),
+        Some(ghost_actor_id.as_str()),
         json!({
             "applet_id": record.applet_id,
             "service_did": service_did,
-            "ghost_actor_did": ghost_actor_did,
+            "ghost_actor_id": ghost_actor_id,
             "authorization_ref": authorization_ref,
             "protocol": provision.protocol,
             "tenant": provision.tenant,
@@ -1251,7 +1232,7 @@ fn ensure_formal_ghost_provision_allowed(
 
 async fn register_package_install(
     state: &AppState,
-    owner_actor_did: &str,
+    owner_actor_id: &str,
     commit: InstallCommitRequestBody,
     idempotency_key: String,
     body_digest: String,
@@ -1328,9 +1309,9 @@ async fn register_package_install(
     let record = AppletBridgeRecord {
         applet_id: package.applet_id.clone(),
         namespace,
-        owner_actor_did: owner_actor_did.to_owned(),
+        owner_actor_id: owner_actor_id.to_owned(),
         registry_did: package.controller_did.to_string(),
-        bot_actor_did: package.bot_actor_id.to_string(),
+        bot_actor_id: package.bot_actor_id.to_string(),
         portal_realm_id: realm_id,
         capabilities: approved_actions,
         manifest: manifest_from_package(&package),
@@ -1350,10 +1331,10 @@ async fn register_package_install(
         ghosts: Vec::new(),
     };
     bot_actor::register_bot(BotActor {
-        did: record.bot_actor_did.clone(),
+        did: record.bot_actor_id.clone(),
         name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
         kind: KIND_BOT.to_owned(),
-        owner_actor_did: owner_actor_did.to_owned(),
+        owner_actor_id: owner_actor_id.to_owned(),
         created_at: now,
         revoked_at: None,
     });
@@ -1365,13 +1346,13 @@ async fn register_package_install(
     append_applet_registration_projection(state, &record, &registration_event_ref).await?;
     crate::routing::append_audit_log(
         state,
-        Some(owner_actor_did),
+        Some(owner_actor_id),
         "applet.install",
         json!({
             "applet_id": record.applet_id,
             "namespace": record.namespace,
             "service_did": package.service_did,
-            "bot_actor_id": record.bot_actor_did,
+            "bot_actor_id": record.bot_actor_id,
             "registration_event_ref": registration_event_ref,
             "registration_epoch": package.registration_epoch,
         }),
@@ -1397,7 +1378,7 @@ async fn append_applet_registration_projection(
         event_kind: kinds::CK_APPLET_REGISTRATION.to_owned(),
         operation_type: "applet_install_registration".to_owned(),
         operation_id: None,
-        sender: Some(record.owner_actor_did.clone()),
+        sender: Some(record.owner_actor_id.clone()),
         payload: registration_payload_from_package(package)?,
         created_at: chrono::Utc::now(),
     };
@@ -1442,7 +1423,7 @@ fn update_applet_projection(state: &AppState, record: &AppletBridgeRecord) {
 
 async fn register_verified_applet(
     state: &AppState,
-    owner_actor_did: &str,
+    owner_actor_id: &str,
     manifest: AppletManifest,
     verified: VerifiedAppletManifest,
     idempotency_key: Option<String>,
@@ -1477,14 +1458,14 @@ async fn register_verified_applet(
     }
 
     let now = chrono::Utc::now();
-    let bot_actor_did = bot_actor_did_for(&namespace, &applet_id);
+    let bot_actor_id = bot_actor_id_for(&namespace, &applet_id);
     let portal_realm_id = portal_realm_id_for(&namespace, &applet_id);
     let record = AppletBridgeRecord {
         applet_id,
         namespace,
-        owner_actor_did: owner_actor_did.to_owned(),
+        owner_actor_id: owner_actor_id.to_owned(),
         registry_did: verified.signer_did,
-        bot_actor_did: bot_actor_did.clone(),
+        bot_actor_id: bot_actor_id.clone(),
         portal_realm_id,
         capabilities: verified.capabilities,
         manifest,
@@ -1501,10 +1482,10 @@ async fn register_verified_applet(
         ghosts: Vec::new(),
     };
     bot_actor::register_bot(BotActor {
-        did: bot_actor_did,
+        did: bot_actor_id,
         name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
         kind: KIND_BOT.to_owned(),
-        owner_actor_did: owner_actor_did.to_owned(),
+        owner_actor_id: owner_actor_id.to_owned(),
         created_at: now,
         revoked_at: None,
     });
@@ -1514,13 +1495,13 @@ async fn register_verified_applet(
         .push(record.clone());
     crate::routing::append_audit_log(
         state,
-        Some(owner_actor_did),
+        Some(owner_actor_id),
         "extensions.applet.register",
         json!({
             "applet_id": record.applet_id,
             "namespace": record.namespace,
             "registry_did": record.registry_did,
-            "bot_actor_did": record.bot_actor_did,
+            "bot_actor_id": record.bot_actor_id,
             "portal_realm_id": record.portal_realm_id,
         }),
         "accepted",
@@ -1558,20 +1539,20 @@ fn provision_ghost(
         return Ok((record.clone(), existing));
     }
     let ghost = GhostActorRecord {
-        ghost_actor_did: ghost_actor_did_for(&record.namespace, applet_id, external_id),
+        ghost_actor_id: ghost_actor_id_for(&record.namespace, applet_id, external_id),
         external_id: external_id.to_owned(),
         display_name,
         created_at: now,
         revoked_at: None,
     };
     bot_actor::register_bot(BotActor {
-        did: ghost.ghost_actor_did.clone(),
+        did: ghost.ghost_actor_id.clone(),
         name: ghost
             .display_name
             .clone()
             .unwrap_or_else(|| ghost.external_id.clone()),
         kind: KIND_GHOST.to_owned(),
-        owner_actor_did: record.owner_actor_did.clone(),
+        owner_actor_id: record.owner_actor_id.clone(),
         created_at: now,
         revoked_at: None,
     });
@@ -1603,7 +1584,7 @@ async fn append_portal_message(
     let message_record = MessageRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
-        sender: ghost.ghost_actor_did.clone(),
+        sender: ghost.ghost_actor_id.clone(),
         thread_id: thread_id.clone(),
         content: content_with_portal.clone(),
         encrypted: false,
@@ -1619,15 +1600,15 @@ async fn append_portal_message(
         event_kind: kinds::CK_MESSAGE_CREATE.to_owned(),
         operation_type: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
-        sender: Some(ghost.ghost_actor_did.clone()),
+        sender: Some(ghost.ghost_actor_id.clone()),
         payload: json!({
             "thread_id": thread_id,
             "content": content_with_portal,
             "encrypted": false,
             "portal_realm_id": applet.portal_realm_id,
             "applet_id": applet.applet_id,
-            "bot_actor_did": applet.bot_actor_did,
-            "ghost_actor_did": ghost.ghost_actor_did,
+            "bot_actor_id": applet.bot_actor_id,
+            "ghost_actor_id": ghost.ghost_actor_id,
             "external_id": ghost.external_id,
         }),
         created_at,
@@ -1731,8 +1712,8 @@ fn enrich_content_with_portal_metadata(
             json!({
                 "applet_id": applet.applet_id,
                 "portal_realm_id": applet.portal_realm_id,
-                "bot_actor_did": applet.bot_actor_did,
-                "ghost_actor_did": ghost.ghost_actor_did,
+                "bot_actor_id": applet.bot_actor_id,
+                "ghost_actor_id": ghost.ghost_actor_id,
                 "external_id": ghost.external_id,
                 "display_name": ghost.display_name,
             }),
@@ -1745,15 +1726,15 @@ fn applet_response(record: &AppletBridgeRecord) -> Value {
     json!({
         "applet_id": record.applet_id,
         "namespace": record.namespace,
-        "owner_actor_did": record.owner_actor_did,
+        "owner_actor_id": record.owner_actor_id,
         "registry_did": record.registry_did,
-        "bot_actor_did": record.bot_actor_did,
+        "bot_actor_id": record.bot_actor_id,
         "portal_realm_id": record.portal_realm_id,
         "capabilities": record.capabilities,
         "status": record.status,
         "registered_at": record.registered_at,
         "revoked_at": record.revoked_at,
-        "ghost_actor_dids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_did.clone()).collect::<Vec<_>>(),
+        "ghost_actor_ids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_id.clone()).collect::<Vec<_>>(),
         "manifest": record.manifest,
     })
 }
@@ -2052,7 +2033,7 @@ fn capability_allows_message_create(capability: &str) -> bool {
     capability == "ck.message.create"
 }
 
-fn extension_actor_did_document(
+fn extension_actor_id_document(
     did: &str,
     actor_kind: &str,
     status: &str,
@@ -2098,7 +2079,7 @@ fn accountability_chain(applet: &AppletBridgeRecord) -> Value {
     json!([
         {
             "kind": "bot_actor",
-            "did": applet.bot_actor_did,
+            "did": applet.bot_actor_id,
             "applet_id": applet.applet_id,
         },
         {
@@ -2146,13 +2127,13 @@ fn applet_display_name(manifest: &AppletManifest) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn bot_actor_did_for(namespace: &str, applet_id: &str) -> String {
+fn bot_actor_id_for(namespace: &str, applet_id: &str) -> String {
     let safe = safe_token(namespace);
     let digest = sha256_hex(applet_id.as_bytes());
     format!("did:web:bot-{safe}-{}.soland.local", &digest[..12])
 }
 
-fn ghost_actor_did_for(namespace: &str, applet_id: &str, external_id: &str) -> String {
+fn ghost_actor_id_for(namespace: &str, applet_id: &str, external_id: &str) -> String {
     let safe_external = safe_token(external_id);
     let digest = sha256_hex(format!("{applet_id}:{external_id}").as_bytes());
     format!(

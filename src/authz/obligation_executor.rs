@@ -27,7 +27,7 @@ pub struct RequestContext {
     /// Realm the request is bound to. Surfaces in audit emission and
     /// rate-limit bucket keying.
     pub realm_id: String,
-    pub actor_did: String,
+    pub actor_id: String,
     pub action: String,
     /// Whether the caller's session has completed MFA. The executor
     /// reads this only — flipping it requires a fresh authentication
@@ -103,7 +103,7 @@ pub fn execute_obligations(
                     target: "policy_audit_obligation",
                     kind = other,
                     realm_id = %ctx.realm_id,
-                    actor = %ctx.actor_did,
+                    actor = %ctx.actor_id,
                     "obligation: unknown kind, failing closed"
                 );
                 return Err(ObligationError::UnknownKind(other.to_owned()));
@@ -131,7 +131,7 @@ fn execute_log_to_audit(obligation: &Value, ctx: &RequestContext) {
         target: "policy_audit_obligation",
         kind = "log_to_audit",
         realm_id = %ctx.realm_id,
-        actor = %ctx.actor_did,
+        actor = %ctx.actor_id,
         action = %ctx.action,
         payload = %payload,
         "obligation: log_to_audit"
@@ -164,7 +164,7 @@ mod tests {
     fn ctx() -> RequestContext {
         RequestContext {
             realm_id: "ck:realm:01904100-0000-7000-8000-000000000001".to_owned(),
-            actor_did: "did:web:alice.example".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
             action: "ck.message.create".to_owned(),
             mfa_completed: false,
             mfa_requested: false,

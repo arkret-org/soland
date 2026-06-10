@@ -101,7 +101,7 @@ pub fn apply_keypackage_publish(
     let created_at = op.created_at.timestamp();
     let row = MlsKeyPackage {
         id: id.to_owned(),
-        actor_did: actor_id.to_owned(),
+        actor_id: actor_id.to_owned(),
         device_id: device_id.to_owned(),
         lifetime,
         key_package_bytes,
@@ -119,7 +119,7 @@ pub fn apply_keypackage_publish(
 
     ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: id.to_owned(),
-        actor_did: actor_id.to_owned(),
+        actor_id: actor_id.to_owned(),
         device_id: device_id.to_owned(),
     })
 }
@@ -209,7 +209,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     else {
         return reject("mls_welcome_group_missing");
     };
-    let Some(recipient_actor_did) = payload
+    let Some(recipient_actor_id) = payload
         .get("recipient_actor_id")
         .or_else(|| payload.get("recipient_principal_id"))
         .and_then(Value::as_str)
@@ -243,7 +243,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     let row = MlsWelcome {
         id: welcome_id.to_owned(),
         group_id: group_id.to_owned(),
-        recipient_actor_did: recipient_actor_did.to_owned(),
+        recipient_actor_id: recipient_actor_id.to_owned(),
         recipient_device_id: recipient_device_id.to_owned(),
         welcome_bytes,
         key_package_id: key_package_id.to_owned(),
@@ -253,7 +253,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     state
         .mls_welcomes
         .entry((
-            recipient_actor_did.to_owned(),
+            recipient_actor_id.to_owned(),
             recipient_device_id.to_owned(),
         ))
         .or_default()
@@ -261,7 +261,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 
     ProjectionEffectOut::Mls(MlsEffect::WelcomeEnqueued {
         welcome_id: welcome_id.to_owned(),
-        recipient_actor_did: recipient_actor_did.to_owned(),
+        recipient_actor_id: recipient_actor_id.to_owned(),
         recipient_device_id: recipient_device_id.to_owned(),
         group_id: group_id.to_owned(),
     })
@@ -286,7 +286,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if epoch != 0 {
         return reject("mls_genesis_epoch_invalid");
     }
-    let Some(creator_actor_did) = payload
+    let Some(creator_actor_id) = payload
         .get("creator_actor_id")
         .or_else(|| payload.get("creator_principal_id"))
         .and_then(Value::as_str)
@@ -309,7 +309,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             epoch: 0,
-            leader_actor_did: creator_actor_did.to_owned(),
+            leader_actor_id: creator_actor_id.to_owned(),
             covered_frontier: covered_frontier.clone(),
             committed_at: op.created_at.timestamp(),
         },
@@ -318,7 +318,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     ProjectionEffectOut::Mls(MlsEffect::GroupGenesis {
         group_id: group_id.to_owned(),
         epoch: 0,
-        creator_actor_did: creator_actor_did.to_owned(),
+        creator_actor_id: creator_actor_id.to_owned(),
         covered_frontier,
     })
 }
@@ -358,7 +358,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         Some(v) => v,
         None => return reject("mls_commit_expected_prev_epoch_missing"),
     };
-    let Some(leader_actor_did) = payload
+    let Some(leader_actor_id) = payload
         .get("leader_actor_id")
         .or_else(|| payload.get("sender"))
         .and_then(Value::as_str)
@@ -406,7 +406,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             epoch: new_epoch,
-            leader_actor_did: leader_actor_did.to_owned(),
+            leader_actor_id: leader_actor_id.to_owned(),
             covered_frontier: covered_frontier.clone(),
             committed_at,
         },
@@ -416,7 +416,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         group_id: group_id.to_owned(),
         previous_epoch: current,
         new_epoch,
-        leader_actor_did: leader_actor_did.to_owned(),
+        leader_actor_id: leader_actor_id.to_owned(),
         covered_frontier,
     })
 }
@@ -454,7 +454,7 @@ const WELCOME_FORBIDDEN_METADATA_KEYS: &[&str] = &[
     "actor_id",
     "principal_did",
     "principal_id",
-    "sender_actor_did",
+    "sender_actor_id",
     "sender_actor_id",
     "sender_actor_display_name",
     "sender_device_id",
@@ -861,7 +861,7 @@ mod tests {
             &MlsCommitEpoch {
                 group_id: "ck:mls_group:abc".to_owned(),
                 epoch: 2,
-                leader_actor_did: "did:web:alice.example".to_owned(),
+                leader_actor_id: "did:web:alice.example".to_owned(),
                 covered_frontier: vec![
                     "ck:event:0196419b-0000-7000-8000-000000000000".to_owned(),
                     "ck:event:0196419b-0000-7000-8000-000000000001".to_owned()

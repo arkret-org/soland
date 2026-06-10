@@ -3131,14 +3131,14 @@ async fn validate_event_proofs(
             )?;
             // 高风险:event proof 验签前强制 DID 文档新鲜度门禁
             // (fail-closed-on-stale)。陈旧/缺证据的缓存公钥不得用于验签。
-            let actor_did = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
+            let actor_id = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
                     format!("event proof actor_id is not a valid DID: {error}"),
                 )
             })?;
-            crate::jws_verify::enforce_high_risk_did_freshness(state, &actor_did)
+            crate::jws_verify::enforce_high_risk_did_freshness(state, &actor_id)
                 .await
                 .map_err(|reason| {
                     tracing::debug!(%reason, "event proof DID freshness gate failed");
@@ -3152,7 +3152,7 @@ async fn validate_event_proofs(
                 &proof_binding_bytes,
                 &jws,
                 &verification_method,
-                actor_id,
+                actor_id.as_str(),
                 state,
             )
             .map_err(|reason| {

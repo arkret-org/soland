@@ -583,15 +583,16 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let scope = record.get("scope").cloned().unwrap_or(Value::Null);
         sql_query(
             "INSERT INTO agent_participation \
-             (agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
+             (id, agent_principal_id, scope_kind, scope_key, realm_id, scope, reply, \
               accept_third_party_mention, act_on_behalf, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
              ON CONFLICT (agent_principal_id, scope_key) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
              scope = EXCLUDED.scope, reply = EXCLUDED.reply, \
              accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
              act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
@@ -629,9 +630,9 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         }
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT scope_kind, scope_key, realm_id, reply, accept_third_party_mention, \
-             act_on_behalf FROM agent_participation_ceiling WHERE scope_key = ANY($1) \
-             ORDER BY scope_key",
+            "SELECT scope_kind, id AS scope_key, realm_id, reply, accept_third_party_mention, \
+             act_on_behalf FROM agent_participation_ceiling WHERE id = ANY($1) \
+             ORDER BY id",
         )
         .bind::<Array<Text>, _>(scope_keys.to_vec())
         .load::<AgentParticipationCeilingRow>(&mut *conn)
@@ -659,10 +660,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let realm_id = get_str("realm_id")?;
         sql_query(
             "INSERT INTO agent_participation_ceiling \
-             (scope_kind, scope_key, realm_id, reply, accept_third_party_mention, \
+             (scope_kind, id, realm_id, reply, accept_third_party_mention, \
               act_on_behalf, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
-             ON CONFLICT (scope_key) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
              reply = EXCLUDED.reply, \
              accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
@@ -824,11 +825,11 @@ impl AgentStore for PgAgentStore {
             .unwrap_or("active")
             .to_owned();
         sql_query(
-            "INSERT INTO agent_principal \
-             (agent_principal_id, controller_did, agent_id, display_name, state, created_at, updated_at) \
+            "INSERT INTO agent_principals \
+             (id, controller_id, agent_id, display_name, state, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) \
-             ON CONFLICT (agent_principal_id) DO UPDATE SET \
-             controller_did = EXCLUDED.controller_did, agent_id = EXCLUDED.agent_id, \
+             ON CONFLICT (id) DO UPDATE SET \
+             controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
              display_name = EXCLUDED.display_name, state = EXCLUDED.state, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
@@ -845,8 +846,8 @@ impl AgentStore for PgAgentStore {
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT agent_principal_id, controller_did, agent_id, display_name, state, \
-             created_at, updated_at FROM agent_principal WHERE agent_principal_id = $1",
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
         .get_result::<AgentPrincipalRow>(&mut *conn)
@@ -859,8 +860,8 @@ impl AgentStore for PgAgentStore {
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT agent_principal_id, controller_did, agent_id, display_name, state, \
-             created_at, updated_at FROM agent_principal WHERE controller_did = $1 \
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+             created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )
         .bind::<Text, _>(controller_did)
@@ -878,8 +879,8 @@ impl AgentStore for PgAgentStore {
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         let updated = sql_query(
-            "UPDATE agent_principal SET state = $2, state_changed_at = NOW(), updated_at = NOW() \
-             WHERE agent_principal_id = $1",
+            "UPDATE agent_principals SET state = $2, state_changed_at = NOW(), updated_at = NOW() \
+             WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
         .bind::<Text, _>(state)
@@ -981,11 +982,11 @@ impl NotificationStore for PgNotificationStore {
         let source_event_id = get_str("source_event_id")?;
         let notification_type = get_str("notification_type")?;
         sql_query(
-            "INSERT INTO notification \
-             (notification_id, recipient_id, realm_id, source_event_id, notification_type, \
+            "INSERT INTO notifications \
+             (id, recipient_id, realm_id, source_event_id, notification_type, \
               created_at) \
              VALUES ($1, $2, $3, $4, $5, NOW()) \
-             ON CONFLICT (notification_id) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&notification_id))
         .bind::<Text, _>(&recipient_id)
@@ -1001,8 +1002,8 @@ impl NotificationStore for PgNotificationStore {
     async fn list_for_recipient(&self, recipient_id: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT notification_id, recipient_id, realm_id, source_event_id, notification_type, \
-             created_at FROM notification WHERE recipient_id = $1 ORDER BY created_at DESC",
+            "SELECT id AS notification_id, recipient_id, realm_id, source_event_id, notification_type, \
+             created_at FROM notifications WHERE recipient_id = $1 ORDER BY created_at DESC",
         )
         .bind::<Text, _>(recipient_id)
         .load::<NotificationRow>(&mut *conn)
@@ -1618,14 +1619,14 @@ pub trait MultisigPendingStore: Send + Sync {
 
 /// G3.S1 — durable KeyPackage row.
 ///
-/// The Pg backend's `(actor_did, device_id, id)` composite key is what
+/// The Pg backend's `(actor_id, device_id, id)` composite key is what
 /// enforces at-most-one row per `keypackage_id`. `try_claim` is the
 /// CAS path — it returns `Ok(true)` on the first claim, `Ok(false)` if
 /// the row is already claimed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackageRecord {
     pub id: String,
-    pub actor_did: String,
+    pub actor_id: String,
     pub device_id: String,
     pub lifetime_not_before: i64,
     pub lifetime_not_after: i64,
@@ -1641,7 +1642,7 @@ pub struct MlsKeyPackageRecord {
 pub struct MlsWelcomeRecord {
     pub id: String,
     pub group_id: String,
-    pub recipient_actor_did: String,
+    pub recipient_actor_id: String,
     pub recipient_device_id: String,
     pub welcome_bytes: Vec<u8>,
     pub key_package_id: String,
@@ -1656,7 +1657,7 @@ pub struct MlsWelcomeRecord {
 pub struct MlsCommitEpochRecord {
     pub group_id: String,
     pub epoch: u64,
-    pub leader_actor_did: String,
+    pub leader_actor_id: String,
     pub covered_frontier: Vec<String>,
     pub governance_binding: Value,
     pub committed_at: i64,
@@ -1697,7 +1698,7 @@ pub trait MlsWelcomeStore: Send + Sync {
     /// same call so subsequent polls skip them.
     async fn drain_pending(
         &self,
-        recipient_actor_did: &str,
+        recipient_actor_id: &str,
         recipient_device_id: &str,
         now_unix_secs: i64,
         limit: usize,
@@ -1714,7 +1715,7 @@ pub trait MlsCommitStore: Send + Sync {
     async fn initialize_genesis(
         &self,
         group_id: &str,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -1727,7 +1728,7 @@ pub trait MlsCommitStore: Send + Sync {
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -4534,7 +4535,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
 
     async fn drain_pending(
         &self,
-        recipient_actor_did: &str,
+        recipient_actor_id: &str,
         recipient_device_id: &str,
         now_unix_secs: i64,
         limit: usize,
@@ -4548,7 +4549,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
             if row.delivered_at.is_some() {
                 continue;
             }
-            if row.recipient_actor_did != recipient_actor_did
+            if row.recipient_actor_id != recipient_actor_id
                 || row.recipient_device_id != recipient_device_id
             {
                 continue;
@@ -4595,7 +4596,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
     async fn initialize_genesis(
         &self,
         group_id: &str,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -4610,7 +4611,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         let record = MlsCommitEpochRecord {
             group_id: group_id.to_owned(),
             epoch: 0,
-            leader_actor_did: leader_actor_did.to_owned(),
+            leader_actor_id: leader_actor_id.to_owned(),
             covered_frontier,
             governance_binding: governance_binding.clone(),
             committed_at,
@@ -4623,7 +4624,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -4643,7 +4644,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         let new_record = MlsCommitEpochRecord {
             group_id: group_id.to_owned(),
             epoch: current.saturating_add(1),
-            leader_actor_did: leader_actor_did.to_owned(),
+            leader_actor_id: leader_actor_id.to_owned(),
             covered_frontier: merged_frontier,
             governance_binding: governance_binding.clone(),
             committed_at,
@@ -5208,9 +5209,9 @@ impl SyncCursorStore for PgSyncCursorStore {
     async fn get(&self, handle: &str) -> PersistenceResult<Option<SyncCursorRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT handle, principal_id, device_id, service_id, filter_digest, purpose, \
+            "SELECT id AS handle, principal_id, device_id, service_id, filter_digest, purpose, \
              positions, target, issued_at_ms, expires_at_ms \
-             FROM sync_cursor_handles WHERE handle = $1",
+             FROM sync_cursor_handles WHERE id = $1",
         )
         .bind::<Text, _>(handle)
         .get_result::<SyncCursorRow>(&mut *conn)
@@ -5227,9 +5228,9 @@ impl SyncCursorStore for PgSyncCursorStore {
         // doc).
         sql_query(
             "INSERT INTO sync_cursor_handles \
-             (handle, principal_id, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
+             (id, principal_id, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (handle) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms",
+             ON CONFLICT (id) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms",
         )
         .bind::<Text, _>(&record.handle)
         .bind::<Nullable<Text>, _>(&record.principal_id)
@@ -5249,7 +5250,7 @@ impl SyncCursorStore for PgSyncCursorStore {
 
     async fn delete(&self, handle: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM sync_cursor_handles WHERE handle = $1")
+        sql_query("DELETE FROM sync_cursor_handles WHERE id = $1")
             .bind::<Text, _>(handle)
             .execute(&mut *conn)
             .await
@@ -5309,13 +5310,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
-             (id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+             (id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
               key_package_bytes, claimed_by_group_id, consumed_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
-        .bind::<Text, _>(&record.actor_did)
+        .bind::<Text, _>(&record.actor_id)
         .bind::<Text, _>(&record.device_id)
         .bind::<BigInt, _>(record.lifetime_not_before)
         .bind::<BigInt, _>(record.lifetime_not_after)
@@ -5331,7 +5332,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+            "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
@@ -5354,7 +5355,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "UPDATE mls_key_packages \
              SET claimed_by_group_id = $2, consumed_at = $3 \
              WHERE id = $1 AND claimed_by_group_id IS NULL \
-             RETURNING id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+             RETURNING id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
@@ -5370,7 +5371,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, actor_did, device_id, lifetime_not_before, lifetime_not_after, \
+            "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
@@ -5387,14 +5388,14 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_welcomes \
-             (id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
+             (id, group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
               key_package_id, enqueued_at, delivered_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
         .bind::<Text, _>(&record.group_id)
-        .bind::<Text, _>(&record.recipient_actor_did)
+        .bind::<Text, _>(&record.recipient_actor_id)
         .bind::<Text, _>(&record.recipient_device_id)
         .bind::<Binary, _>(&record.welcome_bytes)
         .bind::<Text, _>(&record.key_package_id)
@@ -5407,7 +5408,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
 
     async fn drain_pending(
         &self,
-        recipient_actor_did: &str,
+        recipient_actor_id: &str,
         recipient_device_id: &str,
         now_unix_secs: i64,
         limit: usize,
@@ -5417,7 +5418,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         sql_query(
             "WITH picked AS ( \
                  SELECT id FROM mls_welcomes \
-                 WHERE recipient_actor_did = $1 \
+                 WHERE recipient_actor_id = $1 \
                    AND recipient_device_id = $2 \
                    AND delivered_at IS NULL \
                  ORDER BY enqueued_at ASC, id ASC \
@@ -5428,10 +5429,10 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
              SET delivered_at = $3 \
              FROM picked \
              WHERE w.id = picked.id \
-             RETURNING w.id, w.group_id, w.recipient_actor_did, w.recipient_device_id, \
+             RETURNING w.id, w.group_id, w.recipient_actor_id, w.recipient_device_id, \
              w.welcome_bytes, w.key_package_id, w.enqueued_at, w.delivered_at",
         )
-        .bind::<Text, _>(recipient_actor_did)
+        .bind::<Text, _>(recipient_actor_id)
         .bind::<Text, _>(recipient_device_id)
         .bind::<BigInt, _>(now_unix_secs)
         .bind::<BigInt, _>(limit)
@@ -5444,7 +5445,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, group_id, recipient_actor_did, recipient_device_id, welcome_bytes, \
+            "SELECT id, group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
              key_package_id, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
@@ -5460,7 +5461,7 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at \
+            "SELECT group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at \
              FROM mls_commits WHERE group_id = $1",
         )
         .bind::<Text, _>(group_id)
@@ -5473,7 +5474,7 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn initialize_genesis(
         &self,
         group_id: &str,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -5484,13 +5485,13 @@ impl MlsCommitStore for PgMlsCommitStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits \
-             (group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at) \
+             (group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at) \
              VALUES ($1, 0, $2, $3, $4, $5) \
              ON CONFLICT (group_id) DO NOTHING \
-             RETURNING group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at",
+             RETURNING group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at",
         )
         .bind::<Text, _>(group_id)
-        .bind::<Text, _>(leader_actor_did)
+        .bind::<Text, _>(leader_actor_id)
         .bind::<Jsonb, _>(serde_json::json!(frontier))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
@@ -5504,7 +5505,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         &self,
         group_id: &str,
         expected_prev_epoch: u64,
-        leader_actor_did: &str,
+        leader_actor_id: &str,
         covered_frontier: &[String],
         governance_binding: &Value,
         committed_at: i64,
@@ -5517,11 +5518,11 @@ impl MlsCommitStore for PgMlsCommitStore {
             .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO mls_commits (group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at) \
+            "INSERT INTO mls_commits (group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at) \
              SELECT $1, $3, $4, $5, $6, $7 WHERE $2 = 0 \
              ON CONFLICT (group_id) DO UPDATE SET \
                epoch = EXCLUDED.epoch, \
-               leader_actor_did = EXCLUDED.leader_actor_did, \
+               leader_actor_id = EXCLUDED.leader_actor_id, \
                covered_frontier = ( \
                  SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) \
                  FROM jsonb_array_elements_text(mls_commits.covered_frontier || EXCLUDED.covered_frontier) AS merged(value) \
@@ -5529,12 +5530,12 @@ impl MlsCommitStore for PgMlsCommitStore {
                governance_binding = EXCLUDED.governance_binding, \
                committed_at = EXCLUDED.committed_at \
              WHERE mls_commits.epoch = $2 \
-             RETURNING group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at",
+             RETURNING group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at",
         )
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(expected_epoch)
         .bind::<BigInt, _>(next_epoch)
-        .bind::<Text, _>(leader_actor_did)
+        .bind::<Text, _>(leader_actor_id)
         .bind::<Jsonb, _>(serde_json::json!(covered_frontier))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
@@ -5547,7 +5548,7 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_did, covered_frontier, governance_binding, committed_at \
+            "SELECT group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at \
              FROM mls_commits ORDER BY group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
@@ -5561,7 +5562,7 @@ struct MlsKeyPackageRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
-    actor_did: String,
+    actor_id: String,
     #[diesel(sql_type = Text)]
     device_id: String,
     #[diesel(sql_type = BigInt)]
@@ -5582,7 +5583,7 @@ impl From<MlsKeyPackageRow> for MlsKeyPackageRecord {
     fn from(row: MlsKeyPackageRow) -> Self {
         Self {
             id: row.id,
-            actor_did: row.actor_did,
+            actor_id: row.actor_id,
             device_id: row.device_id,
             lifetime_not_before: row.lifetime_not_before,
             lifetime_not_after: row.lifetime_not_after,
@@ -5601,7 +5602,7 @@ struct MlsWelcomeRow {
     #[diesel(sql_type = Text)]
     group_id: String,
     #[diesel(sql_type = Text)]
-    recipient_actor_did: String,
+    recipient_actor_id: String,
     #[diesel(sql_type = Text)]
     recipient_device_id: String,
     #[diesel(sql_type = Binary)]
@@ -5619,7 +5620,7 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
         Self {
             id: row.id,
             group_id: row.group_id,
-            recipient_actor_did: row.recipient_actor_did,
+            recipient_actor_id: row.recipient_actor_id,
             recipient_device_id: row.recipient_device_id,
             welcome_bytes: row.welcome_bytes,
             key_package_id: row.key_package_id,
@@ -5636,7 +5637,7 @@ struct MlsCommitEpochRow {
     #[diesel(sql_type = BigInt)]
     epoch: i64,
     #[diesel(sql_type = Text)]
-    leader_actor_did: String,
+    leader_actor_id: String,
     #[diesel(sql_type = Jsonb)]
     covered_frontier: Value,
     #[diesel(sql_type = Jsonb)]
@@ -5650,7 +5651,7 @@ impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
         Self {
             group_id: row.group_id,
             epoch: row.epoch.max(0) as u64,
-            leader_actor_did: row.leader_actor_did,
+            leader_actor_id: row.leader_actor_id,
             covered_frontier: json_string_array(row.covered_frontier),
             governance_binding: row.governance_binding,
             committed_at: row.committed_at,
@@ -5737,8 +5738,8 @@ impl SessionStore for PgSessionStore {
     async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT token_hash, actor, device_id, audience, expires_at, created_at, revoked_at \
-             FROM sessions WHERE token_hash = $1",
+            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, expires_at, created_at, revoked_at \
+             FROM sessions WHERE id = $1",
         )
         .bind::<Text, _>(token)
         .get_result::<SessionRow>(&mut *conn)
@@ -5751,9 +5752,9 @@ impl SessionStore for PgSessionStore {
     async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO sessions (token_hash, actor, device_id, audience, payload, expires_at, revoked_at, created_at, updated_at) \
+            "INSERT INTO sessions (id, actor_id, device_id, audience, payload, expires_at, revoked_at, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, NOW()) \
-             ON CONFLICT (token_hash) DO UPDATE SET actor = EXCLUDED.actor, device_id = EXCLUDED.device_id, \
+             ON CONFLICT (id) DO UPDATE SET actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
              audience = EXCLUDED.audience, expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, updated_at = NOW()",
         )
         .bind::<Text, _>(&record.token_hash)
@@ -5770,7 +5771,7 @@ impl SessionStore for PgSessionStore {
 
     async fn delete(&self, token: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM sessions WHERE token_hash = $1")
+        sql_query("DELETE FROM sessions WHERE id = $1")
             .bind::<Text, _>(token)
             .execute(&mut *conn)
             .await
@@ -5789,7 +5790,7 @@ impl SessionStore for PgSessionStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT token_hash, actor, device_id, audience, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, expires_at, created_at, revoked_at \
              FROM sessions",
         )
         .load::<SessionRow>(&mut *conn)
@@ -5812,8 +5813,8 @@ impl AccountDataStore for PgAccountDataStore {
     ) -> PersistenceResult<Option<AccountDataRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor, data_type, payload, updated_at \
-             FROM account_datas WHERE actor = $1 AND data_type = $2",
+            "SELECT actor_id AS actor, data_type, payload, updated_at \
+             FROM account_datas WHERE actor_id = $1 AND data_type = $2",
         )
         .bind::<Text, _>(actor)
         .bind::<Text, _>(data_type)
@@ -5827,11 +5828,12 @@ impl AccountDataStore for PgAccountDataStore {
     async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO account_datas (actor, data_type, payload, updated_at) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (actor, data_type) DO UPDATE SET payload = EXCLUDED.payload, \
+            "INSERT INTO account_datas (id, actor_id, data_type, payload, updated_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (actor_id, data_type) DO UPDATE SET payload = EXCLUDED.payload, \
              updated_at = EXCLUDED.updated_at",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.data_type)
         .bind::<Jsonb, _>(&record.payload)
@@ -5844,7 +5846,7 @@ impl AccountDataStore for PgAccountDataStore {
 
     async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM account_datas WHERE actor = $1 AND data_type = $2")
+        sql_query("DELETE FROM account_datas WHERE actor_id = $1 AND data_type = $2")
             .bind::<Text, _>(actor)
             .bind::<Text, _>(data_type)
             .execute(&mut *conn)
@@ -5856,8 +5858,8 @@ impl AccountDataStore for PgAccountDataStore {
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor, data_type, payload, updated_at \
-             FROM account_datas WHERE actor = $1 ORDER BY data_type",
+            "SELECT actor_id AS actor, data_type, payload, updated_at \
+             FROM account_datas WHERE actor_id = $1 ORDER BY data_type",
         )
         .bind::<Text, _>(actor)
         .load::<AccountDataRow>(&mut *conn)
@@ -5878,8 +5880,8 @@ impl BlobStore for PgBlobStore {
         sql_query(
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
-             uploaded_by, created_at \
-             FROM blobs WHERE blob_ref = $1",
+             uploaded_by_id AS uploaded_by, created_at \
+             FROM blobs WHERE id = $1",
         )
         .bind::<Text, _>(blob_ref)
         .get_result::<BlobRow>(&mut *conn)
@@ -5900,14 +5902,14 @@ impl BlobStore for PgBlobStore {
         });
         sql_query(
             "INSERT INTO blobs \
-             (blob_ref, sha256, media_type, filename, uploaded_by, realm_id, size_bytes, \
+             (id, sha256, media_type, filename, uploaded_by_id, realm_id, size_bytes, \
               storage_backend, storage_key, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-             ON CONFLICT (blob_ref) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
              sha256 = EXCLUDED.sha256, \
              media_type = EXCLUDED.media_type, \
              filename = EXCLUDED.filename, \
-             uploaded_by = EXCLUDED.uploaded_by, \
+             uploaded_by_id = EXCLUDED.uploaded_by_id, \
              realm_id = EXCLUDED.realm_id, \
              size_bytes = EXCLUDED.size_bytes, \
              storage_backend = EXCLUDED.storage_backend, \
@@ -5934,7 +5936,7 @@ impl BlobStore for PgBlobStore {
 
     async fn delete(&self, blob_ref: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM blobs WHERE blob_ref = $1")
+        sql_query("DELETE FROM blobs WHERE id = $1")
             .bind::<Text, _>(blob_ref)
             .execute(&mut *conn)
             .await
@@ -5947,8 +5949,8 @@ impl BlobStore for PgBlobStore {
         sql_query(
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
-             uploaded_by, created_at \
-             FROM blobs ORDER BY created_at ASC, blob_ref ASC",
+             uploaded_by_id AS uploaded_by, created_at \
+             FROM blobs ORDER BY created_at ASC, id ASC",
         )
         .load::<BlobRow>(&mut *conn)
         .await
@@ -5970,8 +5972,8 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     ) -> PersistenceResult<Option<DeviceInventoryRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
-             FROM devices WHERE actor = $1 AND device_id = $2 AND revoked_at IS NULL",
+            "SELECT actor_id AS actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
+             FROM devices WHERE actor_id = $1 AND device_id = $2 AND revoked_at IS NULL",
         )
             .bind::<Text, _>(actor)
             .bind::<Text, _>(device_id)
@@ -5984,11 +5986,12 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     async fn put(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO devices (actor, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (actor, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
+            "INSERT INTO devices (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (actor_id, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
              verification_state = EXCLUDED.verification_state, updated_at = EXCLUDED.updated_at, revoked_at = EXCLUDED.revoked_at",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.device_id)
         .bind::<Jsonb, _>(&record.payload)
@@ -6004,8 +6007,8 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
-             FROM devices WHERE actor = $1 AND revoked_at IS NULL ORDER BY device_id",
+            "SELECT actor_id AS actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
+             FROM devices WHERE actor_id = $1 AND revoked_at IS NULL ORDER BY device_id",
         )
         .bind::<Text, _>(actor)
         .load::<DeviceRow>(&mut *conn).await
@@ -6016,8 +6019,8 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
     async fn list(&self) -> PersistenceResult<Vec<DeviceInventoryRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
-             FROM devices WHERE revoked_at IS NULL ORDER BY actor, device_id",
+            "SELECT actor_id AS actor, device_id, payload, verification_state, created_at, updated_at, revoked_at \
+             FROM devices WHERE revoked_at IS NULL ORDER BY actor_id, device_id",
         )
         .load::<DeviceRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
@@ -6059,8 +6062,8 @@ impl FederationTransactionStore for PgFederationTransactionStore {
             .map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO federation_transactions \
-             (txn_id, source_service, destination_service, realm_id, status, content_digest, payload, received_at, processed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (id, txn_id, source_service, destination_service, realm_id, status, content_digest, payload, received_at, processed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (source_service, txn_id) DO UPDATE SET \
              destination_service = EXCLUDED.destination_service, \
              realm_id = EXCLUDED.realm_id, \
@@ -6070,6 +6073,7 @@ impl FederationTransactionStore for PgFederationTransactionStore {
              received_at = EXCLUDED.received_at, \
              processed_at = EXCLUDED.processed_at",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.txn_id)
         .bind::<Text, _>(&record.origin)
         .bind::<Text, _>(&record.destination)
@@ -6116,10 +6120,10 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO federation_outbox \
-             (id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+             (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, attempts, \
               next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (peer_did, idempotency_key) DO NOTHING",
+             ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
         .bind::<Text, _>(&record.peer_did)
@@ -6146,7 +6150,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
     ) -> PersistenceResult<Vec<FederationOutboxRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+            "SELECT id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox \
              WHERE delivered_at IS NULL AND next_attempt_at <= $1 \
@@ -6183,7 +6187,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
     async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+            "SELECT id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox WHERE id = $1",
         )
@@ -6198,7 +6202,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT id, peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
+            "SELECT id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, payload_json, attempts, \
              next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at \
              FROM federation_outbox ORDER BY created_at ASC, id ASC",
         )
@@ -6215,7 +6219,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO federation_outbox_dead_letter \
-             (id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, attempts, \
+             (id, outbox_id, peer_id, endpoint, idempotency_key, terminal_status, attempts, \
               response_excerpt, failed_at, reason) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO NOTHING",
@@ -6241,7 +6245,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
     ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT id, outbox_id, peer_did, endpoint, idempotency_key, terminal_status, \
+            "SELECT id, outbox_id, peer_id AS peer_did, endpoint, idempotency_key, terminal_status, \
              attempts, response_excerpt, failed_at, reason \
              FROM federation_outbox_dead_letter ORDER BY failed_at ASC, id ASC",
         )
@@ -6270,7 +6274,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
              trust_level, freshness_at, etag \
-             FROM push_bridge_cache WHERE cache_key = $1",
+             FROM push_bridge_cache WHERE id = $1",
         )
         .bind::<Text, _>(bridge_describe_url)
         .get_result::<PushBridgeCacheRow>(&mut *conn)
@@ -6288,11 +6292,11 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO push_bridge_cache \
-             (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             (id, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
               cache_state, contract_digest, fetched_at, remote_contract, \
               trust_level, freshness_at, etag, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) \
-             ON CONFLICT (cache_key) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 push_gateway_url = EXCLUDED.push_gateway_url, \
                 service_base_url = EXCLUDED.service_base_url, \
                 bridge_describe_url = EXCLUDED.bridge_describe_url, \
@@ -6326,7 +6330,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
 
     async fn delete(&self, bridge_describe_url: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM push_bridge_cache WHERE cache_key = $1")
+        sql_query("DELETE FROM push_bridge_cache WHERE id = $1")
             .bind::<Text, _>(bridge_describe_url)
             .execute(&mut *conn)
             .await
@@ -6348,7 +6352,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
              trust_level, freshness_at, etag \
-             FROM push_bridge_cache ORDER BY cache_key",
+             FROM push_bridge_cache ORDER BY id",
         )
         .load::<PushBridgeCacheRow>(&mut *conn)
         .await
@@ -6387,12 +6391,12 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         // describe-URL columns until the next live fetch fills in the contract.
         sql_query(
             "INSERT INTO push_bridge_cache \
-             (cache_key, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             (id, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
               cache_state, contract_digest, fetched_at, remote_contract, \
               trust_level, freshness_at, etag, updated_at) \
              VALUES ($1, $1, $1, $1, 'snapshot_recorded', 'snapshot_recorded', \
                      $2, NOW(), '{}'::jsonb, $4, NOW(), $3, NOW()) \
-             ON CONFLICT (cache_key) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 contract_digest = EXCLUDED.contract_digest, \
                 etag = EXCLUDED.etag, \
                 trust_level = EXCLUDED.trust_level, \
@@ -6499,9 +6503,9 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO multisig_pending \
-             (anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
+             (id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (anchor_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 threshold_k = EXCLUDED.threshold_k, \
                 threshold_n = EXCLUDED.threshold_n, \
@@ -6526,9 +6530,9 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
-             FROM multisig_pending WHERE anchor_id = $1",
+             FROM multisig_pending WHERE id = $1",
         )
         .bind::<Text, _>(anchor_id)
         .get_result::<MultisigPendingRow>(&mut *conn)
@@ -6548,7 +6552,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET partials = jsonb_set(partials, ARRAY[$2]::text[], $3, true) \
-             WHERE anchor_id = $1",
+             WHERE id = $1",
         )
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(signer_did)
@@ -6568,7 +6572,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool).await?;
         let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
         sql_query(
-            "SELECT anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
@@ -6582,7 +6586,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM multisig_pending WHERE anchor_id = $1")
+        sql_query("DELETE FROM multisig_pending WHERE id = $1")
             .bind::<Text, _>(anchor_id)
             .execute(&mut *conn)
             .await
@@ -6593,7 +6597,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
@@ -6626,7 +6630,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             "UPDATE multisig_pending \
              SET claimed_by_node_id = $2, claimed_until = $4, \
                  claim_seq = claim_seq + 1 \
-             WHERE anchor_id = $1 \
+             WHERE id = $1 \
                AND (claimed_by_node_id IS NULL \
                     OR claimed_until IS NULL \
                     OR claimed_until <= $3) \
@@ -6648,7 +6652,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             // can log it for diagnostics. Lookup is best-effort — a missing
             // row reports `0`.
             let cur: Option<ClaimSeqRow> =
-                sql_query("SELECT claim_seq FROM multisig_pending WHERE anchor_id = $1")
+                sql_query("SELECT claim_seq FROM multisig_pending WHERE id = $1")
                     .bind::<Text, _>(anchor_id)
                     .get_result::<ClaimSeqRow>(&mut *conn)
                     .await
@@ -6663,7 +6667,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_by_node_id = NULL, claimed_until = NULL \
-             WHERE anchor_id = $1 AND claimed_by_node_id = $2",
+             WHERE id = $1 AND claimed_by_node_id = $2",
         )
         .bind::<Text, _>(anchor_id)
         .bind::<Text, _>(node_id)
@@ -6682,7 +6686,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "DELETE FROM multisig_pending \
-             WHERE anchor_id = $1 \
+             WHERE id = $1 \
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
@@ -6706,7 +6710,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_until = $4 \
-             WHERE anchor_id = $1 \
+             WHERE id = $1 \
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
@@ -6762,7 +6766,7 @@ impl AuditStore for PgAuditStore {
             operation_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO audit_logs \
-             (id, actor, request_id, action, outcome, realm_id, operation_id, device_id, payload, created_at) \
+             (id, actor_id, request_id, action, outcome, realm_id, operation_id, device_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
@@ -6782,7 +6786,7 @@ impl AuditStore for PgAuditStore {
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT payload FROM audit_logs WHERE actor = $1 ORDER BY created_at ASC, id ASC")
+        sql_query("SELECT payload FROM audit_logs WHERE actor_id = $1 ORDER BY created_at ASC, id ASC")
             .bind::<Text, _>(actor)
             .load::<AuditPayloadRow>(&mut *conn)
             .await
@@ -6835,10 +6839,10 @@ impl PushDeviceStore for PgPushDeviceStore {
         let app_id = extract("app_id");
         sql_query(
             "INSERT INTO push_devices \
-             (registration_id, actor, device_id, push_gateway, push_key, platform, app_id, payload, updated_at) \
+             (id, actor_id, device_id, push_gateway, push_key, platform, app_id, payload, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
-             ON CONFLICT (registration_id) DO UPDATE SET \
-                actor = EXCLUDED.actor, \
+             ON CONFLICT (id) DO UPDATE SET \
+                actor_id = EXCLUDED.actor_id, \
                 device_id = EXCLUDED.device_id, \
                 push_gateway = EXCLUDED.push_gateway, \
                 push_key = EXCLUDED.push_key, \
@@ -6870,7 +6874,7 @@ impl PushDeviceStore for PgPushDeviceStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "DELETE FROM push_devices \
-             WHERE actor = $1 \
+             WHERE actor_id = $1 \
                AND device_id = $2 \
                AND ($3 IS NULL OR push_key = $3) \
                AND ($4 IS NULL OR app_id = $4)",
@@ -6886,7 +6890,7 @@ impl PushDeviceStore for PgPushDeviceStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, registration_id ASC")
+        sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, id ASC")
             .load::<PushDevicePayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
@@ -7171,7 +7175,7 @@ impl ModerationStore for PgModerationStore {
         let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_reports \
-             (id, reporter, target_actor, target_event_id, realm_id, payload, created_at) \
+             (id, reporter_id, target_actor_id, target_event_id, realm_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
@@ -7206,7 +7210,7 @@ impl ModerationStore for PgModerationStore {
         let realm_id_uuid: Option<Uuid> = realm_id.as_deref().map(ids::typed_uuid_part_or_panic);
         sql_query(
             "INSERT INTO moderation_actions \
-             (id, moderator, target_actor, action_kind, realm_id, payload, created_at) \
+             (id, moderator_id, target_actor_id, action_kind, realm_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
@@ -7270,9 +7274,9 @@ impl PresenceStore for PgPresenceStore {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO presence (actor, status, updated_at) \
+            "INSERT INTO presence (id, status, updated_at) \
              VALUES ($1, $2, $3) \
-             ON CONFLICT (actor) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 status = EXCLUDED.status, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -7287,7 +7291,7 @@ impl PresenceStore for PgPresenceStore {
 
     async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT actor, status, updated_at FROM presence WHERE actor = $1")
+        sql_query("SELECT id AS actor, status, updated_at FROM presence WHERE id = $1")
             .bind::<Text, _>(actor)
             .get_result::<PresenceRow>(&mut *conn)
             .await
@@ -7367,9 +7371,9 @@ impl WebvhStore for PgWebvhStore {
     async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT did, did_document, key_log_head, seq, method_evidence, \
+            "SELECT id AS did, did_document, key_log_head, seq, method_evidence, \
              fetched_at, expires_at, updated_at \
-             FROM webvh_documents WHERE did = $1",
+             FROM webvh_documents WHERE id = $1",
         )
         .bind::<Text, _>(did)
         .get_result::<WebvhDocumentRow>(&mut *conn)
@@ -7385,7 +7389,7 @@ impl WebvhStore for PgWebvhStore {
     ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT did, did_document, key_log_head, seq, method_evidence, \
+            "SELECT id AS did, did_document, key_log_head, seq, method_evidence, \
              fetched_at, expires_at, updated_at \
              FROM webvh_documents \
              WHERE method_evidence->>'mode' = 'embedded_webvh_provider' \
@@ -7408,10 +7412,10 @@ impl WebvhStore for PgWebvhStore {
         let (fetched_at, expires_at) = webvh_freshness_on_put();
         sql_query(
             "INSERT INTO webvh_documents \
-             (did, did_document, key_log_head, seq, method_evidence, \
+             (id, did_document, key_log_head, seq, method_evidence, \
               fetched_at, expires_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (did) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 did_document = EXCLUDED.did_document, \
                 key_log_head = EXCLUDED.key_log_head, \
                 seq = EXCLUDED.seq, \
@@ -7438,9 +7442,9 @@ impl WebvhStore for PgWebvhStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO webvh_log_events \
-             (event_digest, did, seq, operation, created_at) \
+             (id, did, seq, operation, created_at) \
              VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (event_digest) DO NOTHING",
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&event.event_digest)
         .bind::<Text, _>(&event.did)
@@ -7456,8 +7460,8 @@ impl WebvhStore for PgWebvhStore {
     async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT event_digest, did, seq, operation, created_at \
-             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, event_digest ASC",
+            "SELECT id AS event_digest, did, seq, operation, created_at \
+             FROM webvh_log_events WHERE did = $1 ORDER BY seq ASC, id ASC",
         )
         .bind::<Text, _>(did)
         .load::<WebvhLogRow>(&mut *conn)
@@ -7518,7 +7522,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         let mut conn = pg_conn(&self.pool).await?;
         let invite_id_uuid = ids::typed_uuid_part_or_panic(invite_id);
         sql_query(
-            "SELECT id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
+            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
              FROM realm_invites WHERE id = $1",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
@@ -7535,12 +7539,12 @@ impl RealmInviteStore for PgRealmInviteStore {
         let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO realm_invites \
-             (id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at) \
+             (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
-                inviter = EXCLUDED.inviter, \
-                invitee = EXCLUDED.invitee, \
+                inviter_id = EXCLUDED.inviter_id, \
+                invitee_id = EXCLUDED.invitee_id, \
                 invite_delivery_target = EXCLUDED.invite_delivery_target, \
                 introduction_evidence_digest = EXCLUDED.introduction_evidence_digest, \
                 invite_token = EXCLUDED.invite_token, \
@@ -7566,7 +7570,7 @@ impl RealmInviteStore for PgRealmInviteStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, realm_id, inviter, invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
+            "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, invite_token, status, expires_at, created_at \
              FROM realm_invites ORDER BY created_at ASC, id ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)
@@ -7636,9 +7640,9 @@ impl KeyBackupStore for PgKeyBackupStore {
             });
         sql_query(
             "INSERT INTO key_backups \
-             (backup_id, account_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+             (id, account_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
-             ON CONFLICT (backup_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 account_id = EXCLUDED.account_id, \
                 device_id = EXCLUDED.device_id, \
                 scheme = EXCLUDED.scheme, \
@@ -7662,11 +7666,11 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool).await?;
         // last_accessed_at side-effect on read is informational; failure here
         // must not crash the get path.
-        let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE backup_id = $1")
+        let _ = sql_query("UPDATE key_backups SET last_accessed_at = NOW() WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .execute(&mut *conn)
             .await;
-        sql_query("SELECT payload FROM key_backups WHERE backup_id = $1")
+        sql_query("SELECT payload FROM key_backups WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .get_result::<KeyBackupPayloadRow>(&mut *conn)
             .await
@@ -7677,7 +7681,7 @@ impl KeyBackupStore for PgKeyBackupStore {
 
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM key_backups WHERE backup_id = $1")
+        sql_query("DELETE FROM key_backups WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
             .execute(&mut *conn)
             .await
@@ -7687,7 +7691,7 @@ impl KeyBackupStore for PgKeyBackupStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, backup_id ASC")
+        sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, id ASC")
             .load::<KeyBackupPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|r| r.payload).collect())
@@ -8121,11 +8125,11 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let realm_id_uuid = ids::typed_uuid_part_or_panic(&record.realm_id);
         sql_query(
             "INSERT INTO webrtc_sessions \
-             (id, realm_id, initiator_did, ice_config, signaling_state, created_at, expires_at) \
+             (id, realm_id, initiator_id, ice_config, signaling_state, created_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
-                initiator_did = EXCLUDED.initiator_did, \
+                initiator_id = EXCLUDED.initiator_id, \
                 ice_config = EXCLUDED.ice_config, \
                 signaling_state = EXCLUDED.signaling_state, \
                 expires_at = EXCLUDED.expires_at",
@@ -8147,7 +8151,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         let mut conn = pg_conn(&self.pool).await?;
         let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         let row = sql_query(
-            "SELECT id, realm_id, initiator_did, signaling_state, created_at, expires_at \
+            "SELECT id, realm_id, initiator_id AS initiator_did, signaling_state, created_at, expires_at \
              FROM webrtc_sessions WHERE id = $1",
         )
         .bind::<SqlUuid, _>(session_id_uuid)
@@ -8250,8 +8254,8 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
     async fn get(&self, policy_id: &str) -> PersistenceResult<Option<PolicyDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
-             FROM policy_documents WHERE policy_id = $1",
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE id = $1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
         .get_result::<PolicyDocumentRow>(&mut *conn).await
@@ -8275,16 +8279,16 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO policy_documents \
-             (policy_id, owner, scope, subject_ref, policy_type, document, version, signed_by, active, updated_at) \
+             (id, owner_id, scope, subject_ref, policy_type, document, version, signed_by_id, active, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (policy_id) DO UPDATE SET \
-                owner = EXCLUDED.owner, \
+             ON CONFLICT (id) DO UPDATE SET \
+                owner_id = EXCLUDED.owner_id, \
                 scope = EXCLUDED.scope, \
                 subject_ref = EXCLUDED.subject_ref, \
                 policy_type = EXCLUDED.policy_type, \
                 document = EXCLUDED.document, \
                 version = EXCLUDED.version, \
-                signed_by = EXCLUDED.signed_by, \
+                signed_by_id = EXCLUDED.signed_by_id, \
                 active = EXCLUDED.active, \
                 updated_at = EXCLUDED.updated_at",
         )
@@ -8305,7 +8309,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
 
     async fn delete(&self, policy_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM policy_documents WHERE policy_id = $1")
+        sql_query("DELETE FROM policy_documents WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
             .execute(&mut *conn)
             .await
@@ -8316,8 +8320,8 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
     async fn list_for_owner(&self, owner: &str) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
-             FROM policy_documents WHERE owner = $1 ORDER BY updated_at ASC, policy_id ASC",
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE owner_id = $1 ORDER BY updated_at ASC, id ASC",
         )
         .bind::<Text, _>(owner)
         .load::<PolicyDocumentRow>(&mut *conn).await
@@ -8328,8 +8332,8 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
-             FROM policy_documents ORDER BY updated_at ASC, policy_id ASC",
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents ORDER BY updated_at ASC, id ASC",
         )
         .load::<PolicyDocumentRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
@@ -8343,8 +8347,8 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         // predicate on the returned rows.
         let mut conn = pg_conn(&self.pool).await?;
         let rows: Vec<PolicyDocumentRow> = sql_query(
-            "SELECT policy_id, owner, scope, subject_ref, policy_type, document, active, updated_at \
-             FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, policy_id ASC",
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+             FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, id ASC",
         )
         .load::<PolicyDocumentRow>(&mut *conn).await
         .map_err(PersistenceError::from)?;
@@ -8418,7 +8422,7 @@ impl PgRecoveryPolicyStore {
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND version = $2",
         )
@@ -8440,9 +8444,9 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE policy_id = $1",
+             FROM recovery_policies WHERE id = $1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(policy_id))
         .get_result::<RecoveryPolicyRow>(&mut *conn)
@@ -8458,7 +8462,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
@@ -8477,7 +8481,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 \
              ORDER BY version DESC, accepted_at DESC",
@@ -8530,7 +8534,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO recovery_policies \
-             (policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+             (id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
               expires_at, issued_at, verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
@@ -8633,7 +8637,7 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
     ) -> PersistenceResult<Option<RecoveryReceiptRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+            "SELECT id AS receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
                     trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
                     verification_method, raw_payload, accepted_at \
              FROM recovery_receipts WHERE recovery_session_id = $1",
@@ -8652,7 +8656,7 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
     ) -> PersistenceResult<Vec<RecoveryReceiptRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
-            "SELECT receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+            "SELECT id AS receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
                     trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
                     verification_method, raw_payload, accepted_at \
              FROM recovery_receipts WHERE principal_id = $1 \
@@ -8680,7 +8684,7 @@ impl RecoveryReceiptStore for PgRecoveryReceiptStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO recovery_receipts \
-             (receipt_id, principal_id, recovery_session_id, policy_id, policy_version, \
+             (id, principal_id, recovery_session_id, policy_id, policy_version, \
               trust_domain, new_device_id, proof_digest, outcome, started_at, completed_at, \
               verification_method, raw_payload, accepted_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
@@ -8780,7 +8784,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
     }
 }
 
-const RECOVERY_SESSION_COLUMNS: &str = "recovery_session_id, principal_id, requesting_device_id, \
+const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, ssk_generation, policy_payload, challenge, state, \
      proof_payload, created_at, updated_at, expires_at";
 
@@ -8792,8 +8796,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
     ) -> PersistenceResult<Option<RecoverySessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_session \
-             WHERE recovery_session_id = $1"
+            "SELECT {RECOVERY_SESSION_COLUMNS} FROM recovery_sessions \
+             WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(recovery_session_id))
         .get_result::<RecoverySessionRow>(&mut *conn)
@@ -8806,8 +8810,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
     async fn insert(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO recovery_session \
-             (recovery_session_id, principal_id, requesting_device_id, trust_domain, policy_id, \
+            "INSERT INTO recovery_sessions \
+             (id, principal_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, ssk_generation, policy_payload, challenge, state, proof_payload, \
               created_at, updated_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
@@ -8835,9 +8839,9 @@ impl RecoverySessionStore for PgRecoverySessionStore {
     async fn update(&self, record: RecoverySessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let affected = sql_query(
-            "UPDATE recovery_session SET \
+            "UPDATE recovery_sessions SET \
                 state = $2, proof_payload = $3, updated_at = $4, expires_at = $5 \
-             WHERE recovery_session_id = $1",
+             WHERE id = $1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.recovery_session_id))
         .bind::<Text, _>(&record.state)
@@ -9242,7 +9246,7 @@ impl From<ContactRow> for ContactRecord {
 }
 
 const CONTACT_COLUMNS: &str =
-    "requester, target, scope, status, message, peer_service_did, created_at, updated_at";
+    "requester_id AS requester, target_id AS target, scope, status, message, peer_service_id AS peer_service_did, created_at, updated_at";
 
 #[async_trait]
 impl ContactStore for PgContactStore {
@@ -9252,7 +9256,7 @@ impl ContactStore for PgContactStore {
         // fall back to any scope for this requester/target pair.
         let row = sql_query(format!(
             "SELECT {CONTACT_COLUMNS} FROM contacts \
-             WHERE requester = $1 AND target = $2 \
+             WHERE requester_id = $1 AND target_id = $2 \
              ORDER BY (scope = 'message') DESC, scope ASC LIMIT 1"
         ))
         .bind::<Text, _>(requester)
@@ -9272,7 +9276,7 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(format!(
             "SELECT {CONTACT_COLUMNS} FROM contacts \
-             WHERE requester = $1 AND target = $2 AND scope = $3"
+             WHERE requester_id = $1 AND target_id = $2 AND scope = $3"
         ))
         .bind::<Text, _>(requester)
         .bind::<Text, _>(target)
@@ -9287,14 +9291,15 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO contacts \
-             (requester, target, scope, status, message, peer_service_did, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (requester, target, scope) DO UPDATE SET \
+             (id, requester_id, target_id, scope, status, message, peer_service_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (requester_id, target_id, scope) DO UPDATE SET \
                 status = EXCLUDED.status, \
                 message = EXCLUDED.message, \
-                peer_service_did = EXCLUDED.peer_service_did, \
+                peer_service_id = EXCLUDED.peer_service_id, \
                 updated_at = EXCLUDED.updated_at",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
         .bind::<Text, _>(&record.scope)
@@ -9313,7 +9318,7 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(format!(
             "SELECT {CONTACT_COLUMNS} FROM contacts \
-             WHERE requester = $1 OR target = $1 \
+             WHERE requester_id = $1 OR target_id = $1 \
              ORDER BY created_at ASC, scope ASC"
         ))
         .bind::<Text, _>(actor)
@@ -9324,7 +9329,7 @@ impl ContactStore for PgContactStore {
 
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM contacts WHERE requester = $1 AND target = $2")
+        sql_query("DELETE FROM contacts WHERE requester_id = $1 AND target_id = $2")
             .bind::<Text, _>(requester)
             .bind::<Text, _>(target)
             .execute(&mut *conn)
@@ -9371,7 +9376,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     ) -> PersistenceResult<Option<cokret_sdk::InviteReceivePolicy>> {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
-            "SELECT subject_id, policy_payload FROM invite_receive_policies WHERE subject_id = $1",
+            "SELECT id AS subject_id, policy_payload FROM invite_receive_policies WHERE id = $1",
         )
         .bind::<Text, _>(subject_id)
         .get_result::<InviteReceivePolicyRow>(&mut *conn)
@@ -9394,9 +9399,9 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO invite_receive_policies \
-             (subject_id, policy_payload, blocked_subjects, updated_at) \
+             (id, policy_payload, blocked_subjects, updated_at) \
              VALUES ($1, $2, $3, NOW()) \
-             ON CONFLICT (subject_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 policy_payload = EXCLUDED.policy_payload, \
                 blocked_subjects = EXCLUDED.blocked_subjects, \
                 updated_at = NOW()",
@@ -9414,7 +9419,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         &self,
     ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query("SELECT subject_id, policy_payload FROM invite_receive_policies")
+        let rows = sql_query("SELECT id AS subject_id, policy_payload FROM invite_receive_policies")
             .get_results::<InviteReceivePolicyRow>(&mut *conn)
             .await?;
         rows.into_iter()
@@ -9541,7 +9546,7 @@ impl ConsentCellRow {
     }
 }
 
-const CONSENT_CELL_COLUMNS: &str = "holder, peer, scope, cell_id, requested_at, grant_dots, \
+const CONSENT_CELL_COLUMNS: &str = "holder_id AS holder, peer_id AS peer, scope, cell_id, requested_at, grant_dots, \
      revoked_dots, revoked_at, updated_at";
 
 #[async_trait]
@@ -9555,7 +9560,7 @@ impl ConsentCellStore for PgConsentCellStore {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(format!(
             "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells \
-             WHERE holder = $1 AND peer = $2 AND scope = $3"
+             WHERE holder_id = $1 AND peer_id = $2 AND scope = $3"
         ))
         .bind::<Text, _>(holder)
         .bind::<Text, _>(peer)
@@ -9578,9 +9583,9 @@ impl ConsentCellStore for PgConsentCellStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO consent_cells \
-             (holder, peer, scope, cell_id, requested_at, grant_dots, revoked_dots, revoked_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (holder, peer, scope) DO UPDATE SET \
+             (id, holder_id, peer_id, scope, cell_id, requested_at, grant_dots, revoked_dots, revoked_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (holder_id, peer_id, scope) DO UPDATE SET \
                 cell_id = EXCLUDED.cell_id, \
                 requested_at = EXCLUDED.requested_at, \
                 grant_dots = EXCLUDED.grant_dots, \
@@ -9588,6 +9593,7 @@ impl ConsentCellStore for PgConsentCellStore {
                 revoked_at = EXCLUDED.revoked_at, \
                 updated_at = EXCLUDED.updated_at",
         )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.holder)
         .bind::<Text, _>(&record.peer)
         .bind::<Text, _>(&record.scope)
@@ -9799,8 +9805,8 @@ impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     }
 }
 
-const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "container_space_id, realm_id, kind, title, parent_ref, rank, state, \
-     state_changed_at, created_by, created_at, updated_by, updated_at";
+const SPACE_CONTAINER_PROJECTION_COLUMNS: &str = "id AS container_space_id, realm_id, kind, title, parent_ref, rank, state, \
+     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at";
 
 #[async_trait]
 impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
@@ -9810,7 +9816,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     ) -> PersistenceResult<Option<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers WHERE container_space_id = $1"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
         .get_result::<SpaceContainerProjectionRow>(&mut *conn).await
@@ -9822,11 +9828,11 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     async fn put(&self, record: &SpaceContainerProjectionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO projection_space_containers \
-             (container_space_id, realm_id, kind, title, parent_ref, rank, state, \
-              state_changed_at, created_by, created_at, updated_by, updated_at) \
+            "INSERT INTO projection_spaces \
+             (id, realm_id, kind, title, parent_ref, rank, state, \
+              state_changed_at, created_by_id, created_at, updated_by_id, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (container_space_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 kind = EXCLUDED.kind, \
                 title = EXCLUDED.title, \
@@ -9834,7 +9840,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
                 rank = EXCLUDED.rank, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
-                updated_by = EXCLUDED.updated_by, \
+                updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.container_space_id))
@@ -9866,8 +9872,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     ) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers \
-             WHERE realm_id = $1 ORDER BY container_space_id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces \
+             WHERE realm_id = $1 ORDER BY id"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<SpaceContainerProjectionRow>(&mut *conn)
@@ -9883,7 +9889,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SpaceContainerProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_space_containers ORDER BY container_space_id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces ORDER BY id"
         ))
         .load::<SpaceContainerProjectionRow>(&mut *conn).await
         .map(|rows| {
@@ -9896,7 +9902,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
 
     async fn delete(&self, container_space_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM projection_space_containers WHERE container_space_id = $1")
+        sql_query("DELETE FROM projection_spaces WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
             .execute(&mut *conn)
             .await
@@ -9955,15 +9961,15 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
     }
 }
 
-const FLOW_PROJECTION_COLUMNS: &str = "flow_id, realm_id, title, summary, state, \
-     state_changed_at, created_by, created_at, updated_by, updated_at, scope_circle_id";
+const FLOW_PROJECTION_COLUMNS: &str = "id AS flow_id, realm_id, title, summary, state, \
+     state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at, scope_circle_id";
 
 #[async_trait]
 impl FlowProjectionStore for PgFlowProjectionStore {
     async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE flow_id = $1"
+            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
         .get_result::<FlowProjectionRow>(&mut *conn)
@@ -9977,16 +9983,16 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_flows \
-             (flow_id, realm_id, title, summary, state, state_changed_at, \
-              created_by, created_at, updated_by, updated_at, scope_circle_id) \
+             (id, realm_id, title, summary, state, state_changed_at, \
+              created_by_id, created_at, updated_by_id, updated_at, scope_circle_id) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-             ON CONFLICT (flow_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 title = EXCLUDED.title, \
                 summary = EXCLUDED.summary, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
-                updated_by = EXCLUDED.updated_by, \
+                updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at, \
                 scope_circle_id = EXCLUDED.scope_circle_id",
         )
@@ -10016,7 +10022,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
-             WHERE realm_id = $1 ORDER BY flow_id"
+             WHERE realm_id = $1 ORDER BY id"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<FlowProjectionRow>(&mut *conn)
@@ -10028,7 +10034,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY flow_id"
+            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY id"
         ))
         .load::<FlowProjectionRow>(&mut *conn)
         .await
@@ -10038,7 +10044,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
 
     async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM projection_flows WHERE flow_id = $1")
+        sql_query("DELETE FROM projection_flows WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
             .execute(&mut *conn)
             .await
@@ -10104,8 +10110,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 
-const MORPH_PROJECTION_COLUMNS: &str = "morph_id, realm_id, morph_type, title, fields, \
-     schema_refs, facets, versions, state, state_changed_at, created_by, created_at, updated_by, \
+const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, morph_type, title, fields, \
+     schema_refs, facets, versions, state, state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, \
      updated_at";
 
 #[async_trait]
@@ -10113,7 +10119,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE morph_id = $1"
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
         .get_result::<MorphProjectionRow>(&mut *conn)
@@ -10127,10 +10133,10 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (morph_id, realm_id, morph_type, title, fields, schema_refs, facets, versions, \
-              state, state_changed_at, created_by, created_at, updated_by, updated_at) \
+             (id, realm_id, morph_type, title, fields, schema_refs, facets, versions, \
+              state, state_changed_at, created_by_id, created_at, updated_by_id, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
-             ON CONFLICT (morph_id) DO UPDATE SET \
+             ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 morph_type = EXCLUDED.morph_type, \
                 title = EXCLUDED.title, \
@@ -10140,7 +10146,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 versions = EXCLUDED.versions, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
-                updated_by = EXCLUDED.updated_by, \
+                updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.morph_id))
@@ -10170,7 +10176,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
-             WHERE realm_id = $1 ORDER BY morph_id"
+             WHERE realm_id = $1 ORDER BY id"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
         .load::<MorphProjectionRow>(&mut *conn)
@@ -10182,7 +10188,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MorphProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY morph_id"
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY id"
         ))
         .load::<MorphProjectionRow>(&mut *conn)
         .await
@@ -10192,7 +10198,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
 
     async fn delete(&self, morph_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM projection_morphs WHERE morph_id = $1")
+        sql_query("DELETE FROM projection_morphs WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(morph_id))
             .execute(&mut *conn)
             .await
@@ -10256,7 +10262,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO projection_events \
-             (event_id, realm_id, event_kind, operation_type, operation_id, sender, payload, created_at) \
+             (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.event_id))
@@ -10280,8 +10286,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender, payload, created_at \
-             FROM projection_events ORDER BY ordinal",
+            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at \
+             FROM projection_events ORDER BY id",
         )
         .load::<ProjectionEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())

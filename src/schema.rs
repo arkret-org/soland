@@ -12,9 +12,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    sessions (token_hash) {
-        token_hash -> Text,
-        actor -> Text,
+    sessions (id) {
+        id -> Text,
+        actor_id -> Text,
         device_id -> Text,
         audience -> Text,
         payload -> Jsonb,
@@ -26,8 +26,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    devices (actor, device_id) {
-        actor -> Text,
+    devices (id) {
+        id -> Uuid,
+        actor_id -> Text,
         device_id -> Text,
         device_key -> Nullable<Text>,
         verification_state -> Text,
@@ -39,7 +40,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    federation_transactions (source_service, txn_id) {
+    federation_transactions (id) {
+        id -> Uuid,
         source_service -> Text,
         txn_id -> Text,
         destination_service -> Text,
@@ -53,8 +55,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    push_bridge_cache (cache_key) {
-        cache_key -> Text,
+    push_bridge_cache (id) {
+        id -> Text,
         push_gateway_url -> Text,
         service_base_url -> Text,
         bridge_describe_url -> Text,
@@ -71,8 +73,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    multisig_pending (anchor_id) {
-        anchor_id -> Text,
+    multisig_pending (id) {
+        id -> Text,
         realm_id -> Uuid,
         threshold_k -> Int4,
         threshold_n -> Int4,
@@ -90,7 +92,7 @@ diesel::table! {
 diesel::table! {
     audit_logs (id) {
         id -> Uuid,
-        actor -> Nullable<Text>,
+        actor_id -> Nullable<Text>,
         request_id -> Nullable<Uuid>,
         action -> Text,
         outcome -> Text,
@@ -103,9 +105,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    push_devices (registration_id) {
-        registration_id -> Text,
-        actor -> Nullable<Text>,
+    push_devices (id) {
+        id -> Text,
+        actor_id -> Nullable<Text>,
         device_id -> Text,
         push_gateway -> Text,
         push_key -> Text,
@@ -146,8 +148,8 @@ diesel::table! {
 diesel::table! {
     moderation_reports (id) {
         id -> Uuid,
-        reporter -> Nullable<Text>,
-        target_actor -> Nullable<Text>,
+        reporter_id -> Nullable<Text>,
+        target_actor_id -> Nullable<Text>,
         target_event_id -> Nullable<Uuid>,
         realm_id -> Nullable<Uuid>,
         payload -> Jsonb,
@@ -158,8 +160,8 @@ diesel::table! {
 diesel::table! {
     moderation_actions (id) {
         id -> Uuid,
-        moderator -> Nullable<Text>,
-        target_actor -> Nullable<Text>,
+        moderator_id -> Nullable<Text>,
+        target_actor_id -> Nullable<Text>,
         action_kind -> Nullable<Text>,
         realm_id -> Nullable<Uuid>,
         payload -> Jsonb,
@@ -168,16 +170,16 @@ diesel::table! {
 }
 
 diesel::table! {
-    presence (actor) {
-        actor -> Text,
+    presence (id) {
+        id -> Text,
         status -> Text,
         updated_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    webvh_documents (did) {
-        did -> Text,
+    webvh_documents (id) {
+        id -> Text,
         did_document -> Jsonb,
         key_log_head -> Nullable<Text>,
         seq -> Int8,
@@ -189,8 +191,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    webvh_log_events (event_digest) {
-        event_digest -> Text,
+    webvh_log_events (id) {
+        id -> Text,
         did -> Text,
         seq -> Int8,
         operation -> Jsonb,
@@ -202,8 +204,8 @@ diesel::table! {
     realm_invites (id) {
         id -> Uuid,
         realm_id -> Uuid,
-        inviter -> Text,
-        invitee -> Nullable<Text>,
+        inviter_id -> Text,
+        invitee_id -> Nullable<Text>,
         invite_delivery_target -> Nullable<Jsonb>,
         introduction_evidence_digest -> Nullable<Text>,
         invite_token -> Text,
@@ -214,12 +216,12 @@ diesel::table! {
 }
 
 diesel::table! {
-    blobs (blob_ref) {
-        blob_ref -> Text,
+    blobs (id) {
+        id -> Text,
         sha256 -> Text,
         media_type -> Text,
         filename -> Nullable<Text>,
-        uploaded_by -> Text,
+        uploaded_by_id -> Text,
         realm_id -> Nullable<Uuid>,
         size_bytes -> Int8,
         storage_backend -> Text,
@@ -232,8 +234,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    key_backups (backup_id) {
-        backup_id -> Uuid,
+    key_backups (id) {
+        id -> Uuid,
         account_id -> Nullable<Text>,
         actor_id -> Nullable<Text>,
         device_id -> Nullable<Text>,
@@ -252,7 +254,7 @@ diesel::table! {
     webrtc_sessions (id) {
         id -> Uuid,
         realm_id -> Uuid,
-        initiator_did -> Text,
+        initiator_id -> Text,
         ice_config -> Jsonb,
         signaling_state -> Jsonb,
         created_at -> Timestamptz,
@@ -261,15 +263,15 @@ diesel::table! {
 }
 
 diesel::table! {
-    policy_documents (policy_id) {
-        policy_id -> Uuid,
-        owner -> Text,
+    policy_documents (id) {
+        id -> Uuid,
+        owner_id -> Text,
         scope -> Text,
         subject_ref -> Text,
         policy_type -> Text,
         document -> Jsonb,
         version -> Int4,
-        signed_by -> Nullable<Text>,
+        signed_by_id -> Nullable<Text>,
         active -> Bool,
         updated_at -> Timestamptz,
     }
@@ -280,7 +282,7 @@ diesel::table! {
         id -> Uuid,
         title -> Text,
         summary -> Nullable<Text>,
-        owner -> Nullable<Text>,
+        owner_id -> Nullable<Text>,
         discoverability -> Text,
         history_visibility -> Text,
         history_sharing_policy -> Nullable<Jsonb>,
@@ -296,9 +298,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    space_members (realm_id, actor) {
+    space_members (id) {
+        id -> Uuid,
         realm_id -> Uuid,
-        actor -> Text,
+        actor_id -> Text,
         membership -> Text,
         payload -> Jsonb,
         joined_at -> Nullable<Timestamptz>,
@@ -312,7 +315,7 @@ diesel::table! {
         id -> Uuid,
         realm_id -> Uuid,
         event_type -> Text,
-        sender -> Nullable<Text>,
+        sender_id -> Nullable<Text>,
         thread_id -> Nullable<Text>,
         operation_id -> Nullable<Uuid>,
         payload -> Jsonb,
@@ -326,7 +329,7 @@ diesel::table! {
         realm_id -> Uuid,
         event_type -> Text,
         subject -> Text,
-        sender -> Nullable<Text>,
+        sender_id -> Nullable<Text>,
         operation_id -> Nullable<Uuid>,
         payload -> Jsonb,
         created_at -> Timestamptz,
@@ -334,8 +337,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    account_datas (actor, data_type) {
-        actor -> Text,
+    account_datas (id) {
+        id -> Uuid,
+        actor_id -> Text,
         data_type -> Text,
         payload -> Jsonb,
         updated_at -> Timestamptz,
@@ -344,8 +348,8 @@ diesel::table! {
 
 // Server-side Space-container projection state for ck.space.* lifecycle events.
 diesel::table! {
-    projection_space_containers (container_space_id) {
-        container_space_id -> Uuid,
+    projection_spaces (id) {
+        id -> Uuid,
         realm_id -> Uuid,
         kind -> Text,
         title -> Text,
@@ -353,9 +357,9 @@ diesel::table! {
         rank -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by -> Text,
+        created_by_id -> Text,
         created_at -> Timestamptz,
-        updated_by -> Nullable<Text>,
+        updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
 }
@@ -366,23 +370,23 @@ diesel::table! {
 // from cokret-sdk: active / archived / deleted / redacted (no
 // "tombstoned" — Flow / Morph have no dedicated tombstone event).
 diesel::table! {
-    projection_flows (flow_id) {
-        flow_id -> Uuid,
+    projection_flows (id) {
+        id -> Uuid,
         realm_id -> Uuid,
         title -> Text,
         summary -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by -> Text,
+        created_by_id -> Text,
         created_at -> Timestamptz,
-        updated_by -> Nullable<Text>,
+        updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
 }
 
 diesel::table! {
-    projection_morphs (morph_id) {
-        morph_id -> Uuid,
+    projection_morphs (id) {
+        id -> Uuid,
         realm_id -> Uuid,
         morph_type -> Text,
         title -> Nullable<Text>,
@@ -392,9 +396,9 @@ diesel::table! {
         versions -> Jsonb,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by -> Text,
+        created_by_id -> Text,
         created_at -> Timestamptz,
-        updated_by -> Nullable<Text>,
+        updated_by_id -> Nullable<Text>,
         updated_at -> Nullable<Timestamptz>,
     }
 }
@@ -407,36 +411,38 @@ diesel::table! {
 // canonical_events table is where the (actor_id, actor_seq) uniqueness
 // invariant lives.
 diesel::table! {
-    projection_events (ordinal) {
-        ordinal -> BigInt,
+    projection_events (id) {
+        id -> BigInt,
         event_id -> Uuid,
         realm_id -> Uuid,
         event_kind -> Text,
         operation_type -> Text,
         operation_id -> Nullable<Uuid>,
-        sender -> Nullable<Text>,
+        sender_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    contacts (requester, target, scope) {
-        requester -> Text,
-        target -> Text,
+    contacts (id) {
+        id -> Uuid,
+        requester_id -> Text,
+        target_id -> Text,
         scope -> Text,
         status -> Text,
         message -> Nullable<Text>,
-        peer_service_did -> Nullable<Text>,
+        peer_service_id -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    consent_cells (holder, peer, scope) {
-        holder -> Text,
-        peer -> Text,
+    consent_cells (id) {
+        id -> Uuid,
+        holder_id -> Text,
+        peer_id -> Text,
         scope -> Text,
         cell_id -> Text,
         requested_at -> Nullable<Timestamptz>,
@@ -461,8 +467,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    invite_receive_policies (subject_id) {
-        subject_id -> Text,
+    invite_receive_policies (id) {
+        id -> Text,
         policy_payload -> Jsonb,
         blocked_subjects -> Array<Text>,
         updated_at -> Timestamptz,
@@ -495,7 +501,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     events,
     space_state_events,
     account_datas,
-    projection_space_containers,
+    projection_spaces,
     projection_flows,
     projection_morphs,
     projection_events,

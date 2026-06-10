@@ -216,7 +216,7 @@ async fn policy_server_integration_hits_mock() {
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
-        actor_did: "did:web:alice.example".to_owned(),
+        actor_id: "did:web:alice.example".to_owned(),
         action: "ck.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,
@@ -275,7 +275,7 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
-        actor_did: "did:web:alice.example".to_owned(),
+        actor_id: "did:web:alice.example".to_owned(),
         action: "ck.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,

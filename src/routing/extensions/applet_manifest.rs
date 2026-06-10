@@ -55,7 +55,7 @@ pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
 
 /// On-wire applet manifest envelope. The bot/ghost actor registration
 /// flow in `applet-integration.md` Section 4 takes one of these, verifies it,
-/// and (if accepted) mints a `bot_actor_did` bound to the manifest.
+/// and (if accepted) mints a `bot_actor_id` bound to the manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletManifest {
     pub id: String,

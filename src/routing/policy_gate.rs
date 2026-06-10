@@ -68,7 +68,7 @@ impl DidResolver for SharedDidResolver {
 
 pub(crate) async fn enforce_operation_policy_server(
     state: &AppState,
-    actor_did: &str,
+    actor_id: &str,
     operation: &Operation,
     surface: PolicyGateSurface,
 ) -> Result<(), PolicyGateRejection> {
@@ -93,11 +93,11 @@ pub(crate) async fn enforce_operation_policy_server(
         .unwrap_or_else(|| operation.realm_id.as_str())
         .to_owned();
     let policy_request =
-        policy_request_for_operation(state, actor_did, operation, &action, surface)
+        policy_request_for_operation(state, actor_id, operation, &action, surface)
             .map_err(PolicyGateRejection::forbidden_request)?;
     let mut request_ctx = RequestContext {
         realm_id: realm_id.to_owned(),
-        actor_did: actor_did.to_owned(),
+        actor_id: actor_id.to_owned(),
         action: action.clone(),
         mfa_completed: false,
         mfa_requested: false,
@@ -106,11 +106,11 @@ pub(crate) async fn enforce_operation_policy_server(
 
     let decision = check_with_policy_server(
         &state.authz,
-        actor_did,
+        actor_id,
         &action,
         &resource,
         realm_id,
-        Some(actor_did),
+        Some(actor_id),
         &[],
         &[],
         Some(&policy_client),
@@ -177,7 +177,7 @@ fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateR
 
 fn policy_request_for_operation(
     state: &AppState,
-    actor_did: &str,
+    actor_id: &str,
     operation: &Operation,
     action: &str,
     surface: PolicyGateSurface,
@@ -185,7 +185,7 @@ fn policy_request_for_operation(
     let realm_id = RealmId::new(operation.realm_id.to_string())
         .map_err(|error| format!("invalid realm_id for policy check: {error}"))?;
     let actor_id =
-        Did::new(actor_did.to_owned()).map_err(|error| format!("invalid actor DID: {error}"))?;
+        Did::new(actor_id.to_owned()).map_err(|error| format!("invalid actor DID: {error}"))?;
     let source_service_did = Did::new(state.config.service_did.clone())
         .map_err(|error| format!("invalid local service DID: {error}"))?;
     let event_preview = serde_json::to_value(operation)

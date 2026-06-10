@@ -87,7 +87,7 @@ pub struct ProjectionState {
     /// block; responses are per-actor replacements until the poll is closed.
     pub polls: BTreeMap<String, PollState>,
     /// Structured side-band cache keyed by
-    /// `(realm_id, actor_did)`. Holds the FSM state value plus `role` /
+    /// `(realm_id, actor_id)`. Holds the FSM state value plus `role` /
     /// `joined_at` / `updated_at` side-band data that doesn't fit in the
     /// `ck.component.member.state.v1` FSM cell itself. Reads should go
     /// through helpers like [`ProjectionState::members_of_realm`] /
@@ -216,11 +216,11 @@ pub struct ProjectionState {
     /// capability.
     pub capability_derived: BTreeMap<String, CapabilityDerivedState>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
-    /// row is per `(actor_did, device_id)`; the `claimed_by` /
+    /// row is per `(actor_id, device_id)`; the `claimed_by` /
     /// `consumed_at` slots flip on a successful CAS claim.
     pub mls_key_packages: BTreeMap<String, MlsKeyPackage>,
     /// G3.S1 — per-device Welcome queue. Outer key is
-    /// `(recipient_actor_did, recipient_device_id)`; the inner Vec is
+    /// `(recipient_actor_id, recipient_device_id)`; the inner Vec is
     /// the FIFO of pending Welcomes. Entries gain a non-None
     /// `delivered_at` when the recipient device drains them via
     /// `GET /_cokret/self/keys/welcomes/pending`.
@@ -425,14 +425,14 @@ pub struct KeyPackageLifetime {
 
 /// G3.S1 — published MLS KeyPackage row.
 ///
-/// One per `(actor_did, device_id, keypackage_id)`. The atomic CAS claim
+/// One per `(actor_id, device_id, keypackage_id)`. The atomic CAS claim
 /// flips `claimed_by` from `None` to `Some(group_id)` and sets
 /// `consumed_at`; a second claim against the same `id` is rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackage {
     /// Canonical `ck:mls_keypackage:<uuid>` identifier.
     pub id: String,
-    pub actor_did: String,
+    pub actor_id: String,
     pub device_id: String,
     pub lifetime: KeyPackageLifetime,
     /// Opaque bytes of the MLS KeyPackage (`mls_key_package` per RFC 9420
@@ -461,7 +461,7 @@ pub struct MlsWelcome {
     pub id: String,
     /// MLS group the Welcome admits the recipient into.
     pub group_id: String,
-    pub recipient_actor_did: String,
+    pub recipient_actor_id: String,
     pub recipient_device_id: String,
     /// Opaque MLSMessage / Welcome bytes per RFC 9420 §12.4.3.
     pub welcome_bytes: Vec<u8>,
@@ -492,7 +492,7 @@ pub struct MlsCommitEpoch {
     pub epoch: u64,
     /// DID of the committer (the `leader` per MLS terminology — the
     /// member whose Commit was accepted).
-    pub leader_actor_did: String,
+    pub leader_actor_id: String,
     pub covered_frontier: Vec<String>,
     pub committed_at: i64,
 }
@@ -1240,13 +1240,13 @@ pub enum ProjectionEffect {
     },
     /// Flow watch cell touched. Cell write itself is owned by the
     /// Move/Anchor pipeline (cas-register at SDK layer); the projection
-    /// only records that a watch change happened for `(flow_id, actor_did)`
+    /// only records that a watch change happened for `(flow_id, actor_id)`
     /// so downstream listeners (notification dispatcher, watcher list
     /// projection) can react. `level` is `None` when the effect clears
     /// the cell.
     FlowWatchUpdated {
         flow_id: String,
-        actor_did: String,
+        actor_id: String,
         level: Option<String>,
         level_public: Option<bool>,
     },
@@ -1358,10 +1358,10 @@ pub enum ProjectionEffect {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MlsEffect {
     /// `apply_keypackage_publish` — a fresh KeyPackage row was stored
-    /// for `(actor_did, device_id)`.
+    /// for `(actor_id, device_id)`.
     KeyPackagePublished {
         keypackage_id: String,
-        actor_did: String,
+        actor_id: String,
         device_id: String,
     },
     /// `apply_keypackage_claim` — the named KeyPackage was atomically
@@ -1373,10 +1373,10 @@ pub enum MlsEffect {
         consumed_at: i64,
     },
     /// `apply_welcome_enqueue` — a Welcome envelope was appended to the
-    /// per-`(recipient_actor_did, recipient_device_id)` queue.
+    /// per-`(recipient_actor_id, recipient_device_id)` queue.
     WelcomeEnqueued {
         welcome_id: String,
-        recipient_actor_did: String,
+        recipient_actor_id: String,
         recipient_device_id: String,
         group_id: String,
     },
@@ -1384,7 +1384,7 @@ pub enum MlsEffect {
     GroupGenesis {
         group_id: String,
         epoch: u64,
-        creator_actor_did: String,
+        creator_actor_id: String,
         covered_frontier: Vec<String>,
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from
@@ -1394,7 +1394,7 @@ pub enum MlsEffect {
         group_id: String,
         previous_epoch: u64,
         new_epoch: u64,
-        leader_actor_did: String,
+        leader_actor_id: String,
         covered_frontier: Vec<String>,
     },
 }
@@ -5468,7 +5468,7 @@ impl ProjectionState {
         );
 
         // Synthesize the FSM cell state. Cell ref shape per spec
-        // `ck:cell:ck.component.member.state.v1:<actor_did>` — note the
+        // `ck:cell:ck.component.member.state.v1:<actor_id>` — note the
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
         if let Ok(cell_id) =
@@ -7348,7 +7348,7 @@ impl ProjectionState {
                 reason: "missing_flow_id".to_owned(),
             };
         };
-        let Some(actor_did) = operation
+        let Some(actor_id) = operation
             .payload
             .get("watcher_actor_id")
             .and_then(|v| v.as_str())
@@ -7374,7 +7374,7 @@ impl ProjectionState {
             .and_then(|v| v.as_bool());
         ProjectionEffect::FlowWatchUpdated {
             flow_id,
-            actor_did,
+            actor_id,
             level,
             level_public,
         }
@@ -8478,19 +8478,19 @@ impl ProjectionState {
             .collect()
     }
 
-    /// Look up a single `(realm_id, actor_did)` member entry.
-    pub fn member(&self, realm_id: &str, actor_did: &str) -> Option<&SolandMembershipState> {
+    /// Look up a single `(realm_id, actor_id)` member entry.
+    pub fn member(&self, realm_id: &str, actor_id: &str) -> Option<&SolandMembershipState> {
         self.members
-            .get(&(realm_id.to_owned(), actor_did.to_owned()))
+            .get(&(realm_id.to_owned(), actor_id.to_owned()))
     }
 
     /// Read the FSM state of a member directly from the cells map.
     /// Returns `None` if the cell hasn't been written or is in `Bottom`
-    /// state. The cell_subject is the actor_did per spec
+    /// state. The cell_subject is the actor_id per spec
     /// `ck.component.member.state.v1` cell_family declaration.
-    pub fn member_fsm_state(&self, actor_did: &str) -> Option<String> {
+    pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
         let cell_id =
-            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor_did}"))
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.member.state.v1:{actor_id}"))
                 .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)

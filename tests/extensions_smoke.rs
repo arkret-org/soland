@@ -186,7 +186,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
 
-    let ghost_actor_did = format!(
+    let ghost_actor_id = format!(
         "did:web:{}.applet.example:ghost:u123",
         safe_did_token(&namespace)
     );
@@ -198,7 +198,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         "schema": "ck.applet.ghost_actor.provision_request.v1",
         "applet_id": applet_id,
         "service_did": package.service_did.to_string(),
-        "ghost_actor_did": ghost_actor_did,
+        "ghost_actor_id": ghost_actor_id,
         "protocol": "slack",
         "tenant": "T123",
         "external_user_id": "U123",
@@ -213,7 +213,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::CREATED);
     let provision: Value = response.take_json().await.unwrap();
-    assert_eq!(provision["ghost_actor_did"], json!(ghost_actor_did));
+    assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
     assert_eq!(provision["display_name"], json!("Alice on Slack"));
     let profile_event_ref = provision["profile_event_ref"].as_str().unwrap();
     let accountability_grant_ref = provision["accountability_grant_ref"].as_str().unwrap();
@@ -230,7 +230,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         .unwrap()
         .expect("profile event is durable");
     assert_eq!(profile_event.kind, "ck.profile.create");
-    assert_eq!(profile_event.actor_id, ghost_actor_did);
+    assert_eq!(profile_event.actor_id, ghost_actor_id);
     assert_eq!(
         profile_event.envelope["executed_by"],
         json!(package.service_did.to_string())
@@ -275,7 +275,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     );
     assert_eq!(
         grant_event.envelope["payload"]["subject"],
-        json!(ghost_actor_did)
+        json!(ghost_actor_id)
     );
     assert_eq!(
         grant_event.envelope["payload"]["proof"]["kind"],
@@ -328,7 +328,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
-    let bot_actor_did = install["bot_actor_id"].as_str().unwrap().to_owned();
+    let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
 
     let ghost: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -344,8 +344,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .await
         .unwrap();
     assert_eq!(ghost["ok"], json!(true), "transaction response: {ghost}");
-    let ghost_actor_did = ghost["ghost_actor_did"].as_str().unwrap().to_owned();
-    assert!(ghost_actor_did.starts_with("did:web:ghost-ext-user-x-"));
+    let ghost_actor_id = ghost["ghost_actor_id"].as_str().unwrap().to_owned();
+    assert!(ghost_actor_id.starts_with("did:web:ghost-ext-user-x-"));
     assert!(
         ghost["message_id"]
             .as_str()
@@ -357,7 +357,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["kind"] == "bot_actor" && entry["did"] == bot_actor_did)
+            .any(|entry| entry["kind"] == "bot_actor" && entry["did"] == bot_actor_id)
     );
     let messages = state
         .persistence
@@ -366,14 +366,14 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .await
         .unwrap();
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].sender, ghost_actor_did);
+    assert_eq!(messages[0].sender, ghost_actor_id);
     assert_eq!(
-        messages[0].content["portal"]["bot_actor_did"],
-        json!(bot_actor_did)
+        messages[0].content["portal"]["bot_actor_id"],
+        json!(bot_actor_id)
     );
 
-    let ghost_doc = canonical_did_document(&app, &ghost_actor_did).await;
-    assert_eq!(ghost_doc["id"], json!(ghost_actor_did));
+    let ghost_doc = canonical_did_document(&app, &ghost_actor_id).await;
+    assert_eq!(ghost_doc["id"], json!(ghost_actor_id));
     assert_eq!(ghost_doc["status"], json!("active"));
     assert!(
         ghost_doc["accountability"]
@@ -415,7 +415,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .unwrap();
     assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
 
-    let revoked_doc = canonical_did_document(&app, &ghost_actor_did).await;
+    let revoked_doc = canonical_did_document(&app, &ghost_actor_id).await;
     assert_eq!(revoked_doc["status"], json!("revoked"));
 
     let bot_rejected: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
@@ -480,7 +480,7 @@ async fn tsp_transport_route_audit_smoke() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "route_id": "rt:alice-bob-smoke",
-            "destination_actor_did": "did:web:bob.example",
+            "destination_actor_id": "did:web:bob.example",
             "via_transports": ["tspt:alice-smoke"]
         }))
         .send(&app)
@@ -489,7 +489,7 @@ async fn tsp_transport_route_audit_smoke() {
         .await
         .unwrap();
     assert_eq!(route["route_id"], json!("rt:alice-bob-smoke"));
-    assert_eq!(route["destination_actor_did"], json!("did:web:bob.example"));
+    assert_eq!(route["destination_actor_id"], json!("did:web:bob.example"));
 
     // 4) fetch the audit chain — establish_route auto-appends one entry
     let audit: Value = TestClient::get(

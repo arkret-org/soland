@@ -172,7 +172,7 @@ async fn upload_keypackage(
 
     json_ok(json!({
         "keypackage_id": snapshot.id,
-        "actor_id": snapshot.actor_did,
+        "actor_id": snapshot.actor_id,
         "device_id": snapshot.device_id,
         "lifetime": {
             "not_before": snapshot.lifetime.not_before,
@@ -353,7 +353,7 @@ async fn revoke_keypackages(
             .get(&keypackage_id)
             .await
         {
-            Ok(Some(record)) if record.actor_did != session.actor => {
+            Ok(Some(record)) if record.actor_id != session.actor => {
                 failures.insert(keypackage_id, json!("not_owner"));
             }
             Ok(Some(record)) if record.consumed_at.is_some() => {
@@ -446,7 +446,7 @@ async fn pending_welcomes(
             json!({
                 "welcome_id": row.id,
                 "mls_group_ref": row.group_id,
-                "recipient_actor_id": row.recipient_actor_did,
+                "recipient_actor_id": row.recipient_actor_id,
                 "recipient_device_id": row.recipient_device_id,
                 "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&row.welcome_bytes),
                 "key_package_id": row.key_package_id,
@@ -518,7 +518,7 @@ fn build_op(object_type: &str, payload: Value) -> Operation {
 fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRecord {
     MlsKeyPackageRecord {
         id: kp.id.clone(),
-        actor_did: kp.actor_did.clone(),
+        actor_id: kp.actor_id.clone(),
         device_id: kp.device_id.clone(),
         lifetime_not_before: kp.lifetime.not_before,
         lifetime_not_after: kp.lifetime.not_after,

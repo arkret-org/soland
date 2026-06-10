@@ -42,7 +42,7 @@ pub struct TspTransport {
     pub supported_protocols: Vec<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// DID of the actor that owns the transport (so /list can filter).
-    pub owner_actor_did: String,
+    pub owner_actor_id: String,
 }
 
 /// A TSP route between two actors. `via_transports` lists the
@@ -51,8 +51,8 @@ pub struct TspTransport {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TspRoute {
     pub route_id: String,
-    pub source_actor_did: String,
-    pub destination_actor_did: String,
+    pub source_actor_id: String,
+    pub destination_actor_id: String,
     pub via_transports: Vec<String>,
     pub established_at: chrono::DateTime<chrono::Utc>,
 }
@@ -105,13 +105,13 @@ pub fn declare_transport(transport: TspTransport) -> TspTransport {
     transport
 }
 
-pub fn list_transports(owner_actor_did: Option<&str>) -> Vec<TspTransport> {
+pub fn list_transports(owner_actor_id: Option<&str>) -> Vec<TspTransport> {
     let guard = REGISTRY.lock().expect("tsp registry poisoned");
-    match owner_actor_did {
+    match owner_actor_id {
         Some(owner) => guard
             .transports
             .iter()
-            .filter(|t| t.owner_actor_did == owner)
+            .filter(|t| t.owner_actor_id == owner)
             .cloned()
             .collect(),
         None => guard.transports.clone(),
@@ -213,8 +213,8 @@ pub fn apply_tsp_transport_declare(op: &Operation) -> Option<TspTransport> {
             })
             .unwrap_or_default(),
         created_at: op.created_at,
-        owner_actor_did: p
-            .get("owner_actor_did")
+        owner_actor_id: p
+            .get("owner_actor_id")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
@@ -226,13 +226,13 @@ pub fn apply_tsp_route_establish(op: &Operation) -> Option<TspRoute> {
     let p = op.payload.as_object()?;
     let route = TspRoute {
         route_id: p.get("route_id").and_then(Value::as_str)?.to_owned(),
-        source_actor_did: p
-            .get("source_actor_did")
+        source_actor_id: p
+            .get("source_actor_id")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
-        destination_actor_did: p
-            .get("destination_actor_did")
+        destination_actor_id: p
+            .get("destination_actor_id")
             .and_then(Value::as_str)?
             .to_owned(),
         via_transports: p
@@ -321,7 +321,7 @@ async fn declare_transport_endpoint(
         endpoint_url,
         supported_protocols,
         created_at: chrono::Utc::now(),
-        owner_actor_did: session.actor.clone(),
+        owner_actor_id: session.actor.clone(),
     });
     json_ok(serde_json::to_value(transport).expect("transport serializes"))
 }
@@ -369,10 +369,10 @@ async fn establish_route_endpoint(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("route_id is required"))?
         .to_owned();
-    let destination_actor_did = body
-        .get("destination_actor_did")
+    let destination_actor_id = body
+        .get("destination_actor_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("destination_actor_did is required"))?
+        .ok_or_else(|| AppError::invalid_param("destination_actor_id is required"))?
         .to_owned();
     let via_transports: Vec<String> = body
         .get("via_transports")
@@ -390,8 +390,8 @@ async fn establish_route_endpoint(
     }
     let route = establish_route(TspRoute {
         route_id,
-        source_actor_did: session.actor.clone(),
-        destination_actor_did,
+        source_actor_id: session.actor.clone(),
+        destination_actor_id,
         via_transports,
         established_at: chrono::Utc::now(),
     });
@@ -432,8 +432,8 @@ mod tests {
     fn route(id: &str) -> TspRoute {
         TspRoute {
             route_id: id.to_owned(),
-            source_actor_did: "did:web:alice".to_owned(),
-            destination_actor_did: "did:web:bob".to_owned(),
+            source_actor_id: "did:web:alice".to_owned(),
+            destination_actor_id: "did:web:bob".to_owned(),
             via_transports: vec!["tspt:alice-bob".to_owned()],
             established_at: chrono::Utc::now(),
         }
@@ -449,7 +449,7 @@ mod tests {
             endpoint_url: "https://alice.example/tsp".to_owned(),
             supported_protocols: vec!["cokret".to_owned()],
             created_at: chrono::Utc::now(),
-            owner_actor_did: "did:web:alice".to_owned(),
+            owner_actor_id: "did:web:alice".to_owned(),
         });
         let b = declare_transport(TspTransport {
             transport_id: "tspt:alice".to_owned(),
@@ -457,7 +457,7 @@ mod tests {
             endpoint_url: "https://different.example/tsp".to_owned(),
             supported_protocols: Vec::new(),
             created_at: chrono::Utc::now(),
-            owner_actor_did: "did:web:alice".to_owned(),
+            owner_actor_id: "did:web:alice".to_owned(),
         });
         // Idempotent: registry returned the first row, second declare
         // did NOT mutate the endpoint_url.
