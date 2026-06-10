@@ -1169,6 +1169,8 @@ mod tests {
             admin_principal_dids: Vec::new(),
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
+            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
             compaction_min_anchor_age_seconds: 0,
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,

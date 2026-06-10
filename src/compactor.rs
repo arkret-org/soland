@@ -334,6 +334,8 @@ mod tests {
             // Aggressive policy for tests: 0-age + 0 witnesses + don't
             // require the singleton-successor / preserve-genesis guards so
             // any non-leaf becomes prunable.
+            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
             compaction_min_anchor_age_seconds: 0,
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,

@@ -1413,6 +1413,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
     })]
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors AppConfig fields; callers pass them positionally once
 pub fn describe(
     service_did: &str,
     public_base_url: &str,
@@ -1421,6 +1422,7 @@ pub fn describe(
     oauth_introspection_enabled: bool,
     auth_server_url: Option<&str>,
     trust_domain: &str,
+    resumable_upload_incomplete_ttl_seconds: u64,
 ) -> ServerDescription {
     let mut supported_auth_methods = Vec::new();
     if development_mode {
@@ -1551,6 +1553,11 @@ pub fn describe(
             "ck.feature.soland.push.rules".to_owned(),
             "ck.feature.soland.webrtc.signaling".to_owned(),
             "ck.feature.soland.blob.upload".to_owned(),
+            // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
+            // feature id for the resumable (tus) upload companion binding
+            // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
+            // supported_bindings below.
+            "ck.feature.blob.resumable_upload.tus.v1".to_owned(),
             "ck.feature.soland.blob.authenticated_download".to_owned(),
             "ck.feature.soland.file_transfer".to_owned(),
             "ck.feature.soland.blob.presigned_download.local_direct_serve".to_owned(),
@@ -1574,6 +1581,22 @@ pub fn describe(
         // clients can build `base_url + operation_path` directly.
         supported_bindings: vec![
             serde_json::json!({"kind": "http_json", "base_url": public_base_url.trim_end_matches('/')}),
+            // Per-operation HTTP companion binding (transport-bindings.md
+            // §6.1): tus 1.0.0 resumable upload for ck.self.blob.upload.
+            // Versions/extensions mirror the OPTIONS probe answers of
+            // routing::interop::blob_resumable — describe and wire MUST
+            // agree.
+            serde_json::json!({
+                "kind": "tus",
+                "base_url": format!(
+                    "{}/_cokret/self/blob/resumable",
+                    public_base_url.trim_end_matches('/')
+                ),
+                "operations": ["ck.self.blob.upload"],
+                "extension_profile_required": serde_json::Value::Null,
+                "tus_version": crate::routing::TUS_VERSIONS,
+                "tus_extensions": crate::routing::TUS_EXTENSIONS,
+            }),
         ],
         supported_reducer_profiles: vec!["ck.reducer.v1".to_owned()],
         supported_schema_profiles: vec!["ck.schema.core.v1".to_owned()],
@@ -1581,6 +1604,10 @@ pub fn describe(
         limits: serde_json::json!({
             "storage": storage,
             "max_limit": 100,
+            // Spec media-and-blob.md §2.1 limits keys for the resumable
+            // (tus) upload binding.
+            "resumable_upload_incomplete_ttl_seconds": resumable_upload_incomplete_ttl_seconds,
+            "resumable_upload_max_bytes": crate::routing::MAX_BLOB_UPLOAD_BYTES,
             "registries": artifacts::registry_summary(),
             "plaintext_visible_service_capability": {
                 "supported": true,
@@ -1888,13 +1915,44 @@ mod tests {
             false,
             None,
             "ck:trust_domain:soland.example",
+            86_400,
         );
         let value = serde_json::to_value(description).expect("description serializes");
         assert_eq!(
-            value["supported_bindings"],
-            json!([{"kind": "http_json", "base_url": "https://soland.example"}])
+            value["supported_bindings"][0],
+            json!({"kind": "http_json", "base_url": "https://soland.example"})
         );
         assert!(value["supported_bindings"][0].get("base_path").is_none());
+        // Spec media-and-blob.md §2.1 — the resumable upload binding is
+        // discoverable via feature id + tus binding entry + limits keys.
+        assert_eq!(
+            value["supported_bindings"][1]["kind"],
+            json!("tus"),
+            "tus companion binding advertised"
+        );
+        assert_eq!(
+            value["supported_bindings"][1]["base_url"],
+            json!("https://soland.example/_cokret/self/blob/resumable")
+        );
+        assert_eq!(
+            value["supported_bindings"][1]["operations"],
+            json!(["ck.self.blob.upload"])
+        );
+        assert!(value["supported_bindings"][1]["extension_profile_required"].is_null());
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!("ck.feature.blob.resumable_upload.tus.v1"))
+        );
+        assert_eq!(
+            value["limits"]["resumable_upload_incomplete_ttl_seconds"],
+            json!(86_400)
+        );
+        assert_eq!(
+            value["limits"]["resumable_upload_max_bytes"],
+            json!(10 * 1024 * 1024)
+        );
     }
 
     #[test]

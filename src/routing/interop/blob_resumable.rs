@@ -1,0 +1,1013 @@
+//! Resumable (tus 1.0.0) blob upload binding.
+//!
+//! Spec: crypto-media/media-and-blob.md §2.1 — a per-operation HTTP
+//! companion binding of `ck.self.blob.upload`. tus carries the bytes
+//! (create / PATCH / HEAD / DELETE with offset resume); a cokret-side
+//! finalize step turns the completed tus resource into a canonical blob
+//! with the same `blob_ref` / `content_digest` / `upload_receipt` the
+//! multipart path produces.
+//!
+//! The tus wire protocol is implemented locally instead of via the
+//! `salvo-tus` crate: salvo-tus 0.93.0 keeps its `stores` module private,
+//! so neither the staging directory nor the upload state needed by
+//! finalize is reachable from outside the crate. The subset below is
+//! wire-compatible with tus 1.0.0 core plus the `creation`,
+//! `creation-with-upload`, `termination` and `expiration` extensions.
+//!
+//! Surfaces (all under `/_cokret/self/blob/resumable`):
+//! - `OPTIONS /`              — tus capability probe (no auth; endpoint-level
+//!   confirmation only, discovery is `/_cokret/describe`)
+//! - `POST    /`              — create an upload resource (`Upload-Length`
+//!   required; optional `application/offset+octet-stream` body for
+//!   creation-with-upload)
+//! - `HEAD    /{id}`          — query `Upload-Offset` to resume
+//! - `PATCH   /{id}`          — append a chunk at `Upload-Offset`
+//! - `DELETE  /{id}`          — terminate an in-progress upload
+//! - `POST    /{id}/finalize` — cokret extension: validate + ingest the
+//!   completed bytes into the blob store, returns `SolandBlobUploadOutcome`
+//!
+//! Upload-Metadata keys understood at finalize time: `purpose`, `encrypted`
+//! (`"true"`/`"false"`), `realm_id`, `content_digest` (`sha256:<hex>`
+//! pre-declaration). Per spec §2.1 privacy rules, plaintext filenames and
+//! MIME types of private/E2EE blobs MUST NOT appear in `Upload-Metadata`;
+//! the finalize path stores encrypted blobs as `application/octet-stream`
+//! with no filename, exactly like the canonical upload path.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use salvo::http::{HeaderValue, StatusCode};
+use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use super::blob::{
+    MAX_BLOB_UPLOAD_BYTES, enforce_blob_quota, file_transfer_blob_encryption_metadata,
+    is_valid_blob_purpose,
+};
+use super::{
+    auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service, realm_has_member,
+    render_error, sha256_hex,
+};
+use crate::state::{AppState, BlobRecord};
+
+pub const TUS_VERSION: &str = "1.0.0";
+/// Protocol versions / extensions advertised both on the `OPTIONS` probe
+/// and in `/_cokret/describe` `supported_bindings[kind="tus"]` — the
+/// describe claim and the wire probe MUST agree.
+pub const TUS_VERSIONS: &[&str] = &["1.0.0"];
+pub const TUS_EXTENSIONS: &[&str] = &[
+    "creation",
+    "creation-with-upload",
+    "termination",
+    "expiration",
+];
+
+const H_TUS_RESUMABLE: &str = "tus-resumable";
+const H_TUS_VERSION: &str = "tus-version";
+const H_TUS_EXTENSION: &str = "tus-extension";
+const H_TUS_MAX_SIZE: &str = "tus-max-size";
+const H_UPLOAD_LENGTH: &str = "upload-length";
+const H_UPLOAD_OFFSET: &str = "upload-offset";
+const H_UPLOAD_METADATA: &str = "upload-metadata";
+const H_UPLOAD_EXPIRES: &str = "upload-expires";
+const H_UPLOAD_DEFER_LENGTH: &str = "upload-defer-length";
+const CT_OFFSET_OCTET_STREAM: &str = "application/offset+octet-stream";
+
+pub(super) fn router() -> Router {
+    Router::new()
+        // Concrete `/finalize` segment registered before the `{id}`
+        // wildcard router so salvo resolves it first.
+        .push(Router::with_path("blob/resumable/{id}/finalize").post(resumable_finalize))
+        .push(
+            Router::with_path("blob/resumable")
+                .options(tus_options)
+                .post(tus_create),
+        )
+        .push(
+            Router::with_path("blob/resumable/{id}")
+                .options(tus_options)
+                .head(tus_head)
+                .patch(tus_patch)
+                .delete(tus_delete),
+        )
+}
+
+/// Staging-file metadata for one in-progress upload. Internal to this
+/// node (never wire-visible); written atomically (`.tmp` + rename) next
+/// to the byte file as `{id}.json` / `{id}.bin`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StagedUpload {
+    upload_id: String,
+    declared_size_bytes: u64,
+    offset_bytes: u64,
+    /// Decoded `Upload-Metadata` key/value pairs from creation time.
+    upload_metadata: HashMap<String, Option<String>>,
+    /// Bearer-session actor that created the upload; every later request
+    /// on the resource must authenticate as the same actor.
+    created_by: String,
+    created_at: String,
+    expires_at: String,
+}
+
+fn data_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.bin"))
+}
+
+fn meta_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.json"))
+}
+
+fn is_safe_upload_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+}
+
+static UPLOAD_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+/// Per-upload write serialization. PATCH / DELETE / finalize on the same
+/// id take the id lock so offset check + append + meta rewrite is atomic
+/// within this process.
+fn upload_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = UPLOAD_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = locks.lock().expect("upload lock map poisoned");
+    map.entry(id.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Drop the lock entry once the staged upload is gone (terminated,
+/// finalized, or expired) so the map does not grow with upload churn.
+fn release_upload_lock(id: &str) {
+    if let Some(locks) = UPLOAD_LOCKS.get() {
+        let mut map = locks.lock().expect("upload lock map poisoned");
+        map.remove(id);
+    }
+}
+
+async fn read_meta(dir: &Path, id: &str) -> Option<StagedUpload> {
+    let raw = tokio::fs::read(meta_path(dir, id)).await.ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+async fn write_meta_atomic(dir: &Path, meta: &StagedUpload) -> std::io::Result<()> {
+    let tmp = dir.join(format!("{}.json.tmp", meta.upload_id));
+    let bytes = serde_json::to_vec(meta).map_err(std::io::Error::other)?;
+    tokio::fs::write(&tmp, bytes).await?;
+    tokio::fs::rename(&tmp, meta_path(dir, &meta.upload_id)).await
+}
+
+async fn remove_staged(dir: &Path, id: &str) {
+    let _ = tokio::fs::remove_file(data_path(dir, id)).await;
+    let _ = tokio::fs::remove_file(meta_path(dir, id)).await;
+}
+
+fn is_expired(meta: &StagedUpload) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&meta.expires_at)
+        .map(|expires| expires < chrono::Utc::now())
+        .unwrap_or(true)
+}
+
+fn http_date(rfc3339: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc).format("%a, %d %b %Y %H:%M:%S GMT").to_string())
+}
+
+fn set_tus_header(res: &mut Response) {
+    res.headers_mut()
+        .insert(H_TUS_RESUMABLE, HeaderValue::from_static(TUS_VERSION));
+}
+
+/// Every non-OPTIONS tus request MUST carry `Tus-Resumable: 1.0.0`;
+/// other versions get `412` plus the supported version list.
+fn check_tus_version(req: &Request, res: &mut Response) -> bool {
+    match req
+        .headers()
+        .get(H_TUS_RESUMABLE)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(TUS_VERSION) => true,
+        _ => {
+            res.headers_mut()
+                .insert(H_TUS_VERSION, HeaderValue::from_static(TUS_VERSION));
+            set_tus_header(res);
+            res.status_code(StatusCode::PRECONDITION_FAILED);
+            false
+        }
+    }
+}
+
+/// Parse a tus `Upload-Metadata` header: comma-separated entries of
+/// `key` or `key <base64 value>`; keys must be unique ASCII without
+/// spaces/commas.
+fn parse_upload_metadata(raw: &str) -> Result<HashMap<String, Option<String>>, &'static str> {
+    let mut map = HashMap::new();
+    for item in raw.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            return Err("empty Upload-Metadata entry");
+        }
+        let mut tokens = item.splitn(2, ' ');
+        let key = tokens.next().unwrap_or_default();
+        if key.is_empty()
+            || key.len() > 64
+            || !key
+                .chars()
+                .all(|ch| ch.is_ascii_graphic() && ch != ',' && ch != ';')
+        {
+            return Err("invalid Upload-Metadata key");
+        }
+        if map.contains_key(key) {
+            return Err("duplicate Upload-Metadata key");
+        }
+        match tokens.next() {
+            None => {
+                map.insert(key.to_owned(), None);
+            }
+            Some(value) => {
+                let decoded = BASE64_STANDARD
+                    .decode(value.trim())
+                    .map_err(|_| "Upload-Metadata value must be base64")?;
+                let decoded = String::from_utf8(decoded)
+                    .map_err(|_| "Upload-Metadata value must be UTF-8")?;
+                if decoded.len() > 512 {
+                    return Err("Upload-Metadata value too long");
+                }
+                map.insert(key.to_owned(), Some(decoded));
+            }
+        }
+    }
+    Ok(map)
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_options"))]
+async fn tus_options(res: &mut Response) {
+    set_tus_header(res);
+    let headers = res.headers_mut();
+    headers.insert(
+        H_TUS_VERSION,
+        HeaderValue::from_str(&TUS_VERSIONS.join(",")).expect("static version list"),
+    );
+    headers.insert(
+        H_TUS_EXTENSION,
+        HeaderValue::from_str(&TUS_EXTENSIONS.join(",")).expect("static extension list"),
+    );
+    headers.insert(
+        H_TUS_MAX_SIZE,
+        HeaderValue::from_str(&MAX_BLOB_UPLOAD_BYTES.to_string()).expect("numeric header"),
+    );
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_create"))]
+async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    if !check_tus_version(req, res) {
+        return;
+    }
+    set_tus_header(res);
+    if req.headers().get(H_UPLOAD_DEFER_LENGTH).is_some() {
+        // creation-defer-length is not advertised in TUS_EXTENSIONS.
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "Upload-Defer-Length is not supported; declare Upload-Length",
+        );
+        return;
+    }
+    let Some(declared_size) = req
+        .headers()
+        .get(H_UPLOAD_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "Upload-Length is required",
+        );
+        return;
+    };
+    if declared_size as usize > MAX_BLOB_UPLOAD_BYTES {
+        res.headers_mut().insert(
+            H_TUS_MAX_SIZE,
+            HeaderValue::from_str(&MAX_BLOB_UPLOAD_BYTES.to_string()).expect("numeric header"),
+        );
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "blob exceeds maximum size",
+        );
+        return;
+    }
+    let upload_metadata = match req
+        .headers()
+        .get(H_UPLOAD_METADATA)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(raw) => match parse_upload_metadata(raw) {
+            Ok(metadata) => metadata,
+            Err(message) => {
+                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+                return;
+            }
+        },
+        None => HashMap::new(),
+    };
+
+    let dir = state.config.resumable_upload_dir.clone();
+    if let Err(error) = tokio::fs::create_dir_all(&dir).await {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let upload_id = uuid::Uuid::new_v4().simple().to_string();
+    let created_at = now().to_rfc3339();
+    let expires_at = (chrono::Utc::now()
+        + chrono::Duration::seconds(
+            state.config.resumable_upload_incomplete_ttl_seconds as i64,
+        ))
+    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut meta = StagedUpload {
+        upload_id: upload_id.clone(),
+        declared_size_bytes: declared_size,
+        offset_bytes: 0,
+        upload_metadata,
+        created_by: session.actor.clone(),
+        created_at,
+        expires_at: expires_at.clone(),
+    };
+
+    // creation-with-upload: an offset+octet-stream body on POST carries
+    // the first chunk in the same request.
+    let mut initial_bytes: Vec<u8> = Vec::new();
+    let has_creation_body = req
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|ct| ct.starts_with(CT_OFFSET_OCTET_STREAM));
+    if has_creation_body {
+        req.set_secure_max_size(MAX_BLOB_UPLOAD_BYTES + 64 * 1024);
+        match req.payload().await {
+            Ok(bytes) => initial_bytes = bytes.to_vec(),
+            Err(_) => {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "bad_json",
+                    "invalid creation-with-upload body",
+                );
+                return;
+            }
+        }
+        if initial_bytes.len() as u64 > declared_size {
+            render_error(
+                res,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "creation-with-upload body exceeds Upload-Length",
+            );
+            return;
+        }
+    }
+    if let Err(error) = tokio::fs::write(data_path(&dir, &upload_id), &initial_bytes).await {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    meta.offset_bytes = initial_bytes.len() as u64;
+    if let Err(error) = write_meta_atomic(&dir, &meta).await {
+        remove_staged(&dir, &upload_id).await;
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+
+    // Relative Location — clients resolve it against the request URL. The
+    // absolute base is already known from
+    // `describe.supported_bindings[kind="tus"].base_url`.
+    let location = format!("/_cokret/self/blob/resumable/{upload_id}");
+    let headers = res.headers_mut();
+    headers.insert(
+        "location",
+        HeaderValue::from_str(&location).expect("safe upload id path"),
+    );
+    if has_creation_body {
+        headers.insert(
+            H_UPLOAD_OFFSET,
+            HeaderValue::from_str(&meta.offset_bytes.to_string()).expect("numeric header"),
+        );
+    }
+    if let Some(expires) = http_date(&expires_at) {
+        headers.insert(
+            H_UPLOAD_EXPIRES,
+            HeaderValue::from_str(&expires).expect("formatted date"),
+        );
+    }
+    res.status_code(StatusCode::CREATED);
+}
+
+/// Load + gate one staged upload for the authenticated session. Expired
+/// and foreign-actor resources answer `404` exactly like missing ones so
+/// upload ids cannot be probed across accounts.
+async fn load_gated(
+    state: &AppState,
+    res: &mut Response,
+    id: &str,
+    actor: &str,
+) -> Option<StagedUpload> {
+    let dir = &state.config.resumable_upload_dir;
+    let not_found = |res: &mut Response| {
+        render_error(
+            res,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "resumable upload not found or expired",
+        );
+    };
+    if !is_safe_upload_id(id) {
+        not_found(res);
+        return None;
+    }
+    let Some(meta) = read_meta(dir, id).await else {
+        not_found(res);
+        return None;
+    };
+    if meta.created_by != actor {
+        not_found(res);
+        return None;
+    }
+    if is_expired(&meta) {
+        remove_staged(dir, id).await;
+        not_found(res);
+        return None;
+    }
+    Some(meta)
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_head"))]
+async fn tus_head(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    if !check_tus_version(req, res) {
+        return;
+    }
+    set_tus_header(res);
+    let id = req.param::<String>("id").unwrap_or_default();
+    let Some(meta) = load_gated(state, res, &id, &session.actor).await else {
+        return;
+    };
+    let headers = res.headers_mut();
+    headers.insert(
+        H_UPLOAD_OFFSET,
+        HeaderValue::from_str(&meta.offset_bytes.to_string()).expect("numeric header"),
+    );
+    headers.insert(
+        H_UPLOAD_LENGTH,
+        HeaderValue::from_str(&meta.declared_size_bytes.to_string()).expect("numeric header"),
+    );
+    if let Some(expires) = http_date(&meta.expires_at) {
+        headers.insert(
+            H_UPLOAD_EXPIRES,
+            HeaderValue::from_str(&expires).expect("formatted date"),
+        );
+    }
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    res.status_code(StatusCode::OK);
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_patch"))]
+async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    if !check_tus_version(req, res) {
+        return;
+    }
+    set_tus_header(res);
+    let content_type_ok = req
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|ct| ct.starts_with(CT_OFFSET_OCTET_STREAM));
+    if !content_type_ok {
+        render_error(
+            res,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_param",
+            "PATCH requires content-type application/offset+octet-stream",
+        );
+        return;
+    }
+    let Some(request_offset) = req
+        .headers()
+        .get(H_UPLOAD_OFFSET)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    else {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "Upload-Offset is required",
+        );
+        return;
+    };
+    let id = req.param::<String>("id").unwrap_or_default();
+    let lock = upload_lock(&id);
+    let _guard = lock.lock().await;
+    let Some(mut meta) = load_gated(state, res, &id, &session.actor).await else {
+        return;
+    };
+    if request_offset != meta.offset_bytes {
+        // tus: offset mismatch answers 409 Conflict; the client re-syncs
+        // via HEAD.
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "Upload-Offset does not match current offset",
+        );
+        return;
+    }
+    req.set_secure_max_size(MAX_BLOB_UPLOAD_BYTES + 64 * 1024);
+    let chunk = match req.payload().await {
+        Ok(bytes) => bytes.to_vec(),
+        Err(_) => {
+            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid chunk body");
+            return;
+        }
+    };
+    let new_offset = meta.offset_bytes.saturating_add(chunk.len() as u64);
+    if new_offset > meta.declared_size_bytes {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "chunk exceeds declared Upload-Length",
+        );
+        return;
+    }
+    let dir = &state.config.resumable_upload_dir;
+    let append = async {
+        use tokio::io::AsyncWriteExt as _;
+        let mut file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(data_path(dir, &id))
+            .await?;
+        file.write_all(&chunk).await?;
+        file.flush().await
+    };
+    if let Err(error) = append.await {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    meta.offset_bytes = new_offset;
+    if let Err(error) = write_meta_atomic(dir, &meta).await {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let headers = res.headers_mut();
+    headers.insert(
+        H_UPLOAD_OFFSET,
+        HeaderValue::from_str(&new_offset.to_string()).expect("numeric header"),
+    );
+    if new_offset < meta.declared_size_bytes
+        && let Some(expires) = http_date(&meta.expires_at)
+    {
+        headers.insert(
+            H_UPLOAD_EXPIRES,
+            HeaderValue::from_str(&expires).expect("formatted date"),
+        );
+    }
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_delete"))]
+async fn tus_delete(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    if !check_tus_version(req, res) {
+        return;
+    }
+    set_tus_header(res);
+    let id = req.param::<String>("id").unwrap_or_default();
+    let lock = upload_lock(&id);
+    let _guard = lock.lock().await;
+    let Some(_meta) = load_gated(state, res, &id, &session.actor).await else {
+        return;
+    };
+    remove_staged(&state.config.resumable_upload_dir, &id).await;
+    release_upload_lock(&id);
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+#[endpoint]
+#[tracing::instrument(skip_all, fields(op = "blob_resumable_finalize"))]
+async fn resumable_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let Some(session) = auth_or_render(state, req, res).await else {
+        return;
+    };
+    let id = req.param::<String>("id").unwrap_or_default();
+    let lock = upload_lock(&id);
+    let _guard = lock.lock().await;
+    let Some(meta) = load_gated(state, res, &id, &session.actor).await else {
+        return;
+    };
+    if meta.offset_bytes != meta.declared_size_bytes {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "resumable upload is incomplete",
+        );
+        return;
+    }
+
+    let meta_value = |key: &str| -> Option<String> {
+        meta.upload_metadata
+            .get(key)
+            .cloned()
+            .flatten()
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let purpose = meta_value("purpose");
+    if let Some(purpose) = purpose.as_deref()
+        && !is_valid_blob_purpose(purpose)
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "invalid blob upload purpose",
+        );
+        return;
+    }
+    let encrypted = match meta_value("encrypted").as_deref() {
+        None => false,
+        Some("true") | Some("1") | Some("yes") => true,
+        Some("false") | Some("0") | Some("no") => false,
+        Some(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "Upload-Metadata encrypted must be true or false",
+            );
+            return;
+        }
+    };
+    let realm_id = match meta_value("realm_id") {
+        Some(realm_id) => {
+            if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "invalid blob realm_id",
+                );
+                return;
+            }
+            if !realm_has_member(state, &realm_id, &session.actor).await {
+                render_error(
+                    res,
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    "uploader is not a joined member of the blob Realm",
+                );
+                return;
+            }
+            Some(realm_id)
+        }
+        None => None,
+    };
+    let expected_digest = match meta_value("content_digest") {
+        Some(digest) => {
+            if !is_valid_sha256_digest(&digest) {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_param",
+                    "content_digest must be sha256:<64 lowercase hex>",
+                );
+                return;
+            }
+            Some(digest)
+        }
+        None => None,
+    };
+    // First resumable round only carries the E2EE / file-transfer shapes
+    // yougen uses; encrypted blobs never take filename/MIME from metadata
+    // (spec §2.1 privacy rule), plaintext blobs land as octet-stream.
+    let encryption: Option<Value> = if encrypted {
+        if purpose.as_deref() == Some("file_transfer") {
+            Some(file_transfer_blob_encryption_metadata())
+        } else {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "encrypted resumable uploads require Upload-Metadata purpose=file_transfer",
+            );
+            return;
+        }
+    } else {
+        None
+    };
+    let plaintext_denied = if encrypted {
+        false
+    } else if let Some(realm_id) = realm_id.as_deref() {
+        !realm_allows_plaintext_service(state, realm_id).await
+    } else {
+        false
+    };
+    if plaintext_denied {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "private plaintext blob uploads require this service in plaintext_visible_services",
+        );
+        return;
+    }
+
+    let dir = &state.config.resumable_upload_dir;
+    let bytes = match tokio::fs::read(data_path(dir, &id)).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::error!(%error, upload_id = %id, "resumable upload data file unreadable");
+            render_error(
+                res,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "resumable upload not found or expired",
+            );
+            return;
+        }
+    };
+    if bytes.len() as u64 != meta.declared_size_bytes {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "resumable upload bytes do not match declared length",
+        );
+        return;
+    }
+    if bytes.len() > MAX_BLOB_UPLOAD_BYTES {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "blob exceeds maximum size",
+        );
+        return;
+    }
+    if let Err(message) =
+        enforce_blob_quota(state, &session.actor, realm_id.as_deref(), bytes.len()).await
+    {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "quota_exceeded",
+            message,
+        );
+        return;
+    }
+    let size_bytes = bytes.len();
+    let sha256 = sha256_hex(&bytes);
+    let content_digest = format!("sha256:{sha256}");
+    if let Some(expected) = expected_digest
+        && expected != content_digest
+    {
+        crate::metrics::record_digest_mismatch("blob_resumable_finalize");
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "digest_mismatch",
+            "provided content_digest does not match blob content",
+        );
+        return;
+    }
+
+    // Identical ingest path to the canonical multipart upload: the final
+    // blob_ref / content_digest MUST equal what a single-shot upload of
+    // the same bytes would produce (spec §2.1 content-addressing
+    // invariant).
+    let media_type = "application/octet-stream".to_owned();
+    let blob_ref = format!("ck:blob:sha256:{sha256}");
+    let storage_key = state.object_storage.object_key_for_sha256(&sha256);
+    if let Err(error) = state.object_storage.put(&storage_key, bytes).await {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    let record = BlobRecord {
+        sha256: sha256.clone(),
+        size_bytes: size_bytes as i64,
+        storage_backend: state.object_storage.backend_name().to_owned(),
+        storage_key: storage_key.clone(),
+        media_type: media_type.clone(),
+        filename: None,
+        realm_id: realm_id.clone(),
+        encryption: encryption.clone(),
+        uploaded_by: session.actor.clone(),
+        created_at: now(),
+    };
+    if let Err(error) = state.persistence.blobs().put(&blob_ref, &record).await {
+        tracing::error!(%error, "failed to persist blob");
+        if let Err(delete_error) = state.object_storage.delete(&storage_key).await {
+            tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+        }
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &error.to_string(),
+        );
+        return;
+    }
+    // Staging part is consumed; drop it so it can never be replayed or
+    // double-finalized. Removal failure is non-fatal (the TTL sweeper
+    // collects leftovers).
+    remove_staged(dir, &id).await;
+    release_upload_lock(&id);
+    let mut upload_receipt = json!({
+        "service_did": state.config.service_did.clone(),
+        "created_at": now(),
+        "encrypted_attachment": encryption,
+        "encrypted": encrypted,
+        "realm_id": realm_id,
+        "content_digest": content_digest.clone(),
+        "upload_binding": "tus",
+    });
+    if let Some(purpose) = purpose {
+        upload_receipt["purpose"] = json!(purpose);
+    }
+    res.render(Json(crate::wire::SolandBlobUploadOutcome {
+        blob_ref,
+        size_bytes,
+        media_type,
+        content_digest,
+        upload_receipt,
+    }));
+}
+
+/// Background sweeper for expired incomplete resumable upload parts.
+/// Honors `describe.limits.resumable_upload_incomplete_ttl_seconds`:
+/// staging files whose mtime is older than the TTL are removed and never
+/// produce a referencable `blob_ref` (spec §2.1 expiration/GC rule).
+pub fn spawn_resumable_upload_ttl_sweeper(
+    state: AppState,
+) -> std::sync::Arc<tokio::task::JoinHandle<()>> {
+    let ttl = std::time::Duration::from_secs(state.config.resumable_upload_incomplete_ttl_seconds);
+    let dir = state.config.resumable_upload_dir.clone();
+    let interval = ttl
+        .checked_div(4)
+        .unwrap_or(ttl)
+        .clamp(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+    let task = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        // Skip the immediate first tick so we don't fire mid-boot.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            match sweep_expired_parts(&dir, ttl).await {
+                Ok(0) => {}
+                Ok(removed) => tracing::debug!(
+                    removed,
+                    "resumable upload TTL sweep removed expired staging files"
+                ),
+                Err(error) => {
+                    tracing::warn!(%error, "resumable upload TTL sweep failed");
+                }
+            }
+        }
+    });
+    std::sync::Arc::new(task)
+}
+
+async fn sweep_expired_parts(dir: &Path, ttl: std::time::Duration) -> std::io::Result<u32> {
+    let mut removed = 0u32;
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        // Directory not created yet — nothing staged, nothing to sweep.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let now = std::time::SystemTime::now();
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let is_staging = matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("bin") | Some("json") | Some("tmp")
+        );
+        if !is_staging {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if now.duration_since(modified).unwrap_or_default() > ttl
+            && tokio::fs::remove_file(&path).await.is_ok()
+        {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upload_metadata_parses_tus_pairs() {
+        let parsed = parse_upload_metadata(
+            "purpose ZmlsZV90cmFuc2Zlcg==,encrypted dHJ1ZQ==,is_confidential",
+        )
+        .expect("valid metadata");
+        assert_eq!(
+            parsed.get("purpose"),
+            Some(&Some("file_transfer".to_owned()))
+        );
+        assert_eq!(parsed.get("encrypted"), Some(&Some("true".to_owned())));
+        assert_eq!(parsed.get("is_confidential"), Some(&None));
+    }
+
+    #[test]
+    fn upload_metadata_rejects_duplicates_and_bad_base64() {
+        assert!(parse_upload_metadata("a Zg==,a Zg==").is_err());
+        assert!(parse_upload_metadata("key not-base64!!").is_err());
+        assert!(parse_upload_metadata("").is_err());
+    }
+
+    #[test]
+    fn safe_upload_ids_reject_path_tricks() {
+        assert!(is_safe_upload_id("0196deadbeef"));
+        assert!(is_safe_upload_id("a-b_c"));
+        assert!(!is_safe_upload_id(""));
+        assert!(!is_safe_upload_id("../escape"));
+        assert!(!is_safe_upload_id("a/b"));
+        assert!(!is_safe_upload_id("a.b"));
+        assert!(!is_safe_upload_id(&"x".repeat(65)));
+    }
+}

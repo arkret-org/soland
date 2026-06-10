@@ -77,6 +77,8 @@ pub fn router(state: AppState) -> Router {
 /// Boot-time worker re-export (`events` is crate-private; `main` only needs
 /// this one entry point from it).
 pub use events::sync::spawn_sync_cursor_ttl_sweeper;
+pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS};
+pub use interop::spawn_resumable_upload_ttl_sweeper;
 
 pub(crate) async fn sync_token(state: &AppState) -> String {
     events::sync::sync_token_for_state(state).await
@@ -1682,6 +1684,8 @@ mod operation_conformance_tests {
                 admin_principal_dids: Vec::new(),
                 push_bridge_cache_ttl_seconds: 900,
                 push_bridge_trusted_service_dids: Vec::new(),
+                resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+                resumable_upload_incomplete_ttl_seconds: 86_400,
                 compaction_min_anchor_age_seconds: 604_800,
                 compaction_min_witnesses: 1,
                 compaction_preserve_genesis: true,
@@ -3099,6 +3103,8 @@ mod framework_error_routing_tests {
             admin_principal_dids: Vec::new(),
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
+            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
             compaction_min_anchor_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,

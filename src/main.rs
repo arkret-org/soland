@@ -157,6 +157,16 @@ async fn main() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    // GC for expired incomplete resumable (tus) blob upload parts — spec
+    // media-and-blob.md §2.1: incomplete parts have a bounded lifetime and
+    // never produce a referencable blob_ref.
+    let _resumable_upload_ttl_sweeper =
+        soland::routing::spawn_resumable_upload_ttl_sweeper(state.clone());
+    tracing::info!(
+        worker = "resumable_upload_ttl_sweep",
+        "background worker configured"
+    );
+
     // G3.S0 — durable outbound federation HTTP delivery worker. No-op
     // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
     // that don't want background HTTP traffic). The dispatcher drains

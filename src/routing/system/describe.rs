@@ -232,6 +232,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
         &state.config.trust_domain,
+        state.config.resumable_upload_incomplete_ttl_seconds,
     );
     // T6.1 — claim-level partition of the describe response.
     // See cokret-spec/spec/v1/zh/sync/service-surface.md §3.0 and

@@ -759,7 +759,7 @@ fn blob_upload_purpose(req: &Request) -> Result<Option<String>, &'static str> {
     Ok(None)
 }
 
-fn file_transfer_blob_encryption_metadata() -> Value {
+pub(super) fn file_transfer_blob_encryption_metadata() -> Value {
     json!({
         "scheme": "ck.file_transfer.encrypted_blob.v1",
         "purpose": "file_transfer",
@@ -895,7 +895,7 @@ fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize),
     Some(Ok((start, end)))
 }
 
-const MAX_BLOB_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_BLOB_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const MAX_BLOB_ACCOUNT_BYTES: usize = 50 * 1024 * 1024;
 const MAX_BLOB_REALM_BYTES: usize = 100 * 1024 * 1024;
 
@@ -996,7 +996,7 @@ fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
     }
 }
 
-async fn enforce_blob_quota(
+pub(super) async fn enforce_blob_quota(
     state: &AppState,
     actor: &str,
     realm_id: Option<&str>,
@@ -1029,7 +1029,7 @@ async fn enforce_blob_quota(
     Ok(())
 }
 
-fn is_valid_blob_purpose(value: &str) -> bool {
+pub(super) fn is_valid_blob_purpose(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
         && value.len() <= 64

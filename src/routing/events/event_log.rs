@@ -82,6 +82,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
         &state.config.trust_domain,
+        state.config.resumable_upload_incomplete_ttl_seconds,
     );
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
@@ -5074,6 +5075,8 @@ mod proof_strictness_tests {
             admin_principal_dids: Vec::new(),
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_dids: Vec::new(),
+            resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
+            resumable_upload_incomplete_ttl_seconds: 86_400,
             compaction_min_anchor_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,

@@ -19,6 +19,8 @@ mod account_workflow;
 mod agent_bridge;
 #[path = "http_api/auth.rs"]
 mod auth;
+#[path = "http_api/blob_resumable.rs"]
+mod blob_resumable;
 #[path = "http_api/cors_config.rs"]
 mod cors_config;
 #[path = "http_api/devices_webrtc.rs"]

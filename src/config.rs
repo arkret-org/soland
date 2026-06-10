@@ -170,6 +170,17 @@ pub struct AppConfig {
     /// `pending` and have to be promoted manually via the live-fetch path.
     /// Env: `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` (comma-separated).
     pub push_bridge_trusted_service_dids: Vec<String>,
+    /// Resumable (tus) blob upload — staging directory for in-progress
+    /// upload parts before they are finalized into the blob store. See
+    /// spec crypto-media/media-and-blob.md §2.1.
+    /// Env: `SOLAND_RESUMABLE_UPLOAD_DIR` (default `./soland-resumable-uploads`).
+    pub resumable_upload_dir: PathBuf,
+    /// Resumable (tus) blob upload — maximum lifetime of an incomplete
+    /// upload part, in seconds. Expired parts are garbage-collected and
+    /// never produce a referencable `blob_ref`. Advertised in
+    /// `describe.limits.resumable_upload_incomplete_ttl_seconds`.
+    /// Env: `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` (default 86_400 = 24h).
+    pub resumable_upload_incomplete_ttl_seconds: u64,
     /// MAL-11 compaction: minimum age (seconds) before an Anchor is
     /// prune-eligible. Younger Anchors must not be pruned even when a
     /// compaction Anchor has witnessed them — gives slow federation peers
@@ -517,6 +528,15 @@ impl AppConfig {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+        let resumable_upload_dir = env_non_empty("SOLAND_RESUMABLE_UPLOAD_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("./soland-resumable-uploads"));
+        let resumable_upload_incomplete_ttl_seconds =
+            std::env::var("SOLAND_RESUMABLE_UPLOAD_TTL_SECS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(86_400)
+                .max(60);
         let compaction_min_anchor_age_seconds =
             std::env::var("SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS")
                 .ok()
@@ -599,6 +619,8 @@ impl AppConfig {
             admin_principal_dids,
             push_bridge_cache_ttl_seconds,
             push_bridge_trusted_service_dids,
+            resumable_upload_dir,
+            resumable_upload_incomplete_ttl_seconds,
             compaction_min_anchor_age_seconds,
             compaction_min_witnesses,
             compaction_preserve_genesis,

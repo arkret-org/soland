@@ -1,11 +1,16 @@
 use salvo::prelude::*;
 
 mod blob;
+mod blob_resumable;
 mod mimi;
 pub(crate) mod moderation;
 mod push;
 mod push_outbound;
 mod webrtc;
+
+pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
+pub(crate) use blob_resumable::{TUS_EXTENSIONS, TUS_VERSIONS};
+pub use blob_resumable::spawn_resumable_upload_ttl_sweeper;
 
 use super::admin::audit;
 use super::identity::auth;
@@ -35,6 +40,7 @@ pub fn protocol_router() -> Router {
             Router::with_path("self")
                 .push(webrtc::protocol_router())
                 .push(blob::router())
+                .push(blob_resumable::router())
                 .push(moderation::protocol_router()),
         )
         // `open` — non-Cokret external vendor interop (MIMI).
