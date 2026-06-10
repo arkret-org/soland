@@ -766,27 +766,43 @@ fn file_transfer_blob_encryption_metadata() -> Value {
     })
 }
 
+/// Spec `blob.schema.json#/$defs/encrypted_attachment` carries a `scheme`
+/// discriminator. The server stores the envelope as opaque JSON and never
+/// decrypts; these constants only drive the light-touch shape validation
+/// below (which fields are required), not any cryptographic interpretation.
+const SCHEME_WHOLE_FILE: &str = "ck.blob.whole_file_aead.v1";
+const SCHEME_STREAM: &str = "ck.blob.stream_aead.v1";
+
 fn validate_encrypted_attachment_metadata(
     metadata: &serde_json::Value,
 ) -> Result<(), &'static str> {
     let Some(envelope) = metadata.as_object() else {
         return Err("attachment envelope must be a JSON object");
     };
-    for field in ["algorithm", "nonce", "ciphertext_digest"] {
-        if envelope
-            .get(field)
+
+    // Algorithm identifier. soland's existing wire contract uses `algorithm`;
+    // the spec field is `alg`. Accept either so both the legacy clients and
+    // spec-conformant clients validate.
+    let has_alg = ["alg", "algorithm"].iter().any(|field| {
+        envelope
+            .get(*field)
             .and_then(|value| value.as_str())
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err("attachment envelope is missing required string fields");
-        }
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    if !has_alg {
+        return Err("attachment envelope requires alg");
     }
+
     if !envelope
         .get("key_ref")
         .is_some_and(|value| value.is_object() || value.as_str().is_some())
     {
         return Err("attachment envelope requires key_ref");
     }
+
+    // `ciphertext_digest` is mandatory in both schemes; it is a sha256 of the
+    // entire opaque ciphertext (true for whole-file AND stream form), so the
+    // server's existing SHA256-of-uploaded-bytes check covers both naturally.
     if !envelope
         .get("ciphertext_digest")
         .and_then(|value| value.as_str())
@@ -794,6 +810,58 @@ fn validate_encrypted_attachment_metadata(
     {
         return Err("attachment ciphertext_digest must be sha256:<64 lowercase hex>");
     }
+
+    // `scheme` is optional; per spec a missing scheme is treated as
+    // `ck.blob.whole_file_aead.v1`. Validate the per-scheme shape only for the
+    // two known schemes. Unknown schemes are accepted as opaque JSON (the
+    // server does not interpret the envelope) and are NOT subjected to the
+    // whole-file `nonce` requirement, so an unknown value is never
+    // mis-validated as whole-file.
+    match envelope.get("scheme").and_then(|value| value.as_str()) {
+        Some(SCHEME_STREAM) => {
+            // Streaming chunked AEAD: per-object random `nonce_prefix`, no
+            // single `nonce`. Require the stream descriptor fields exist and
+            // have the right JSON types; do NOT validate segment structure,
+            // nonces, or per-segment tags — that needs the key the server
+            // does not hold.
+            if envelope
+                .get("nonce_prefix")
+                .and_then(|value| value.as_str())
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err("stream attachment envelope requires nonce_prefix");
+            }
+            if !envelope
+                .get("segment_size")
+                .is_some_and(serde_json::Value::is_u64)
+            {
+                return Err("stream attachment envelope requires integer segment_size");
+            }
+            if !envelope
+                .get("segment_count")
+                .is_some_and(serde_json::Value::is_u64)
+            {
+                return Err("stream attachment envelope requires integer segment_count");
+            }
+        }
+        None | Some(SCHEME_WHOLE_FILE) => {
+            // Whole-file AEAD (explicit or, per spec, the default when scheme
+            // is absent): a single `nonce` is required.
+            if envelope
+                .get("nonce")
+                .and_then(|value| value.as_str())
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err("attachment envelope requires nonce");
+            }
+        }
+        Some(_) => {
+            // Unknown scheme: forward-compatible passthrough. The server does
+            // not interpret the envelope, so store it as-is without imposing
+            // either scheme's field requirements.
+        }
+    }
+
     Ok(())
 }
 
@@ -1181,6 +1249,103 @@ mod tests {
         assert_eq!(
             blob_content_disposition(&blob, "profile_avatar").as_deref(),
             Some("attachment; filename=\"avatar.svg\"")
+        );
+    }
+
+    #[test]
+    fn attachment_envelope_whole_file_default_scheme_requires_nonce() {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        // No scheme → treated as whole_file; nonce present → valid.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "key_ref": "ck:mls:exporter",
+                "nonce": "AAAAAAAAAAAAAAAA",
+                "ciphertext_digest": digest,
+            }))
+            .is_ok()
+        );
+        // No scheme, no nonce → rejected.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "key_ref": "ck:mls:exporter",
+                "ciphertext_digest": digest,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn attachment_envelope_legacy_algorithm_field_still_accepted() {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "algorithm": "mls-rfc9420",
+                "key_ref": {"kid": "did:web:alice.example#device"},
+                "nonce": "nonce",
+                "ciphertext_digest": digest,
+            }))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn attachment_envelope_stream_scheme_requires_stream_descriptor() {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        // Valid stream envelope: nonce_prefix + segment_size/count, no nonce.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "scheme": "ck.blob.stream_aead.v1",
+                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "key_ref": "ck:mls:exporter",
+                "nonce_prefix": "AAAAAAAA",
+                "segment_size": 65536,
+                "segment_count": 4,
+                "ciphertext_digest": digest,
+            }))
+            .is_ok()
+        );
+        // Stream scheme but missing nonce_prefix → rejected.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "scheme": "ck.blob.stream_aead.v1",
+                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "key_ref": "ck:mls:exporter",
+                "segment_size": 65536,
+                "segment_count": 4,
+                "ciphertext_digest": digest,
+            }))
+            .is_err()
+        );
+        // Stream scheme but segment_size not an integer → rejected.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "scheme": "ck.blob.stream_aead.v1",
+                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "key_ref": "ck:mls:exporter",
+                "nonce_prefix": "AAAAAAAA",
+                "segment_size": "65536",
+                "segment_count": 4,
+                "ciphertext_digest": digest,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn attachment_envelope_unknown_scheme_passes_through_without_nonce() {
+        let digest = format!("sha256:{}", "0".repeat(64));
+        // Forward-compatible: unknown scheme is accepted opaquely and is NOT
+        // forced to carry a whole-file `nonce`.
+        assert!(
+            validate_encrypted_attachment_metadata(&json!({
+                "scheme": "ck.blob.future_scheme.v9",
+                "alg": "something-new",
+                "key_ref": "ck:mls:exporter",
+                "ciphertext_digest": digest,
+            }))
+            .is_ok()
         );
     }
 
