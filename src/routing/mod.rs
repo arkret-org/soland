@@ -2189,6 +2189,31 @@ mod operation_conformance_tests {
         let other = state.record_psi_probe("did:web:other.example", holder);
         assert!(!other.rate_limited, "distinct pair has its own window");
     }
+
+    #[test]
+    fn key_backup_download_quota_limits_after_daily_cap() {
+        // Spec key-management.md §7.8 — per-principal rolling-24h quota on
+        // full-ciphertext key-backup downloads.
+        let state = test_state();
+        let principal = "did:web:alice.example";
+        let limit = 4;
+        // Downloads up to the cap are allowed.
+        for n in 1..=limit {
+            let outcome = state.record_key_backup_download(principal, limit);
+            assert!(!outcome.rate_limited, "download {n} within quota must pass");
+            assert_eq!(outcome.count, n);
+        }
+        // The next download over the cap is withheld with a backoff hint.
+        let over = state.record_key_backup_download(principal, limit);
+        assert!(over.rate_limited, "download over the daily cap must be limited");
+        assert!(
+            over.retry_after_ms > 0,
+            "limited download must surface backoff"
+        );
+        // A different principal is tracked independently.
+        let other = state.record_key_backup_download("did:web:bob.example", limit);
+        assert!(!other.rate_limited, "distinct principal has its own window");
+    }
 }
 
 #[cfg(test)]

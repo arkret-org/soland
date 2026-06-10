@@ -879,6 +879,11 @@ pub struct AppState {
     /// probe counters; backs the timing-side-channel rate limit in
     /// `directory::private_contact_discovery`.
     pub psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
+    /// Spec `identity/key-management.md` §7.8 — per-principal rolling-24h
+    /// counter of full-ciphertext key-backup downloads; backs the
+    /// anti-bulk-dump quota in `identity::key_backup::get_key_backup`.
+    /// In-memory like the other limiters; a restart resets the window.
+    pub key_backup_download_tracker: Arc<Mutex<BTreeMap<String, KeyBackupDownloadRecord>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
     /// `Utc::now()`; the notifications read-side filter uses it to flag
     /// rows as read. Same in-memory shape as the other two.
@@ -1195,6 +1200,28 @@ pub const PSI_PROBE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
 /// [`PSI_PROBE_WINDOW`] before further probes are rate-limited. SEC-09.
 pub const PSI_PROBE_MAX_PER_WINDOW: u32 = 20;
 
+/// Spec `identity/key-management.md` §7.8 — default per-principal ceiling on
+/// full-ciphertext key-backup downloads
+/// (`GET /_cokret/self/keys/backups/{backup_id}`) within a rolling
+/// [`KEY_BACKUP_DOWNLOAD_WINDOW`]. Encrypted backup ciphertext is offline
+/// KDF-cracking ammunition; the quota covers a legitimate restore over a long
+/// backup series while blocking bulk dumps. Deployments may adjust via
+/// `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT`, clamped to the spec-allowed
+/// `[16, 256]` range ([`KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN`] /
+/// [`KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX`]).
+pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT: u32 = 64;
+
+/// Spec §7.8 — lower bound of the deployment-adjustable download quota.
+pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN: u32 = 16;
+
+/// Spec §7.8 — upper bound of the deployment-adjustable download quota.
+pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX: u32 = 256;
+
+/// Rolling window over which a principal's key-backup ciphertext downloads
+/// accumulate before further reads are rejected. Spec §7.8 phrases the limit
+/// as "每 principal 每 24h".
+pub const KEY_BACKUP_DOWNLOAD_WINDOW: chrono::Duration = chrono::Duration::hours(24);
+
 /// A revoked cursor authority recorded by `ck.self.account.cursor_revoke`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
@@ -1242,6 +1269,33 @@ pub struct PsiProbeOutcome {
     /// surface `retry_after_ms`.
     pub rate_limited: bool,
     /// Probe count in the current window (post-increment).
+    pub count: u32,
+    /// Suggested client backoff when `rate_limited` is set.
+    pub retry_after_ms: i64,
+}
+
+/// Per-principal key-backup ciphertext download counter
+/// (spec `identity/key-management.md` §7.8). Drives the rolling 24h
+/// anti-bulk-dump quota on `GET /_cokret/self/keys/backups/{backup_id}`.
+#[derive(Clone, Debug)]
+pub struct KeyBackupDownloadRecord {
+    /// Full-envelope downloads observed in the current window.
+    pub count: u32,
+    /// Start of the current rolling window.
+    pub window_started_at: chrono::DateTime<chrono::Utc>,
+    /// Timestamp of the most recent download attempt.
+    pub last_download_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Result of recording a key-backup ciphertext download against the
+/// per-principal §7.8 quota.
+#[derive(Clone, Debug)]
+pub struct KeyBackupDownloadOutcome {
+    /// `true` once the principal exceeds the effective daily limit in the
+    /// current window; callers MUST then withhold the ciphertext, return
+    /// `429`, and write the §7.8 `key_backup_read` audit entry.
+    pub rate_limited: bool,
+    /// Download count in the current window (post-increment).
     pub count: u32,
     /// Suggested client backoff when `rate_limited` is set.
     pub retry_after_ms: i64,
@@ -2052,6 +2106,7 @@ impl AppState {
             erased_actors: Arc::new(Mutex::new(BTreeSet::new())),
             failed_login_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             psi_probe_tracker: Arc::new(Mutex::new(BTreeMap::new())),
+            key_backup_download_tracker: Arc::new(Mutex::new(BTreeMap::new())),
             notification_read_cursors: Arc::new(Mutex::new(BTreeMap::new())),
             sync_cursor_hmac_key,
             sync_cursor_revocations: Arc::new(Mutex::new(Vec::new())),
@@ -2380,6 +2435,52 @@ impl AppState {
             0
         };
         PsiProbeOutcome {
+            rate_limited,
+            count: entry.count,
+            retry_after_ms,
+        }
+    }
+
+    /// Spec `identity/key-management.md` §7.8 — record a full-ciphertext
+    /// key-backup download for `principal_id` and report whether the rolling
+    /// 24h quota ([`KEY_BACKUP_DOWNLOAD_WINDOW`]) is exhausted. Once
+    /// `count > limit` the caller MUST withhold the ciphertext (HTTP 429)
+    /// and write the `access_kind="key_backup_read"` audit entry — encrypted
+    /// backups are offline-KDF-cracking ammunition, so bulk dumps must be
+    /// throttled even for the legitimate owner session.
+    pub fn record_key_backup_download(
+        &self,
+        principal_id: &str,
+        limit: u32,
+    ) -> KeyBackupDownloadOutcome {
+        let mut map = self
+            .key_backup_download_tracker
+            .lock()
+            .expect("key_backup_download_tracker lock");
+        let now = chrono::Utc::now();
+        let entry = map
+            .entry(principal_id.to_owned())
+            .or_insert(KeyBackupDownloadRecord {
+                count: 0,
+                window_started_at: now,
+                last_download_at: now,
+            });
+        // Roll the window if the current one has elapsed.
+        if now - entry.window_started_at > KEY_BACKUP_DOWNLOAD_WINDOW {
+            entry.count = 0;
+            entry.window_started_at = now;
+        }
+        entry.count = entry.count.saturating_add(1);
+        entry.last_download_at = now;
+        let rate_limited = entry.count > limit;
+        let retry_after_ms = if rate_limited {
+            (entry.window_started_at + KEY_BACKUP_DOWNLOAD_WINDOW - now)
+                .num_milliseconds()
+                .max(0)
+        } else {
+            0
+        };
+        KeyBackupDownloadOutcome {
             rate_limited,
             count: entry.count,
             retry_after_ms,

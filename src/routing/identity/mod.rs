@@ -11,7 +11,9 @@ mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
 mod identity_link;
-mod key_backup;
+// pub(in crate::routing) so `system::describe::key_backups_describe` can
+// publish the effective §7.8 download quota alongside the surface contract.
+pub(in crate::routing) mod key_backup;
 mod keys;
 mod profile;
 // R3 spec-sync (cokret-spec b47ff6ec) — recovery policy / receipt

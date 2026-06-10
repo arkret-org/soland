@@ -74,6 +74,30 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "private_account_state",
 ];
 const DELETE_PROOF_HEADER: &str = "x-cokret-key-backup-delete-proof";
+
+/// Spec `identity/key-management.md` §7.8 — resolve the effective
+/// per-principal rolling-24h download quota for full-ciphertext key-backup
+/// reads. Defaults to [`KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT`]; the
+/// deployment may adjust via `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT`, but
+/// only inside the spec-allowed `[16, 256]` range — values outside the range
+/// are clamped, not honored (the spec forbids relaxing past the ceiling).
+pub(in crate::routing) fn key_backup_daily_download_limit() -> u32 {
+    let configured = std::env::var("SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok());
+    clamp_key_backup_daily_download_limit(configured)
+}
+
+fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> u32 {
+    configured
+        .map(|value| {
+            value.clamp(
+                crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
+                crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
+            )
+        })
+        .unwrap_or(crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
+}
 const UNLOCK_PROOF_HEADER: &str = "x-cokret-key-backup-unlock-proof";
 const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "backup_id",
@@ -1007,6 +1031,36 @@ async fn verify_key_backup_unlock_proof(
     verify_key_backup_unlock_proof_signature(state, &proof)
 }
 
+/// Spec `identity/key-management.md` §7.6 — genesis envelopes
+/// (`series_seq == 0`) MUST NOT carry `supersedes` and MUST NOT carry
+/// `supersedes_digest`. A genesis claiming a predecessor (in either field)
+/// is a malformed chain → canonical 409 `series_chain_broken`.
+fn validate_series_genesis_shape(backup: &Value) -> Result<(), AppError> {
+    if backup
+        .get("supersedes")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_chain_broken"));
+    }
+    if backup
+        .get("supersedes_digest")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes_digest`",
+        )
+        .with_status(StatusCode::CONFLICT)
+        .with_wire_code("series_chain_broken"));
+    }
+    Ok(())
+}
+
 /// CKP-0008 / CKP-0009 (spec head 37ce729) — series monotonicity check
 /// for `PUT /_cokret/self/keys/backups/{backup_id}`. Returns one of the three
 /// canonical 409 reasons:
@@ -1054,16 +1108,7 @@ async fn enforce_key_backup_series_chain(
     }
 
     if series_seq == 0 {
-        // Genesis envelope: MUST NOT carry `supersedes`; if it does the
-        // chain is malformed.
-        if supersedes.is_some() {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
-                "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
-            )
-            .with_status(StatusCode::CONFLICT)
-            .with_wire_code("series_chain_broken"));
-        }
+        validate_series_genesis_shape(backup)?;
         // Genesis envelope is fine if no prior entries exist for the series.
         if let Some(existing_seq) = max_existing_seq {
             return Err(AppError::new(
@@ -1454,6 +1499,41 @@ async fn get_key_backup(
         return Err(AppError::not_found("key backup not found"));
     }
     verify_key_backup_unlock_proof(state, req, &session.actor, &session.device_id, &backup).await?;
+    // Spec key-management.md §7.8 — per-principal rolling-24h download quota
+    // on full-ciphertext reads. The over-threshold download MUST be withheld
+    // (429) and MUST land in the audit log as a `key_backup_read` access
+    // record; encrypted backups are offline KDF-cracking ammunition, so bulk
+    // dumps are throttled even for the owner's own authenticated session.
+    let daily_limit = key_backup_daily_download_limit();
+    let quota = state.record_key_backup_download(&session.actor, daily_limit);
+    if quota.rate_limited {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.audit.accessed",
+            json!({
+                "access_kind": "key_backup_read",
+                "backup_id": backup_id.clone(),
+                "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
+                "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
+                "device_id": session.device_id.clone(),
+                "download_count": quota.count,
+                "daily_limit": daily_limit,
+            }),
+            "rate_limited",
+        )
+        .await;
+        return Err(AppError::new(
+            ErrorCode::RateLimited,
+            format!(
+                "key backup download quota exceeded ({daily_limit} full-ciphertext reads per principal per 24h)"
+            ),
+        )
+        .with_reason_detail(format!(
+            "key-management.md §7.8 daily_principal_download_limit; retry_after_ms={}",
+            quota.retry_after_ms
+        )));
+    }
     json_ok(backup)
 }
 
@@ -1875,6 +1955,83 @@ mod tests {
         assert_eq!(
             cokret_sdk::canonical::sha256_digest(&canonical),
             "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
+        );
+    }
+
+    // ── §7.6 genesis-envelope shape ──────────────────────────────────────
+
+    #[test]
+    fn genesis_envelope_rejects_supersedes() {
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["supersedes"] = json!("ck:backup:01964137-0000-7000-8000-0000000000ff");
+
+        let err = validate_series_genesis_shape(&body)
+            .expect_err("genesis envelope carrying `supersedes` must be series_chain_broken");
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(err.wire_code_override.as_deref(), Some("series_chain_broken"));
+        assert!(err.message.contains("`supersedes`"));
+    }
+
+    #[test]
+    fn genesis_envelope_rejects_supersedes_digest() {
+        // Spec key-management.md §7.6 — genesis MUST NOT carry
+        // `supersedes_digest` even when `supersedes` itself is absent.
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["supersedes_digest"] = json!(
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        );
+
+        let err = validate_series_genesis_shape(&body).expect_err(
+            "genesis envelope carrying `supersedes_digest` must be series_chain_broken",
+        );
+        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(err.wire_code_override.as_deref(), Some("series_chain_broken"));
+        assert!(err.message.contains("supersedes_digest"));
+    }
+
+    #[test]
+    fn genesis_envelope_tolerates_null_predecessor_fields() {
+        // Spec §7.6 phrases genesis as `supersedes == null`; an explicit
+        // JSON null is equivalent to absence, not a chain claim.
+        let mut body =
+            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
+        body["supersedes"] = Value::Null;
+        body["supersedes_digest"] = Value::Null;
+
+        validate_series_genesis_shape(&body)
+            .expect("explicit null predecessor fields are equivalent to absence");
+    }
+
+    // ── §7.8 download-quota clamp ────────────────────────────────────────
+
+    #[test]
+    fn download_limit_defaults_and_clamps_to_spec_range() {
+        use crate::state::{
+            KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT, KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
+            KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
+        };
+
+        // Unset → spec default (64).
+        assert_eq!(
+            clamp_key_backup_daily_download_limit(None),
+            KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT
+        );
+        // In-range values are honored as-is.
+        assert_eq!(clamp_key_backup_daily_download_limit(Some(100)), 100);
+        // Outside the spec-allowed [16, 256] range the value is clamped —
+        // §7.8 forbids relaxing past the ceiling, and a sub-floor value
+        // would break a single legitimate long-series restore.
+        assert_eq!(
+            clamp_key_backup_daily_download_limit(Some(1)),
+            KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN
+        );
+        assert_eq!(
+            clamp_key_backup_daily_download_limit(Some(100_000)),
+            KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
         );
     }
 

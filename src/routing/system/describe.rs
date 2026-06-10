@@ -647,7 +647,14 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
             "ck.self.keys.backups.list",
             "ck.self.keys.backups.get",
             "ck.self.keys.backups.delete"
-        ]
+        ],
+        // Spec key-management.md §7.8 — implementations MUST publish the
+        // effective per-principal rolling-24h full-ciphertext download
+        // quota they enforce on `ck.self.keys.backups.get`.
+        "limits": {
+            "daily_principal_download_limit":
+                crate::routing::identity::key_backup::key_backup_daily_download_limit(),
+        }
     }))
 }
 
