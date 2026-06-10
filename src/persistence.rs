@@ -1467,61 +1467,13 @@ pub trait OneTimeKeyStore: Send + Sync {
     async fn claim(&self, actor: &str, device_id: &str) -> PersistenceResult<Option<Value>>;
 }
 
-/// Encrypted key backups + the restore-ticket FSM tables.
-///
-/// The restore-ticket trio (ticket envelope + `executor_state` +
-/// `approval_state`) is durable behind a row per `ticket_id` in the
-/// `restore_tickets` table. The FSM is
-/// `pending → approved → executed → revoked` (with `rejected` and
-/// `cancelled` as terminals); transitions live in
-/// [`crate::routing::key_backup_restore::ticket_status_transition`] and bump
-/// the row's monotonic `fence_token` so a stale concurrent writer that read
-/// the pre-bump token cannot land its update.
-///
-/// `snapshot_tickets` / `snapshot_executor_runs` / `snapshot_approval_runs`
-/// satisfy the routing-layer's per-actor filter / iter / retain patterns —
-/// every record carries an `actor` field in its envelope and the routing
-/// layer filters in-process. The `delete_*` family is used by the restore-
-/// state import path's `replace_owned` mode.
+/// Encrypted key-backup envelopes (one row per `backup_id`).
 #[async_trait]
 pub trait KeyBackupStore: Send + Sync {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>>;
-
-    async fn put_ticket(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    async fn get_ticket(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    async fn delete_ticket(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    async fn snapshot_tickets(&self) -> PersistenceResult<Vec<(String, Value)>>;
-
-    async fn put_executor_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    async fn get_executor_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    async fn delete_executor_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    async fn snapshot_executor_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
-
-    async fn put_approval_run(&self, ticket_id: String, payload: Value) -> PersistenceResult<()>;
-    async fn get_approval_run(&self, ticket_id: &str) -> PersistenceResult<Option<Value>>;
-    async fn delete_approval_run(&self, ticket_id: &str) -> PersistenceResult<bool>;
-    async fn snapshot_approval_runs(&self) -> PersistenceResult<Vec<(String, Value)>>;
-
-    /// Read the current monotonic fence token for a ticket. Returns 0 when
-    /// the row does not exist yet (next put_* will bump to 1).
-    async fn ticket_fence_token(&self, ticket_id: &str) -> PersistenceResult<i64>;
-
-    /// CAS-style transition. Updates `status` to `next_status` IFF the row's
-    /// current `fence_token` matches `expected_fence`. On success bumps the
-    /// fence by 1 and returns `Ok(new_fence)`; on a stale CAS returns
-    /// `Ok(None)` so the caller can render a 409. The ticket envelope JSONB
-    /// is NOT touched — callers update `payload` (and approval/executor
-    /// envelopes) via `put_ticket` / `put_approval_run` / `put_executor_run`
-    /// AFTER a successful CAS.
-    async fn cas_ticket_status(
-        &self,
-        ticket_id: &str,
-        expected_fence: i64,
-        next_status: &str,
-    ) -> PersistenceResult<Option<i64>>;
 }
 
 /// MAL-11 — persistent multisig partial-signature buffer.

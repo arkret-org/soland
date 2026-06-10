@@ -239,7 +239,11 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         profile_event.envelope["authorization_ref"],
         json!(authorization_ref)
     );
-    assert_eq!(profile_event.envelope["applet_id"], json!(applet_id));
+    // The applet binding is carried by `executed_by` + `authorization_ref`
+    // (CKP-0008/0009 delegated authorization) and by the profile's
+    // `managed_by_applet` below — NOT by a top-level envelope `applet_id`.
+    // `event-envelope.schema.json` is `additionalProperties:false` and has no
+    // `applet_id`, so asserting one here contradicts the canonical wire shape.
     assert_eq!(
         profile_event.envelope["payload"]["object"]["profile_fields"]["managed_by_applet"],
         json!(applet_id)
