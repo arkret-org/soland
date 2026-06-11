@@ -546,7 +546,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ck.message.create".to_owned(),
         "ck.applet.ghost.provision".to_owned(),
     ];
-    package.endpoint_set = json!({
+    package.endpoint_policy = json!({
         "transactions": "/_cokret/edge/applet/transactions",
         "actors": "/_cokret/edge/applet/actors/{actor_id}",
         "realms": "/_cokret/edge/applet/realms/{realm_id_or_alias}",

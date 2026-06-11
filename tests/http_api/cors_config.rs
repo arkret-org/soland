@@ -403,7 +403,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&signed_payload).unwrap();
     assert_eq!(
         ice["signature"]["payload_digest"],
-        format!("sha256:{:x}", Sha256::digest(&payload_bytes))
+        format!("sha256:{}", hex::encode(Sha256::digest(&payload_bytes)))
     );
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(

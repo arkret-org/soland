@@ -93,7 +93,7 @@ fn b64(bytes: &[u8]) -> String {
 fn sha256_json(value: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
-    format!("sha256:{:x}", Sha256::digest(&bytes))
+    format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
 
 fn event_canonical_digest(event: &Value) -> String {

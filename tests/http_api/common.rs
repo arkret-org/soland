@@ -164,7 +164,7 @@ fn signed_federation_request_headers(
 ) -> Vec<(&'static str, String)> {
     let body_bytes = cokret_sdk::canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
-    let request_digest = format!("sha256:{:x}", Sha256::digest(&body_bytes));
+    let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = trust_domain_from_service_did(origin);
     let destination_trust_domain = trust_domain_from_service_did(destination);
     let created = chrono::Utc::now().timestamp();
@@ -437,7 +437,7 @@ pub(crate) fn sha256_json(value: &Value) -> String {
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 pub(crate) fn expected_flow_id_for_scope(scope_id: &str) -> String {
@@ -446,7 +446,7 @@ pub(crate) fn expected_flow_id_for_scope(scope_id: &str) -> String {
         .map(|suffix| format!("ck:flow:{suffix}"))
         .unwrap_or_else(|| {
             let digest = Sha256::digest(scope_id.as_bytes());
-            format!("ck:flow:{:x}", digest)
+            format!("ck:flow:{}", hex::encode(digest))
                 .chars()
                 .take("ck:flow:".len() + 26)
                 .collect()

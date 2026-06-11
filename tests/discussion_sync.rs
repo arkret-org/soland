@@ -495,7 +495,7 @@ fn sha256_json(value: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(value).expect("json canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn flow_id_for_realm(realm_id: &str) -> String {

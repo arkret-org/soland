@@ -22,13 +22,25 @@ fn account_data_entry<'a>(sync: &'a Value, data_type: &str) -> Option<&'a Value>
         .find(|entry| entry["data_type"] == data_type)
 }
 
+fn device_message_target(kind: &str, content: Value) -> Value {
+    serde_json::json!({
+        "kind": kind,
+        "content": content,
+        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    })
+}
+
 #[tokio::test]
 async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
     let file_transfer_bytes = b"file-transfer-ciphertext";
-    let file_transfer_digest = format!("sha256:{:x}", Sha256::digest(file_transfer_bytes));
+    let file_transfer_digest = format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(file_transfer_bytes))
+    );
     let file_transfer_blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "text/plain", true)
@@ -79,7 +91,7 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let avatar_bytes = b"\x89PNG\r\n\x1a\navatar-bytes".to_vec();
-    let avatar_sha256 = format!("{:x}", Sha256::digest(&avatar_bytes));
+    let avatar_sha256 = hex::encode(Sha256::digest(&avatar_bytes));
     let blob_ref = format!("ck:blob:sha256:{avatar_sha256}");
     let storage_key = state.object_storage.object_key_for_sha256(&avatar_sha256);
     state
@@ -441,15 +453,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "device_keys": {"alg": "mls-rfc9420", "key": "alice-device-key"},
-            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
-            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
-            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
-            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
-            "one_time_keys": [{"key_id": "otk1", "key": "one-time"}],
+            "one_time_keys": {"signed_curve25519:otk1": {"key": "one-time"}},
             "fallback_keys": {"signed_curve25519:fallback": {"key": "fallback-key"}},
-            "mls_key_packages": [{"package_id": "mls-package-1", "key": "opaque-package"}],
-            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
             "device_signature": {"alg": "none"}
         }))
         .send(&app_from_state(state.clone()))
@@ -472,13 +477,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert!(query["device_keys"].is_object());
     assert_eq!(
         query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["device_keys"]["key"],
-        "alice-device-key"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["device_signature"]["alg"],
-        "none"
+            ["one_time_keys"]["signed_curve25519:otk1"]["key"],
+        "one-time"
     );
     assert_eq!(
         query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
@@ -487,33 +487,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
     );
     assert_eq!(
         query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["mls_key_packages"][0]["package_id"],
-        "mls-package-1"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["principal_signing_keys"][0]["key"],
-        "principal-key"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["recovery_keys"][0]["key"],
-        "recovery-key"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["session_keys"][0]["key"],
-        "session-key"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["agent_keys"][0]["key"],
-        "agent-key"
-    );
-    assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["backup_restore_keys"][0]["key"],
-        "backup-key"
+            ["device_signature"]["alg"],
+        "none"
     );
 
     let claimed_once: Value = TestClient::post("http://server/_cokret/self/keys/claim")
@@ -532,8 +507,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .unwrap();
     assert_eq!(
         claimed_once["one_time_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["key_id"],
-        "otk1"
+            ["key"],
+        "one-time"
     );
     let claimed_replay: Value = TestClient::post("http://server/_cokret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -561,8 +536,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "messages": {
                 "did:web:alice.example": {
                     "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.welcome",
-                        "content": {"ciphertext": "opaque"}
+                        "kind": "ck.mls.welcome",
+                        "content": "not-an-object",
+                        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1))
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
                     }
                 }
             }
@@ -577,10 +554,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.welcome",
-                        "content": encrypted_envelope("ck.mls.welcome", "opaque")
-                    }
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -597,10 +572,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.welcome",
-                        "content": encrypted_envelope("ck.mls.welcome", "opaque")
-                    }
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "opaque"))
                 }
             }
         }))
@@ -609,7 +582,15 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(duplicate["delivered"].as_object().unwrap().len(), 0);
+    assert_eq!(
+        duplicate
+            .get("delivered")
+            .and_then(Value::as_object)
+            .map(|delivered| delivered.len())
+            .unwrap_or(0),
+        0,
+        "duplicate send must not re-queue messages: {duplicate}"
+    );
 
     let bad_blob = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -685,7 +666,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     assert_eq!(plaintext_private_blob.status_code.unwrap().as_u16(), 403);
 
     let encrypted_bytes = b"encrypted-bytes";
-    let ciphertext_digest = format!("sha256:{:x}", Sha256::digest(encrypted_bytes));
+    let ciphertext_digest = format!("sha256:{}", hex::encode(Sha256::digest(encrypted_bytes)));
     let blob: Value = TestClient::post("http://server/_cokret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "Text/Plain; charset=utf-8", true)
@@ -883,7 +864,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let bob_body = bob_blob.take_string().await.unwrap();
     assert_eq!(bob_body.as_bytes(), encrypted_bytes);
     assert_eq!(
-        format!("sha256:{:x}", Sha256::digest(bob_body.as_bytes())),
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(bob_body.as_bytes()))
+        ),
         blob["upload_receipt"]["encrypted_attachment"]["ciphertext_digest"]
             .as_str()
             .unwrap()
@@ -1313,10 +1297,8 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.application",
-                        "content": encrypted_envelope("ck.mls.application", ciphertext)
-                    }
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                        device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", ciphertext))
                 }
             }
         }))
@@ -1352,10 +1334,8 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.application",
-                        "content": encrypted_envelope("ck.mls.application", "ack-ciphertext")
-                    }
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                        device_message_target("ck.mls.application", encrypted_envelope("ck.mls.application", "ack-ciphertext"))
                 }
             }
         }))
@@ -1443,10 +1423,8 @@ async fn device_messages_evicted_after_session_logout() {
         .json(&serde_json::json!({
             "messages": {
                 "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "type": "ck.mls.welcome",
-                        "content": encrypted_envelope("ck.mls.welcome", "logout-ciphertext")
-                    }
+                    "ck:device:01904100-0000-7000-8000-a11ce0000001":
+                        device_message_target("ck.mls.welcome", encrypted_envelope("ck.mls.welcome", "logout-ciphertext"))
                 }
             }
         }))

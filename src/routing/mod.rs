@@ -360,13 +360,30 @@ fn add_contract_operation(
     // A table entry whose path is absent from the merged router doc would
     // silently no-op, leaving SOLAND_EXTENSION_OPERATIONS documenting a
     // mount point that does not exist. Fail loudly in debug builds so the
-    // table cannot drift away from the actual routes again.
+    // table cannot drift away from the actual routes again. Concrete
+    // collection entries such as `/_soland/admin/actors` are valid when the
+    // merged router exposes the parameterized `/_soland/admin/{resource}`
+    // pattern that serves them.
     debug_assert!(
-        doc.paths.contains_key(path),
+        doc.path_is_served(path),
         "SOLAND_EXTENSION_OPERATIONS path `{path}` (operation `{operation_id}`) is not served by any router"
     );
     if let Some(path_item) = doc.paths.get_mut(path) {
         path_item.operations.insert(method, operation);
+    }
+}
+
+trait OpenApiRouteExt {
+    fn path_is_served(&self, path: &str) -> bool;
+}
+
+impl OpenApiRouteExt for OpenApi {
+    fn path_is_served(&self, path: &str) -> bool {
+        self.paths.contains_key(path)
+            || self
+                .paths
+                .keys()
+                .any(|pattern| pattern_matches_path(pattern, path))
     }
 }
 

@@ -67,7 +67,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
     let token = dev_token(state.clone()).await;
 
     let payload = b"resumable-file-transfer-ciphertext-bytes".to_vec();
-    let expected_digest = format!("sha256:{:x}", Sha256::digest(&payload));
+    let expected_digest = format!("sha256:{}", hex::encode(Sha256::digest(&payload)));
     let (head, tail) = payload.split_at(16);
 
     // Create the upload resource with file-transfer metadata.

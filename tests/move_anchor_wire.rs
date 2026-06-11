@@ -638,7 +638,7 @@ fn refresh_event_proof(event: &mut Value) {
 
 fn sha256_json(value: &Value) -> String {
     let bytes = serde_json::to_vec(value).expect("JSON value serializes");
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 /// events.subscribe is a streaming NDJSON

@@ -57,9 +57,10 @@ async fn keys_upload(
 
     let one_time_key_count = body.one_time_keys.len() as u64;
     let mut one_time_key_alg_counts = BTreeMap::new();
-    for algorithm in body.one_time_keys.keys() {
+    for key_id in body.one_time_keys.keys() {
+        let algorithm = key_id.split(':').next().unwrap_or(key_id.as_str());
         *one_time_key_alg_counts
-            .entry(algorithm.clone())
+            .entry(algorithm.to_owned())
             .or_insert(0) += 1;
     }
     let one_time_keys = body.one_time_keys;

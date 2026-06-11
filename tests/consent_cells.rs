@@ -186,7 +186,7 @@ fn sha256_json(value: &Value) -> String {
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn event_canonical_digest(event: &Value) -> String {

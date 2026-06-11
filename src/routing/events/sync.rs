@@ -3793,11 +3793,23 @@ mod tests {
     const ROSTER_CALLER: &str = "did:web:bob.example";
 
     fn roster_body(audience: &str) -> SyncRequestBody {
+        let mut extra = BTreeMap::new();
+        extra.insert("audience".to_owned(), json!(audience));
         SyncRequestBody {
             after: None,
             catchup: None,
-            filter: Some(json!({ "audience": audience })),
+            filter: Some(cokret_sdk::SyncFilter {
+                realms: Vec::new(),
+                timeline_limit: None,
+                lazy_load_members: false,
+                include_redundant_members: false,
+                event_types: Vec::new(),
+                not_event_types: Vec::new(),
+                extra,
+            }),
             set_presence: None,
+            subscriptions: None,
+            wait_for: None,
         }
     }
 
