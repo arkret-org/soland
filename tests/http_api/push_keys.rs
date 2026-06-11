@@ -980,7 +980,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let service = app_from_state(state.clone());
     let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
     let push_gateway = "https://push.example/_cokret/edge/push/notify";
-    let bridge_describe = "https://push.example/_cokret/edge/push/bridge/describe";
+    let bridge_describe = "https://push.example/_floria/push/bridge/describe";
     let stale_at = chrono::Utc::now() - chrono::Duration::hours(25);
 
     let stale_import: Value = TestClient::post(

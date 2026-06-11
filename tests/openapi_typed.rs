@@ -254,11 +254,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
         "PushUnregisterRequestBody",
         "PushNotifyRequestBody",
         "PushNotifyOutcome",
-        "CreateWebrtcSessionRequestBody",
-        "CreateWebrtcSessionOutcome",
-        "WebrtcSignalRequestBody",
-        "WebrtcSignalOutcome",
-        "WebrtcSignalsOutcome",
+        "CreateWebRtcSessionRequestBody",
+        "CreateWebRtcSessionOutcome",
+        "WebRtcSignalRequestBody",
+        "WebRtcSignalOutcome",
+        "WebRtcSignalsOutcome",
     ] {
         assert!(
             body.contains(typed_now),

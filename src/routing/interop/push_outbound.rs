@@ -92,7 +92,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 .to_owned(),
             cache_import_path: "/_soland/edge/push/outbound/bridge/cache/import"
                 .to_owned(),
-            bridge_describe_path: "/_cokret/edge/push/bridge/describe".to_owned(),
+            bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
             notify_path: "/_cokret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
                 "ck.push.bridge.describe".to_owned(),
@@ -133,7 +133,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "entries": [{
                     "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/_cokret/edge/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
                     "fetch_state": "seed_import",
                     "cache_state": "imported_replace_existing",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -151,7 +151,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
                 "entries": [{
                     "push_gateway_url": "https://floria.example/_cokret/edge/push/notify",
                     "service_base_url": "https://floria.example",
-                    "bridge_describe_url": "https://floria.example/_cokret/edge/push/bridge/describe",
+                    "bridge_describe_url": "https://floria.example/_floria/push/bridge/describe",
                     "fetch_state": "cache_hit",
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -192,7 +192,7 @@ async fn outbound_push_bridge_resolve(
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url =
-        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
     let cached = state
         .persistence
         .push_bridge_cache()
@@ -258,7 +258,7 @@ async fn outbound_push_bridge_fetch(
             AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url =
-        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
     let (bridge_describe_target, client) =
         crate::security::validate_http_url_for_egress_with_pinned_client(
             &bridge_describe_url,
@@ -511,7 +511,7 @@ async fn outbound_push_bridge_cache_invalidate(
     {
         if let Some(service_base_url) = derive_push_gateway_service_base_url(push_gateway_url) {
             let bridge_describe_url =
-                join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+                join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
             usize::from(cache.delete(&bridge_describe_url).await.unwrap_or(false))
         } else {
             0
@@ -538,7 +538,7 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     }
 
     for suffix in [
-        "/_cokret/edge/push/bridge/describe",
+        "/_floria/push/bridge/describe",
         "/cokret/push/v1/bridge/describe",
         "/_cokret/edge/push/notify",
         "/cokret/push/v1/notify",
@@ -554,11 +554,16 @@ pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Op
     if value.is_empty() { None } else { Some(value) }
 }
 
-pub(super) fn join_edge_push_url(base: &str, path: &str) -> String {
+pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');
-    let path = path.strip_prefix("_cokret/edge/").unwrap_or(path);
 
+    if path.starts_with("_floria/") {
+        let base = base.strip_suffix("/_cokret/edge").unwrap_or(base);
+        return format!("{base}/{path}");
+    }
+
+    let path = path.strip_prefix("_cokret/edge/").unwrap_or(path);
     if base.ends_with("/_cokret/edge") {
         format!("{base}/{path}")
     } else {

@@ -2,49 +2,49 @@ use super::*;
 
 /// WebRTC sessions + signals. Sessions auto-prune on `expires_at`.
 #[async_trait]
-pub trait WebrtcSessionStore: Send + Sync {
-    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()>;
-    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>>;
+pub trait WebRtcSessionStore: Send + Sync {
+    async fn put(&self, record: WebRtcSessionRecord) -> PersistenceResult<()>;
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebRtcSessionRecord>>;
     async fn delete(&self, session_id: &str) -> PersistenceResult<bool>;
     async fn append_signal(
         &self,
         session_id: &str,
         actor_must_be_participant: &str,
         builder: SignalBuilder<'_>,
-    ) -> PersistenceResult<WebrtcAppendSignal>;
+    ) -> PersistenceResult<WebRtcAppendSignal>;
     async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
 /// Closure that fills in a signal once the store has assigned a sequence.
-pub type SignalBuilder<'a> = Box<dyn FnOnce(u64) -> WebrtcSignalRecord + Send + 'a>;
+pub type SignalBuilder<'a> = Box<dyn FnOnce(u64) -> WebRtcSignalRecord + Send + 'a>;
 
-/// Result of `WebrtcSessionStore::append_signal` — useful when the caller
+/// Result of `WebRtcSessionStore::append_signal` — useful when the caller
 /// needs to surface the sequence number / participant set to the client.
 #[derive(Debug, Clone)]
-pub struct WebrtcAppendSignal {
+pub struct WebRtcAppendSignal {
     pub seq: u64,
 }
 
 #[derive(Default)]
-pub(crate) struct MemoryWebrtcSessionStore {
-    data: Mutex<BTreeMap<String, WebrtcSessionRecord>>,
+pub(crate) struct MemoryWebRtcSessionStore {
+    data: Mutex<BTreeMap<String, WebRtcSessionRecord>>,
 }
 
-impl MemoryWebrtcSessionStore {
+impl MemoryWebRtcSessionStore {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 }
 
 #[async_trait]
-impl WebrtcSessionStore for MemoryWebrtcSessionStore {
-    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
+impl WebRtcSessionStore for MemoryWebRtcSessionStore {
+    async fn put(&self, record: WebRtcSessionRecord) -> PersistenceResult<()> {
         let id = record.session_id.clone();
         self.data.lock().expect("webrtc lock").insert(id, record);
         Ok(())
     }
 
-    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebRtcSessionRecord>> {
         Ok(self
             .data
             .lock()
@@ -67,7 +67,7 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
         session_id: &str,
         actor_must_be_participant: &str,
         builder: SignalBuilder<'_>,
-    ) -> PersistenceResult<WebrtcAppendSignal> {
+    ) -> PersistenceResult<WebRtcAppendSignal> {
         let mut data = self.data.lock().expect("webrtc lock");
         let record = data
             .get_mut(session_id)
@@ -80,7 +80,7 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
         let seq = record.next_seq;
         record.next_seq += 1;
         record.signals.push(builder(seq));
-        Ok(WebrtcAppendSignal { seq })
+        Ok(WebRtcAppendSignal { seq })
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {
@@ -92,12 +92,12 @@ impl WebrtcSessionStore for MemoryWebrtcSessionStore {
     }
 }
 
-pub(crate) struct PgWebrtcSessionStore {
+pub(crate) struct PgWebRtcSessionStore {
     pub(crate) pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct WebrtcSessionRow {
+struct WebRtcSessionRow {
     #[diesel(sql_type = SqlUuid)]
     id: Uuid,
     #[diesel(sql_type = SqlUuid)]
@@ -112,8 +112,8 @@ struct WebrtcSessionRow {
     expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl WebrtcSessionRow {
-    async fn into_record(self) -> PersistenceResult<WebrtcSessionRecord> {
+impl WebRtcSessionRow {
+    async fn into_record(self) -> PersistenceResult<WebRtcSessionRecord> {
         // The `signaling_state` envelope carries the live participants set,
         // signals vec, and next_seq counter — round-tripped via serde_json.
         let participants: BTreeSet<String> = self
@@ -132,13 +132,13 @@ impl WebrtcSessionRow {
             .get("next_seq")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let signals: Vec<WebrtcSignalRecord> = self
+        let signals: Vec<WebRtcSignalRecord> = self
             .signaling_state
             .get("signals")
             .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
-                    .map(|signal| WebrtcSignalRecord {
+                    .map(|signal| WebRtcSignalRecord {
                         seq: signal.get("seq").and_then(Value::as_u64).unwrap_or(0),
                         sender: signal
                             .get("sender")
@@ -166,7 +166,7 @@ impl WebrtcSessionRow {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(WebrtcSessionRecord {
+        Ok(WebRtcSessionRecord {
             session_id: ids::format_typed_uuid("webrtc", &self.id),
             realm_id: ids::format_typed_uuid("space", &self.realm_id),
             created_by: self.initiator_did,
@@ -201,7 +201,7 @@ impl WebrtcSessionRow {
     }
 }
 
-fn webrtc_signaling_state(record: &WebrtcSessionRecord) -> Value {
+fn webrtc_signaling_state(record: &WebRtcSessionRecord) -> Value {
     serde_json::json!({
         "participants": record.participants.iter().cloned().collect::<Vec<_>>(),
         "mode": record.mode.clone(),
@@ -225,8 +225,8 @@ fn webrtc_signaling_state(record: &WebrtcSessionRecord) -> Value {
 }
 
 #[async_trait]
-impl WebrtcSessionStore for PgWebrtcSessionStore {
-    async fn put(&self, record: WebrtcSessionRecord) -> PersistenceResult<()> {
+impl WebRtcSessionStore for PgWebRtcSessionStore {
+    async fn put(&self, record: WebRtcSessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         let signaling_state = webrtc_signaling_state(&record);
         let ice_config: Value = serde_json::json!({});
@@ -256,7 +256,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebrtcSessionRecord>> {
+    async fn get(&self, session_id: &str) -> PersistenceResult<Option<WebRtcSessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         let session_id_uuid = ids::typed_uuid_part_or_panic(session_id);
         let row = sql_query(
@@ -264,7 +264,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
              FROM webrtc_sessions WHERE id = $1",
         )
         .bind::<SqlUuid, _>(session_id_uuid)
-        .get_result::<WebrtcSessionRow>(&mut *conn)
+        .get_result::<WebRtcSessionRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::from)?;
@@ -290,7 +290,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         session_id: &str,
         actor_must_be_participant: &str,
         builder: SignalBuilder<'_>,
-    ) -> PersistenceResult<WebrtcAppendSignal> {
+    ) -> PersistenceResult<WebRtcAppendSignal> {
         // Read-modify-write inside a single conn — acceptable since callers
         // serialize on the WebRTC routing handler and the conflict surface
         // is bounded by the active call session.
@@ -307,7 +307,7 @@ impl WebrtcSessionStore for PgWebrtcSessionStore {
         record.next_seq += 1;
         record.signals.push(builder(seq));
         self.put(record).await?;
-        Ok(WebrtcAppendSignal { seq })
+        Ok(WebRtcAppendSignal { seq })
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {

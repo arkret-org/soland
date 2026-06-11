@@ -685,7 +685,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
                 required_contract: "ck.push.bridge.describe".to_owned(),
-                discovery_path: "/_cokret/edge/push/bridge/describe".to_owned(),
+                discovery_path: "/_floria/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },
         ],

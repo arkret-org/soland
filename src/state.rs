@@ -1711,7 +1711,7 @@ pub struct OutboundPushBridgeCacheRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct WebrtcSessionRecord {
+pub struct WebRtcSessionRecord {
     pub session_id: String,
     pub realm_id: String,
     pub created_by: String,
@@ -1723,11 +1723,11 @@ pub struct WebrtcSessionRecord {
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub next_seq: u64,
-    pub signals: Vec<WebrtcSignalRecord>,
+    pub signals: Vec<WebRtcSignalRecord>,
 }
 
 #[derive(Clone, Debug)]
-pub struct WebrtcSignalRecord {
+pub struct WebRtcSignalRecord {
     pub seq: u64,
     pub sender: String,
     pub message_type: String,
