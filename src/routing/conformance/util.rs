@@ -19,9 +19,14 @@ use anyhow::Result;
 use anyhow::anyhow;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+/// SHA-256 digest of `bytes`, lowercase hex, prefixed with `sha256:`.
+///
+/// Re-exported from the SDK canonical helper (the single digest-string
+/// source of truth for all downstream services) instead of carrying a
+/// third fork alongside `cotest::conformance::sha256_prefixed`.
+pub use cokret_sdk::canonical::sha256_digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 /// Canonical-JSON encode a `serde_json::Value`.
 ///
@@ -59,19 +64,6 @@ pub fn canonical_json(value: &Value) -> Result<String> {
         }
         _ => Ok(serde_json::to_string(value)?),
     }
-}
-
-/// SHA-256 digest of `bytes`, lowercase hex, prefixed with `sha256:`.
-///
-/// Forked from `cotest::conformance::sha256_prefixed`.
-pub fn sha256_prefixed(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity("sha256:".len() + digest.len() * 2);
-    out.push_str("sha256:");
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
 }
 
 /// Opaque cursor shape used by `/conformance/cursor`.
@@ -144,7 +136,7 @@ mod tests {
         let canonical = canonical_json(&value).unwrap();
         assert_eq!(canonical, r#"{"a":1,"b":2}"#);
         assert_eq!(
-            sha256_prefixed(canonical.as_bytes()),
+            sha256_digest(canonical.as_bytes()),
             "sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
         );
     }
@@ -185,7 +177,7 @@ mod tests {
 
     #[test]
     fn sha256_digest_is_lowercase_prefixed_hex() {
-        assert!(looks_like_sha256_digest(&sha256_prefixed(b"hello")));
+        assert!(looks_like_sha256_digest(&sha256_digest(b"hello")));
         assert!(!looks_like_sha256_digest("SHA256:abc"));
         assert!(!looks_like_sha256_digest("sha256:short"));
     }

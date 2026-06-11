@@ -23,7 +23,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{ModerationReportRequestBody, SolandModerationReportOutcome};
+use crate::wire::{SolandModerationReportRequestBody, SolandModerationReportOutcome};
 
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
@@ -44,7 +44,7 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.moderation.report"))]
 async fn moderation_report(
     aa: AuthArgs,
-    body: JsonBody<ModerationReportRequestBody>,
+    body: JsonBody<SolandModerationReportRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SolandModerationReportOutcome> {

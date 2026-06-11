@@ -373,22 +373,12 @@ fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<Value> {
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
     let transcript = recovery_proof_transcript(record, kind);
     let transcript_bytes = cokret_sdk::canonical::canonical_json_bytes(&transcript).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&transcript_bytes);
-    let proof_digest = format!("sha256:{}", hex_lower(&hasher.finalize()));
+    let proof_digest = cokret_sdk::canonical::sha256_digest(&transcript_bytes);
     let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
     if let Some(vm) = verification_method {
         summary["verification_method"] = json!(vm);
     }
     Some(summary)
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
 }
 
 /// Load a session and enforce principal isolation: only the authenticated
@@ -486,7 +476,7 @@ async fn recovery_session_create(
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{principal}`"
             ))
-            .with_wire_code("recovery_policy_missing")
+            .with_wire_code("recovery_policy_mismatch")
         })?;
     if active.trust_domain != trust_domain {
         return Err(AppError::conflict(format!(
@@ -823,11 +813,13 @@ async fn recovery_session_complete(
     // reach `verified`, so this endpoint always rejects rather than fabricating
     // a successful recovery.
     if record.state != "verified" {
+        // Registry-canonical `failed_precondition`: completion preconditions
+        // (a `verified` session) are not met yet.
         return Err(AppError::conflict(format!(
             "recovery session is `{}`, completion requires `verified`",
             record.state
         ))
-        .with_wire_code("recovery_session_not_verified"));
+        .with_wire_code("failed_precondition"));
     }
 
     // C-P4 / Phase 3 (durable model) — the recovering client has already

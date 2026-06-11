@@ -239,6 +239,14 @@ fn api_v1_router() -> Router {
 fn soland_local_router() -> Router {
     Router::new()
         .oapi_tag("soland-local")
+        // The `/_soland/` compat mirror reuses the same protocol handlers as
+        // the canonical `/_cokret/` tree, so it must also carry the protocol
+        // middleware: `X-Cokret-Wait-For` validation/acknowledgement must not
+        // silently no-op on one mount while working on the other. The mirror
+        // is slated for sunset (product clients migrate to `/_cokret/`, then
+        // protocol-duplicate mounts are removed module by module); until then
+        // the two trees must stay behaviourally equivalent.
+        .hoop(wait_for_sync_token)
         .push(system::legacy_router())
         .push(identity::legacy_router())
         .push(
@@ -258,6 +266,18 @@ fn soland_local_router() -> Router {
         .push(Router::with_path("peer").push(federation::router()))
         .push(interop::legacy_router())
         .push(extensions::legacy_router())
+        // Catch-all for the `/_soland/...` tree, mirroring the `/_cokret/`
+        // one: unmatched paths/methods get the canonical Cokret JSON error
+        // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`
+        // + `Allow`) instead of salvo's bare defaults, so the compat mirror
+        // and the protocol tree answer errors identically. This router is
+        // pushed last under the shared `_soland` parent, so the catch-all is
+        // the final fallthrough for the whole namespace (admin included).
+        .push(
+            Router::with_path("{**rest}")
+                .options(cors_preflight)
+                .goal(api_not_found),
+        )
 }
 
 static COKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
@@ -336,6 +356,14 @@ fn add_contract_operation(
         .summary(summary)
         .operation_id(operation_id)
         .add_response("200", OapiResponse::new("ok"));
+    // A table entry whose path is absent from the merged router doc would
+    // silently no-op, leaving SOLAND_EXTENSION_OPERATIONS documenting a
+    // mount point that does not exist. Fail loudly in debug builds so the
+    // table cannot drift away from the actual routes again.
+    debug_assert!(
+        doc.paths.contains_key(path),
+        "SOLAND_EXTENSION_OPERATIONS path `{path}` (operation `{operation_id}`) is not served by any router"
+    );
     if let Some(path_item) = doc.paths.get_mut(path) {
         path_item.operations.insert(method, operation);
     }
@@ -367,8 +395,8 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "/_cokret/gate/account/session-grants",
         PathItemType::Post,
         "auth",
-        "org.cokret.soland.auth.exchange_session_grant",
-        "exchange coauth session grant for principal bearer session",
+        "ck.gate.account.issue_session_grant",
+        "issue principal bearer session from a coauth session grant",
     ),
     (
         "/_soland/gate/auth/logout",
@@ -401,56 +429,56 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     // CKP-0007 (P2A.3) — Circle admin surface. Operation ids align with
     // `ck.circles.*` (sibling of `ck.realms.*` / `ck.spaces.*`).
     (
-        "/_cokret/self/circles",
+        "/_soland/self/circles",
         PathItemType::Post,
         "circles",
         "org.cokret.soland.circles.create",
         "create a Circle (ck.circle.create)",
     ),
     (
-        "/_cokret/self/circles",
+        "/_soland/self/circles",
         PathItemType::Get,
         "circles",
         "org.cokret.soland.circles.list",
         "list Circles for a Realm",
     ),
     (
-        "/_cokret/self/circles/{circle_id}",
+        "/_soland/self/circles/{circle_id}",
         PathItemType::Get,
         "circles",
         "org.cokret.soland.circles.get",
         "fetch a Circle by id",
     ),
     (
-        "/_cokret/self/circles/{circle_id}/members",
+        "/_soland/self/circles/{circle_id}/members",
         PathItemType::Post,
         "circles",
         "org.cokret.soland.circles.members.add",
         "add or change a Circle member",
     ),
     (
-        "/_cokret/self/circles/{circle_id}/members/{actor_id}",
+        "/_soland/self/circles/{circle_id}/members/{actor_id}",
         PathItemType::Delete,
         "circles",
         "org.cokret.soland.circles.members.remove",
         "remove a Circle member",
     ),
     (
-        "/_cokret/self/circles/{circle_id}/scope-rotate",
+        "/_soland/self/circles/{circle_id}/scope-rotate",
         PathItemType::Post,
         "circles",
         "org.cokret.soland.circles.scope_rotate",
         "rotate the Circle's bound MLS group",
     ),
     (
-        "/_cokret/self/circles/{circle_id}/archive",
+        "/_soland/self/circles/{circle_id}/archive",
         PathItemType::Post,
         "circles",
         "org.cokret.soland.circles.archive",
         "archive a Circle (ck.circle.archive)",
     ),
     (
-        "/_cokret/self/circles/{circle_id}/tombstone",
+        "/_soland/self/circles/{circle_id}/tombstone",
         PathItemType::Post,
         "circles",
         "org.cokret.soland.circles.tombstone",
@@ -625,7 +653,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "account aggregate describe",
     ),
     (
-        "/_cokret/self/sync/backfill/gap",
+        "/_soland/self/sync/backfill/gap",
         PathItemType::Get,
         "sync",
         "org.cokret.soland.sync.backfill_gap",
@@ -828,11 +856,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "store encrypted key backup",
     ),
     (
-        "/_cokret/self/keys/backups/{backup_id}",
-        PathItemType::Get,
+        "/_cokret/self/keys/backups/{backup_id}/unlock",
+        PathItemType::Post,
         "keys",
-        "ck.self.keys.backups.get",
-        "get encrypted key backup",
+        "ck.self.keys.backups.unlock",
+        "unlock encrypted key backup",
     ),
     (
         "/_cokret/self/keys/backups/{backup_id}",
@@ -849,14 +877,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "list encrypted key backups",
     ),
     (
-        "/_cokret/self/devices/pairing-challenge",
+        "/_soland/self/devices/pairing-challenge",
         PathItemType::Post,
         "devices",
         "org.cokret.soland.devices.pairing_challenge",
         "create device pairing challenge",
     ),
     (
-        "/_cokret/self/devices/authorize-pairing",
+        "/_soland/self/devices/authorize-pairing",
         PathItemType::Post,
         "devices",
         "org.cokret.soland.devices.authorize_pairing",
@@ -898,21 +926,21 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "download blob bytes",
     ),
     (
-        "/_cokret/self/webrtc/sessions",
+        "/_soland/self/webrtc/sessions",
         PathItemType::Post,
         "webrtc",
         "org.cokret.soland.webrtc.create_session",
         "create WebRTC session",
     ),
     (
-        "/_cokret/self/webrtc/sessions/{session_id}/signals",
+        "/_soland/self/webrtc/sessions/{session_id}/signals",
         PathItemType::Post,
         "webrtc",
         "org.cokret.soland.webrtc.send_signal",
         "send WebRTC signal",
     ),
     (
-        "/_cokret/self/webrtc/sessions/{session_id}",
+        "/_soland/self/webrtc/sessions/{session_id}",
         PathItemType::Delete,
         "webrtc",
         "org.cokret.soland.webrtc.close_session",
@@ -940,28 +968,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "MIMI key material",
     ),
     (
-        "/_cokret/open/mimi/flows/{room_id}/update",
+        "/_cokret/open/mimi/flows/{flow_id}/update",
         PathItemType::Put,
         "mimi",
         "ck.open.mimi.room_update",
         "MIMI external room interop update",
     ),
     (
-        "/_cokret/open/mimi/flows/{room_id}/notify",
+        "/_cokret/open/mimi/flows/{flow_id}/notify",
         PathItemType::Post,
         "mimi",
-        "org.cokret.soland.mimi.room_notify",
+        "ck.open.mimi.notify",
         "MIMI external room interop notify",
     ),
     (
-        "/_cokret/open/mimi/flows/{room_id}/messages",
+        "/_cokret/open/mimi/flows/{flow_id}/messages",
         PathItemType::Post,
         "mimi",
         "ck.open.mimi.submit_message",
         "MIMI external room interop submit message",
     ),
     (
-        "/_cokret/open/mimi/flows/{room_id}/group-info",
+        "/_cokret/open/mimi/flows/{flow_id}/group-info",
         PathItemType::Get,
         "mimi",
         "ck.open.mimi.group_info",
@@ -1077,7 +1105,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "detach a capability grant from a personal agent",
     ),
     (
-        "/_cokret/self/agents/{agent_id}/sidecar-thread/ensure",
+        "/_soland/self/agents/{agent_id}/sidecar-thread/ensure",
         PathItemType::Post,
         "agents",
         "ck.self.agent.sidecar_thread.ensure",
@@ -1103,14 +1131,14 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     ),
     // R3 spec-sync — recovery policy / receipt endpoints.
     (
-        "/_cokret/root/identity/recovery-policy",
+        "/_soland/root/identity/recovery-policy",
         PathItemType::Post,
         "identity",
         "org.cokret.soland.identity.recovery_policy.put",
         "submit a ck.schema.recovery_policy.v1 policy",
     ),
     (
-        "/_cokret/root/identity/recovery-receipt",
+        "/_soland/root/identity/recovery-receipt",
         PathItemType::Post,
         "identity",
         "org.cokret.soland.identity.recovery_receipt.put",
@@ -1166,7 +1194,8 @@ async fn cors_preflight(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-/// Catch-all handler under `/_cokret/*`.
+/// Catch-all handler under `/_cokret/*` (and the `/_soland/*` compat mirror,
+/// which mounts the same protocol handlers and must answer errors identically).
 ///
 /// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10:
 /// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
@@ -1223,15 +1252,15 @@ fn populate_known_routes(doc: &OpenApi) {
     let _ = KNOWN_ROUTES.get_or_init(|| {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
         for (path, item) in doc.paths.iter() {
-            // Only the protocol-bound HTTP surface participates in
-            // 404/405 disambiguation. The entire protocol surface now lives
-            // under the negative-space root `/_cokret/...` (trust segments
-            // self/gate/root/find/peer/open/edge); it is spec-mandated to
-            // return the canonical error envelope. Other prefixes (e.g.
-            // `/health`, `/.well-known/...`, `/_soland/admin/...`) are out
-            // of scope for the `unrecognized_endpoint` /
-            // `method_not_allowed` contract.
-            if !path.starts_with("/_cokret/") {
+            // The protocol surface (`/_cokret/...`, trust segments
+            // self/gate/root/find/peer/open/edge) is spec-mandated to return
+            // the canonical error envelope; the `/_soland/...` compat mirror
+            // reuses the same handlers and carries its own catch-all, so it
+            // participates in 404/405 disambiguation too — otherwise the two
+            // mounts would answer wrong-method requests differently. Other
+            // prefixes (`/health`, `/.well-known/...`) are out of scope for
+            // the `unrecognized_endpoint` / `method_not_allowed` contract.
+            if !(path.starts_with("/_cokret/") || path.starts_with("/_soland/")) {
                 continue;
             }
             let methods: Vec<Method> = item
@@ -1389,8 +1418,6 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "x-cokret-blob-purpose",
             "x-cokret-purpose",
             "x-cokret-attachment-envelope",
-            "x-cokret-key-backup-delete-proof",
-            "x-cokret-key-backup-unlock-proof",
             "range",
         ]);
 
@@ -1430,7 +1457,6 @@ pub(crate) struct SnapshotBundle {
     /// Doubles as the snapshot's `state_root` until the
     /// `effective_anchor_view`-driven state root is wired in.
     pub state_digest: String,
-    pub manifest: Value,
     pub frontier: Value,
     /// Deterministic chunk partition (SDK
     /// [`cokret_sdk::SnapshotChunker::default`] @ 256 KiB).
@@ -1499,7 +1525,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
         "generated_at": generated_at,
     });
     let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
-    let state_digest = format!("sha256:{}", sha256_hex(&chunk_bytes));
+    let state_digest = cokret_sdk::canonical::sha256_digest(&chunk_bytes);
     let snapshot_ref = format!(
         "ck:snapshot:{}:{}",
         realm_id,
@@ -1555,26 +1581,15 @@ pub(crate) async fn snapshot_bundle_for_realm(
         "message_count": state_document["message_count"],
         "state_digest": state_digest,
     });
-    let manifest = json!({
-        "snapshot_ref": snapshot_ref,
-        "schema_profiles": ["ck.schema.core.v1"],
-        "reducer_profile": "ck.reducer.v1",
-        "covers_frontier": frontier,
-        "chunk_digests": chunks.iter().map(|c| c.digest.as_str().to_owned()).collect::<Vec<_>>(),
-        "chunk_count": chunk_count,
-        "merkle_root": merkle_root.as_str(),
-        "state_digest": state_digest,
-        "verification_method": state.config.service_did,
-        "generator": {
-            "name": "soland-dev-snapshot",
-            "version": env!("CARGO_PKG_VERSION")
-        },
-        "generated_at": generated_at,
-    });
+    // Note: this dev bundle deliberately does NOT mint a
+    // `ck.schema.snapshot.v1` manifest. The spec manifest requires a real
+    // detached proof (`signature` / `authority_binding` /
+    // `event_set_commitment` MUST NOT be fabricated), so the protocol
+    // snapshot-head operations stay `not_implemented`; the bundle only backs
+    // the `/_soland/` dev download surface.
     Some(SnapshotBundle {
         snapshot_ref,
         state_digest,
-        manifest,
         frontier,
         chunks,
         tree,
@@ -2329,13 +2344,10 @@ mod canonical_conformance_vectors {
     }
 
     fn explicit_cokret_served_route_allowlist() -> std::collections::BTreeSet<(String, String)> {
-        [
-            ("GET", "/_cokret/self/keys/keypackages/welcomes/pending"),
-            ("POST", "/_cokret/self/applets/{applet_id}/ghosts/provision"),
-        ]
-        .into_iter()
-        .map(|(method, path)| (method.to_owned(), norm_route_path(path)))
-        .collect()
+        // Empty by design: every `/_cokret/` route must be a spec
+        // operation-registry binding. soland-private surfaces live under
+        // `/_soland/` (welcomes/pending and ghosts/provision moved there).
+        std::collections::BTreeSet::new()
     }
 
     fn explicit_soland_path_literal_allowlist() -> std::collections::BTreeSet<String> {
@@ -3182,7 +3194,7 @@ async fn wait_for_sync_token(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_header",
+            "invalid_param",
             "X-Cokret-Wait-For must be ASCII",
         );
         return;
@@ -3197,7 +3209,7 @@ async fn wait_for_sync_token(
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "invalid_header",
+                "invalid_param",
                 "X-Cokret-Wait-For must contain ck:cursor sync tokens",
             );
             return;
@@ -3207,7 +3219,7 @@ async fn wait_for_sync_token(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_header",
+            "invalid_param",
             "X-Cokret-Wait-For must contain at least one sync token",
         );
         return;

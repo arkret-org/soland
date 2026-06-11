@@ -578,7 +578,7 @@ pub(super) async fn identity_receipts(
                 })]
             })
             .unwrap_or_default(),
-        threshold_met: true,
+        threshold_met: Some(true),
     })
 }
 

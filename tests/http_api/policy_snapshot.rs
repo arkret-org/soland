@@ -158,7 +158,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     let realm_id = space["realm_id"].as_str().unwrap().to_owned();
 
     let head: Value = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
+        "http://server/_soland/self/sync/snapshot-head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -281,7 +281,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
     }
 
     let head: Value = TestClient::get(format!(
-        "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
+        "http://server/_soland/self/sync/snapshot-head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await

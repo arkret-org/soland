@@ -448,32 +448,30 @@ async fn require_realm_owner(
 }
 
 fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError {
-    use salvo::http::StatusCode;
-
     use crate::authz::DelegationError;
-    // We don't have a canonical `failed_precondition` ErrorCode in the
-    // registry; reuse `StateMismatch` as the base (semantically close — a
-    // precondition on parent grant state failed) and override the wire
-    // string so the test can assert the spec-canonical code.
-    let state_mismatch = crate::error::ErrorCode::StateMismatch;
+    use crate::error::ErrorCode;
+    // Wire codes follow `zh/authz/capabilities.md` §10 / error-code-registry:
+    // parent revoked / superseded / expired / tombstoned → reason
+    // `grant_revoked_upstream`; validity-window widening → reason
+    // `delegation_expiry_widening`; actions / resources out of the parent's
+    // scope → `schema_violation`; non-holder delegators → `capability_denied`.
     match err {
         DelegationError::ParentNotFound => AppError::not_found("delegated_from grant not found"),
-        DelegationError::ParentRevoked => {
-            AppError::new(state_mismatch, "delegated_from grant is revoked")
-                .with_status(StatusCode::PRECONDITION_FAILED)
-                .with_wire_code("parent_revoked")
-        }
-        DelegationError::ParentExpired => {
-            AppError::new(state_mismatch, "delegated_from grant has already expired")
-                .with_status(StatusCode::PRECONDITION_FAILED)
-                .with_wire_code("parent_expired")
-        }
+        DelegationError::ParentRevoked => AppError::new(
+            ErrorCode::FailedPrecondition,
+            "delegated_from grant is revoked",
+        )
+        .with_wire_code("grant_revoked_upstream"),
+        DelegationError::ParentExpired => AppError::new(
+            ErrorCode::FailedPrecondition,
+            "delegated_from grant has already expired",
+        )
+        .with_wire_code("grant_revoked_upstream"),
         DelegationError::NotGrantHolder => {
             AppError::capability_denied("delegator is not the subject of the parent grant")
-                .with_wire_code("not_grant_holder")
         }
         DelegationError::ActionsNotHeld { offending } => AppError::new(
-            state_mismatch,
+            ErrorCode::SchemaViolation,
             format!(
                 "delegator does not hold action(s) {}",
                 offending
@@ -482,21 +480,16 @@ fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("capability_not_held"),
+        ),
         DelegationError::OverExpire => AppError::new(
-            state_mismatch,
+            ErrorCode::FailedPrecondition,
             "delegated expires_at must be ≤ parent expires_at",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("capability_over_expire"),
+        .with_wire_code("delegation_expiry_widening"),
         DelegationError::ResourceOutOfScope => AppError::new(
-            state_mismatch,
+            ErrorCode::SchemaViolation,
             "delegated resource is outside the parent's scope",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("resource_out_of_scope"),
+        ),
     }
 }
 

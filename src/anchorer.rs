@@ -47,7 +47,6 @@ use cokret_sdk::{
     Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, RealmId,
 };
 use ed25519_dalek::SigningKey;
-use sha2::{Digest, Sha256};
 
 use crate::config::AnchorerSigningKeyOrigin;
 use crate::routing::federation::move_anchor::select_jws_verifier;
@@ -560,12 +559,9 @@ impl AnchorerWorker {
         state: &AppState,
         canonical_bytes: &[u8],
     ) -> Result<MoveSignature, AnchorerError> {
-        // payload_digest = sha256(canonical_bytes), prefix-encoded.
-        let hash_hex: String = Sha256::digest(canonical_bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        let payload_digest = Hash::new(format!("sha256:{hash_hex}"))
+        // payload_digest = sha256(canonical_bytes), prefix-encoded via the
+        // shared SDK digest helper.
+        let payload_digest = Hash::new(cokret_sdk::canonical::sha256_digest(canonical_bytes))
             .map_err(|e| AnchorerError::Construction(format!("payload hash: {e}")))?;
 
         let signing_key = state.anchorer_signing_key();

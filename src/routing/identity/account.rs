@@ -26,7 +26,8 @@ use cokret_sdk::http::{
 // `model` path to avoid binding the wrong same-named re-export.
 use cokret_sdk::model::InviteReceivePolicy;
 use cokret_sdk::{
-    AccountDeviceSummary, AccountView, DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
+    AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody, AccountView,
+    DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
@@ -80,6 +81,16 @@ fn record_handle_release(state: &AppState, localpart: &str) {
     releases.insert(localpart.to_owned(), chrono::Utc::now());
 }
 use crate::{JsonResult, json_ok};
+
+/// `gate` trust-segment account routes — the spec `account_auth` surface
+/// group (tier `deployment_local`) binds account registration to
+/// `POST /_cokret/gate/account/register`. The historical product-private
+/// mirror at `/_soland/self/account/register` (handle-based body) stays in
+/// `router()` below until product clients migrate.
+pub(super) fn protocol_gate_router() -> Router {
+    Router::with_path("account")
+        .push(Router::with_path("register").post(gate_account_register))
+}
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
@@ -263,6 +274,105 @@ async fn account_register(
     .await;
     res.status_code(StatusCode::CREATED);
     json_ok(account_response(account, state))
+}
+
+/// `POST /_cokret/gate/account/register` — spec-canonical registration
+/// binding (`ck.gate.account.register`, surface group `account_auth`).
+///
+/// Spec: sync/service-http-binding.md — request is
+/// `AccountRegisterRequestBody {principal_id, display_name?, device_id?,
+/// proof?}`; a bare `handle` field MUST NOT be accepted (the first handle
+/// arrives via a signed handle claim, cf. identity-handles.md), so the
+/// account is provisioned with a synthetic localpart derived from the DID
+/// (same bootstrap rule as `dev_login`). The optional lifecycle `proof`
+/// shares the session-grant proof vocabulary; signature verification of
+/// that proof is future work (cf. the device-pairing scaffolds), the field
+/// is currently accepted without cryptographic validation.
+#[endpoint(
+    operation_id = "ck.gate.account.register",
+    tags("account"),
+    summary = "Register an account (spec account_auth binding)",
+    status_codes(200, 400, 409, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.register"))]
+async fn gate_account_register(
+    depot: &mut Depot,
+    body: JsonBody<AccountRegisterRequestBody>,
+) -> JsonResult<AccountRegisterOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let did = body.principal_id.as_str().to_owned();
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
+    let existing = state
+        .persistence
+        .accounts()
+        .get(&did)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if existing.is_some() {
+        return Err(AppError::new(
+            crate::error::ErrorCode::DuplicateConflict,
+            "account already exists",
+        ));
+    }
+    let synthetic_handle = handle_for_did(&did);
+    let account = AccountRecord {
+        id: crate::ids::generate_account_id(),
+        did: did.clone(),
+        localpart: normalize_localpart(&synthetic_handle),
+        display_name: body.display_name.clone(),
+        bio: None,
+        avatar_url: None,
+        created_at: now(),
+    };
+    state
+        .persistence
+        .accounts()
+        .put(&account)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(device_id) = body.device_id.as_ref() {
+        let registered_at = now();
+        let device = DeviceInventoryRecord {
+            actor: did.clone(),
+            device_id: device_id.as_str().to_owned(),
+            display_name: account.display_name.clone(),
+            verification_state: "unverified".to_owned(),
+            payload: json!({
+                "device_id": device_id.as_str(),
+                "display_name": account.display_name.clone(),
+                "verification": "unverified",
+                "registered_with_account": true,
+            }),
+            created_at: registered_at,
+            updated_at: registered_at,
+            revoked_at: None,
+        };
+        state
+            .persistence
+            .devices()
+            .put(&device)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    append_audit_log(
+        state,
+        Some(&did),
+        "account.register",
+        json!({"handle": account.handle(), "via": "gate"}),
+        "accepted",
+    )
+    .await;
+    let devices = account_device_summaries(state, &did).await?;
+    json_ok(AccountRegisterOutcome {
+        principal_id: body.principal_id,
+        state: state.account_lifecycle_state(&did),
+        devices,
+        primary_handle_claim: None,
+        primary_handle_claim_ref: None,
+        handle_claim_digests: Vec::new(),
+        profile: None,
+    })
 }
 
 #[endpoint(
@@ -493,8 +603,10 @@ async fn transfer_handle(
     {
         Some(account) => account,
         None => {
+            // Registry code `principal_unknown` (404): the referenced
+            // principal DID is unknown or not visible to the caller.
             return Err(AppError::not_found("target account not found")
-                .with_wire_code("target_did_unknown"));
+                .with_wire_code("principal_unknown"));
         }
     };
     // Park the source on a synthetic DID-derived handle and check it's
@@ -972,7 +1084,7 @@ async fn erase_account(
                 "erasure retained stub canonicalization failed: {error}"
             ))
         })?;
-    let retained_stub_digest = format!("sha256:{}", sha256_hex(&retained_stub_bytes));
+    let retained_stub_digest = cokret_sdk::canonical::sha256_digest(&retained_stub_bytes);
     let proof_payload = json!({
         "receipt_id_seed": actor.clone(),
         "retained_stub_digest": retained_stub_digest.clone(),
@@ -1255,7 +1367,7 @@ fn erasure_receipt_operation(receipt: Value) -> Option<cokret_sdk::Operation> {
 fn erasure_receipt_payload_digest(payload: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
-    format!("sha256:{}", sha256_hex(&bytes))
+    cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String {

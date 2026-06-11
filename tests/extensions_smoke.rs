@@ -115,7 +115,7 @@ async fn applet_protocol_describe_smoke() {
     );
     assert_eq!(
         describe["install"]["ghost_actor_provision_path"],
-        json!("/_cokret/self/applets/{applet_id}/ghosts/provision")
+        json!("/_soland/self/applets/{applet_id}/ghosts/provision")
     );
     assert_eq!(
         describe["transaction_path"],
@@ -193,7 +193,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         safe_did_token(&namespace)
     );
     let mut response = TestClient::post(format!(
-        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
+        "http://server/_soland/self/applets/{applet_id}/ghosts/provision"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({

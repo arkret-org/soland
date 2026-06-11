@@ -25,7 +25,7 @@ use cokret_sdk::{Did, Hash};
 use ed25519_dalek::VerifyingKey;
 
 use crate::persistence::{
-    Freshness, WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, verify_did_document_freshness,
+    WebvhFreshness, WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, verify_did_document_freshness,
 };
 use crate::state::AppState;
 
@@ -154,8 +154,8 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
 /// 从持久化层取该 DID 的 [`WebvhDocumentRecord`](即"已 ingest 的文档"),
 /// 用 [`verify_did_document_freshness`] 判定:
 ///
-/// * [`Freshness::Fresh`] → `Ok(())`,放行。
-/// * [`Freshness::Stale`] → `Err`,缓存公钥已超过高风险 TTL,fail-closed。
+/// * [`WebvhFreshness::Fresh`] → `Ok(())`,放行。
+/// * [`WebvhFreshness::Stale`] → `Err`,缓存公钥已超过高风险 TTL,fail-closed。
 ///
 /// 若该 DID 在持久化层没有任何记录(`get_document` 返回 `None`):说明没有
 /// 任何可信的 ingest 证据可用于高风险验签,同样 fail-closed。注意:dev /
@@ -180,8 +180,8 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
         ));
     };
     match verify_did_document_freshness(&record, chrono::Utc::now(), max_age) {
-        Freshness::Fresh => Ok(()),
-        Freshness::Stale => Err(format!(
+        WebvhFreshness::Fresh => Ok(()),
+        WebvhFreshness::Stale => Err(format!(
             "DID document is stale for high-risk verification (exceeded {HIGH_RISK_DID_FRESHNESS_MAX_SECS}s freshness window): {did}"
         )),
     }

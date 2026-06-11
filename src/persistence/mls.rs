@@ -7,7 +7,7 @@ use super::*;
 /// CAS path — it returns `Ok(true)` on the first claim, `Ok(false)` if
 /// the row is already claimed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsKeyPackageRecord {
+pub struct MlsKeyPackageRow {
     pub id: String,
     pub actor_id: String,
     pub device_id: String,
@@ -53,8 +53,8 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// Insert a fresh KeyPackage row. Returns `Ok(false)` if the
     /// `id` is already present (re-publishes of the same id are
     /// idempotent — production fixtures sometimes resubmit on retry).
-    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool>;
-    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
+    async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool>;
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Atomically claim the named KeyPackage for `group_id`. Returns
     /// `Ok(Some(record))` on success (with `claimed_by_group_id` /
     /// `consumed_at` filled in), `Ok(None)` if the row is already
@@ -65,9 +65,9 @@ pub trait MlsKeyPackageStore: Send + Sync {
         id: &str,
         group_id: &str,
         consumed_at: i64,
-    ) -> PersistenceResult<Option<MlsKeyPackageRecord>>;
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
 }
 
 /// G3.S1 — Welcome to-device queue store. Each recipient device drains
@@ -121,7 +121,7 @@ pub trait MlsCommitStore: Send + Sync {
 
 #[derive(Default)]
 pub(crate) struct MemoryMlsKeyPackageStore {
-    rows: Mutex<BTreeMap<String, MlsKeyPackageRecord>>,
+    rows: Mutex<BTreeMap<String, MlsKeyPackageRow>>,
 }
 
 impl MemoryMlsKeyPackageStore {
@@ -132,14 +132,14 @@ impl MemoryMlsKeyPackageStore {
 
 #[async_trait]
 impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
-    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+    async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
         let mut rows = self.rows.lock().expect("mls keypackage lock");
         let fresh = !rows.contains_key(&record.id);
         rows.insert(record.id.clone(), record.clone());
         Ok(fresh)
     }
 
-    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         Ok(self
             .rows
             .lock()
@@ -153,7 +153,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         id: &str,
         group_id: &str,
         consumed_at: i64,
-    ) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut rows = self.rows.lock().expect("mls keypackage lock");
         let Some(row) = rows.get_mut(id) else {
             return Ok(None);
@@ -167,7 +167,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(Some(row.clone()))
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
         Ok(self
             .rows
             .lock()
@@ -344,7 +344,7 @@ pub(crate) struct PgMlsCommitStore {
 
 #[async_trait]
 impl MlsKeyPackageStore for PgMlsKeyPackageStore {
-    async fn put(&self, record: &MlsKeyPackageRecord) -> PersistenceResult<bool> {
+    async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
@@ -367,7 +367,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         Ok(inserted > 0)
     }
 
-    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+    async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
@@ -375,10 +375,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
-        .get_result::<MlsKeyPackageRow>(&mut *conn)
+        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRecord::from))
+        .map(|row| row.map(MlsKeyPackageRow::from))
         .map_err(PersistenceError::from)
     }
 
@@ -387,7 +387,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         id: &str,
         group_id: &str,
         consumed_at: i64,
-    ) -> PersistenceResult<Option<MlsKeyPackageRecord>> {
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE mls_key_packages \
@@ -399,23 +399,23 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(consumed_at)
-        .get_result::<MlsKeyPackageRow>(&mut *conn)
+        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRecord::from))
+        .map(|row| row.map(MlsKeyPackageRow::from))
         .map_err(PersistenceError::from)
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
              key_package_bytes, claimed_by_group_id, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
-        .load::<MlsKeyPackageRow>(&mut *conn)
+        .load::<MlsKeyPackagePgRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(MlsKeyPackageRecord::from).collect())
+        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
         .map_err(PersistenceError::from)
     }
 }
@@ -596,7 +596,7 @@ impl MlsCommitStore for PgMlsCommitStore {
 }
 
 #[derive(QueryableByName)]
-struct MlsKeyPackageRow {
+struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
@@ -617,8 +617,8 @@ struct MlsKeyPackageRow {
     created_at: i64,
 }
 
-impl From<MlsKeyPackageRow> for MlsKeyPackageRecord {
-    fn from(row: MlsKeyPackageRow) -> Self {
+impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
+    fn from(row: MlsKeyPackagePgRow) -> Self {
         Self {
             id: row.id,
             actor_id: row.actor_id,

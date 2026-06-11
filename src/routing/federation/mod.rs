@@ -21,6 +21,18 @@ pub fn admin_anchor_sign_router() -> Router {
     move_anchor::api_admin_router()
 }
 
+/// Deployment-local inbound federation rail, mounted at `/_soland/peer/*`.
+///
+/// This is NOT the protocol federation surface: the cross-vendor S2S entry
+/// point is the `peer_federation` surface group at `/_cokret/peer/*`
+/// (outbound dispatch in this repo only ever targets `/_cokret/peer/events`).
+/// The routes below (Matrix-style transactions, operations push/pull/
+/// backfill/frontier, Move/Anchor direct ingest, realm-members,
+/// verify-actor) exist for local testing and operations; describe advertises
+/// them under `profile_limitations` as `federation.private_inbound_rail` so
+/// remote peers cannot mistake them for an interop contract. Long-term plan:
+/// converge Move/Anchor ingest into the `/_cokret/peer/events` envelope
+/// channel and downgrade or delete this rail.
 pub fn router() -> Router {
     Router::new().push(move_anchor::router()).push(
         Router::with_path("federation")

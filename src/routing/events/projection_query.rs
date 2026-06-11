@@ -43,7 +43,7 @@ use serde_json::{Value, json};
 use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{
-    MorphProjection, ObjectLifecycleState, ProjectionState, RelationState,
+    MorphProjection, ObjectLifecycleState, ProjectionState, SolandRelationState,
     SpaceContainerLifecycleState,
 };
 use crate::result::{JsonResult, json_ok};
@@ -112,7 +112,7 @@ fn total_count(len: usize) -> Result<u64, AppError> {
     u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
 }
 
-fn relation_string_field<'a>(relation: &'a RelationState, field_name: &str) -> Option<&'a str> {
+fn relation_string_field<'a>(relation: &'a SolandRelationState, field_name: &str) -> Option<&'a str> {
     relation
         .fields
         .get(field_name)
@@ -123,7 +123,7 @@ fn relation_string_field<'a>(relation: &'a RelationState, field_name: &str) -> O
 fn flow_position_relation<'a>(
     projection: &'a ProjectionState,
     flow_id: &str,
-) -> Option<&'a RelationState> {
+) -> Option<&'a SolandRelationState> {
     projection
         .relations
         .values()

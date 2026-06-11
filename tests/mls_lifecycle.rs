@@ -5,7 +5,7 @@
 //!   2. claim it atomically (and assert a second claim returns 409),
 //!   3. submit canonical `ck.mls.genesis` and `ck.mls.welcome` events and assert they mirror into
 //!      the MLS epoch / Welcome stores,
-//!   4. drain the calling device's queue via `GET /_cokret/self/keys/keypackages/welcomes/pending`.
+//!   4. drain the calling device's queue via `GET /_soland/self/keys/keypackages/welcomes/pending`.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
 //! `ck.mls.commit` events via the canonical `POST /_cokret/self/events` pipeline
@@ -432,7 +432,7 @@ async fn mls_lifecycle_end_to_end() {
     // ── 4. Bob drains his Welcome queue via the HTTP route ──────
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     let drain_resp =
-        TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
+        TestClient::get("http://server/_soland/self/keys/keypackages/welcomes/pending")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
             .send(&app_from_state(state.clone()))
             .await;
@@ -453,7 +453,7 @@ async fn mls_lifecycle_end_to_end() {
     // Second drain must return zero rows — `delivered_at` flips
     // ensures we don't redeliver.
     let drain2_resp =
-        TestClient::get("http://server/_cokret/self/keys/keypackages/welcomes/pending")
+        TestClient::get("http://server/_soland/self/keys/keypackages/welcomes/pending")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
             .send(&app_from_state(state.clone()))
             .await;

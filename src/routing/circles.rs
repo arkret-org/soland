@@ -496,7 +496,7 @@ const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_cap
 /// the HTTP 422 and the reducer 422 surface the same wire code.
 const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str = "circle_member_must_be_realm_member";
 
-/// Resolve the `(owner, members)` pair the `AuthzEngine::check` default-rule
+/// Resolve the `(owner, members)` pair the `SolandAuthzEngine::check` default-rule
 /// path needs for a Realm. Mirrors the lookup in `routing/access/authz.rs`.
 async fn circle_authz_principals(
     state: &AppState,

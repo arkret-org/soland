@@ -1079,7 +1079,12 @@ pub(in crate::routing) async fn submit_event_value(
                 rejection.message,
             ));
         }
-        if let Ok(proj) = state.projection.lock() {
+        {
+            // Admission checks below are mandatory and MUST NOT be skipped
+            // (fail-closed). The projection lock is the poison-free
+            // `state::Mutex`, so acquiring it cannot fail and this block
+            // always runs.
+            let proj = state.projection.lock().expect("projection lock");
             if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1362,7 +1367,7 @@ fn configured_peer_event_targets(state: &AppState) -> Vec<(String, String)> {
 fn canonical_json_hash(value: &Value) -> String {
     canonical::canonical_sha256(value).unwrap_or_else(|_| {
         let bytes = serde_json::to_vec(value).unwrap_or_default();
-        format!("sha256:{}", sha256_hex(&bytes))
+        cokret_sdk::canonical::sha256_digest(&bytes)
     })
 }
 
@@ -1582,11 +1587,14 @@ async fn validate_event_envelope(
     // Round R2/R3 (T07) + Stream-F (Wave 1B) — Realm in terminal state
     // (`ck.realm.tombstone` OR `ck.realm.destroy` applied) refuses every
     // non-audit-class write. Spec `realm-and-space.md` §2.5 / §2.5.1.
+    // The projection lock is poison-free (`state::Mutex`), so this check is
+    // always evaluated — a terminal Realm can never be written to because a
+    // lock failure defaulted the answer to "not terminal" (fail-open).
     let realm_terminal = state
         .projection
         .lock()
-        .map(|proj| proj.realm_is_in_terminal_state(&realm_id))
-        .unwrap_or(false);
+        .expect("projection lock")
+        .realm_is_in_terminal_state(&realm_id);
     if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
         return Err(event_validation_error(
             error_http_status(code),
@@ -2075,7 +2083,7 @@ fn encrypted_message_ciphertext_digest(envelope: &Value) -> Option<String> {
     envelope
         .pointer("/payload/encrypted_content/ciphertext")
         .and_then(Value::as_str)
-        .map(|ciphertext| format!("sha256:{}", sha256_hex(ciphertext.as_bytes())))
+        .map(|ciphertext| cokret_sdk::canonical::sha256_digest(ciphertext.as_bytes()))
 }
 
 async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> Option<Value> {
@@ -2110,7 +2118,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    format!("sha256:{}", sha256_hex(&bytes))
+    cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn validate_sender_commitment_binding(
@@ -2150,7 +2158,7 @@ fn validate_sender_commitment_binding(
             "sender commitment cannot be canonicalized",
         )
     })?;
-    let expected_digest = format!("sha256:{}", sha256_hex(&commitment_bytes));
+    let expected_digest = cokret_sdk::canonical::sha256_digest(&commitment_bytes);
     if declared_digest != expected_digest {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -3075,7 +3083,7 @@ async fn validate_event_proofs(
         let payload_only_hash_accept = if is_dev_proof {
             object.get("payload").map(|payload| {
                 let bytes = canonical::canonical_json_bytes(payload).unwrap_or_default();
-                format!("sha256:{}", sha256_hex(&bytes))
+                cokret_sdk::canonical::sha256_digest(&bytes)
             })
         } else {
             None
@@ -3752,7 +3760,7 @@ fn event_canonical_bytes(envelope: &Value) -> Result<Vec<u8>, EventValidationErr
 }
 
 fn event_digest(bytes: &[u8]) -> String {
-    format!("sha256:{}", sha256_hex(bytes))
+    cokret_sdk::canonical::sha256_digest(bytes)
 }
 
 fn is_valid_event_id(value: &str) -> bool {
@@ -5842,7 +5850,7 @@ mod proof_strictness_tests {
         // matches; production would still reject this even with the correct
         // payload hash because the proof lacks a JWS.
         let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
-        let payload_digest = format!("sha256:{}", sha256_hex(&payload_bytes));
+        let payload_digest = cokret_sdk::canonical::sha256_digest(&payload_bytes);
         if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
             && let Some(proof) = proofs.first_mut()
             && let Some(map) = proof.as_object_mut()
@@ -5871,7 +5879,7 @@ mod proof_strictness_tests {
         // 从而让本测试聚焦于其本意:JWS 签名验证失败。
         ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
-        let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
+        let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
         let mut object = serde_json::Map::new();
         object.insert(
             "proofs".to_owned(),
@@ -5891,7 +5899,7 @@ mod proof_strictness_tests {
             &state,
             &session,
             "did:web:alice.example",
-            &format!("sha256:{}", sha256_hex(canonical_bytes)),
+            &cokret_sdk::canonical::sha256_digest(canonical_bytes),
         )
         .await
         .expect_err("production must reject unsigned/fake JWS proofs");
@@ -5911,7 +5919,7 @@ mod proof_strictness_tests {
         let session = session();
         // 刻意不 ingest 任何 webvh 文档:actor 在持久化层无新鲜度证据。
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
-        let event_digest = format!("sha256:{}", sha256_hex(canonical_bytes));
+        let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
         let mut object = serde_json::Map::new();
         object.insert(
             "proofs".to_owned(),
@@ -5931,7 +5939,7 @@ mod proof_strictness_tests {
             &state,
             &session,
             "did:web:alice.example",
-            &format!("sha256:{}", sha256_hex(canonical_bytes)),
+            &cokret_sdk::canonical::sha256_digest(canonical_bytes),
         )
         .await
         .expect_err("stale/missing DID document must fail closed before JWS verify");

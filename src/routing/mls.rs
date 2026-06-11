@@ -7,10 +7,11 @@
 //!   a fresh KeyPackage).
 //! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.claim` (atomically
 //!   claim a published KeyPackage; second claim of the same id returns `409 cas_conflict`).
-//! - `GET  /_cokret/self/keys/keypackages/welcomes/pending` — extension op
+//! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
 //!   `org.cokret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
 //!   50 per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
-//!   redeliver). This is a soland-specific extension (not in the canonical spec registry).
+//!   redeliver). This is a soland-specific extension (not in the canonical spec registry), so it
+//!   is served from the `/_soland/` product surface only.
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `ck.mls.commit` events via the normal `POST /_cokret/self/events`
@@ -41,7 +42,7 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
-use crate::persistence::MlsKeyPackageRecord;
+use crate::persistence::MlsKeyPackageRow;
 use crate::reducer::{self, MlsEffect, MlsKeyPackage, ProjectionEffect};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -55,19 +56,20 @@ use crate::wire::now;
 /// `cokret-service-api.openapi.yaml §/keys/keypackages/*`):
 ///   - `POST /_cokret/self/keys/keypackages/upload`
 ///   - `POST /_cokret/self/keys/keypackages/claim`
-///   - `GET  /_cokret/self/keys/keypackages/welcomes/pending` (soland extension)
 pub fn router() -> Router {
     protocol_router()
 }
 
 pub fn protocol_router() -> Router {
+    // `/_cokret/` carries only operation-registry routes. The soland-private
+    // Welcome drain (`welcomes/pending`) lives on the `/_soland/` product
+    // surface (see `legacy_router`).
     Router::with_path("keys").push(
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))
             .push(Router::with_path("claim").post(claim_keypackage))
             .push(Router::with_path("consume").post(consume_keypackages))
-            .push(Router::with_path("revoke").post(revoke_keypackages))
-            .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
+            .push(Router::with_path("revoke").post(revoke_keypackages)),
     )
 }
 
@@ -514,9 +516,9 @@ fn build_op(object_type: &str, payload: Value) -> Operation {
 }
 
 /// Convert the reducer's in-process [`MlsKeyPackage`] into the
-/// persistence-layer [`MlsKeyPackageRecord`].
-fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRecord {
-    MlsKeyPackageRecord {
+/// persistence-layer [`MlsKeyPackageRow`].
+fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
+    MlsKeyPackageRow {
         id: kp.id.clone(),
         actor_id: kp.actor_id.clone(),
         device_id: kp.device_id.clone(),

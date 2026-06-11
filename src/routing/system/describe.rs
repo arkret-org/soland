@@ -473,7 +473,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         "profile_claim": "not_claimed",
         "limitations": [
             "examples are maintained inline, not generated from a normative artifact bundle",
-            "effective-grants and check are backed by the local AuthzEngine only",
+            "effective-grants and check are backed by the local SolandAuthzEngine only",
             "condition lattice, obligation execution, and cross-service policy lifecycle are not complete profile surfaces"
         ],
         "check_path": "/_cokret/self/authz/check",
@@ -515,7 +515,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_request_example": {
             "actor": "did:web:alice.example",
-            "action": "ck.self.keys.backups.get",
+            "action": "ck.self.keys.backups.unlock",
             "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
@@ -563,10 +563,10 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "ck.self.keys.backups.get",
+            "policy_type": "ck.self.keys.backups.unlock",
             "effect": "require_review",
             "payload": {
-                "actions": ["ck.self.keys.backups.get"],
+                "actions": ["ck.self.keys.backups.unlock"],
                 "resource": {
                     "kind": "blob",
                     "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
@@ -646,12 +646,12 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
         "operations": [
             "ck.self.keys.backups.put",
             "ck.self.keys.backups.list",
-            "ck.self.keys.backups.get",
+            "ck.self.keys.backups.unlock",
             "ck.self.keys.backups.delete"
         ],
         // Spec key-management.md §7.8 — implementations MUST publish the
         // effective per-principal rolling-24h full-ciphertext download
-        // quota they enforce on `ck.self.keys.backups.get`.
+        // quota they enforce on `ck.self.keys.backups.unlock`.
         "limits": {
             "daily_principal_download_limit":
                 crate::routing::identity::key_backup::key_backup_daily_download_limit(),

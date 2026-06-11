@@ -1089,7 +1089,7 @@ pub(super) async fn admin_repair_bottom(
                 "strategy": &body,
             });
             let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
-            let placeholder_id = format!("sha256:{}", sha256_hex_for(&bytes));
+            let placeholder_id = cokret_sdk::canonical::sha256_digest(&bytes);
             json_ok(AdminSubmitMoveOutcome {
                 move_id: placeholder_id,
                 accepted: false,
@@ -1923,14 +1923,6 @@ fn try_aggregate_partials(record: &crate::state::MultisigPendingRecord) -> Resul
         .map_err(|e| format!("aggregate: {e}"))?;
 
     Ok(record.anchor_id.clone())
-}
-
-// ── Local helpers ─────────────────────────────────────────────────────────
-
-fn sha256_hex_for(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ── MAL-13 GC candidates admin endpoint ──────────────────────────────────

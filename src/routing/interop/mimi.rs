@@ -35,7 +35,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("provider-directory").get(mimi_provider_directory))
         .push(Router::with_path("key-material").post(mimi_key_material))
         .push(Router::with_path("flows/{flow_id}/update").put(mimi_room_update))
-        .push(Router::with_path("flows/{flow_id}/notify").post(mimi_room_notify))
+        .push(Router::with_path("flows/{flow_id}/notify").post(mimi_notify))
         .push(Router::with_path("flows/{flow_id}/messages").post(mimi_room_message))
         .push(Router::with_path("flows/{flow_id}/group-info").get(mimi_group_info))
         .push(Router::with_path("consent/request").post(mimi_consent_request))
@@ -77,7 +77,7 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let target = body
         .get("target_identifier")
@@ -111,7 +111,7 @@ async fn mimi_room_update(
     let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
@@ -130,7 +130,7 @@ async fn mimi_room_update(
                     AppError::invalid_param(
                         "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
                     )
-                    .with_wire_code("missing_realm_binding")
+                    .with_wire_code("mimi_governance_binding_missing")
                 })?;
             Some(event_id)
         }
@@ -151,12 +151,12 @@ async fn mimi_room_update(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.mimi.room_notify",
+    operation_id = "ck.open.mimi.notify",
     tags("mimi"),
-    summary = "Fan out a MIMI room notify (broadcasts a `ck.open.mimi.notify` ephemeral)"
+    summary = "Fan out a MIMI notify (broadcasts a `ck.open.mimi.notify` ephemeral)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.mimi.room_notify"))]
-async fn mimi_room_notify(
+#[tracing::instrument(skip_all, fields(op = "ck.open.mimi.notify"))]
+async fn mimi_notify(
     flow_id: PathParam<String>,
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -165,7 +165,7 @@ async fn mimi_room_notify(
     let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
@@ -177,7 +177,7 @@ async fn mimi_room_notify(
     // into projection_events so it doesn't pollute durable history.
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Cokret Realm")
-            .with_wire_code("mimi_room_unbound")
+            .with_wire_code("mimi_governance_binding_missing")
     })?;
     let event_id = ids::generate_event_id();
     let notify_record = ProjectionEventRecord {
@@ -232,7 +232,7 @@ async fn mimi_room_message(
     let room_id = flow_id.into_inner();
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
@@ -261,7 +261,7 @@ async fn mimi_room_message(
         .get("original_envelope_hash")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("sha256:{}", sha256_hex(body.to_string().as_bytes())));
+        .unwrap_or_else(|| cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()));
 
     // Map the MIMI message into the canonical Cokret timeline.
     // Append a MessageRecord + a `ck.message.create` projection event so
@@ -271,7 +271,7 @@ async fn mimi_room_message(
     // message arrived through the facade.
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Cokret Realm")
-            .with_wire_code("mimi_room_unbound")
+            .with_wire_code("mimi_governance_binding_missing")
     })?;
     let sender = body
         .get("sender_did")
@@ -408,7 +408,7 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
     }
     let realm_id = mimi_bound_realm_id(state, &room_id).await.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Cokret Realm")
-            .with_wire_code("mimi_room_unbound")
+            .with_wire_code("mimi_governance_binding_missing")
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
     json_ok(json!({
@@ -433,7 +433,7 @@ async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonR
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let consent_id = ids::generate("mimi_consent");
     json_ok(json!({
@@ -457,7 +457,7 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let consent_id = body
         .get("consent_id")
@@ -489,7 +489,7 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let query = body
         .get("query")
@@ -532,7 +532,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let report_id = ids::generate_report_id();
     if let Err(error) = state
@@ -575,7 +575,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         return Err(AppError::invalid_param(
             "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Cokret Realm",
         )
-        .with_wire_code("missing_realm_binding"));
+        .with_wire_code("mimi_governance_binding_missing"));
     };
     let report_event_id = ids::generate_event_id();
     let report_record = ProjectionEventRecord {
@@ -641,7 +641,7 @@ async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("unsupported_draft"));
+        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let blob_ref = body
         .get("blob_ref")
@@ -746,7 +746,7 @@ fn mimi_receipt(state: &AppState, operation_id: &str, body: &Value, extra: Value
         "operation_id": operation_id,
         "service_did": state.config.service_did,
         "provider_id": mimi_provider_id(state),
-        "request_hash": format!("sha256:{}", sha256_hex(body.to_string().as_bytes())),
+        "request_hash": cokret_sdk::canonical::sha256_digest(body.to_string().as_bytes()),
         "accepted_at": now(),
         "drafts": {
             "protocol": "draft-ietf-mimi-protocol-06",
@@ -846,7 +846,7 @@ fn map_mimi_message_content(
             "quarantine_id": quarantine_id,
             "unknown_content_kind": kind,
             "reason": "unknown_mimi_content_kind",
-            "raw_payload_hash": format!("sha256:{}", sha256_hex(content.to_string().as_bytes())),
+            "raw_payload_hash": cokret_sdk::canonical::sha256_digest(content.to_string().as_bytes()),
         });
         let content = json!({
             "kind": "ck.content.unsupported",
@@ -1124,7 +1124,7 @@ fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Valu
         "hub_provider": state.config.service_did.clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
-        "policy_root": format!("sha256:{}", sha256_hex(format!("{realm_id}:{room_id}:policy").as_bytes())),
+        "policy_root": cokret_sdk::canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
         "status": "accepted",
         "canonical_truth": "cokret_signed_event_reducer"
     })

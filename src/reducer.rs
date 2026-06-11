@@ -48,7 +48,7 @@ const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str = "circle_encryption_below_realm
 /// CKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
 /// an actor other than the target) requires the requester to hold
 /// `ck.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
-/// The HTTP surface runs the authoritative `AuthzEngine::check` and stamps a
+/// The HTTP surface runs the authoritative `SolandAuthzEngine::check` and stamps a
 /// verdict into the operation payload; the reducer fails closed when that
 /// verdict is absent or false, so an unauthorised one-way add is rejected even
 /// if it bypasses the HTTP gate.
@@ -82,7 +82,7 @@ pub struct ProjectionState {
     /// Read markers keyed by (realm_id, actor, scope_id). LWW.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
     /// Relations keyed by relation_id. LWW by HLC.
-    pub relations: BTreeMap<String, RelationState>,
+    pub relations: BTreeMap<String, SolandRelationState>,
     /// Poll projections keyed by poll_id. Poll create is a message content
     /// block; responses are per-actor replacements until the poll is closed.
     pub polls: BTreeMap<String, PollState>,
@@ -98,7 +98,7 @@ pub struct ProjectionState {
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
     /// Realm lifecycle state keyed by realm_id.
-    pub realm_states: BTreeMap<String, RealmState>,
+    pub realm_states: BTreeMap<String, SolandRealmState>,
     /// Redacted event IDs (tombstones). This stays as a flat
     /// fast-lookup index over the parallel [`Self::redaction_cells`] map
     /// — entries sit here whenever the parallel cell is `Some(_)` and are
@@ -223,7 +223,7 @@ pub struct ProjectionState {
     /// `(recipient_actor_id, recipient_device_id)`; the inner Vec is
     /// the FIFO of pending Welcomes. Entries gain a non-None
     /// `delivered_at` when the recipient device drains them via
-    /// `GET /_cokret/self/keys/welcomes/pending`.
+    /// `GET /_soland/self/keys/keypackages/welcomes/pending`.
     pub mls_welcomes: BTreeMap<(String, String), Vec<MlsWelcome>>,
     /// G3.S1 — per-group MLS commit-epoch state. The reducer keeps the
     /// monotonic epoch counter in lockstep with `apply_commit_epoch`
@@ -453,7 +453,7 @@ pub struct MlsKeyPackage {
 ///
 /// The reducer's `apply_welcome_enqueue` appends one row per Welcome
 /// fanout target; the recipient device drains its queue via
-/// `GET /_cokret/self/keys/welcomes/pending`, which marks each delivered row
+/// `GET /_soland/self/keys/keypackages/welcomes/pending`, which marks each delivered row
 /// with `delivered_at = now()` so a re-poll won't redeliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsWelcome {
@@ -1090,7 +1090,7 @@ fn read_scope_key(scope: &ReadScopeWire) -> String {
 }
 
 #[derive(Clone, Debug)]
-pub struct RelationState {
+pub struct SolandRelationState {
     pub relation_id: String,
     pub realm_id: String,
     pub relation_kind: String,
@@ -1102,7 +1102,7 @@ pub struct RelationState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl RelationState {
+impl SolandRelationState {
     pub fn is_active(&self) -> bool {
         self.state == "active"
     }
@@ -1128,7 +1128,7 @@ pub struct SolandMembershipState {
 }
 
 #[derive(Clone, Debug)]
-pub struct RealmState {
+pub struct SolandRealmState {
     pub realm_id: String,
     pub owner: Option<String>,
     pub title: Option<String>,
@@ -1188,8 +1188,8 @@ pub enum ProjectionEffect {
         active: bool,
     },
     ReadMarkerUpdated(ReadMarkerState),
-    RelationCreated(RelationState),
-    RelationUpdated(RelationState),
+    RelationCreated(SolandRelationState),
+    RelationUpdated(SolandRelationState),
     RelationDeleted {
         relation_id: String,
     },
@@ -2301,7 +2301,7 @@ fn find_capability_grant(
 /// `ck.circle.member.manage` verdict for `circle_id`?
 ///
 /// The Circle HTTP surface (`/_soland/self/circles/{id}/members`) runs the
-/// real `AuthzEngine::check(sender, "ck.circle.member.manage",
+/// real `SolandAuthzEngine::check(sender, "ck.circle.member.manage",
 /// "ck:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
 /// selector — and stamps the result into the operation payload before handing
 /// it to the reducer. The reducer treats this as a fail-closed assertion:
@@ -3859,7 +3859,7 @@ impl ProjectionState {
         let relation = self
             .relations
             .entry(relation_id.clone())
-            .or_insert_with(|| RelationState {
+            .or_insert_with(|| SolandRelationState {
                 relation_id: relation_id.clone(),
                 realm_id: realm_id.to_owned(),
                 relation_kind: "contains".to_owned(),
@@ -4680,7 +4680,7 @@ impl ProjectionState {
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
 
-        let state = RelationState {
+        let state = SolandRelationState {
             relation_id: relation_id.clone(),
             realm_id: operation.realm_id.to_string(),
             relation_kind,
@@ -4811,7 +4811,7 @@ impl ProjectionState {
         let state = self
             .relations
             .entry(relation_id.clone())
-            .or_insert_with(|| RelationState {
+            .or_insert_with(|| SolandRelationState {
                 relation_id: relation_id.clone(),
                 realm_id: operation.realm_id.to_string(),
                 relation_kind: relation_kind.clone(),
@@ -5696,7 +5696,7 @@ impl ProjectionState {
                 let entry = self
                     .realm_states
                     .entry(realm_id.clone())
-                    .or_insert_with(|| RealmState {
+                    .or_insert_with(|| SolandRealmState {
                         realm_id: realm_id.clone(),
                         owner: None,
                         title: Some(title.to_owned()),
@@ -5962,7 +5962,7 @@ impl ProjectionState {
         let realm = self
             .realm_states
             .entry(realm_id.clone())
-            .or_insert_with(|| RealmState {
+            .or_insert_with(|| SolandRealmState {
                 realm_id: realm_id.clone(),
                 owner: owner.clone(),
                 title: title.clone(),
@@ -7979,7 +7979,7 @@ impl ProjectionState {
                     // `ck.circle.member.manage` (narrowed by
                     // `allowed_circle_ids`) on this Circle. The authoritative
                     // capability decision runs in the HTTP surface
-                    // (`AuthzEngine::check`) and is stamped into the payload;
+                    // (`SolandAuthzEngine::check`) and is stamped into the payload;
                     // the reducer fails closed when that verdict is absent.
                     return ProjectionEffect::Rejected {
                         reason: CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED.to_owned(),
@@ -8437,7 +8437,7 @@ impl ProjectionState {
     }
 
     /// Get relations for a Realm, optionally filtered by kind.
-    pub fn relations_for_realm(&self, realm_id: &str, kind: Option<&str>) -> Vec<&RelationState> {
+    pub fn relations_for_realm(&self, realm_id: &str, kind: Option<&str>) -> Vec<&SolandRelationState> {
         self.relations
             .values()
             .filter(|r| {
@@ -8451,7 +8451,7 @@ impl ProjectionState {
     /// surface that resolves the "narrow discussion" companion of a
     /// "wide synthesis" Flow. Returns the `from_ref` side of each live
     /// matching relation.
-    pub fn confidential_discussions_of(&self, flow_id: &str) -> Vec<&RelationState> {
+    pub fn confidential_discussions_of(&self, flow_id: &str) -> Vec<&SolandRelationState> {
         self.relations
             .values()
             .filter(|r| {
@@ -8547,7 +8547,7 @@ impl ProjectionState {
     /// `ck.realm.tombstone` and `ck.realm.destroy` because they share
     /// the same cell family (`ck.component.realm.destroy.v1`). Callers
     /// that need to distinguish the two should consult
-    /// [`Self::realm_is_in_terminal_state`] / [`RealmState::terminal_state`].
+    /// [`Self::realm_is_in_terminal_state`] / [`SolandRealmState::terminal_state`].
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
         let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.realm.destroy.v1:{realm_id}"))

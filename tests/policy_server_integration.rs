@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde_json::Value;
 use soland::authz::obligation_executor::RequestContext;
 use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
-use soland::authz::{AuthzEngine, MergedAuthzDecision, check_with_policy_server};
+use soland::authz::{SolandAuthzEngine, MergedAuthzDecision, check_with_policy_server};
 use soland::reducer::RealmPolicyServerConfig;
 
 const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
@@ -212,7 +212,7 @@ async fn policy_server_integration_hits_mock() {
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true)
         .with_policy_did_resolver(policy_resolver(&signing));
-    let engine = AuthzEngine::new();
+    let engine = SolandAuthzEngine::new();
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
@@ -271,7 +271,7 @@ async fn policy_server_integration_timeout_fails_closed() {
     let cfg = config_for(&url, 250);
     let client = PolicyClient::new(reqwest::Client::new(), "did:web:soland.local")
         .with_private_network_egress(true);
-    let engine = AuthzEngine::new();
+    let engine = SolandAuthzEngine::new();
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),

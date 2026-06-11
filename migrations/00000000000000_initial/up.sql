@@ -674,6 +674,18 @@ CREATE TABLE public.sync_cursor_handles (
     CONSTRAINT sync_cursor_handles_purpose_check CHECK ((purpose = ANY (ARRAY['stream'::text, 'barrier'::text])))
 );
 
+CREATE TABLE public.sync_cursor_revocations (
+    id uuid NOT NULL,
+    cursor_digest text NOT NULL,
+    principal_id text NOT NULL,
+    device_id text,
+    scope text NOT NULL,
+    reason_code text NOT NULL,
+    revoked_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT sync_cursor_revocations_scope_check CHECK ((scope = ANY (ARRAY['this_cursor'::text, 'same_device'::text, 'same_session'::text])))
+);
+
 CREATE TABLE public.webrtc_sessions (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
@@ -897,6 +909,9 @@ ALTER TABLE ONLY public.spaces
 ALTER TABLE ONLY public.sync_cursor_handles
     ADD CONSTRAINT sync_cursor_handles_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.sync_cursor_revocations
+    ADD CONSTRAINT sync_cursor_revocations_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.webrtc_sessions
     ADD CONSTRAINT webrtc_sessions_pkey PRIMARY KEY (id);
 
@@ -1082,6 +1097,8 @@ CREATE INDEX spaces_preview_policy_digest_idx ON public.spaces USING btree (prev
 CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING btree (expires_at_ms);
 
 CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING btree (principal_id, device_id, filter_digest);
+
+CREATE INDEX sync_cursor_revocations_expiry_idx ON public.sync_cursor_revocations USING btree (expires_at);
 
 CREATE INDEX webrtc_sessions_expires_idx ON public.webrtc_sessions USING btree (expires_at);
 

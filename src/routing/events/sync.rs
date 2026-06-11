@@ -59,8 +59,7 @@ use crate::state::{
     ProjectionEventRecord, RealmDirectoryEntry, SessionRecord, TypingRecord,
 };
 use crate::wire::{
-    AccountDescribeOutcome, BackfillOutcome, ClientSyncRequestBody, EventsQueryPostRequestBody,
-    SolandSnapshotHeadState,
+    EventsQueryPostRequestBody, SolandBackfillOutcome, SyncDescription, SyncRequestBody,
 };
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
@@ -88,7 +87,10 @@ pub(super) fn legacy_router() -> Router {
         .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
         .push(Router::with_path("ephemeral").post(submit_ephemeral))
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
-        .push(Router::with_path("snapshot/head").get(snapshot_head))
+        // Product-face dev snapshot head: serves the deployment-local dev
+        // bundle descriptor. The protocol `ck.self.snapshot.head` (manifest
+        // contract) is NOT implemented and fails closed on `/_cokret/`.
+        .push(Router::with_path("sync/snapshot-head").get(snapshot_head_dev))
         .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
 }
 
@@ -108,7 +110,7 @@ fn normalize_scope_selectors(values: Vec<String>) -> Result<Vec<String>, crate::
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
-async fn account_describe(depot: &mut Depot, res: &mut Response) {
+async fn account_describe(depot: &mut Depot) -> crate::result::JsonResult<SyncDescription> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let mut supported_sync_profiles = vec![
         "initial".to_owned(),
@@ -123,8 +125,10 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
     if is_stateless_cursor_profile_declared(state) {
         supported_sync_profiles.push("ck.profile.stateless_cursor.v1".to_owned());
     }
-    res.render(Json(AccountDescribeOutcome {
-        service_did: state.config.service_did.clone(),
+    let service_did = validate_did(&state.config.service_did)
+        .map_err(|_| crate::error::AppError::internal("configured service_did is not a valid DID"))?;
+    crate::result::json_ok(SyncDescription {
+        service_did,
         supported_sync_profiles,
         limits: json!({
             "max_realms": 50,
@@ -133,8 +137,10 @@ async fn account_describe(depot: &mut Depot, res: &mut Response) {
             "backfill_endpoint": "/_cokret/self/sync/backfill/gap",
             "bottom_repair_endpoint": "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair"
         }),
-        frontier: json!({"storage": state.db.mode(), "generated_at": now()}),
-    }));
+        // SDK `SyncDescription.frontier` is an opaque cursor string; hand out
+        // the current sync token so callers can seed `after` from describe.
+        frontier: Some(sync_token_for_state(state).await),
+    })
 }
 
 /// Default long-poll window for incremental `account/subscribe` requests
@@ -406,6 +412,19 @@ async fn account_cursor_revoke(
         revoked_at,
         expires_at,
     };
+    // Durable first (fail-closed): a revocation that is only cached in
+    // memory would silently un-revoke on the next restart, which defeats
+    // the high-assurance purpose of this endpoint. Only after the ledger
+    // write succeeds do we update the in-memory cache that
+    // `cursor_authority_revoked` consults.
+    state
+        .persistence
+        .sync_cursors()
+        .record_revocation(&record)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("failed to persist cursor revocation: {error}"))
+        })?;
     {
         let now_ms = revoked_at.timestamp_millis();
         let mut revocations = state
@@ -472,8 +491,8 @@ fn delta_is_empty(response: &cokret_sdk::model::SyncOutcome) -> bool {
         && response.presence.is_empty()
 }
 
-fn account_subscribe_query(req: &mut Request) -> ClientSyncRequestBody {
-    ClientSyncRequestBody {
+fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
+    SyncRequestBody {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
@@ -519,7 +538,7 @@ fn account_reconnect_control_frame(
 fn account_subscribe_scope_key(
     req: &Request,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequestBody,
+    body: &SyncRequestBody,
 ) -> String {
     format!(
         "ck.self.account.subscribe|{}|filter={}",
@@ -576,7 +595,7 @@ fn presence_sync_event_json(record: PresenceRecord) -> Value {
 async fn build_sync_snapshot(
     state: &AppState,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequestBody,
+    body: &SyncRequestBody,
     after_cursor: &SyncCursor,
 ) -> cokret_sdk::model::SyncOutcome {
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
@@ -849,7 +868,7 @@ fn roster_members_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequestBody,
+    body: &SyncRequestBody,
 ) -> Vec<Value> {
     let registry = state.member_identity_registry();
     let context = RosterDisclosureContext::new(state, realm_entry, session, body);
@@ -960,7 +979,7 @@ impl<'a> RosterDisclosureContext<'a> {
         state: &'a AppState,
         realm_entry: &'a RealmDirectoryEntry,
         session: Option<&'a SessionRecord>,
-        body: &ClientSyncRequestBody,
+        body: &SyncRequestBody,
     ) -> Self {
         Self {
             service_did: &state.config.service_did,
@@ -984,7 +1003,7 @@ impl<'a> RosterDisclosureContext<'a> {
 fn roster_handle_claim_audience(
     state: &AppState,
     session: Option<&SessionRecord>,
-    body: &ClientSyncRequestBody,
+    body: &SyncRequestBody,
 ) -> String {
     body.filter
         .as_ref()
@@ -2369,7 +2388,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
         "filter": filter.unwrap_or(&empty_filter),
     });
     cokret_sdk::canonical::canonical_sha256(&binding)
-        .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(binding.to_string().as_bytes())))
+        .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))
 }
 
 #[endpoint(
@@ -3113,7 +3132,7 @@ async fn events_query_impl(
     let limit = parts.limit;
     let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
-    // Single-Realm fast path preserves the original `BackfillOutcome` shape
+    // Single-Realm fast path preserves the original `SolandBackfillOutcome` shape
     // for soland's existing test surface (ck.sync.backfill behavior).
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
@@ -3130,7 +3149,7 @@ async fn events_query_impl(
                 }
                 let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
                 return crate::result::json_ok(
-                    serde_json::to_value(BackfillOutcome {
+                    serde_json::to_value(SolandBackfillOutcome {
                         events,
                         prev_cursor: cursor.clone(),
                         next_cursor: match page.next_cursor {
@@ -3152,7 +3171,7 @@ async fn events_query_impl(
             }
         }
         return crate::result::json_ok(
-            serde_json::to_value(BackfillOutcome {
+            serde_json::to_value(SolandBackfillOutcome {
                 events: Vec::new(),
                 prev_cursor: cursor.clone(),
                 next_cursor: Some(sync_token_for_state(state).await),
@@ -3216,7 +3235,7 @@ async fn events_query_impl(
         None => Some(sync_token_for_state(state).await),
     };
     crate::result::json_ok(
-        serde_json::to_value(BackfillOutcome {
+        serde_json::to_value(SolandBackfillOutcome {
             events: page_events,
             prev_cursor: cursor.clone(),
             next_cursor,
@@ -3370,18 +3389,45 @@ async fn sync_gap_backfill(
     }))
 }
 
+/// Spec resolution (2026-06-11): `ck.self.snapshot.head` returns the full
+/// signed `ck.schema.snapshot.v1` manifest. soland cannot produce a real
+/// Snapshot detached proof yet, and the spec forbids serving a dev-signed
+/// stand-in (`signature` / `authority_binding` / `event_set_commitment`
+/// MUST NOT be fabricated — service-http-binding.md §6.1, service-surface.md
+/// §5.2). The operation is therefore not declared in
+/// `describe.supported_operations` and the endpoint fails closed with
+/// `not_implemented` until a real signing path lands. The dev snapshot
+/// bundle remains reachable on the `/_soland/` product face
+/// (`org.cokret.soland.sync.snapshot_chunk`).
 #[endpoint(
     operation_id = "ck.self.snapshot.head",
     tags("sync"),
-    summary = "Read the snapshot-v1 head (manifest + chunk descriptors + merkle_root) for a Realm"
+    summary = "Read the snapshot-v1 manifest head for a Realm (not implemented)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.snapshot.head"))]
-async fn snapshot_head(
+async fn snapshot_head() -> crate::result::JsonResult<serde_json::Value> {
+    Err(crate::error::AppError::new(
+        crate::error::ErrorCode::NotImplemented,
+        "ck.self.snapshot.head is not implemented: this deployment cannot \
+         produce a signed ck.schema.snapshot.v1 manifest",
+    ))
+}
+
+/// Deployment-local dev snapshot head (`/_soland/self/sync/snapshot-head`).
+/// Serves the dev bundle descriptor (chunk plan + merkle root + dev digest)
+/// that pairs with `org.cokret.soland.sync.snapshot_chunk`. This is NOT the
+/// protocol `ck.self.snapshot.head` manifest contract.
+#[endpoint(
+    operation_id = "org.cokret.soland.sync.snapshot_head",
+    tags("sync"),
+    summary = "Read the deployment-local dev snapshot head (chunk plan + merkle root)"
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.snapshot_head"))]
+async fn snapshot_head_dev(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<SolandSnapshotHeadState> {
+) -> crate::result::JsonResult<serde_json::Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // Spec-canonical query param is `realm_id`.
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
     let realm_id = scope_selector_to_realm_id(&realm_id)?;
@@ -3399,10 +3445,9 @@ async fn snapshot_head(
     let bundle = snapshot_bundle_for_realm(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    // Snapshot v1: the manifest already lists per-chunk digests, so
-    // `chunks[]` becomes the per-chunk descriptor (id + size + digest)
-    // — receivers fetch each chunk via `/sync/snapshot-chunk?chunk_id=N`
-    // and check it against `merkle_root` using the chunk's `audit_path`.
+    // chunks[] is the per-chunk descriptor (id + size + digest) — receivers
+    // fetch each chunk via `/sync/snapshot-chunk?chunk_id=N` and check it
+    // against `merkle_root` using the chunk's `audit_path`.
     let chunk_descriptors: Vec<serde_json::Value> = bundle
         .chunks
         .iter()
@@ -3416,29 +3461,30 @@ async fn snapshot_head(
         })
         .collect();
     let merkle_root = bundle.tree.root().as_str().to_owned();
-    let generator_proof_value = bundle.generator_proof.clone();
     let service_did = state.config.service_did.clone();
-    let signature_payload = format!(
+    let digest_payload = format!(
         "{}:{}:{}",
         bundle.snapshot_ref, bundle.state_digest, service_did
     );
-    crate::result::json_ok(SolandSnapshotHeadState {
-        snapshot_ref: bundle.snapshot_ref,
-        state_digest: bundle.state_digest,
-        manifest: bundle.manifest,
-        chunks: chunk_descriptors,
-        frontier: bundle.frontier,
-        signature: json!({
+    crate::result::json_ok(json!({
+        "snapshot_ref": bundle.snapshot_ref,
+        "state_digest": bundle.state_digest,
+        "chunks": chunk_descriptors,
+        "frontier": bundle.frontier,
+        // Dev integrity digest over (snapshot_ref, state_digest, service
+        // DID). Deliberately NOT named `signature`: the spec forbids
+        // fabricating snapshot manifest signatures.
+        "dev_digest": {
             "kid": format!("{service_did}#snapshot-dev"),
             "alg": "sha256-dev",
-            "sig": sha256_hex(signature_payload.as_bytes())
-        }),
-        merkle_root,
-        chunk_count: bundle.chunk_count,
-        chunk_bytes: bundle.chunk_bytes,
-        total_bytes: bundle.total_bytes,
-        generator_proof: generator_proof_value,
-    })
+            "digest": sha256_hex(digest_payload.as_bytes())
+        },
+        "merkle_root": merkle_root,
+        "chunk_count": bundle.chunk_count,
+        "chunk_bytes": bundle.chunk_bytes,
+        "total_bytes": bundle.total_bytes,
+        "generator_proof": bundle.generator_proof,
+    }))
 }
 
 #[endpoint(
@@ -3489,7 +3535,7 @@ async fn snapshot_chunk(
         "media_type": "application/json",
         "encoding": "base64url",
         "digest": chunk.digest.as_str(),
-        "verified": format!("sha256:{}", sha256_hex(&chunk.bytes)) == chunk.digest.as_str(),
+        "verified": cokret_sdk::canonical::sha256_digest(&chunk.bytes) == chunk.digest.as_str(),
         "bytes_base64": URL_SAFE_NO_PAD.encode(&chunk.bytes),
         "audit_path": audit_path,
         "tree_size": tree_size,
@@ -3668,8 +3714,8 @@ mod tests {
     const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
     const ROSTER_CALLER: &str = "did:web:bob.example";
 
-    fn roster_body(audience: &str) -> ClientSyncRequestBody {
-        ClientSyncRequestBody {
+    fn roster_body(audience: &str) -> SyncRequestBody {
+        SyncRequestBody {
             after: None,
             catchup: None,
             filter: Some(json!({ "audience": audience })),

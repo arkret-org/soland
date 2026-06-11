@@ -14,7 +14,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoverySessionRecord};
 use crate::wire::{
-    SolandKeysBackupsDeleteOutcome, SolandKeysBackupsList, SolandKeysBackupsPutOutcome,
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsPutOutcome, SolandKeysBackupsList,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -22,9 +22,9 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("keys/backups/{backup_id}")
                 .put(put_key_backup)
-                .get(get_key_backup)
                 .delete(delete_key_backup),
         )
+        .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
 
@@ -34,9 +34,9 @@ pub(super) fn legacy_router() -> Router {
         .push(
             Router::with_path("keys/backups/{backup_id}")
                 .put(put_key_backup)
-                .get(get_key_backup)
                 .delete(delete_key_backup),
         )
+        .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
 
@@ -96,7 +96,6 @@ fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> u32 {
         })
         .unwrap_or(crate::state::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
 }
-const UNLOCK_PROOF_HEADER: &str = "x-cokret-key-backup-unlock-proof";
 const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "backup_id",
     "actor_id",
@@ -377,18 +376,18 @@ fn validate_key_backup_body(
     {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "legacy_secret_storage_wire_form: senders MUST use ck.schema.key_backup.v1",
+            "legacy ck.secret_storage.v1 wire form: senders MUST use ck.schema.key_backup.v1",
         )
-        .with_wire_code("legacy_secret_storage_wire_form"));
+        .with_wire_code("key_backup_wire_schema_required"));
     }
     // Also reject the embedded `ck:secret_storage:` typed-id form that
     // marked the pre-series wire envelopes.
     if backup_id.starts_with("ck:secret_storage:") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "legacy_secret_storage_wire_form: senders MUST use the chained key-backup envelope",
+            "legacy ck:secret_storage: id form: senders MUST use the chained key-backup envelope",
         )
-        .with_wire_code("legacy_secret_storage_wire_form"));
+        .with_wire_code("key_backup_wire_schema_required"));
     }
     for field in REQUIRED_KEY_BACKUP_FIELDS {
         if !object.contains_key(*field) {
@@ -701,7 +700,7 @@ async fn enforce_recovery_policy_ref(
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{actor_id}`"
             ))
-            .with_wire_code("recovery_policy_missing")
+            .with_wire_code("recovery_policy_mismatch")
         })?;
 
     if ref_policy_id != Some(active.policy_id.as_str())
@@ -980,10 +979,13 @@ async fn enforce_recovery_session_binding_when_present(
         ));
     }
     if !matches!(record.state.as_str(), "verified" | "completed") {
+        // Registry reason `recovery_evidence_unbound`: the unlock proof is
+        // not backed by a verified/completed recovery session, so the
+        // recovery evidence is not bound to the session it claims.
         return Err(AppError::conflict(
             "key backup unlock proof recovery session must be verified or completed",
         )
-        .with_wire_code("recovery_session_not_verified"));
+        .with_wire_code("recovery_evidence_unbound"));
     }
     if let Some((kind, digest)) = recovery_session_proof_summary(&record) {
         if required_proof_string(proof, "proof_kind")? != kind
@@ -997,36 +999,24 @@ async fn enforce_recovery_session_binding_when_present(
     Ok(())
 }
 
+/// Spec `keys_backups_unlock_request_body` (additionalProperties: false) —
+/// the unlock proof travels as the `proof` field of the JSON request body of
+/// `POST /_cokret/self/keys/backups/{backup_id}/unlock`; header / query
+/// carriers are forbidden. The proof MUST validate as
+/// `ck.schema.key_backup_unlock_proof.v1` and is verified against the
+/// recovery session, caller, requesting device key, and target envelope
+/// before the full ciphertext is returned (key-management.md §7.7.1 / §7.8).
 async fn verify_key_backup_unlock_proof(
     state: &AppState,
-    req: &Request,
+    proof: &Value,
     actor_id: &str,
     session_device_id: &str,
     backup: &Value,
 ) -> Result<(), AppError> {
-    let Some(proof_header) = req
-        .headers()
-        .get(salvo::http::header::HeaderName::from_static(
-            UNLOCK_PROOF_HEADER,
-        ))
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(AppError::capability_denied(format!(
-            "key backup ciphertext reads require `{UNLOCK_PROOF_HEADER}`"
-        )));
-    };
-    let proof: Value = serde_json::from_str(proof_header).map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            format!("key backup unlock proof header must be JSON: {error}"),
-        )
-    })?;
-    validate_key_backup_unlock_proof_shape(&proof, actor_id, session_device_id, backup)?;
-    enforce_recovery_session_binding_when_present(state, &proof, actor_id, session_device_id)
+    validate_key_backup_unlock_proof_shape(proof, actor_id, session_device_id, backup)?;
+    enforce_recovery_session_binding_when_present(state, proof, actor_id, session_device_id)
         .await?;
-    verify_key_backup_unlock_proof_signature(state, &proof)
+    verify_key_backup_unlock_proof_signature(state, proof)
 }
 
 /// Spec `identity/key-management.md` §7.6 — genesis envelopes
@@ -1367,10 +1357,17 @@ async fn ensure_key_backup_delete_is_series_tail(
             .and_then(Value::as_u64)
             .is_some_and(|seq| seq > series_seq)
         {
+            // key-management.md §7.8: active-series non-tail envelopes MUST
+            // NOT be individually deleted. No dedicated registry code exists
+            // for this rule, so surface the canonical `failed_precondition`
+            // with the rule spelled out in the diagnostic detail.
             return Err(AppError::conflict(
                 "key backup series non-tail envelopes cannot be individually deleted",
             )
-            .with_wire_code("active_series_non_tail_delete_forbidden"));
+            .with_wire_code("failed_precondition")
+            .with_reason_detail(
+                "active series non-tail delete forbidden (key-management.md §7.8)",
+            ));
         }
     }
     Ok(())
@@ -1388,13 +1385,21 @@ async fn put_key_backup(
     backup: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandKeysBackupsPutOutcome> {
+) -> JsonResult<KeysBackupsPutOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     if backup_id.trim().is_empty() {
         return Err(AppError::invalid_param("backup_id is required"));
     }
+    // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
+    // `ck:backup:<uuidv7>`; parse into the SDK typed id up front so a
+    // non-conforming id fails before any persistence side effect.
+    let typed_backup_id = cokret_sdk::BackupId::new(backup_id.clone()).map_err(|error| {
+        AppError::invalid_param(format!(
+            "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
+        ))
+    })?;
     let backup = backup.into_inner();
     validate_key_backup_body(&backup_id, &session.actor, &backup)?;
     enforce_key_backup_series_chain(state, &session.actor, &backup).await?;
@@ -1411,9 +1416,13 @@ async fn put_key_backup(
         .put(backup_id.clone(), backup.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(SolandKeysBackupsPutOutcome {
-        status: if duplicate { "duplicate" } else { "accepted" }.to_owned(),
-        backup_id,
+    json_ok(KeysBackupsPutOutcome {
+        status: if duplicate {
+            KeyBackupPutStatus::Duplicate
+        } else {
+            KeyBackupPutStatus::Accepted
+        },
+        backup_id: typed_backup_id,
         ciphertext_digest,
     })
 }
@@ -1488,20 +1497,37 @@ async fn list_key_backups(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.get",
+    operation_id = "ck.self.keys.backups.unlock",
     tags("keys"),
-    summary = "Read a single encrypted key backup by backup_id"
+    summary = "Unlock and return the full encrypted key backup envelope by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.get"))]
-async fn get_key_backup(
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.unlock"))]
+async fn unlock_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
+    body: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
+    // spec `keys_backups_unlock_request_body` (additionalProperties: false):
+    // `{proof}` only; the unlock proof MUST NOT travel in a header or query.
+    let body = body.into_inner();
+    let object = body.as_object().ok_or_else(|| {
+        AppError::invalid_param("ck.self.keys.backups.unlock request body must be an object")
+    })?;
+    for key in object.keys() {
+        if key != "proof" {
+            return Err(AppError::invalid_param(
+                "ck.self.keys.backups.unlock permits only proof",
+            ));
+        }
+    }
+    let proof = object.get("proof").ok_or_else(|| {
+        AppError::invalid_param("ck.self.keys.backups.unlock requires a proof in the request body")
+    })?;
     let Some(backup) = state
         .persistence
         .key_backups()
@@ -1515,7 +1541,11 @@ async fn get_key_backup(
     if backup.get("actor_id").and_then(Value::as_str) != Some(&session.actor) {
         return Err(AppError::not_found("key backup not found"));
     }
-    verify_key_backup_unlock_proof(state, req, &session.actor, &session.device_id, &backup).await?;
+    // The path `backup_id` and `proof.backup_id` MUST match: the envelope is
+    // looked up by the path id and the shape check below requires
+    // `proof.backup_id` to equal the envelope's own `backup_id`.
+    verify_key_backup_unlock_proof(state, proof, &session.actor, &session.device_id, &backup)
+        .await?;
     // Spec key-management.md §7.8 — per-principal rolling-24h download quota
     // on full-ciphertext reads. The over-threshold download MUST be withheld
     // (429) and MUST land in the audit log as a `key_backup_read` access
@@ -1565,7 +1595,7 @@ async fn delete_key_backup(
     backup_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandKeysBackupsDeleteOutcome> {
+) -> JsonResult<KeysBackupsDeleteOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
@@ -1599,10 +1629,10 @@ async fn delete_key_backup(
         "deleted",
     )
     .await;
-    json_ok(SolandKeysBackupsDeleteOutcome {
-        deleted: true,
-        backup_id,
-    })
+    // SDK `KeysBackupsDeleteOutcome` carries only the spec-required
+    // `deleted: const true`; the optional `backup_id` echo was dropped when
+    // the local mirror DTO was retired in favour of the SDK type.
+    json_ok(KeysBackupsDeleteOutcome { deleted: true })
 }
 
 #[cfg(test)]

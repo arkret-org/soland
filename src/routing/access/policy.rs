@@ -490,7 +490,7 @@ async fn policy_check(
             "alg": "EdDSA",
             "typ": "ck.policy.check.binding.v1",
             "scheme": "ed25519-detached-jws",
-            "payload_digest": format!("sha256:{}", sha256_hex(&canonical_bytes)),
+            "payload_digest": cokret_sdk::canonical::sha256_digest(&canonical_bytes),
             "jws": jws_detached,
             "sig": sha256_hex(body.request_canonical_digest.as_bytes())
         }),

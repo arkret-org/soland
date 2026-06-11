@@ -672,8 +672,21 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .await;
     assert_eq!(invalid_wait.status_code.unwrap().as_u16(), 400);
 
-    let snapshot: Value = TestClient::get(format!(
+    // Protocol snapshot head fails closed: soland cannot produce a signed
+    // ck.schema.snapshot.v1 manifest, so `ck.self.snapshot.head` answers
+    // `not_implemented` (spec service-surface.md §5.2).
+    let mut protocol_head = TestClient::get(format!(
         "http://server/_cokret/self/snapshot/head?realm_id={realm_id}"
+    ))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(protocol_head.status_code.unwrap().as_u16(), 501);
+    let protocol_head_body: Value = protocol_head.take_json().await.unwrap();
+    assert_eq!(protocol_head_body["error"]["code"], "not_implemented");
+
+    // The deployment-local dev snapshot head lives on the product face.
+    let snapshot: Value = TestClient::get(format!(
+        "http://server/_soland/self/sync/snapshot-head?realm_id={realm_id}"
     ))
     .send(&app_from_state(state.clone()))
     .await
@@ -687,8 +700,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .unwrap()
             .starts_with("ck:snapshot:")
     );
-    assert!(!snapshot["signature"]["sig"].as_str().unwrap().is_empty());
-    assert_eq!(snapshot["manifest"]["reducer_profile"], "ck.reducer.v1");
+    assert!(!snapshot["dev_digest"]["digest"].as_str().unwrap().is_empty());
     // Snapshot v1 (round 9): chunk_id is now a typed integer in the SDK
     // shape; small test states fit in a single 256 KiB chunk so chunk[0]
     // .digest is the state_digest and chunk_count == 1.

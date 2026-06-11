@@ -9,12 +9,11 @@ use serde_json::{Value, json};
 
 use super::{
     is_realm_deleted, is_valid_sha256_digest, now, query_param, query_param_all, render_error,
-    sha256_hex, snapshot_bundle_for_realm, validate_did,
+    validate_did,
 };
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, CanonicalEventRecord};
-use crate::wire::SolandSnapshotHeadState;
 
 const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
@@ -47,6 +46,11 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<Value> {
         "service_did": state.config.service_did.clone(),
         "protocol_version": "1.0",
         "primary_write_path": "/_cokret/peer/events",
+        // `ck.peer.snapshot.head` is intentionally NOT declared: soland
+        // cannot produce a real signed `ck.schema.snapshot.v1` manifest yet,
+        // and spec service-surface.md §5.2 / service-http-binding.md §6.1
+        // forbid declaring (or stub-serving) the operation in that state —
+        // the endpoint returns `not_implemented` instead.
         "supported_operations": [
             "ck.peer.events.describe",
             "ck.peer.events.submit",
@@ -54,7 +58,6 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<Value> {
             "ck.peer.events.query_post",
             "ck.peer.events.resolve",
             "ck.peer.events.frontier",
-            "ck.peer.snapshot.head",
             "ck.peer.invites.submit"
         ],
         "supported_profiles": [
@@ -315,70 +318,29 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
     json_ok(response)
 }
 
+/// Spec resolution (2026-06-11): `ck.peer.snapshot.head` returns the full
+/// signed `ck.schema.snapshot.v1` manifest. soland cannot produce a real
+/// Snapshot detached proof yet, and the spec forbids serving a dev-signed
+/// stand-in (`signature` / `authority_binding` / `event_set_commitment`
+/// MUST NOT be fabricated — service-http-binding.md §6.1, service-surface.md
+/// §5.2). The operation is therefore undeclared and the endpoint fails
+/// closed with `not_implemented` until a real signing path lands. The
+/// dev snapshot bundle remains reachable on the `/_soland/` product face
+/// (`org.cokret.soland.sync.snapshot_chunk`).
 #[endpoint(
     operation_id = "ck.peer.snapshot.head",
     tags("peer"),
-    summary = "Read a federation peer snapshot head"
+    summary = "Read a federation peer snapshot head (not implemented)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.snapshot.head"))]
-async fn peer_snapshot_head(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<SolandSnapshotHeadState> {
+async fn peer_snapshot_head(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None)?;
-    let realm_id = query_param(req, "realm_id")
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
-    let realm_id =
-        RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    if is_realm_deleted(state, realm_id.as_str()).await {
-        return Err(AppError::not_found("not found"));
-    }
-    {
-        let realms = state.realms.lock().expect("realms lock");
-        if realms.get(&realm_id).is_none() {
-            return Err(AppError::not_found("not found"));
-        }
-    }
-    let bundle = snapshot_bundle_for_realm(state, realm_id.as_str())
-        .await
-        .ok_or_else(|| AppError::not_found("not found"))?;
-    let chunk_descriptors: Vec<Value> = bundle
-        .chunks
-        .iter()
-        .map(|chunk| {
-            json!({
-                "chunk_id": chunk.chunk_id,
-                "media_type": "application/json",
-                "digest": chunk.digest.as_str(),
-                "size": chunk.bytes.len(),
-            })
-        })
-        .collect();
-    let merkle_root = bundle.tree.root().as_str().to_owned();
-    let generator_proof_value = bundle.generator_proof.clone();
-    let service_did = state.config.service_did.clone();
-    let signature_payload = format!(
-        "{}:{}:{}",
-        bundle.snapshot_ref, bundle.state_digest, service_did
-    );
-    json_ok(SolandSnapshotHeadState {
-        snapshot_ref: bundle.snapshot_ref,
-        state_digest: bundle.state_digest,
-        manifest: bundle.manifest,
-        chunks: chunk_descriptors,
-        frontier: bundle.frontier,
-        signature: json!({
-            "kid": format!("{service_did}#snapshot-dev"),
-            "alg": "sha256-dev",
-            "sig": sha256_hex(signature_payload.as_bytes())
-        }),
-        merkle_root,
-        chunk_count: bundle.chunk_count,
-        chunk_bytes: bundle.chunk_bytes,
-        total_bytes: bundle.total_bytes,
-        generator_proof: generator_proof_value,
-    })
+    Err(AppError::new(
+        crate::error::ErrorCode::NotImplemented,
+        "ck.peer.snapshot.head is not implemented: this deployment cannot \
+         produce a signed ck.schema.snapshot.v1 manifest",
+    ))
 }
 
 #[derive(Debug)]

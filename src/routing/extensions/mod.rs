@@ -56,9 +56,11 @@ pub fn legacy_router() -> Router {
                 .push(applet_bridge::router())
                 .push(applet_manifest::router()),
         )
-        // `self` — bot/ghost actor + TSP + sovereign enclave surfaces.
+        // `self` — applet install companion + bot/ghost actor + TSP +
+        // sovereign enclave surfaces.
         .push(
             Router::with_path("self")
+                .push(applet_bridge::legacy_self_router())
                 .push(
                     Router::with_path("extensions")
                         .push(bot_actor::router())

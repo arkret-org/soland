@@ -8,7 +8,7 @@
 //!
 //! ## G3.S2 — policy server integration
 //!
-//! [`AuthzEngine::check`] is the LOCAL capability decision. The
+//! [`SolandAuthzEngine::check`] is the LOCAL capability decision. The
 //! remote `/policy/check` round-trip lives in [`policy_client`], and
 //! the post-decision side-effect set lives in [`obligation_executor`].
 //! The integration helper [`check_with_policy_server`] composes the
@@ -45,7 +45,7 @@ pub struct AuthzResult {
 
 /// Thread-safe authorization engine.
 #[derive(Clone)]
-pub struct AuthzEngine {
+pub struct SolandAuthzEngine {
     grants: Arc<Mutex<BTreeMap<String, Grant>>>,
 }
 
@@ -57,7 +57,7 @@ enum GrantDecision {
     RequireReview,
 }
 
-impl AuthzEngine {
+impl SolandAuthzEngine {
     pub fn new() -> Self {
         Self {
             grants: Arc::new(Mutex::new(BTreeMap::new())),
@@ -408,7 +408,7 @@ impl AuthzEngine {
     }
 }
 
-impl Default for AuthzEngine {
+impl Default for SolandAuthzEngine {
     fn default() -> Self {
         Self::new()
     }
@@ -676,7 +676,7 @@ impl MergedAuthzDecision {
 /// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
 #[allow(clippy::too_many_arguments)]
 pub async fn check_with_policy_server(
-    engine: &AuthzEngine,
+    engine: &SolandAuthzEngine,
     actor: &str,
     action: &str,
     resource: &str,
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn owner_gets_all_actions() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
             "manage_space",
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn member_gets_read_only() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         let members = vec!["did:web:bob".to_owned()];
         let result = engine.check(
             "did:web:bob",
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn explicit_grant_overrides_default() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         engine.create_grant(
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn explicit_deny_overrides_allow() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         engine.create_grant(
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
@@ -865,7 +865,7 @@ mod tests {
     fn require_review_and_quarantine_outrank_allow() {
         // Per spec B5: deny / quarantine / require_review are each
         // any-hit-wins; allow is the diagnostic fallback only.
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         engine.create_grant(
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn revoked_grant_denied() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         let grant = engine.create_grant(
             "ck:space:1".to_owned(),
             "did:web:alice".to_owned(),
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn stranger_denied() {
-        let engine = AuthzEngine::new();
+        let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:eve",
             "read",

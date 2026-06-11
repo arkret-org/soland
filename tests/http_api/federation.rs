@@ -22,7 +22,10 @@ async fn peer_events_describe_advertises_formal_surface() {
     assert!(operations.iter().any(|op| op == "ck.peer.events.submit"));
     assert!(operations.iter().any(|op| op == "ck.peer.events.query"));
     assert!(operations.iter().any(|op| op == "ck.peer.events.frontier"));
-    assert!(operations.iter().any(|op| op == "ck.peer.snapshot.head"));
+    // `ck.peer.snapshot.head` MUST NOT be declared while soland cannot
+    // produce a signed ck.schema.snapshot.v1 manifest; the endpoint
+    // answers `not_implemented` instead (service-surface.md §5.2).
+    assert!(!operations.iter().any(|op| op == "ck.peer.snapshot.head"));
 }
 
 #[tokio::test]

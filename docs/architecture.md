@@ -48,7 +48,7 @@ A successful `POST /_cokret/self/events` walks the following stages:
    funneled through one of the `*Store` traits
    (`EventsStore`, `RealmsStore`, `AccountsStore`, `FederationOutboxStore`,
    ...). Production deployments hit `PgPersistenceStore`; tests hit
-   `MemoryPersistenceStore`. Both stores share the same trait surface so
+   `SolandMemoryPersistenceStore`. Both stores share the same trait surface so
    tests exercise the production code paths.
 
 5. **Side-effect fanout**. The handler returns to the caller as soon as

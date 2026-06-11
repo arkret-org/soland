@@ -8,6 +8,16 @@ pub trait FederationTransactionStore: Send + Sync {
         origin: &str,
         txn_id: &str,
     ) -> PersistenceResult<Option<FederationTransactionRecord>>;
+    /// Atomically claim the `(origin, txn_id)` idempotency slot *before*
+    /// running any side-effecting ingest. Inserts `record` (a
+    /// `status="processing"` placeholder) only when no row exists yet —
+    /// `INSERT ... ON CONFLICT DO NOTHING` semantics. Returns `Ok(true)`
+    /// when this caller now owns the slot and must run the ingest plus the
+    /// finalising [`put`](Self::put); `Ok(false)` when another in-flight or
+    /// completed request already holds it. This closes the get→ingest→put
+    /// TOCTOU window: two concurrent deliveries of the same txn_id can
+    /// never both execute the operation batch.
+    async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool>;
     async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
 }
@@ -98,6 +108,16 @@ impl FederationTransactionStore for MemoryFederationTransactionStore {
     ) -> PersistenceResult<Option<FederationTransactionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.get(&(origin.to_owned(), txn_id.to_owned())).cloned())
+    }
+
+    async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool> {
+        let mut data = self.data.lock().expect("lock");
+        let key = (record.origin.clone(), record.txn_id.clone());
+        if data.contains_key(&key) {
+            return Ok(false);
+        }
+        data.insert(key, record.clone());
+        Ok(true)
     }
 
     async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
@@ -280,6 +300,34 @@ impl FederationTransactionStore for PgFederationTransactionStore {
         .optional()
         .map(|row| row.map(FederationTransactionRecord::from))
         .map_err(PersistenceError::from)
+    }
+
+    async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id_uuid: Option<Uuid> = record
+            .realm_id
+            .as_deref()
+            .map(ids::typed_uuid_part_or_panic);
+        let inserted = sql_query(
+            "INSERT INTO federation_transactions \
+             (id, txn_id, source_service, destination_service, realm_id, status, content_digest, payload, received_at, processed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (source_service, txn_id) DO NOTHING",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.txn_id)
+        .bind::<Text, _>(&record.origin)
+        .bind::<Text, _>(&record.destination)
+        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+        .bind::<Text, _>(&record.status)
+        .bind::<Text, _>(&record.content_digest)
+        .bind::<Jsonb, _>(&record.response)
+        .bind::<Timestamptz, _>(record.received_at)
+        .bind::<Nullable<Timestamptz>, _>(record.processed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(inserted > 0)
     }
 
     async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {

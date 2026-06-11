@@ -1,11 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cokret_sdk::identity::{CompositeDidResolver, DidDocument, DidResolver};
 use cokret_sdk::{Did, Error as SdkError, Hash, Operation, RealmId};
 use salvo::http::StatusCode;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::authz::obligation_executor::{ObligationError, RequestContext};
 use crate::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
@@ -46,7 +45,7 @@ impl PolicyGateRejection {
 
 #[derive(Clone)]
 struct SharedDidResolver {
-    inner: Arc<Mutex<CompositeDidResolver>>,
+    inner: Arc<crate::state::Mutex<CompositeDidResolver>>,
 }
 
 impl DidResolver for SharedDidResolver {
@@ -216,13 +215,6 @@ fn policy_request_for_operation(
 }
 
 fn digest_value(value: &str) -> Result<Hash, String> {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    let digest = hasher.finalize();
-    let hex = digest.iter().fold(String::with_capacity(64), |mut acc, b| {
-        use std::fmt::Write;
-        let _ = write!(&mut acc, "{b:02x}");
-        acc
-    });
-    Hash::new(format!("sha256:{hex}")).map_err(|error| error.to_string())
+    Hash::new(cokret_sdk::canonical::sha256_digest(value.as_bytes()))
+        .map_err(|error| error.to_string())
 }

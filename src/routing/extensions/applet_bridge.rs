@@ -95,6 +95,16 @@ pub(super) fn router() -> Router {
         )
 }
 
+/// soland-private companion surface for the spec applet install flow,
+/// mounted at `/_soland/self/applets/...`. Ghost provisioning is not a
+/// registry operation, so it must not appear under `/_cokret/`.
+pub(super) fn legacy_self_router() -> Router {
+    Router::with_path("applets").push(
+        Router::with_path("{applet_id}")
+            .push(Router::with_path("ghosts/provision").post(provision_ghost_actor_endpoint)),
+    )
+}
+
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(
@@ -125,13 +135,12 @@ pub(super) fn protocol_router() -> Router {
                             .push(Router::with_path("preview").post(install_preview_endpoint))
                             .post(install_endpoint),
                     )
+                    // Spec applet self surface is install / install/preview /
+                    // {applet_id}/revoke only; the soland-private ghost
+                    // provision endpoint lives on `/_soland/` (legacy_router).
                     .push(
                         Router::with_path("{applet_id}")
-                            .push(Router::with_path("revoke").post(revoke_install_endpoint))
-                            .push(
-                                Router::with_path("ghosts/provision")
-                                    .post(provision_ghost_actor_endpoint),
-                            ),
+                            .push(Router::with_path("revoke").post(revoke_install_endpoint)),
                     ),
             ),
         )
@@ -164,7 +173,7 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
             "preview_path": "/_cokret/self/applets/install/preview",
             "commit_path": "/_cokret/self/applets/install",
             "revoke_path": "/_cokret/self/applets/{applet_id}/revoke",
-            "ghost_actor_provision_path": "/_cokret/self/applets/{applet_id}/ghosts/provision"
+            "ghost_actor_provision_path": "/_soland/self/applets/{applet_id}/ghosts/provision"
         },
         "transaction_path": "/_cokret/edge/applet/transactions",
         "package_schema": "ck.schema.applet_package.v1"

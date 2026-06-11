@@ -35,7 +35,7 @@ use super::{
     flow_id_from_realm_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
-use crate::persistence::{MlsKeyPackageRecord, MlsWelcomeRecord};
+use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
     fanout_actor_private_update,
@@ -1112,7 +1112,7 @@ async fn mirror_mls_effect_to_persistence(
                 .lock()
                 .ok()
                 .and_then(|projection| projection.mls_key_packages.get(keypackage_id).cloned())
-                .map(|kp| MlsKeyPackageRecord {
+                .map(|kp| MlsKeyPackageRow {
                     id: kp.id,
                     actor_id: kp.actor_id,
                     device_id: kp.device_id,

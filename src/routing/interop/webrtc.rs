@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::RealmId;
+use cokret_sdk::{CallId, RealmId};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -35,10 +35,9 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
 use crate::wire::{
-    CreateWebrtcSessionOutcome, CreateWebrtcSessionRequestBody, OkOutcome,
-    SolandCallMediaParticipantBinding, SolandCallMediaTokenExchangeOutcome,
-    SolandCallMediaTokenExchangeRequestBody, WebrtcSignalOutcome, WebrtcSignalRequestBody,
-    WebrtcSignalsOutcome,
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CreateWebrtcSessionOutcome,
+    CreateWebrtcSessionRequestBody, OkOutcome, SolandCallMediaTokenExchangeRequestBody,
+    WebrtcSignalOutcome, WebrtcSignalRequestBody, WebrtcSignalsOutcome,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -282,7 +281,7 @@ fn turn_credential(
 fn ice_config_payload_digest(payload: &Value) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| payload.to_string().into_bytes());
-    format!("sha256:{}", sha256_hex(&bytes))
+    cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
 fn ice_config_signature(state: &AppState, payload: &Value) -> String {
@@ -816,25 +815,27 @@ async fn handle_rtc_token(
     state: &AppState,
     session: &SessionRecord,
     body: SolandCallMediaTokenExchangeRequestBody,
-) -> JsonResult<SolandCallMediaTokenExchangeOutcome> {
+) -> JsonResult<CallMediaTokenExchangeOutcome> {
     use crate::error::ErrorCode;
 
-    if RealmId::new(body.realm_id.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid realm_id"));
-    }
+    // Validation produces the SDK typed ids the response binding carries, so
+    // the wire outcome reuses `cokret_sdk::CallMediaTokenExchangeOutcome`
+    // directly instead of a stringly soland mirror.
+    let realm_id = RealmId::new(body.realm_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     if !is_valid_webrtc_session_id(&body.call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
     }
-    if validate_did(&body.actor_id).is_err() || body.actor_id != session.actor {
-        return Err(AppError::invalid_param(
-            "actor_id must match the authenticated actor",
-        ));
-    }
-    if validate_device_id(&body.device_id).is_err() || body.device_id != session.device_id {
-        return Err(AppError::invalid_param(
-            "device_id must match the authenticated device",
-        ));
-    }
+    let call_id = CallId::new(body.call_id.clone())
+        .map_err(|_| AppError::invalid_param("invalid call_id"))?;
+    let actor_id = validate_did(&body.actor_id)
+        .ok()
+        .filter(|_| body.actor_id == session.actor)
+        .ok_or_else(|| AppError::invalid_param("actor_id must match the authenticated actor"))?;
+    let device_id = validate_device_id(&body.device_id)
+        .ok()
+        .filter(|_| body.device_id == session.device_id)
+        .ok_or_else(|| AppError::invalid_param("device_id must match the authenticated device"))?;
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
@@ -993,27 +994,35 @@ async fn handle_rtc_token(
         URL_SAFE_NO_PAD.encode(service_sig.to_bytes())
     );
 
-    let participant_binding = SolandCallMediaParticipantBinding {
+    let participant_binding = CallMediaParticipantBinding {
         scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
-        realm_id: body.realm_id,
-        call_id: body.call_id,
-        focus_id: body.focus_id,
-        actor_id: body.actor_id,
-        device_id: body.device_id,
+        realm_id,
+        call_id,
+        focus_id: body.focus_id.clone(),
+        actor_id,
+        device_id,
         participant_identity: participant_identity.clone(),
         expires_at,
     };
 
-    json_ok(SolandCallMediaTokenExchangeOutcome {
+    // Spec `CallMediaTokenExchangeOutcome` requires `connect_url`; a focus
+    // that does not declare one cannot be exchanged into a usable media
+    // session, so fail closed instead of returning a partial outcome.
+    let connect_url = issued_token.connect_url.ok_or_else(|| {
+        focus_unavailable_error("selected focus does not declare a connect_url")
+    })?;
+
+    json_ok(CallMediaTokenExchangeOutcome {
+        focus_id: body.focus_id,
+        backend_type: focus.provider.as_wire().to_owned(),
+        connect_url,
         backend_token: issued_token.backend_token,
         participant_identity,
         participant_binding,
         expires_at,
         service_signature,
-        connect_url: issued_token.connect_url,
-        todos: Vec::new(),
     })
 }
 
@@ -1391,7 +1400,7 @@ async fn cokret_rtc_token(
     body: JsonBody<SolandCallMediaTokenExchangeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandCallMediaTokenExchangeOutcome> {
+) -> JsonResult<CallMediaTokenExchangeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     handle_rtc_token(state, &session, body.into_inner()).await

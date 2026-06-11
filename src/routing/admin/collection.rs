@@ -23,7 +23,6 @@ use super::{
     accept_local_operations, append_audit_log, demo_actors, device_inventory_to_json,
     discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
     flow_projection_for_realm, policy_document_to_response, projection_event_from_operation,
-    sha256_hex,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -605,7 +604,7 @@ async fn admin_invite_items(state: &AppState) -> Vec<Value> {
                 "invitee": invite.invitee,
                 "invite_delivery_target": invite.invite_delivery_target,
                 "introduction_evidence_digest": invite.introduction_evidence_digest,
-                "token_hash": format!("sha256:{}", sha256_hex(invite.invite_token.as_bytes())),
+                "token_hash": cokret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
                 "status": invite.status,
                 "expires_at": invite.expires_at,
                 "created_at": invite.created_at,

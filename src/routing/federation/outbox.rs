@@ -136,7 +136,7 @@ fn rfc9421_sign(
     target_url: &str,
     body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    let request_canonical_digest = format!("sha256:{:x}", Sha256::digest(body));
+    let request_canonical_digest = cokret_sdk::canonical::sha256_digest(body);
     insert_header_if_valid(
         &mut headers,
         "request-canonical-digest",

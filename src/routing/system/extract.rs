@@ -55,10 +55,10 @@ impl AuthArgs {
             Ok(session) => Ok(session),
             Err((status, code, message)) => {
                 // The auth inner returns a wire-code string. Map it to a
-                // registered ErrorCode when possible; for non-canonical
-                // codes (e.g. `account_erased`) attach the literal wire
-                // string via `wire_code_override` so the response carries
-                // the spec-precise `error.code` rather than the registered
+                // registered ErrorCode when possible; for codes without a
+                // typed `ErrorCode` variant attach the literal wire string
+                // via `wire_code_override` so the response carries the
+                // spec-precise `error.code` rather than the registered
                 // fallback.
                 let typed = crate::error::ErrorCode::from_wire(code);
                 let mut err = AppError::new(

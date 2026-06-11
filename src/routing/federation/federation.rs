@@ -36,6 +36,19 @@ use crate::state::{AppState, FederationTransactionRecord};
 
 const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
+/// Placeholder status stamped by `try_begin` while an inbound federation
+/// transaction is being ingested. A row in this state means some worker
+/// claimed the `(origin, txn_id)` idempotency slot but has not yet written
+/// the final response.
+const FEDERATION_TXN_STATUS_PROCESSING: &str = "processing";
+
+/// How long a `processing` placeholder is honoured before a retry may take
+/// the slot over. A claim older than this means the claiming worker crashed
+/// between `try_begin` and the finalising `put` (the ingest path itself is
+/// non-blocking), so the transaction would otherwise be stuck returning
+/// `temporarily_unavailable` forever.
+const FEDERATION_TXN_PROCESSING_TAKEOVER_SECS: i64 = 60;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FederationPeerTarget {
     url: String,
@@ -116,12 +129,36 @@ pub(super) async fn federation_transaction(
             .origin_key_state_digest
             .clone(),
     };
+    // Whether this request is taking over a stale `processing` claim left by
+    // a worker that crashed between `try_begin` and the finalising `put`.
+    let mut stale_claim_takeover = false;
     match state
         .persistence
         .federation_transactions()
         .get(body.origin.as_str(), &txn_id)
         .await
     {
+        // Another request claimed this (origin, txn_id) and is still
+        // ingesting. Matched before the cached-response arm so a
+        // placeholder row is never decoded as a final outcome.
+        Ok(Some(record)) if record.status == FEDERATION_TXN_STATUS_PROCESSING => {
+            if record.content_digest != content_digest {
+                return Err(AppError::new(
+                    crate::error::ErrorCode::DuplicateConflict,
+                    "federation transaction id was reused with different content",
+                ));
+            }
+            let claim_age_secs = now()
+                .signed_duration_since(record.received_at)
+                .num_seconds();
+            if claim_age_secs < FEDERATION_TXN_PROCESSING_TAKEOVER_SECS {
+                return Err(AppError::new(
+                    crate::error::ErrorCode::TemporarilyUnavailable,
+                    "federation transaction is being processed by a concurrent delivery; retry",
+                ));
+            }
+            stale_claim_takeover = true;
+        }
         Ok(Some(record)) if record.content_digest == content_digest => {
             // Round R2/R3 (T14) + Round 4 (B1.8) — cache hit MUST re-do
             // capability check. We re-validate origin & destination
@@ -203,6 +240,39 @@ pub(super) async fn federation_transaction(
     let destination = body.destination.to_string();
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
+    // Claim the (origin, txn_id) idempotency slot *before* the
+    // side-effecting ingest. Without this, two concurrent deliveries of the
+    // same txn_id both observed `get == None` above and both executed the
+    // operation batch (TOCTOU). The placeholder insert is atomic
+    // (`ON CONFLICT DO NOTHING`); only the winner ingests, the loser asks
+    // the peer to retry (it will then hit the winner's cached response).
+    // A `stale_claim_takeover` skips the claim — the placeholder row
+    // already exists and is past its takeover horizon.
+    if !stale_claim_takeover {
+        let placeholder = FederationTransactionRecord {
+            origin: origin.clone(),
+            txn_id: txn_id.clone(),
+            destination: destination.clone(),
+            realm_id: None,
+            content_digest: content_digest.clone(),
+            status: FEDERATION_TXN_STATUS_PROCESSING.to_owned(),
+            response: Value::Null,
+            received_at: now(),
+            processed_at: None,
+        };
+        let claimed = state
+            .persistence
+            .federation_transactions()
+            .try_begin(&placeholder)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        if !claimed {
+            return Err(AppError::new(
+                crate::error::ErrorCode::TemporarilyUnavailable,
+                "federation transaction is being processed by a concurrent delivery; retry",
+            ));
+        }
+    }
     let ingest = ingest_federation_operations(state, &origin, operations).await;
     let response = cokret_sdk::FederationTransactionOutcome {
         ok: true,
@@ -641,7 +711,7 @@ pub(super) async fn federation_pull_operations(
             "operation_count": realm_operations.len(),
             "created_at": now(),
         });
-        let state_digest = format!("sha256:{}", sha256_hex(manifest.to_string().as_bytes()));
+        let state_digest = cokret_sdk::canonical::sha256_digest(manifest.to_string().as_bytes());
         json!({
             "manifest": manifest,
             "state_digest": state_digest,
@@ -980,7 +1050,7 @@ fn verify_inbound_federation_http_signature(
         .with_status(StatusCode::BAD_REQUEST)
     })?;
     let expected_content_digest = content_digest_header(&body_bytes);
-    let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
+    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
     validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
 
     let content_digest = required_header(req, "content-digest")?;
@@ -1092,7 +1162,7 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
         None => Vec::new(),
     };
     let expected_content_digest = content_digest_header(&body_bytes);
-    let expected_request_digest = format!("sha256:{}", sha256_hex(&body_bytes));
+    let expected_request_digest = cokret_sdk::canonical::sha256_digest(&body_bytes);
     validate_federation_request_binding(&state.config.trust_domain, req, &expected_request_digest)?;
 
     let content_digest = required_header(req, "content-digest")?;
@@ -2225,7 +2295,7 @@ fn signed_fanout_intent_evidence(
 ) -> serde_json::Value {
     let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(intent)
         .unwrap_or_else(|_| serde_json::to_vec(intent).unwrap_or_default());
-    let payload_digest = format!("sha256:{}", sha256_hex(&canonical_bytes));
+    let payload_digest = cokret_sdk::canonical::sha256_digest(&canonical_bytes);
     let protected_header = br#"{"alg":"EdDSA","typ":"ck.federation.outbound_fanout.intent.v1"}"#;
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
@@ -3209,8 +3279,7 @@ impl FederationIdempotencyKey {
             "origin_key_state_digest": self.origin_key_state_digest,
         }))
         .unwrap_or_default();
-        let digest = Sha256::digest(&canonical);
-        format!("sha256:{:x}", digest)
+        cokret_sdk::canonical::sha256_digest(&canonical)
     }
 
     /// Canonical-replay key — drops `origin_key_state_digest`. Used to
@@ -3223,8 +3292,7 @@ impl FederationIdempotencyKey {
             "idempotency_key": self.idempotency_key,
         }))
         .unwrap_or_default();
-        let digest = Sha256::digest(&canonical);
-        format!("sha256:{:x}", digest)
+        cokret_sdk::canonical::sha256_digest(&canonical)
     }
 }
 

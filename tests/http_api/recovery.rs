@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use soland::persistence::{MemoryPersistenceStore, PersistenceStore};
+use soland::persistence::{SolandMemoryPersistenceStore, PersistenceStore};
 use soland::state::{CanonicalEventRecord, DeviceInventoryRecord, SessionRecord};
 
 use super::common::*;
@@ -39,7 +39,7 @@ const RECEIPT_FIELDS: &[&str] = &[
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
-    let persistence: Arc<dyn PersistenceStore> = Arc::new(MemoryPersistenceStore::new());
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
     let signing = SigningKey::from_bytes(&[71u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
@@ -73,7 +73,7 @@ async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_tampered_signature_body() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
@@ -95,7 +95,7 @@ async fn recovery_policy_rejects_tampered_signature_body() {
 async fn recovery_policy_production_accepts_verified_payload() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = shared_recovery_state_with_config(Arc::new(MemoryPersistenceStore::new()), config);
+    let state = shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
     let token = "prod_recovery_token";
     seed_bearer_session(&state, token).await;
     let signing = SigningKey::from_bytes(&[77u8; 32]);
@@ -115,7 +115,7 @@ async fn recovery_policy_production_accepts_verified_payload() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_missing_signed_field_coverage() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[73u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
@@ -139,7 +139,7 @@ async fn recovery_policy_rejects_missing_signed_field_coverage() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_policy_binding_mismatch() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[74u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
@@ -168,7 +168,7 @@ async fn recovery_receipt_rejects_policy_binding_mismatch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_tampered_proof_digest() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[75u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let (policy_id, device_id) =
@@ -197,7 +197,7 @@ async fn recovery_receipt_rejects_tampered_proof_digest() {
 async fn recovery_receipt_rejects_unauthorized_device() {
     // §15 step 7 — a receipt for a device with no accepted ck.device.authorize
     // MUST be rejected (no authorized device key to verify against).
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[79u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
@@ -225,7 +225,7 @@ async fn recovery_receipt_rejects_unauthorized_device() {
 async fn recovery_receipt_requires_backup_classes_unlocked() {
     // device-lifecycle.md §15 step 7: backup_classes_unlocked is a required
     // normative receipt field. Dropping it MUST be rejected.
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[78u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
@@ -265,7 +265,7 @@ async fn recovery_receipt_requires_backup_classes_unlocked() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
-    let persistence: Arc<dyn PersistenceStore> = Arc::new(MemoryPersistenceStore::new());
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
     let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[76u8; 32]);
@@ -305,7 +305,7 @@ const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce00000
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_active_and_history() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[91u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     // Authenticate AS the principal so the read APIs (principal-isolated) see it.
@@ -348,7 +348,7 @@ async fn recovery_policy_get_returns_active_and_history() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipts_get_returns_history() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[92u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let (policy_id, device_id) =
@@ -385,7 +385,7 @@ async fn recovery_receipts_get_returns_history() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_read_enforces_principal_isolation() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[93u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -440,7 +440,7 @@ async fn open_recovery_session(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_create_and_get_roundtrip() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[101u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -474,7 +474,7 @@ async fn recovery_session_create_and_get_roundtrip() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_create_requires_active_policy() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[102u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -499,12 +499,12 @@ async fn recovery_session_create_requires_active_policy() {
         StatusCode::CONFLICT,
     )
     .await;
-    assert_eq!(body["error"]["code"], "recovery_policy_missing");
+    assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_get_enforces_principal_isolation() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing_a = SigningKey::from_bytes(&[103u8; 32]);
     let (principal_a, vm_a) = did_key_principal(&signing_a);
     let token_a = dev_token_for_device(
@@ -561,7 +561,7 @@ fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_principal_signing_proof_verifies() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[105u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -623,7 +623,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_principal_signing_rejects_bad_signature() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[111u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -672,7 +672,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_proof_rejects_challenge_mismatch() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[106u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -701,7 +701,7 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[107u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -733,7 +733,7 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_unverified() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[108u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -754,7 +754,7 @@ async fn recovery_session_complete_rejects_unverified() {
         StatusCode::CONFLICT,
     )
     .await;
-    assert_eq!(body["error"]["code"], "recovery_session_not_verified");
+    assert_eq!(body["error"]["code"], "failed_precondition");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -762,7 +762,7 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
     // C-P4: a verified session completes by authorizing the requesting device
     // into inventory (real, auth-consulted) + transitioning to `completed`. The
     // canonical operation-stream emission is the acknowledged `production_gap`.
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[112u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[212u8; 32]);
@@ -841,14 +841,14 @@ async fn recovery_session_complete_authorizes_device_after_verify() {
         StatusCode::CONFLICT,
     )
     .await;
-    assert_eq!(again["error"]["code"], "recovery_session_not_verified");
+    assert_eq!(again["error"]["code"], "failed_precondition");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
     // The authorize event's cross_signing_binding MUST bind the CURRENT accepted
     // generation; a stale/forged generation is rejected.
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[113u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[214u8; 32]);
@@ -1149,7 +1149,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
     // accepted publish). A device-authorize binding can then no longer verify —
     // completion MUST reject (cross_signing_state_missing), proving reset
     // invalidates stale bindings.
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[117u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[219u8; 32]);
@@ -1200,7 +1200,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_missing_cross_signing_state() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[115u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[215u8; 32]);
@@ -1228,7 +1228,7 @@ async fn recovery_session_complete_rejects_missing_cross_signing_state() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_complete_rejects_wrong_ssk_signature() {
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[116u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[216u8; 32]);
@@ -1268,7 +1268,7 @@ async fn recovery_session_complete_rejects_wrong_ssk_signature() {
 async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
     // A did_recovery backup whose recovery_policy_ref does not equal the actor's
     // active recovery policy MUST be rejected with recovery_policy_mismatch.
-    let state = shared_recovery_state(Arc::new(MemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[121u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(

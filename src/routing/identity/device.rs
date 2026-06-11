@@ -15,7 +15,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{AuthArgs, append_audit_log, device_inventory_to_json, now, sha256_hex};
+use super::{AuthArgs, append_audit_log, device_inventory_to_json, now};
 use crate::error::AppError;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::{JsonResult, ids, json_ok};
@@ -260,7 +260,7 @@ async fn device_pairing_challenge(
             "type": "sha256-dev",
             "nonce": nonce,
             "canonical": canonical,
-            "digest": format!("sha256:{}", sha256_hex(canonical.to_string().as_bytes())),
+            "digest": cokret_sdk::canonical::sha256_digest(canonical.to_string().as_bytes()),
         },
         "production_gap": "device_pairing_proof_verification",
     }))

@@ -16,7 +16,7 @@ async fn configured_cors_allows_only_explicit_origin() {
         .add_header("Access-Control-Request-Method", "POST", true)
         .add_header(
             "Access-Control-Request-Headers",
-            "authorization, content-type, x-cokret-wait-for, x-cokret-key-backup-unlock-proof, x-cokret-key-backup-delete-proof",
+            "authorization, content-type, x-cokret-wait-for",
             true,
         )
         .send(&service)
@@ -41,13 +41,16 @@ async fn configured_cors_allows_only_explicit_origin() {
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    // Key-backup delete/unlock proofs travel in the JSON request body per
+    // spec (`keys_backups_delete_request_body` / `keys_backups_unlock_request_body`);
+    // the former private proof headers must no longer be advertised.
     assert!(
-        allow_headers.contains("x-cokret-key-backup-unlock-proof"),
-        "key-backup unlock proof header must be allowed in browser preflight: {allow_headers}"
+        !allow_headers.contains("x-cokret-key-backup-unlock-proof"),
+        "key-backup unlock proof must travel in the request body, not a header: {allow_headers}"
     );
     assert!(
-        allow_headers.contains("x-cokret-key-backup-delete-proof"),
-        "key-backup delete proof header must be allowed in browser preflight: {allow_headers}"
+        !allow_headers.contains("x-cokret-key-backup-delete-proof"),
+        "key-backup delete proof must travel in the request body, not a header: {allow_headers}"
     );
 
     let denied = TestClient::options("http://server/_cokret/self/account/subscribe?catchup=true")

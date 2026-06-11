@@ -51,18 +51,35 @@ pub trait SyncCursorStore: Send + Sync {
     ) -> PersistenceResult<usize>;
     /// TTL sweep: drop every row whose `expires_at_ms` is at or before `now_ms`.
     async fn prune_expired(&self, now_ms: i64) -> PersistenceResult<usize>;
+    /// Append a cursor-authority revocation (`ck.self.account.cursor_revoke`)
+    /// to the durable ledger. Expired ledger rows are swept opportunistically
+    /// on every write so the table stays bounded by `CURSOR_MAX_TTL_SECONDS`.
+    ///
+    /// Durability here is a security property: a revoked cursor MUST stay
+    /// revoked across a process restart (spec `client-sync.md` cursor-revoke
+    /// semantics), so the in-memory revocation cache on `AppState` is
+    /// hydrated from this ledger at boot.
+    async fn record_revocation(&self, record: &CursorRevocation) -> PersistenceResult<()>;
+    /// Every revocation whose GC horizon (`expires_at`) is still in the
+    /// future. Used to hydrate the in-memory revocation cache at boot.
+    async fn active_revocations(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Vec<CursorRevocation>>;
 }
 
 /// In-memory `handle -> SyncCursorRecord` table. Mirrors the
 /// `sync_cursor_handles` Pg table on the same primary key.
 pub(crate) struct MemorySyncCursorStore {
     data: Arc<Mutex<BTreeMap<String, SyncCursorRecord>>>,
+    revocations: Arc<Mutex<Vec<CursorRevocation>>>,
 }
 
 impl MemorySyncCursorStore {
     pub(crate) fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
+            revocations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -117,6 +134,25 @@ impl SyncCursorStore for MemorySyncCursorStore {
         let before = data.len();
         data.retain(|_, record| record.expires_at_ms > now_ms);
         Ok(before - data.len())
+    }
+
+    async fn record_revocation(&self, record: &CursorRevocation) -> PersistenceResult<()> {
+        let mut revocations = self.revocations.lock().expect("lock");
+        revocations.retain(|entry| entry.expires_at > record.revoked_at);
+        revocations.push(record.clone());
+        Ok(())
+    }
+
+    async fn active_revocations(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Vec<CursorRevocation>> {
+        let revocations = self.revocations.lock().expect("lock");
+        Ok(revocations
+            .iter()
+            .filter(|entry| entry.expires_at > now)
+            .cloned()
+            .collect())
     }
 }
 
@@ -248,6 +284,84 @@ impl SyncCursorStore for PgSyncCursorStore {
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::from)
+    }
+
+    async fn record_revocation(&self, record: &CursorRevocation) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        // Opportunistic TTL sweep on every write keeps the ledger bounded by
+        // CURSOR_MAX_TTL_SECONDS — mirrors the in-memory cache's retain-then-
+        // push behaviour.
+        sql_query("DELETE FROM sync_cursor_revocations WHERE expires_at <= $1")
+            .bind::<Timestamptz, _>(record.revoked_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::from)?;
+        sql_query(
+            "INSERT INTO sync_cursor_revocations \
+             (id, cursor_digest, principal_id, device_id, scope, reason_code, revoked_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind::<SqlUuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.cursor_digest)
+        .bind::<Text, _>(&record.principal_id)
+        .bind::<Nullable<Text>, _>(&record.device_id)
+        .bind::<Text, _>(&record.scope)
+        .bind::<Text, _>(&record.reason_code)
+        .bind::<Timestamptz, _>(record.revoked_at)
+        .bind::<Timestamptz, _>(record.expires_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn active_revocations(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Vec<CursorRevocation>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT cursor_digest, principal_id, device_id, scope, reason_code, revoked_at, expires_at \
+             FROM sync_cursor_revocations WHERE expires_at > $1 \
+             ORDER BY revoked_at ASC",
+        )
+        .bind::<Timestamptz, _>(now)
+        .load::<CursorRevocationRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(rows.into_iter().map(CursorRevocation::from).collect())
+    }
+}
+
+#[derive(QueryableByName)]
+struct CursorRevocationRow {
+    #[diesel(sql_type = Text)]
+    cursor_digest: String,
+    #[diesel(sql_type = Text)]
+    principal_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    device_id: Option<String>,
+    #[diesel(sql_type = Text)]
+    scope: String,
+    #[diesel(sql_type = Text)]
+    reason_code: String,
+    #[diesel(sql_type = Timestamptz)]
+    revoked_at: chrono::DateTime<Utc>,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<Utc>,
+}
+
+impl From<CursorRevocationRow> for CursorRevocation {
+    fn from(row: CursorRevocationRow) -> Self {
+        Self {
+            cursor_digest: row.cursor_digest,
+            principal_id: row.principal_id,
+            device_id: row.device_id,
+            scope: row.scope,
+            reason_code: row.reason_code,
+            revoked_at: row.revoked_at,
+            expires_at: row.expires_at,
+        }
     }
 }
 

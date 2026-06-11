@@ -38,7 +38,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::util::{
-    CursorShape, canonical_json, encode_cursor_shape, order_hlc_clocks, sha256_prefixed,
+    CursorShape, canonical_json, encode_cursor_shape, order_hlc_clocks, sha256_digest,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::routing::system::util::query_param;
@@ -111,7 +111,7 @@ pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
         .ok_or_else(|| AppError::missing_param("missing input"))?;
     let canonical = canonical_json(input)
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
-    let digest = sha256_prefixed(canonical.as_bytes());
+    let digest = sha256_digest(canonical.as_bytes());
     json_ok(json!({
         "canonical_json": canonical,
         "digest": digest,
@@ -163,7 +163,7 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     }
     let canonical = canonical_json(&Value::Object(payload))
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
-    let digest = sha256_prefixed(canonical.as_bytes());
+    let digest = sha256_digest(canonical.as_bytes());
     let signature = signing_key.sign(canonical.as_bytes());
 
     json_ok(json!({
@@ -287,7 +287,7 @@ pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
         .ok_or_else(|| AppError::missing_param("missing envelope"))?;
     let canonical = canonical_json(envelope_value)
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
-    let digest = sha256_prefixed(canonical.as_bytes());
+    let digest = sha256_digest(canonical.as_bytes());
     json_ok(json!({
         "canonical_bytes": canonical,
         "digest": digest,
@@ -385,12 +385,12 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
             "snapshot manifest canonical envelope exceeds 1 MiB",
         ));
     }
-    let manifest_digest = sha256_prefixed(manifest_canonical.as_bytes());
+    let manifest_digest = sha256_digest(manifest_canonical.as_bytes());
 
     let mut chunk_hashes = Vec::with_capacity(chunks.len());
     for (index, chunk) in chunks.iter().enumerate() {
         let material = snapshot_chunk_material(chunk)?;
-        let digest = sha256_prefixed(material.as_bytes());
+        let digest = sha256_digest(material.as_bytes());
         if let Some(declared) = declared_chunk_digest(manifest, chunks, index, chunk)
             && declared != digest
         {
@@ -915,8 +915,8 @@ fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, 
 
 fn digest_json(value: &Value) -> String {
     canonical_json(value)
-        .map(|canonical| sha256_prefixed(canonical.as_bytes()))
-        .unwrap_or_else(|_| sha256_prefixed(value.to_string().as_bytes()))
+        .map(|canonical| sha256_digest(canonical.as_bytes()))
+        .unwrap_or_else(|_| sha256_digest(value.to_string().as_bytes()))
 }
 
 fn string_array(value: Option<&Value>) -> impl Iterator<Item = &str> {
@@ -1071,7 +1071,7 @@ mod tests {
         });
         let chunks = vec![json!({ "payload": { "body": "hello" } })];
         let material = snapshot_chunk_material(&chunks[0]).unwrap();
-        let actual_digest = sha256_prefixed(material.as_bytes());
+        let actual_digest = sha256_digest(material.as_bytes());
 
         assert_ne!(
             declared_chunk_digest(&manifest, &chunks, 0, &chunks[0]).unwrap(),

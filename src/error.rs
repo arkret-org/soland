@@ -189,41 +189,48 @@ pub mod reasons {
 
     // ── R3 (spec b47ff6ec, _before_todos.md §0.7) — Agent / pairing /
     // session-grant + media-binding (CKP-0010) + recovery / handle reason
-    // codes. Exposed here so future R3.1 handler work can reference them
-    // through the `crate::error::reasons` namespace without depending on
-    // a parallel SDK PR landing first. Once cokret-rust-sdk adopts the
-    // canonical `REASON_*` constants, swap these `pub const` literals for
-    // re-exports the same way the C44/C45 block above does.
-    //
-    // TODO(R3.1): swap to `core_error::REASON_*` re-exports once SDK
-    // ships the matching registry entries.
+    // codes, re-exported from the SDK `ERROR_CODE_*` registry mirror so
+    // the wire strings have a single source of truth.
 
     // Agent / pairing / session-grant (8 codes).
-    pub const PAIRING_REQUEST_EXPIRED: &str = "pairing_request_expired";
-    pub const PROOF_INVALID: &str = "proof_invalid";
+    pub const PAIRING_REQUEST_EXPIRED: &str = core_error::ERROR_CODE_PAIRING_REQUEST_EXPIRED;
+    pub const PROOF_INVALID: &str = core_error::ERROR_CODE_PROOF_INVALID;
     pub const VERIFICATION_METHOD_PRINCIPAL_MISMATCH: &str =
-        "verification_method_principal_mismatch";
-    pub const AGENT_PAUSED: &str = "agent_paused";
-    pub const AGENT_DEACTIVATED: &str = "agent_deactivated";
-    pub const APPROVAL_ALREADY_CONSUMED: &str = "approval_already_consumed";
-    pub const SIDECAR_CREATE_DENIED: &str = "sidecar_create_denied";
-    pub const ACTOR_KIND_REDUCER_MANAGED: &str = "actor_kind_reducer_managed";
+        core_error::ERROR_CODE_VERIFICATION_METHOD_PRINCIPAL_MISMATCH;
+    pub const AGENT_PAUSED: &str = core_error::ERROR_CODE_AGENT_PAUSED;
+    pub const AGENT_DEACTIVATED: &str = core_error::ERROR_CODE_AGENT_DEACTIVATED;
+    pub const APPROVAL_ALREADY_CONSUMED: &str = core_error::ERROR_CODE_APPROVAL_ALREADY_CONSUMED;
+    pub const SIDECAR_CREATE_DENIED: &str = core_error::ERROR_CODE_SIDECAR_CREATE_DENIED;
+    pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ERROR_CODE_ACTOR_KIND_REDUCER_MANAGED;
 
     // Media binding / CKP-0010 (10 codes).
-    pub const FOCUS_MISMATCH: &str = "focus_mismatch";
-    pub const UNKNOWN_FOCUS_TYPE: &str = "unknown_focus_type";
-    pub const TOKEN_ISSUER_UNAUTHORISED: &str = "token_issuer_unauthorised";
-    pub const PARTICIPANT_BINDING_INVALID: &str = "participant_binding_invalid";
-    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str = "participant_identity_unrecognised";
-    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str = "session_focus_already_committed";
-    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str = "e2ee_key_source_unauthorised";
-    pub const RECORDING_ARTIFACT_PIPELINE_BYPASSED: &str = "recording_artifact_pipeline_bypassed";
+    pub const FOCUS_MISMATCH: &str = core_error::ERROR_CODE_FOCUS_MISMATCH;
+    pub const UNKNOWN_FOCUS_TYPE: &str = core_error::ERROR_CODE_UNKNOWN_FOCUS_TYPE;
+    pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ERROR_CODE_TOKEN_ISSUER_UNAUTHORISED;
+    pub const PARTICIPANT_BINDING_INVALID: &str =
+        core_error::ERROR_CODE_PARTICIPANT_BINDING_INVALID;
+    pub const PARTICIPANT_IDENTITY_UNRECOGNISED: &str =
+        core_error::ERROR_CODE_PARTICIPANT_IDENTITY_UNRECOGNISED;
+    pub const SESSION_FOCUS_ALREADY_COMMITTED: &str =
+        core_error::ERROR_CODE_SESSION_FOCUS_ALREADY_COMMITTED;
+    pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str =
+        core_error::ERROR_CODE_E2EE_KEY_SOURCE_UNAUTHORISED;
+    pub const RECORDING_ARTIFACT_PIPELINE_BYPASSED: &str =
+        core_error::ERROR_CODE_RECORDING_ARTIFACT_PIPELINE_BYPASSED;
+    // Not in the SDK mirror nor `error-code-registry.json` (2026-06-11):
+    // CKP-0010 §5 reserves this reason for v1.1 (v1 SHOULD normalize the
+    // legacy single-endpoint shape instead of rejecting), so the v1
+    // registry/SDK intentionally omit it. Stays a soland-local literal
+    // until the v1.1 registry entry lands.
     pub const LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE: &str = "legacy_single_endpoint_media_service";
-    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str = "focus_unavailable_for_client";
+    pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
+        core_error::ERROR_CODE_FOCUS_UNAVAILABLE_FOR_CLIENT;
 
     // Recovery / handle (2 codes).
-    pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str = "recovery_witness_revoke_lagging";
-    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = "handle_homograph_forbidden";
+    pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
+        core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;
+    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str =
+        core_error::ERROR_CODE_HANDLE_HOMOGRAPH_FORBIDDEN;
 
     // ── R3.1 (2026-05-27, cokret-spec @ 7157ee8) — MemberIdentity append-
     // only replacement event error codes. Re-exported from the SDK's

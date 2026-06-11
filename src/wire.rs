@@ -165,39 +165,12 @@ pub struct OutboundPushBridgeExamples {
     pub cache_export_response: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct IntegrationDescribeOutcome {
-    pub contract: String,
-    pub version: String,
-    pub service: String,
-    pub service_kind: String,
-    pub api_base_path: String,
-    pub describe_path: String,
-    pub dependencies: Vec<IntegrationDependencyDescriptor>,
-    pub surfaces: Vec<IntegrationSurfaceDescriptor>,
-    pub examples: Value,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct IntegrationDependencyDescriptor {
-    pub service: String,
-    pub purpose: String,
-    pub required_contract: String,
-    pub discovery_path: String,
-    pub mode: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct IntegrationSurfaceDescriptor {
-    pub name: String,
-    pub method: String,
-    pub path: String,
-    pub contract: String,
-    pub stability: String,
-    pub todo: String,
-}
+// Shared `/_cokret/edge/integration/describe` manifest shape: re-exported from
+// the SDK contracts crate (the authoritative definition shared by floria,
+// soland, and coauth) instead of a local copy.
+pub use cokret_sdk::integration_api::{
+    IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
+};
 
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeResolveRequestBody {
@@ -366,24 +339,13 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
     pub cache_state: String,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct AccountDescribeOutcome {
-    pub service_did: String,
-    pub supported_sync_profiles: Vec<String>,
-    pub limits: Value,
-    pub frontier: Value,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ClientSyncRequestBody {
-    pub after: Option<String>,
-    #[serde(default)]
-    pub catchup: Option<bool>,
-    #[serde(default)]
-    pub filter: Option<Value>,
-    #[serde(default)]
-    pub set_presence: Option<String>,
-}
+// client-sync family DTOs come straight from the SDK (`SyncDescription`
+// answers `account/describe`, `SyncRequestBody` carries the subscribe/sync
+// request); both derive ToSchema under the `salvo` feature, so soland keeps
+// no private copies that could drift. NOTE: the explicit `model::` path
+// matters — the SDK root re-exports a different, client-side typed
+// `sync::SyncRequestBody` under the same name.
+pub use cokret_sdk::model::{SyncDescription, SyncRequestBody};
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandHandleClaim {
@@ -550,7 +512,7 @@ pub struct IndexSpaceHierarchyOutcome {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct BackfillOutcome {
+pub struct SolandBackfillOutcome {
     pub events: Vec<Value>,
     pub prev_cursor: Option<String>,
     pub next_cursor: Option<String>,
@@ -564,33 +526,11 @@ pub struct SolandEventsFrontierState {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandSnapshotHeadState {
-    pub snapshot_ref: String,
-    pub state_digest: String,
-    pub manifest: Value,
-    pub chunks: Vec<Value>,
-    pub frontier: Value,
-    pub signature: Value,
-    /// Snapshot v1: root of the binary Merkle tree built over chunk
-    /// digests. Receivers cross-check `chunks[i].digest` reaching this
-    /// root via the per-chunk `audit_path`.
-    pub merkle_root: String,
-    /// Snapshot v1: number of chunks in `chunks[]`. Equivalent to
-    /// `generator_proof.chunk_count` but surfaced explicitly so clients
-    /// don't have to parse the proof to plan fetches.
-    pub chunk_count: u32,
-    /// Snapshot v1: target per-chunk byte budget the chunker used. The
-    /// last chunk MAY be smaller; all others are exactly this size.
-    pub chunk_bytes: u32,
-    /// Snapshot v1: sum of per-chunk byte lengths. Lets receivers size
-    /// download buffers before fetching.
-    pub total_bytes: u64,
-    /// Snapshot v1: signed commitment from the snapshot generator
-    /// binding `(generator_did, realm_id, state_root, merkle_root,
-    /// chunk_count, total_bytes, chunk_bytes)`.
-    pub generator_proof: Value,
-}
+// `SolandSnapshotHeadState` was deleted with the 2026-06-11 spec resolution:
+// `ck.self.snapshot.head` / `ck.peer.snapshot.head` return the full signed
+// `ck.schema.snapshot.v1` manifest (the spec `SnapshotHeadState` DTO was
+// removed and hard-rejected in renames.json). soland answers both operations
+// with `not_implemented` until it can produce a real Snapshot detached proof.
 
 // spec `service-operation-dtos.schema.json#/$defs/AuthzCheckRequestBody`
 // (additionalProperties: false). required: actor_id, action; `resource` is
@@ -674,7 +614,7 @@ pub struct UpsertPushRuleRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ModerationReportRequestBody {
+pub struct SolandModerationReportRequestBody {
     pub realm_id: String,
     pub target_ref: String,
     pub report_reason_code: String,
@@ -851,7 +791,7 @@ pub struct ClaimHandleOutcome {
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct TransferHandleRequestBody {
     /// DID of the recipient. MUST be a registered account; otherwise
-    /// the request fails with `target_did_unknown`.
+    /// the request fails with `principal_unknown`.
     pub target_did: String,
 }
 
@@ -918,18 +858,9 @@ pub struct IdentityDescribeOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityLogOutcome {
-    pub events: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityReceiptsOutcome {
-    pub receipts: Vec<Value>,
-    pub threshold_met: bool,
-}
+// Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
+// authoritative carrier for identity operation shapes); no soland mirrors.
+pub use cokret_sdk::{IdentityLogOutcome, IdentityReceiptsOutcome};
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandIdentityResolveOutcome {
@@ -940,32 +871,26 @@ pub struct SolandIdentityResolveOutcome {
     pub method_evidence: Value,
 }
 
-// spec `keys-operations.schema.json#/$defs/keys_backups_put_outcome`
-// (additionalProperties: false). required: status ∈ {accepted, duplicate},
-// backup_id, ciphertext_digest.
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandKeysBackupsPutOutcome {
-    pub status: String,
-    pub backup_id: String,
-    pub ciphertext_digest: String,
-}
+// Key-backup put/delete outcomes are the SDK server-side DTOs
+// (`cokret_sdk::model` is the authoritative carrier for
+// `keys-operations.schema.json#/$defs/keys_backups_put_outcome` /
+// `keys_backups_delete_outcome`); no soland mirrors. NOTE: the crate-root
+// names `cokret_sdk::KeysBackupsPutOutcome` / `KeysBackupsDeleteOutcome`
+// resolve to the *client-side* twins from `key_backup_client` (same wire
+// shape, no salvo `ToSchema`); the server must use the `model` ones.
+pub use cokret_sdk::model::{KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsPutOutcome};
 
 // spec `keys-operations.schema.json#/$defs/keys_backups_list`
-// (additionalProperties: false). required: backups, has_more; next_cursor optional.
+// (additionalProperties: false). required: backups, has_more; next_cursor
+// optional. Still a local DTO: the SDK's `model::KeysBackupsList` is missing
+// the spec-required `has_more` field, so it cannot carry this response until
+// the SDK type is fixed (cross-repo follow-up).
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandKeysBackupsList {
     pub backups: Vec<Value>,
     pub has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
-}
-
-// spec `keys-operations.schema.json#/$defs/keys_backups_delete_outcome`
-// (additionalProperties: false). required: deleted (const true); backup_id optional.
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandKeysBackupsDeleteOutcome {
-    pub deleted: bool,
-    pub backup_id: String,
 }
 
 // CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent 11 operations.
@@ -1113,9 +1038,11 @@ pub struct SolandAgentSidecarThreadEnsureOutcome {
 }
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
-// token exchange wire shapes. Mirrors `CallMediaTokenExchangeOutcome` /
-// `CallMediaParticipantBinding` in `cokret_sdk`; soland mints the
-// soland-side ToSchema-friendly copies so salvo-oapi can pick them up.
+// token exchange wire shapes. Response types come straight from the SDK
+// (`CallMediaTokenExchangeOutcome` / `CallMediaParticipantBinding` derive
+// ToSchema under the `salvo` feature), so soland no longer mints private
+// mirrors that can drift from the spec DTOs.
+pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandCallMediaTokenExchangeRequestBody {
@@ -1127,38 +1054,6 @@ pub struct SolandCallMediaTokenExchangeRequestBody {
     /// `ck.call.state.session_focus`; otherwise the handler rejects with
     /// `focus_mismatch`.
     pub focus_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandCallMediaParticipantBinding {
-    /// `ck.media.participant_binding.v1`.
-    pub scheme: String,
-    /// Detached signature over the canonical binding body.
-    pub sig: String,
-    /// Key identifier of the signing media-service key. Receivers MUST
-    /// verify this resolves to the current
-    /// `ck.realm.media_service.service_id` epoch (MEDIA-1).
-    pub issuer_kid: String,
-    pub realm_id: String,
-    pub call_id: String,
-    pub focus_id: String,
-    pub actor_id: String,
-    pub device_id: String,
-    pub participant_identity: String,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandCallMediaTokenExchangeOutcome {
-    pub backend_token: String,
-    pub participant_identity: String,
-    pub participant_binding: SolandCallMediaParticipantBinding,
-    pub expires_at: DateTime<Utc>,
-    pub service_signature: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connect_url: Option<String>,
-    #[serde(default)]
-    pub todos: Vec<String>,
 }
 
 // ── B-C (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — recovery
@@ -1300,11 +1195,20 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "ck.self.blob.get",
     "ck.self.keys.backups.put",
     "ck.self.keys.backups.list",
-    "ck.self.keys.backups.get",
+    "ck.self.keys.backups.unlock",
     "ck.self.keys.backups.delete",
     "ck.peer.invites.submit",
     "ck.open.invite_locator.resolve",
 ];
+
+/// Spec operations soland deliberately does NOT declare even though their
+/// surface group is otherwise supported. `ck.self.snapshot.head` must return
+/// a real signed `ck.schema.snapshot.v1` manifest; deployments that cannot
+/// produce a Snapshot detached proof MUST NOT declare the operation and MUST
+/// answer `not_implemented` (service-surface.md §5.2,
+/// service-http-binding.md §6.1). The handler in
+/// `routing::events::sync::snapshot_head` fails closed accordingly.
+const UNDECLARED_OPERATION_IDS: &[&str] = &["ck.self.snapshot.head"];
 
 fn canonical_supported_operations() -> Vec<String> {
     let missing = artifacts::missing_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS);
@@ -1318,6 +1222,7 @@ fn canonical_supported_operations() -> Vec<String> {
             supported.push(operation_id);
         }
     }
+    supported.retain(|operation_id| !UNDECLARED_OPERATION_IDS.contains(&operation_id.as_str()));
     debug_assert!(
         supported
             .iter()
@@ -1407,6 +1312,32 @@ fn profile_limitations() -> Vec<Value> {
             "area": "blob.presign",
             "status": "local_direct_serve",
             "reason": "presign issues a short-lived soland-signed local /blob/get URL; backend-native object-store presign is not claimed"
+        }),
+        json!({
+            "area": "snapshot.head",
+            "status": "not_implemented_fail_closed",
+            "reason": "no real ck.schema.snapshot.v1 detached-proof signing path exists; ck.self.snapshot.head / ck.peer.snapshot.head are undeclared and return not_implemented (dev snapshot chunks stay on the /_soland product face)"
+        }),
+        json!({
+            "area": "account_auth.device_pair",
+            "status": "product_two_step_flow",
+            "spec_operation": "ck.gate.account.device_pair",
+            "product_paths": [
+                "/_soland/self/devices/pairing-challenge",
+                "/_soland/self/devices/authorize-pairing"
+            ],
+            "reason": "device pairing is implemented as soland's two-step challenge/authorize product flow instead of the spec single-operation POST /_cokret/gate/account/device-pair binding; the two-step flow covers the same capability (existing-device-authorized sibling registration) but is not wire-compatible with the spec binding. ck.gate.account.oidc_callback is delegated to the bridges deployment and not served here."
+        }),
+        json!({
+            "area": "federation.private_inbound_rail",
+            "status": "deployment_local_only",
+            "canonical_inbound": "/_cokret/peer/events",
+            "private_paths": [
+                "/_soland/peer/federation/*",
+                "/_soland/peer/moves",
+                "/_soland/peer/anchors"
+            ],
+            "reason": "the /_soland/peer/* inbound federation surface (transactions, operations push/pull/backfill/frontier, moves/anchors direct ingest, realm-members, verify-actor) is a deployment-local test/ops rail only; it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop — the protocol S2S entry point is the /_cokret/peer/* surface group"
         }),
     ]
 }
@@ -1544,52 +1475,52 @@ pub fn describe(
         rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
-            "ck.feature.soland.account.register".to_owned(),
-            "ck.feature.soland.account.me".to_owned(),
-            "ck.feature.soland.auth.logout".to_owned(),
-            "ck.feature.soland.contacts.request".to_owned(),
-            "ck.feature.soland.contacts.respond".to_owned(),
-            "ck.feature.soland.space.lifecycle".to_owned(),
-            "ck.feature.soland.schema.registry".to_owned(),
-            "ck.feature.soland.events.describe".to_owned(),
-            "ck.feature.soland.events.submit".to_owned(),
-            "ck.feature.soland.events.read".to_owned(),
-            "ck.feature.soland.federation.transaction".to_owned(),
-            "ck.feature.soland.federation.operations".to_owned(),
-            "ck.feature.soland.sync.client_sync".to_owned(),
-            "ck.feature.soland.sync.bound_cursor".to_owned(),
-            "ck.feature.soland.sync.incremental_since".to_owned(),
-            "ck.feature.soland.sync.typing".to_owned(),
-            "ck.feature.soland.sync.backfill".to_owned(),
-            "ck.feature.soland.directory.search_realms".to_owned(),
-            "ck.feature.soland.directory.resolve_realm".to_owned(),
-            "ck.feature.soland.index.query".to_owned(),
-            "ck.feature.soland.authz.check".to_owned(),
-            "ck.feature.soland.profile.presence".to_owned(),
-            "ck.feature.soland.push.register_device".to_owned(),
-            "ck.feature.soland.push.rules".to_owned(),
-            "ck.feature.soland.webrtc.signaling".to_owned(),
-            "ck.feature.soland.blob.upload".to_owned(),
+            "org.cokret.soland.feature.account.register".to_owned(),
+            "org.cokret.soland.feature.account.me".to_owned(),
+            "org.cokret.soland.feature.auth.logout".to_owned(),
+            "org.cokret.soland.feature.contacts.request".to_owned(),
+            "org.cokret.soland.feature.contacts.respond".to_owned(),
+            "org.cokret.soland.feature.space.lifecycle".to_owned(),
+            "org.cokret.soland.feature.schema.registry".to_owned(),
+            "org.cokret.soland.feature.events.describe".to_owned(),
+            "org.cokret.soland.feature.events.submit".to_owned(),
+            "org.cokret.soland.feature.events.read".to_owned(),
+            "org.cokret.soland.feature.federation.transaction".to_owned(),
+            "org.cokret.soland.feature.federation.operations".to_owned(),
+            "org.cokret.soland.feature.sync.client_sync".to_owned(),
+            "org.cokret.soland.feature.sync.bound_cursor".to_owned(),
+            "org.cokret.soland.feature.sync.incremental_since".to_owned(),
+            "org.cokret.soland.feature.sync.typing".to_owned(),
+            "org.cokret.soland.feature.sync.backfill".to_owned(),
+            "org.cokret.soland.feature.directory.search_realms".to_owned(),
+            "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
+            "org.cokret.soland.feature.index.query".to_owned(),
+            "org.cokret.soland.feature.authz.check".to_owned(),
+            "org.cokret.soland.feature.profile.presence".to_owned(),
+            "org.cokret.soland.feature.push.register_device".to_owned(),
+            "org.cokret.soland.feature.push.rules".to_owned(),
+            "org.cokret.soland.feature.webrtc.signaling".to_owned(),
+            "org.cokret.soland.feature.blob.upload".to_owned(),
             // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
             // feature id for the resumable (tus) upload companion binding
             // of ck.self.blob.upload. Pairs with the `kind="tus"` entry in
             // supported_bindings below.
             "ck.feature.blob.resumable_upload.tus.v1".to_owned(),
-            "ck.feature.soland.blob.authenticated_download".to_owned(),
-            "ck.feature.soland.file_transfer".to_owned(),
-            "ck.feature.soland.blob.presigned_download.local_direct_serve".to_owned(),
-            "ck.feature.soland.blob.upload_policy".to_owned(),
-            "ck.feature.soland.federation.transaction_idempotency".to_owned(),
-            "ck.feature.soland.policy.documents".to_owned(),
-            "ck.feature.soland.moderation.report".to_owned(),
-            "ck.feature.soland.mimi.provider_facade".to_owned(),
-            "ck.feature.soland.mimi.discovery".to_owned(),
-            "ck.feature.soland.mimi.key_material_receipt".to_owned(),
-            "ck.feature.soland.mimi.room_projection".to_owned(),
-            "ck.feature.soland.mimi.identifier_privacy".to_owned(),
-            "ck.feature.soland.mimi.proxy_download_policy".to_owned(),
-            "ck.feature.soland.registry.artifacts".to_owned(),
-            "ck.feature.soland.plaintext_visible_services".to_owned(),
+            "org.cokret.soland.feature.blob.authenticated_download".to_owned(),
+            "org.cokret.soland.feature.file_transfer".to_owned(),
+            "org.cokret.soland.feature.blob.presigned_download.local_direct_serve".to_owned(),
+            "org.cokret.soland.feature.blob.upload_policy".to_owned(),
+            "org.cokret.soland.feature.federation.transaction_idempotency".to_owned(),
+            "org.cokret.soland.feature.policy.documents".to_owned(),
+            "org.cokret.soland.feature.moderation.report".to_owned(),
+            "org.cokret.soland.feature.mimi.provider_facade".to_owned(),
+            "org.cokret.soland.feature.mimi.discovery".to_owned(),
+            "org.cokret.soland.feature.mimi.key_material_receipt".to_owned(),
+            "org.cokret.soland.feature.mimi.room_projection".to_owned(),
+            "org.cokret.soland.feature.mimi.identifier_privacy".to_owned(),
+            "org.cokret.soland.feature.mimi.proxy_download_policy".to_owned(),
+            "org.cokret.soland.feature.registry.artifacts".to_owned(),
+            "org.cokret.soland.feature.plaintext_visible_services".to_owned(),
         ],
         supported_operations,
         // service-surface.md §3 documents `base_url` (typed `format: uri` in

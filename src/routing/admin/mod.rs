@@ -19,7 +19,7 @@ use super::{
     AuthArgs, accept_local_operations, demo_actors, device_inventory_to_json,
     discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
     flow_projection_for_realm, now, policy_document_to_response, projection_event_from_operation,
-    realm_has_member, sha256_hex,
+    realm_has_member,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AppState, SessionRecord};

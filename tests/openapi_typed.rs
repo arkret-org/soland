@@ -249,7 +249,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // All wire types already carry `ToSchema`; the conversions attach
     // operation_id + typed request/response/path/query schemas.
     for typed_now in [
-        "ModerationReportRequestBody",
+        "SolandModerationReportRequestBody",
         "SolandModerationReportOutcome",
         "PushUnregisterRequestBody",
         "PushNotifyRequestBody",
@@ -316,15 +316,19 @@ async fn typed_describe_handlers_publish_response_schemas() {
     }
 
     // Round 15m — identity/key_backup.rs + identity/profile.rs typed batch.
-    // - identity/key_backup.rs::{put_key_backup, list_key_backups, get_key_backup,
+    // - identity/key_backup.rs::{put_key_backup, list_key_backups, unlock_key_backup,
     //   delete_key_backup}
     // - identity/profile.rs::profile_presence
     // Note: profile_presence's response wrapper `ProfilePresenceOutcome`
     // is newly added in profile.rs (no upstream wire type existed).
     for typed_now in [
-        "SolandKeysBackupsPutOutcome",
+        // Key-backup put/delete outcomes were re-pointed at the SDK
+        // server-side DTOs (`cokret_sdk::model::KeysBackups*Outcome`);
+        // the list outcome stays a soland DTO until the SDK type grows
+        // the spec-required `has_more` field.
+        "KeysBackupsPutOutcome",
         "SolandKeysBackupsList",
-        "SolandKeysBackupsDeleteOutcome",
+        "KeysBackupsDeleteOutcome",
         "ProfilePresenceOutcome",
     ] {
         assert!(
@@ -335,7 +339,7 @@ async fn typed_describe_handlers_publish_response_schemas() {
     for operation_id in [
         "ck.self.keys.backups.put",
         "ck.self.keys.backups.list",
-        "ck.self.keys.backups.get",
+        "ck.self.keys.backups.unlock",
         "ck.self.keys.backups.delete",
         "ck.profile.presence",
     ] {

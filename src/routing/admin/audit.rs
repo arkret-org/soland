@@ -11,7 +11,7 @@ use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
-use super::{now, realm_has_member, sha256_hex};
+use super::{now, realm_has_member};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
@@ -306,7 +306,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    format!("sha256:{}", sha256_hex(&bytes))
+    cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
 pub async fn append_audit_log(

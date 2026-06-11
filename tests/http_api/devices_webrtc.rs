@@ -503,7 +503,12 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         token_response["connect_url"],
         "wss://media.example/mediasoup"
     );
-    assert!(token_response["todos"].as_array().unwrap().is_empty());
+    // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + type
+    // identify the chosen focus and its backend protocol; `todos` is not a
+    // schema field and must not appear.
+    assert_eq!(token_response["focus_id"], "ck:focus:mediasoup:blue");
+    assert_eq!(token_response["type"], "mediasoup");
+    assert!(token_response.get("todos").is_none());
     assert_eq!(
         token_response["participant_binding"]["issuer_kid"],
         "did:web:media.example#mediasoup-2026-05"

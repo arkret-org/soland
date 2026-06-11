@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
@@ -12,16 +12,57 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
-use crate::authz::AuthzEngine;
+use crate::authz::SolandAuthzEngine;
 use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
-use crate::persistence::{MemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
+use crate::persistence::{SolandMemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
 use crate::reducer::ProjectionState;
 use crate::verified_profiles::VerifiedProfileDescriptor;
 
 const MAX_SUBSCRIBE_RECONNECT_WINDOW_MS: u64 = 86_400_000;
+
+/// Poison-free mutex for every [`AppState`] shared surface.
+///
+/// `std::sync::Mutex` poisons itself when the holding thread panics: every
+/// later `lock()` returns `Err` forever, which turned a single in-critical-
+/// section panic into either a process-wide 500 storm (`.expect("...lock")`
+/// paths) or a silent fail-open (`.lock().ok()` admission paths) until
+/// restart. This wrapper recovers the inner data via
+/// [`std::sync::PoisonError::into_inner`], so `lock()` never fails.
+///
+/// The `LockResult` return shape is kept identical to `std::sync::Mutex` so
+/// existing call sites (`.expect(...)`, `if let Ok(...)`, `.map(...)`)
+/// compile unchanged — their `Err` arms are now structurally unreachable,
+/// i.e. admission checks guarded by `if let Ok(guard)` always run
+/// (fail-closed instead of fail-open).
+#[derive(Debug)]
+pub struct Mutex<T: ?Sized>(std::sync::Mutex<T>);
+
+impl<T: Default> Default for Mutex<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+impl<T> Mutex<T> {
+    pub const fn new(value: T) -> Self {
+        Self(std::sync::Mutex::new(value))
+    }
+}
+
+impl<T: ?Sized> Mutex<T> {
+    /// Acquire the lock. Always returns `Ok`: a poisoned inner mutex is
+    /// recovered instead of propagating the poison flag. Callers may keep
+    /// using `.expect("...lock")` — it can no longer panic.
+    pub fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, T>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
 
 // `did_resolver_chain.rs` lives at `src/did_resolver_chain.rs`; declare it as
 // a submodule of `state` so `AppState::new` can construct the resolver chain
@@ -840,7 +881,7 @@ pub struct AppState {
     pub object_storage: Arc<dyn ObjectStorage>,
     pub hlc: ServerHlc,
     pub projection: Arc<Mutex<ProjectionState>>,
-    pub authz: AuthzEngine,
+    pub authz: SolandAuthzEngine,
     pub realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
     /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
@@ -864,7 +905,7 @@ pub struct AppState {
     pub account_lifecycle: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
     /// Erased actors — DID set. Once an actor `erase`s itself, every
     /// subsequent authenticated request from that bearer returns 401
-    /// `account_erased` (and directory hits skip the row). Same in-memory
+    /// `unauthenticated` (account erased; and directory hits skip the row). Same in-memory
     /// trade-off as `handle_releases`: persistent ledger lands with the
     /// account-state projection.
     pub erased_actors: Arc<Mutex<BTreeSet<String>>>,
@@ -882,7 +923,7 @@ pub struct AppState {
     pub psi_probe_tracker: Arc<Mutex<BTreeMap<(String, String), PsiProbeRecord>>>,
     /// Spec `identity/key-management.md` §7.8 — per-principal rolling-24h
     /// counter of full-ciphertext key-backup downloads; backs the
-    /// anti-bulk-dump quota in `identity::key_backup::get_key_backup`.
+    /// anti-bulk-dump quota in `identity::key_backup::unlock_key_backup`.
     /// In-memory like the other limiters; a restart resets the window.
     pub key_backup_download_tracker: Arc<Mutex<BTreeMap<String, KeyBackupDownloadRecord>>>,
     /// Per-actor notifications read marker. `mark_all_read(actor)` writes
@@ -899,9 +940,12 @@ pub struct AppState {
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
-    /// cursor's maximum TTL has elapsed (`CursorRevocation::expires_at`). In-memory
-    /// today; a durable revocation ledger can replace the backing vector without
-    /// changing the wire contract.
+    /// cursor's maximum TTL has elapsed (`CursorRevocation::expires_at`).
+    /// This vector is a read cache over the durable
+    /// `persistence.sync_cursors()` revocation ledger
+    /// (`sync_cursor_revocations` table): the revoke endpoint writes the
+    /// ledger first (fail-closed) and [`AppState::hydrate`] reloads active
+    /// rows at boot, so a restart cannot resurrect a revoked cursor.
     pub sync_cursor_revocations: Arc<Mutex<Vec<CursorRevocation>>>,
     /// Monotonic position allocator for to-device queues. Cursor ack uses
     /// numeric `position <= ack_position` pruning, so positions must advance
@@ -1186,7 +1230,7 @@ pub struct FailedLoginRecord {
     /// the counter rather than locking the actor.
     pub last_failure_at: chrono::DateTime<chrono::Utc>,
     /// `Some(until)` if the actor is currently locked out — auth
-    /// handlers return `account_locked` until `Utc::now() >= until`.
+    /// handlers return 403 `policy_denied` (lockout) until `Utc::now() >= until`.
     pub locked_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -1913,7 +1957,7 @@ impl AppState {
             .map(|pool| {
                 Arc::new(PgPersistenceStore::new(pool.clone())) as Arc<dyn PersistenceStore>
             })
-            .unwrap_or_else(|| Arc::new(MemoryPersistenceStore::new()));
+            .unwrap_or_else(|| Arc::new(SolandMemoryPersistenceStore::new()));
         Self::new_with_persistence(config, db, persistence)
     }
 
@@ -2114,7 +2158,7 @@ impl AppState {
             config,
             hlc: ServerHlc::new(&service_did),
             projection: Arc::new(Mutex::new(hydrated)),
-            authz: AuthzEngine::new(),
+            authz: SolandAuthzEngine::new(),
             db,
             persistence,
             object_storage,
@@ -2286,6 +2330,25 @@ impl AppState {
                 .expect("direct_conversation_bindings lock");
             for (participants_key, record) in bindings {
                 map.entry(participants_key).or_insert(record);
+            }
+        }
+
+        // Hydrate the cursor-revocation cache from the durable
+        // `sync_cursor_revocations` ledger so a revoked cursor stays revoked
+        // across restarts (spec `client-sync.md` cursor-revoke semantics —
+        // a revoked cursor MUST keep returning `cursor_revoked` and MUST NOT
+        // advance to-device ack / resume / wait-for / dropped-recovery
+        // state). Built off-lock first; merge under a short critical section.
+        match self.persistence.sync_cursors().active_revocations(now).await {
+            Ok(revocations) => {
+                let mut cache = self
+                    .sync_cursor_revocations
+                    .lock()
+                    .expect("sync cursor revocations lock");
+                cache.extend(revocations);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
             }
         }
     }

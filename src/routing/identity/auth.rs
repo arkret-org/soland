@@ -5,6 +5,7 @@
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
 //!   `/oauth/introspect`
 //! - `POST /_cokret/gate/account/session-grants` — legacy coauth session-grant bridge
+//! - `POST /_cokret/gate/account/session-grants/revoke` — spec `ck.gate.account.session_revoke`
 //! - `POST /_soland/gate/auth/logout` — revoke the bearer + the bound device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
@@ -18,6 +19,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
+use cokret_sdk::{SessionRevokeOutcome, SessionRevokeRequestBody};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -45,8 +47,13 @@ pub(super) fn router() -> Router {
 }
 
 pub(super) fn protocol_account_router() -> Router {
-    Router::with_path("account")
-        .push(Router::with_path("session-grants").post(exchange_session_grant))
+    Router::with_path("account").push(
+        Router::with_path("session-grants")
+            .post(exchange_session_grant)
+            // Spec `account_auth` surface group: `ck.gate.account.session_revoke`
+            // binds to `POST /_cokret/gate/account/session-grants/revoke`.
+            .push(Router::with_path("revoke").post(session_revoke)),
+    )
 }
 
 pub(super) fn legacy_router() -> Router {
@@ -58,32 +65,47 @@ pub(super) fn legacy_router() -> Router {
 }
 
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
-    account_new_session_tuple(state, actor).map(|(status, code, message)| {
+    account_new_session_tuple(state, actor).map(|(status, code, reason_detail, message)| {
         AppError::capability_denied(message)
             .with_status(status)
             .with_wire_code(code)
+            .with_reason_detail(reason_detail)
     })
 }
 
+/// Lifecycle gate for new session issuance. Wire codes come from the spec
+/// error-code-registry: `locked` / `suspended` deny by account policy →
+/// `policy_denied` (403); `deactivated` / `erased` hit the
+/// account-lifecycle.md §7.1 write barrier → `failed_precondition` with
+/// reason `principal_deactivated`. The pre-rename lifecycle word is kept in
+/// `error.details.reason_detail` for operators.
 fn account_new_session_tuple(
     state: &AppState,
     actor: &str,
-) -> Option<(StatusCode, &'static str, &'static str)> {
+) -> Option<(StatusCode, &'static str, &'static str, &'static str)> {
     match state.account_lifecycle_state(actor).as_str() {
-        "locked" => Some((StatusCode::FORBIDDEN, "account_locked", "account is locked")),
+        "locked" => Some((
+            StatusCode::FORBIDDEN,
+            "policy_denied",
+            "account_status=locked",
+            "account is locked",
+        )),
         "suspended" => Some((
             StatusCode::FORBIDDEN,
-            "account_suspended",
+            "policy_denied",
+            "account_status=suspended",
             "account is suspended",
         )),
         "deactivated" => Some((
-            StatusCode::FORBIDDEN,
-            "account_deactivated",
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "principal_deactivated (account_status=deactivated)",
             "account has been deactivated",
         )),
         "erased" => Some((
-            StatusCode::FORBIDDEN,
-            "account_erased",
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            "principal_deactivated (account_status=erased)",
             "account has been erased",
         )),
         _ => None,
@@ -92,8 +114,9 @@ fn account_new_session_tuple(
 
 /// Spec: A.3 — auth handlers consult the in-memory failed-login counter
 /// before doing any other work. The lockout response is 403
-/// `account_locked` with a wire body that doesn't reveal which credential
-/// failed, only that the actor is currently locked.
+/// `policy_denied` (registry code; lifecycle detail travels in
+/// `error.details.reason_detail`) with a wire body that doesn't reveal
+/// which credential failed, only that the actor is currently locked.
 fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
     let until = state.account_lockout_active_until(actor)?;
     let until_wire = until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -103,7 +126,8 @@ fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
              retry after {until_wire}"
         ))
         .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("account_locked"),
+        .with_wire_code("policy_denied")
+        .with_reason_detail("account_status=locked (failed-login lockout)"),
     )
 }
 
@@ -146,22 +170,22 @@ fn account_existing_session_error(
     // "authenticated, policy denies". A session-bearing request whose
     // backing account is `locked` / `deactivated` carries a valid
     // bearer (so the request IS authenticated); the lifecycle gate is
-    // a policy denial and MUST surface as 403.
+    // a policy denial and MUST surface as 403 with the registry code
+    // `policy_denied`.
     //
     // `erased` is the exception kept at 401: erasure invalidates the
-    // bearer itself, so the spec calls for a re-auth signal rather
-    // than a policy-denial signal (matches identity/account-lifecycle.md
-    // §3 "subsequent authenticated requests return 401 `account_erased`").
+    // bearer itself, so re-auth is the right signal — registry code
+    // `unauthenticated` ("authentication material is missing or invalid").
     match state.account_lifecycle_state(actor).as_str() {
-        "locked" => Some((StatusCode::FORBIDDEN, "account_locked", "account is locked")),
+        "locked" => Some((StatusCode::FORBIDDEN, "policy_denied", "account is locked")),
         "deactivated" => Some((
             StatusCode::FORBIDDEN,
-            "account_deactivated",
+            "policy_denied",
             "account has been deactivated",
         )),
         "erased" => Some((
             StatusCode::UNAUTHORIZED,
-            "account_erased",
+            "unauthenticated",
             "account has been erased",
         )),
         _ => None,
@@ -191,7 +215,7 @@ async fn dev_login(
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.actor)?;
     // Spec: A.3 — auth handlers consult the in-memory failed-login
     // counter before doing anything else. An actor that crossed the
-    // threshold gets a 403 `account_locked` until the lockout window
+    // threshold gets a 403 `policy_denied` (lockout) until the lockout window
     // expires, without revealing whether the credential would otherwise
     // have been valid.
     if let Some(error) = account_lockout_error(state, &body.actor) {
@@ -298,11 +322,11 @@ async fn dev_login(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.auth.exchange_session_grant",
+    operation_id = "ck.gate.account.issue_session_grant",
     tags("auth"),
-    summary = "Exchange a coauth session-grant for a principal-server bearer session"
+    summary = "Issue a principal bearer session from a coauth session-grant proof"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.exchange_session_grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.issue_session_grant"))]
 async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequestBody>,
@@ -647,6 +671,141 @@ async fn logout(
     json_ok(LogoutOutcome { ok: true, revoked })
 }
 
+/// `POST /_cokret/gate/account/session-grants/revoke` — spec
+/// `ck.gate.account.session_revoke` (surface group `account_auth`).
+///
+/// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
+/// calling session); `target_grant_id` / `target_device_id` /
+/// `all_sessions=true` are mutually exclusive selectors and the target MUST
+/// belong to the calling principal. Revokes session grants / bearer
+/// sessions only — device authorization is NOT touched and no
+/// `ck.account.status` write happens implicitly. Cross-session selectors
+/// require a fresh lifecycle proof; cryptographic verification of that
+/// proof is future work (cf. the device-pairing scaffolds), presence is
+/// enforced here.
+#[endpoint(
+    operation_id = "ck.gate.account.session_revoke",
+    tags("auth"),
+    summary = "Revoke session grants / bearer sessions for the calling principal",
+    status_codes(200, 400, 401, 403, 404, 422, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.session_revoke"))]
+async fn session_revoke(
+    aa: super::AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<SessionRevokeOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    // The empty-body form is valid, so parse by hand instead of `JsonBody`
+    // (which answers a missing body with a 400 before the handler runs).
+    let body: SessionRevokeRequestBody = match req.payload().await {
+        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes).map_err(|error| {
+            AppError::bad_json(format!("invalid session-revoke body: {error}"))
+        })?,
+        _ => SessionRevokeRequestBody {
+            target_grant_id: None,
+            target_device_id: None,
+            all_sessions: None,
+            proof: None,
+        },
+    };
+    if body.all_sessions == Some(false) {
+        // Schema pins `all_sessions` to `const true`; `false` is a shape error.
+        return Err(AppError::invalid_param("all_sessions must be true when present"));
+    }
+    let selector_count = usize::from(body.target_grant_id.is_some())
+        + usize::from(body.target_device_id.is_some())
+        + usize::from(body.all_sessions == Some(true));
+    if selector_count > 1 {
+        return Err(AppError::new(
+            ErrorCode::SessionRevokeSelectorConflict,
+            "target_grant_id, target_device_id and all_sessions are mutually exclusive",
+        ));
+    }
+    if selector_count == 1 && body.proof.is_none() {
+        // Spec: revoking anything beyond the calling session needs a fresh
+        // DID/device proof or an explicit capability.
+        return Err(AppError::capability_denied(
+            "cross-session revoke requires a lifecycle proof",
+        ));
+    }
+    let revoked_at = now();
+    let revoked_count: usize = if body.all_sessions == Some(true) {
+        revoke_sessions_for_actor(state, &session.actor)
+            .await
+            .map_err(AppError::internal)?
+    } else if let Some(target_device_id) = body.target_device_id.as_ref() {
+        // Sessions are filtered by the calling actor, so a device owned by
+        // another principal can never be revoked through this path.
+        let sessions = state
+            .persistence
+            .sessions()
+            .snapshot_all()
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let mut count = 0usize;
+        for mut record in sessions.into_iter().filter(|record| {
+            record.actor == session.actor
+                && record.device_id == target_device_id.as_str()
+                && record.revoked_at.is_none()
+        }) {
+            record.revoked_at = Some(revoked_at);
+            state
+                .persistence
+                .sessions()
+                .put(&record)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            count += 1;
+        }
+        count
+    } else if body.target_grant_id.is_some() {
+        // Session grants are issued by coauth; soland only ever sees the
+        // grant JWT during the exchange and keeps no grant_id -> session
+        // mapping, so a grant-addressed revoke cannot resolve here.
+        return Err(AppError::not_found("unknown session grant"));
+    } else {
+        // No selector: revoke the calling session only. Unlike `logout`,
+        // device authorization stays untouched per the spec contract.
+        match state
+            .persistence
+            .sessions()
+            .get(&session.token_hash)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            Some(mut record) if record.revoked_at.is_none() => {
+                record.revoked_at = Some(revoked_at);
+                state
+                    .persistence
+                    .sessions()
+                    .put(&record)
+                    .await
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+                1
+            }
+            _ => 0,
+        }
+    };
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "auth.session_revoke",
+        json!({
+            "all_sessions": body.all_sessions == Some(true),
+            "target_device_id": body.target_device_id.as_ref().map(|device| device.as_str().to_owned()),
+            "revoked_count": revoked_count,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(SessionRevokeOutcome {
+        revoked_count: revoked_count as u64,
+        revoked_grant_ids: Vec::new(),
+    })
+}
+
 // ── Session validation pipeline ─────────────────────────────────────────────
 
 /// Standard "extract authenticated session or render 401" wrapper used by
@@ -797,8 +956,10 @@ async fn authenticated_oauth_session(
     )?;
     let oauth = parse_oauth_introspection(&value, token)?;
     ensure_oauth_account(state, &oauth).await?;
-    if let Some(error) = account_new_session_tuple(state, &oauth.actor) {
-        return Err(error);
+    if let Some((status, code, _reason_detail, message)) =
+        account_new_session_tuple(state, &oauth.actor)
+    {
+        return Err((status, code, message));
     }
     ensure_oauth_device(state, &oauth).await?;
 

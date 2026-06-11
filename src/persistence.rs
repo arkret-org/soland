@@ -101,19 +101,19 @@ pub const WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS: i64 = 24 * 60 * 60;
 /// `verify_did_document_freshness` 的判定结果。语义对齐
 /// [`DriftResult`]:高风险路径将除 `Fresh` 外的一切视为 fail-closed。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Freshness {
+pub enum WebvhFreshness {
     /// 记录年龄在 `max_age` 内,可放行。
     Fresh,
     /// 记录年龄已超过 `max_age`,高风险须拒绝。
     Stale,
 }
 
-impl Freshness {
+impl WebvhFreshness {
     /// 稳定字符串标签,用于审计 `outcome` 字段与拒绝响应。
     pub fn as_str(self) -> &'static str {
         match self {
-            Freshness::Fresh => "fresh",
-            Freshness::Stale => "stale",
+            WebvhFreshness::Fresh => "fresh",
+            WebvhFreshness::Stale => "stale",
         }
     }
 }
@@ -123,7 +123,7 @@ impl Freshness {
 /// 纯函数,fail-closed 语义集中在一处。
 ///
 /// 判定以 `age = now - record.fetched_at` 与 `max_age` 比较为准:
-/// `age > max_age` → [`Freshness::Stale`],否则 [`Freshness::Fresh`]。
+/// `age > max_age` → [`WebvhFreshness::Stale`],否则 [`WebvhFreshness::Fresh`]。
 ///
 /// 不直接看 `record.expires_at`:`expires_at` 是写入时固化的高风险过期提示
 /// (= fetched_at + 15min,仅用于存储与清理索引,见 §3.4 "缓存 MUST 绑定
@@ -136,12 +136,12 @@ pub fn verify_did_document_freshness(
     record: &WebvhDocumentRecord,
     now: chrono::DateTime<Utc>,
     max_age: chrono::Duration,
-) -> Freshness {
+) -> WebvhFreshness {
     let age = now.signed_duration_since(record.fetched_at);
     if age > max_age {
-        Freshness::Stale
+        WebvhFreshness::Stale
     } else {
-        Freshness::Fresh
+        WebvhFreshness::Fresh
     }
 }
 
@@ -213,7 +213,7 @@ pub trait PersistenceStore: Send + Sync {
 }
 
 /// In-memory implementation of persistence store.
-pub struct MemoryPersistenceStore {
+pub struct SolandMemoryPersistenceStore {
     accounts: MemoryAccountStore,
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
@@ -262,7 +262,7 @@ pub struct MemoryPersistenceStore {
     sync_cursors: MemorySyncCursorStore,
 }
 
-impl MemoryPersistenceStore {
+impl SolandMemoryPersistenceStore {
     pub fn new() -> Self {
         Self {
             accounts: MemoryAccountStore::new(),
@@ -315,13 +315,13 @@ impl MemoryPersistenceStore {
     }
 }
 
-impl Default for MemoryPersistenceStore {
+impl Default for SolandMemoryPersistenceStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PersistenceStore for MemoryPersistenceStore {
+impl PersistenceStore for SolandMemoryPersistenceStore {
     fn accounts(&self) -> &dyn AccountStore {
         &self.accounts
     }
@@ -547,7 +547,7 @@ pub struct PgPersistenceStore {
     agents: PgAgentStore,
     notifications: PgNotificationStore,
     sync_cursors: PgSyncCursorStore,
-    fallback: MemoryPersistenceStore,
+    fallback: SolandMemoryPersistenceStore,
 }
 
 impl PgPersistenceStore {
@@ -591,7 +591,7 @@ impl PgPersistenceStore {
             agents: PgAgentStore { pool: pool.clone() },
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
             notifications: PgNotificationStore { pool },
-            fallback: MemoryPersistenceStore::new(),
+            fallback: SolandMemoryPersistenceStore::new(),
         }
     }
 }
@@ -1645,7 +1645,7 @@ mod tests {
         );
         let result =
             verify_did_document_freshness(&record, now, chrono::Duration::seconds(15 * 60));
-        assert_eq!(result, Freshness::Fresh);
+        assert_eq!(result, WebvhFreshness::Fresh);
     }
 
     #[test]
@@ -1658,7 +1658,7 @@ mod tests {
         );
         let result =
             verify_did_document_freshness(&record, now, chrono::Duration::seconds(15 * 60));
-        assert_eq!(result, Freshness::Stale);
+        assert_eq!(result, WebvhFreshness::Stale);
     }
 
     #[test]
@@ -1674,7 +1674,7 @@ mod tests {
         let degraded = chrono::Duration::seconds(WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS);
         assert_eq!(
             verify_did_document_freshness(&record, now, degraded),
-            Freshness::Fresh
+            WebvhFreshness::Fresh
         );
         // 但同一记录在高风险 15min 阈值下判 Stale。
         assert_eq!(
@@ -1683,7 +1683,7 @@ mod tests {
                 now,
                 chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS)
             ),
-            Freshness::Stale
+            WebvhFreshness::Stale
         );
     }
 
@@ -1710,7 +1710,7 @@ mod tests {
                 Utc::now(),
                 chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS)
             ),
-            Freshness::Fresh
+            WebvhFreshness::Fresh
         );
     }
 

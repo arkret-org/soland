@@ -140,7 +140,7 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
     use crate::error::ErrorCode;
     match wire {
         "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
-        "invalid_header" | "invalid_param" | "missing_param" => ErrorCode::InvalidParam,
+        "invalid_param" | "missing_param" => ErrorCode::InvalidParam,
         "session_expired" => ErrorCode::CursorExpired,
         _ => ErrorCode::InternalError,
     }
@@ -446,14 +446,14 @@ async fn push_register_session_grant_bridge(
     let grant = grant.to_str().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            "invalid_header",
+            "invalid_param",
             "X-Cokret-Session-Grant must be ASCII",
         )
     })?;
     if grant.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "invalid_header",
+            "invalid_param",
             "X-Cokret-Session-Grant must not be empty",
         ));
     }
@@ -495,7 +495,7 @@ async fn push_register_session_grant_bridge(
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "invalid_header",
+                "invalid_param",
                 "session grant challenge and proof headers must be supplied together",
             ));
         }
@@ -543,7 +543,7 @@ fn optional_ascii_header<'a>(
         .map(|value| {
             value
                 .to_str()
-                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_header", display_name))
+                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_param", display_name))
         })
         .transpose()
 }
