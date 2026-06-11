@@ -9,17 +9,96 @@ use cokret_sdk::lattice::CellState;
 use super::common::*;
 
 #[tokio::test]
+async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let sibling = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+
+    let unauthenticated = TestClient::post("http://server/_cokret/gate/account/device-pair")
+        .json(&serde_json::json!({
+            "pairing_code": "pairing-code",
+            "new_device_pubkey": {
+                "kty": "OKP",
+                "kid": sibling,
+                "alg": "EdDSA",
+                "key": "emtleQ"
+            },
+            "challenge_signature": "c2ln"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    let paired: Value = TestClient::post("http://server/_cokret/gate/account/device-pair")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "pairing_code": "pairing-code",
+            "new_device_pubkey": {
+                "kty": "OKP",
+                "kid": sibling,
+                "alg": "EdDSA",
+                "key": "emtleQ"
+            },
+            "challenge_signature": "c2ln",
+            "display_name": "Paired Phone",
+            "device_metadata": {
+                "platform": "ios"
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(paired["device_id"], sibling);
+    assert!(
+        paired["authorized_event_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("ck:event:")
+    );
+    assert_eq!(paired["device_grant"]["status"], "active");
+
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(viewer["devices"].as_array().unwrap().iter().any(|device| {
+        device["device_id"] == sibling
+            && device["status"] == "active"
+            && device["display_name"] == "Paired Phone"
+    }));
+    assert!(
+        state
+            .persistence
+            .audit()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["action"] == "account.device_pair"
+                    && event["outcome"] == "accepted"
+                    && event["target"]["new_device_id"] == sibling
+            })
+    );
+}
+
+#[tokio::test]
 async fn device_pairing_challenge_and_authorization_surface_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
+    let unauthenticated = TestClient::post("http://server/_soland/self/devices/pairing-challenge")
         .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let challenge: Value = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
+    let challenge: Value = TestClient::post("http://server/_soland/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007"}))
         .send(&app_from_state(state.clone()))
@@ -43,7 +122,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
     );
 
     let authorized: Value =
-        TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
+        TestClient::post("http://server/_soland/self/devices/authorize-pairing")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "challenge_id": challenge["challenge_id"],
@@ -69,7 +148,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
         authorized["production_gap"],
         "authorization_event_not_yet_in_operation_stream"
     );
-    let devices: Value = TestClient::get("http://server/_cokret/self/devices")
+    let devices: Value = TestClient::get("http://server/_soland/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -111,7 +190,7 @@ async fn device_rename_updates_display_name() {
 
     // Register a sibling device to rename (current session device is
     // alice's own device; pairing gives us a second one).
-    let challenge: Value = TestClient::post("http://server/_cokret/self/devices/pairing-challenge")
+    let challenge: Value = TestClient::post("http://server/_soland/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({ "device_id": sibling }))
         .send(&app_from_state(state.clone()))
@@ -119,7 +198,7 @@ async fn device_rename_updates_display_name() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/_cokret/self/devices/authorize-pairing")
+    let _: Value = TestClient::post("http://server/_soland/self/devices/authorize-pairing")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "challenge_id": challenge["challenge_id"],
@@ -135,7 +214,7 @@ async fn device_rename_updates_display_name() {
 
     // Unauthenticated rename is rejected.
     let unauth = TestClient::post(format!(
-        "http://server/_cokret/self/devices/{sibling}/rename"
+        "http://server/_soland/self/devices/{sibling}/rename"
     ))
     .json(&serde_json::json!({ "display_name": "Hacker" }))
     .send(&app_from_state(state.clone()))
@@ -144,7 +223,7 @@ async fn device_rename_updates_display_name() {
 
     // Empty display_name is rejected.
     let empty = TestClient::post(format!(
-        "http://server/_cokret/self/devices/{sibling}/rename"
+        "http://server/_soland/self/devices/{sibling}/rename"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "   " }))
@@ -154,7 +233,7 @@ async fn device_rename_updates_display_name() {
 
     // Over-long display_name (>128 chars) is rejected.
     let too_long = TestClient::post(format!(
-        "http://server/_cokret/self/devices/{sibling}/rename"
+        "http://server/_soland/self/devices/{sibling}/rename"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "x".repeat(129) }))
@@ -164,7 +243,7 @@ async fn device_rename_updates_display_name() {
 
     // Renaming an unknown device is a 404.
     let unknown = TestClient::post(
-        "http://server/_cokret/self/devices/ck:device:01904100-0000-7000-8000-000000000404/rename",
+        "http://server/_soland/self/devices/ck:device:01904100-0000-7000-8000-000000000404/rename",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "Ghost" }))
@@ -174,7 +253,7 @@ async fn device_rename_updates_display_name() {
 
     // Happy path: rename succeeds and the new name is returned + listed.
     let renamed: Value = TestClient::post(format!(
-        "http://server/_cokret/self/devices/{sibling}/rename"
+        "http://server/_soland/self/devices/{sibling}/rename"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "display_name": "  Work Phone  " }))
@@ -186,7 +265,7 @@ async fn device_rename_updates_display_name() {
     assert_eq!(renamed["device_id"], sibling);
     assert_eq!(renamed["display_name"], "Work Phone");
 
-    let devices: Value = TestClient::get("http://server/_cokret/self/devices")
+    let devices: Value = TestClient::get("http://server/_soland/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await

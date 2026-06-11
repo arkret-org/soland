@@ -845,13 +845,11 @@ pub(super) async fn submit_federation_events(
         // domain BEFORE constructing a session, instead of leaving author
         // identity entirely to the downstream proof chain. Two acceptance
         // paths:
-        //   1. the actor's home trust domain (derived from its DID host,
-        //      same derivation as the service-DID → trust-domain rule)
-        //      equals the `source-trust-domain` header; or
-        //   2. the actor is already a member of the binding Realm in the
-        //      local membership index (the source domain is then relaying
-        //      for a known member; identity is re-verified downstream by
-        //      `validate_event_envelope`'s proof checks).
+        //   1. the actor's home trust domain (derived from its DID host, same derivation as the
+        //      service-DID → trust-domain rule) equals the `source-trust-domain` header; or
+        //   2. the actor is already a member of the binding Realm in the local membership index
+        //      (the source domain is then relaying for a known member; identity is re-verified
+        //      downstream by `validate_event_envelope`'s proof checks).
         if !federation_actor_origin_acceptable(state, &actor, &source_trust_domain, &binding_realm)
             .await
         {

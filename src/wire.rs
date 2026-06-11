@@ -1313,13 +1313,14 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "account_auth.device_pair",
-            "status": "product_two_step_flow",
+            "status": "standard_gate_supported_with_legacy_scaffold",
             "spec_operation": "ck.gate.account.device_pair",
+            "canonical_path": "/_cokret/gate/account/device-pair",
             "product_paths": [
                 "/_soland/self/devices/pairing-challenge",
                 "/_soland/self/devices/authorize-pairing"
             ],
-            "reason": "device pairing is implemented as soland's two-step challenge/authorize product flow instead of the spec single-operation POST /_cokret/gate/account/device-pair binding; the two-step flow covers the same capability (existing-device-authorized sibling registration) but is not wire-compatible with the spec binding. ck.gate.account.oidc_callback is delegated to the bridges deployment and not served here."
+            "reason": "ck.gate.account.device_pair is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. ck.gate.account.oidc_callback is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
