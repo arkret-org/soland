@@ -75,11 +75,13 @@ CREATE TABLE public.agent_principals (
     controller_id text NOT NULL,
     agent_id text NOT NULL,
     display_name text NOT NULL,
+    agent_slug text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT agent_principals_id_check CHECK (((id ~~ 'did:%'::text) AND (id !~ '[[:space:]#?]'::text))),
+    CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR (agent_slug ~ '^[a-z0-9]([a-z0-9_-]{0,62}[a-z0-9])?$'::text)),
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );
 
@@ -975,6 +977,7 @@ CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation
 CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING btree (realm_id);
 
 CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
+CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_id, agent_slug) WHERE (agent_slug IS NOT NULL);
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 

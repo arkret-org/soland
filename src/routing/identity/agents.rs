@@ -30,7 +30,7 @@ use cokret_sdk::model::{
     AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, effective_participation,
-    validate_selection_within_ceiling,
+    validate_agent_slug, validate_selection_within_ceiling,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -144,6 +144,10 @@ fn agent_view_from_record(record: &Value) -> SolandAgentView {
         controller_did: field("controller_did"),
         agent_id: field("agent_id"),
         display_name: field("display_name"),
+        agent_slug: record
+            .get("agent_slug")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         state: record
             .get("state")
             .and_then(Value::as_str)
@@ -151,6 +155,8 @@ fn agent_view_from_record(record: &Value) -> SolandAgentView {
             .to_owned(),
         created_at: field("created_at"),
         updated_at: field("updated_at"),
+        pairing_request_id: None,
+        expires_at: None,
         grants: Vec::new(),
         todos: Vec::new(),
     }
@@ -467,6 +473,32 @@ async fn provision_agent(
             "controller_did must match the authenticated session actor",
         ));
     }
+    let agent_slug = body
+        .agent_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(slug) = agent_slug.as_deref() {
+        validate_agent_slug(slug)
+            .map_err(|err| AppError::invalid_param(format!("agent_slug is invalid: {err}")))?;
+        let existing = state
+            .persistence
+            .agents()
+            .list_for_controller(&controller_did)
+            .await
+            .map_err(|err| {
+                AppError::internal(format!("agent slug conflict check failed: {err}"))
+            })?;
+        if existing.iter().any(|record| {
+            record.get("agent_slug").and_then(Value::as_str) == Some(slug)
+                && record.get("state").and_then(Value::as_str) != Some("deactivated")
+        }) {
+            return Err(AppError::invalid_param(
+                "agent_slug is already bound to an active agent for this controller",
+            ));
+        }
+    }
     let agent_id = body
         .agent_id
         .unwrap_or_else(|| format!("did:web:agent.{}", session.actor.replace([':', '/'], ".")));
@@ -475,6 +507,13 @@ async fn provision_agent(
     }
     let agent_principal_id = generate_agent_principal_did();
     let timestamp = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
+    let pairing_ttl_ms = body
+        .pairing_ttl_ms
+        .unwrap_or(15 * 60 * 1000)
+        .min(24 * 60 * 60 * 1000);
+    let expires_at = (chrono::Utc::now() + chrono::Duration::milliseconds(pairing_ttl_ms as i64))
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
     // Persist the agent_principal row so list/get/lifecycle + grant/session
     // paths have a real principal to operate on (CKP-0008).
     state
@@ -485,6 +524,7 @@ async fn provision_agent(
             "controller_did": controller_did,
             "agent_id": agent_id,
             "display_name": body.display_name,
+            "agent_slug": agent_slug.clone(),
             "state": "active",
             "created_at": timestamp,
             "updated_at": timestamp,
@@ -500,6 +540,7 @@ async fn provision_agent(
             "controller_did": controller_did,
             "agent_id": agent_id,
             "display_name": body.display_name,
+            "agent_slug": agent_slug.clone(),
         }),
         "accepted",
     )
@@ -510,9 +551,12 @@ async fn provision_agent(
         controller_did,
         agent_id,
         display_name: body.display_name,
+        agent_slug,
         state: "active".to_owned(),
         created_at: timestamp.clone(),
         updated_at: timestamp,
+        pairing_request_id: Some(pairing_request_id),
+        expires_at: Some(expires_at),
         grants: body.initial_grants,
         todos: Vec::new(),
     })
@@ -541,6 +585,7 @@ async fn list_agents(
     json_ok(SolandAgentList {
         agents: records.iter().map(agent_view_from_record).collect(),
         next_cursor: None,
+        has_more: false,
         todos: Vec::new(),
     })
 }
@@ -1005,5 +1050,20 @@ mod tests {
             verification_method_principal("did:web:agent.example?versionId=1#key-1"),
             "did:web:agent.example"
         );
+    }
+
+    #[test]
+    fn agent_view_from_record_includes_agent_slug() {
+        let view = agent_view_from_record(&json!({
+            "agent_principal_id": "did:web:agent.example",
+            "controller_did": "did:web:example.com:users:alice",
+            "agent_id": "did:web:agent.example",
+            "display_name": "Summary Assistant",
+            "agent_slug": "summary",
+            "state": "active",
+            "created_at": "2026-06-11T00:00:00.000Z",
+            "updated_at": "2026-06-11T00:00:00.000Z"
+        }));
+        assert_eq!(view.agent_slug.as_deref(), Some("summary"));
     }
 }

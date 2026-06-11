@@ -6,9 +6,10 @@
 //!
 //! - Authoritative field: `subject_id` (principal DID). It is the ONLY field that participates in
 //!   actor attribution, authorization, resolution and render lookup.
-//! - Audit metadata (MAY): `handle_at_time` / `display_name_at_time` / `mention_text_original` /
-//!   `resolved_at`. Verifier / reducer / policy engine MUST ignore these for trust decisions
-//!   (SEC-SOL-1 — soland's authz / audit / federation paths never read them).
+//! - Audit metadata (MAY): `handle_at_time` / `display_name_at_time` / `controller_subject_id` /
+//!   `controller_handle_at_time` / `agent_slug_at_time` / `mention_text_original` / `resolved_at`.
+//!   Verifier / reducer / policy engine MUST ignore these for trust decisions (SEC-SOL-1 — soland's
+//!   authz / audit / federation paths never read them).
 //! - The pre-R3.2 fields `subject` / `handle` / `display_snapshot` are GONE; an envelope carrying
 //!   any of them MUST be rejected as a `schema_violation` with reason
 //!   `mention_reference_legacy_shape`.
@@ -44,6 +45,7 @@ pub fn validate_mention_reference(mention: &Value) -> Result<(), WireRejection> 
                 format!(
                     "mention reference field `{field}` is the removed pre-R3.2 shape; use \
                      subject_id (authoritative) + handle_at_time / display_name_at_time / \
+                     controller_subject_id / controller_handle_at_time / agent_slug_at_time / \
                      mention_text_original (audit metadata only)"
                 ),
             ));
@@ -76,6 +78,9 @@ mod tests {
             "subject_id": "did:web:alice-principal.example",
             "handle_at_time": "alice:acme.example",
             "display_name_at_time": "Alice",
+            "controller_subject_id": "did:web:alice-controller.example",
+            "controller_handle_at_time": "alice:acme.example",
+            "agent_slug_at_time": "summary",
             "mention_text_original": "@alice:acme.example",
             "resolved_at": "2026-05-28T10:00:00Z"
         });

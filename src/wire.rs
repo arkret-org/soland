@@ -921,6 +921,10 @@ pub struct SolandAgentKeyPairOutcome {
 pub struct SolandAgentProvisionRequestBody {
     pub display_name: String,
     #[serde(default)]
+    pub agent_slug: Option<String>,
+    #[serde(default)]
+    pub pairing_ttl_ms: Option<u64>,
+    #[serde(default)]
     pub controller_did: Option<String>,
     #[serde(default)]
     pub agent_id: Option<String>,
@@ -934,9 +938,15 @@ pub struct SolandAgentView {
     pub controller_did: String,
     pub agent_id: String,
     pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_slug: Option<String>,
     pub state: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairing_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
     #[serde(default)]
     pub grants: Vec<Value>,
     #[serde(default)]
@@ -947,6 +957,7 @@ pub struct SolandAgentView {
 pub struct SolandAgentList {
     pub agents: Vec<SolandAgentView>,
     pub next_cursor: Option<String>,
+    pub has_more: bool,
     #[serde(default)]
     pub todos: Vec<String>,
 }
@@ -1189,6 +1200,7 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "ck.find.directory.search_realms",
     "ck.find.directory.resolve_realm",
     "ck.find.directory.resolve_target",
+    "ck.find.directory.resolve_agent_selector",
     "ck.find.directory.list_handles_for_subject",
     "ck.self.blob.upload",
     "ck.self.blob.head",

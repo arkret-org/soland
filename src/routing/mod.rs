@@ -713,6 +713,13 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "resolve realm",
     ),
     (
+        "/_cokret/find/directory/resolve-agent-selector",
+        PathItemType::Post,
+        "directory",
+        "ck.find.directory.resolve_agent_selector",
+        "resolve agent selector",
+    ),
+    (
         "/_cokret/find/directory/list-handles-for-subject",
         PathItemType::Post,
         "directory",

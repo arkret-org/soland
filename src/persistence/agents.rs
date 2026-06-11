@@ -297,8 +297,8 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 
 /// CKP-0008 — native personal agent principal persistence (provision /
 /// list / get / lifecycle). JSON Value records mirror SolandAgentView:
-/// agent_principal_id, controller_did, agent_id, display_name, state,
-/// created_at, updated_at.
+/// agent_principal_id, controller_did, agent_id, display_name,
+/// agent_slug, state, created_at, updated_at.
 #[async_trait]
 pub trait AgentStore: Send + Sync {
     async fn put(&self, record: Value) -> PersistenceResult<()>;
@@ -391,6 +391,8 @@ struct AgentPrincipalRow {
     agent_id: String,
     #[diesel(sql_type = Text)]
     display_name: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    agent_slug: Option<String>,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Timestamptz)]
@@ -406,6 +408,7 @@ impl From<AgentPrincipalRow> for Value {
             "controller_did": row.controller_did,
             "agent_id": row.agent_id,
             "display_name": row.display_name,
+            "agent_slug": row.agent_slug,
             "state": row.state,
             "created_at": row.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "updated_at": row.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -432,6 +435,10 @@ impl AgentStore for PgAgentStore {
         let controller_did = get_str("controller_did")?;
         let agent_id = get_str("agent_id")?;
         let display_name = get_str("display_name")?;
+        let agent_slug = record
+            .get("agent_slug")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         let state = record
             .get("state")
             .and_then(Value::as_str)
@@ -439,16 +446,18 @@ impl AgentStore for PgAgentStore {
             .to_owned();
         sql_query(
             "INSERT INTO agent_principals \
-             (id, controller_id, agent_id, display_name, state, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) \
+             (id, controller_id, agent_id, display_name, agent_slug, state, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              controller_id = EXCLUDED.controller_id, agent_id = EXCLUDED.agent_id, \
-             display_name = EXCLUDED.display_name, state = EXCLUDED.state, updated_at = NOW()",
+             display_name = EXCLUDED.display_name, agent_slug = EXCLUDED.agent_slug, \
+             state = EXCLUDED.state, updated_at = NOW()",
         )
         .bind::<Text, _>(&agent_principal_id)
         .bind::<Text, _>(&controller_did)
         .bind::<Text, _>(&agent_id)
         .bind::<Text, _>(&display_name)
+        .bind::<Nullable<Text>, _>(&agent_slug)
         .bind::<Text, _>(&state)
         .execute(&mut *conn)
         .await
@@ -459,7 +468,7 @@ impl AgentStore for PgAgentStore {
     async fn get(&self, agent_principal_id: &str) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              created_at, updated_at FROM agent_principals WHERE id = $1",
         )
         .bind::<Text, _>(agent_principal_id)
@@ -473,7 +482,7 @@ impl AgentStore for PgAgentStore {
     async fn list_for_controller(&self, controller_did: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, state, \
+            "SELECT id AS agent_principal_id, controller_id AS controller_did, agent_id, display_name, agent_slug, state, \
              created_at, updated_at FROM agent_principals WHERE controller_id = $1 \
              ORDER BY created_at",
         )
