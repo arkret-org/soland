@@ -164,7 +164,7 @@ pub struct OutboundPushBridgeExamples {
     pub cache_export_response: Value,
 }
 
-// Shared `/_cokret/edge/integration/describe` manifest shape: re-exported from
+// Shared `/_floria/integration/describe` manifest shape: re-exported from
 // the SDK contracts crate (the authoritative definition shared by floria,
 // soland, and coauth) instead of a local copy.
 pub use cokret_sdk::integration_api::{
@@ -1121,7 +1121,7 @@ pub struct SolandRecoveryReceiptOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateWebrtcSessionRequestBody {
+pub struct CreateWebRtcSessionRequestBody {
     pub realm_id: String,
     #[serde(default)]
     pub participants: Vec<String>,
@@ -1134,7 +1134,7 @@ pub struct CreateWebrtcSessionRequestBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CreateWebrtcSessionOutcome {
+pub struct CreateWebRtcSessionOutcome {
     pub session_id: String,
     pub realm_id: String,
     pub participants: Vec<String>,
@@ -1146,7 +1146,7 @@ pub struct CreateWebrtcSessionOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalRequestBody {
+pub struct WebRtcSignalRequestBody {
     pub message_type: String,
     #[serde(default)]
     pub seq: Option<u64>,
@@ -1157,7 +1157,7 @@ pub struct WebrtcSignalRequestBody {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalOutcome {
+pub struct WebRtcSignalOutcome {
     pub ok: bool,
     pub session_id: String,
     pub seq: u64,
@@ -1166,7 +1166,7 @@ pub struct WebrtcSignalOutcome {
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebrtcSignalsOutcome {
+pub struct WebRtcSignalsOutcome {
     pub session_id: String,
     pub call_state: String,
     pub events: Vec<Value>,

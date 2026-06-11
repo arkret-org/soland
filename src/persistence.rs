@@ -190,7 +190,7 @@ pub trait PersistenceStore: Send + Sync {
     fn presence(&self) -> &dyn PresenceStore;
     fn typing(&self) -> &dyn TypingStore;
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
-    fn webrtc(&self) -> &dyn WebrtcSessionStore;
+    fn webrtc(&self) -> &dyn WebRtcSessionStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
@@ -243,7 +243,7 @@ pub struct SolandMemoryPersistenceStore {
     presence: MemoryPresenceStore,
     typing: MemoryTypingStore,
     push_bridge_cache: MemoryPushBridgeCacheStore,
-    webrtc: MemoryWebrtcSessionStore,
+    webrtc: MemoryWebRtcSessionStore,
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
     recovery_receipts: MemoryRecoveryReceiptStore,
@@ -294,7 +294,7 @@ impl SolandMemoryPersistenceStore {
             presence: MemoryPresenceStore::new(),
             typing: MemoryTypingStore::new(),
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
-            webrtc: MemoryWebrtcSessionStore::new(),
+            webrtc: MemoryWebRtcSessionStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
@@ -414,7 +414,7 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.push_bridge_cache
     }
 
-    fn webrtc(&self) -> &dyn WebrtcSessionStore {
+    fn webrtc(&self) -> &dyn WebRtcSessionStore {
         &self.webrtc
     }
 
@@ -539,7 +539,7 @@ pub struct PgPersistenceStore {
     webvh: PgWebvhStore,
     realm_invites: PgRealmInviteStore,
     key_backups: PgKeyBackupStore,
-    webrtc: PgWebrtcSessionStore,
+    webrtc: PgWebRtcSessionStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
     recovery_receipts: PgRecoveryReceiptStore,
@@ -584,7 +584,7 @@ impl PgPersistenceStore {
             webvh: PgWebvhStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
-            webrtc: PgWebrtcSessionStore { pool: pool.clone() },
+            webrtc: PgWebRtcSessionStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
             recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
@@ -691,7 +691,7 @@ impl PersistenceStore for PgPersistenceStore {
         &self.push_bridge_cache
     }
 
-    fn webrtc(&self) -> &dyn WebrtcSessionStore {
+    fn webrtc(&self) -> &dyn WebRtcSessionStore {
         &self.webrtc
     }
 
@@ -1089,7 +1089,7 @@ mod tests {
     async fn memory_push_bridge_cache_store_crud() {
         let store = MemoryPushBridgeCacheStore::new();
         let now = Utc::now();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
         let record = OutboundPushBridgeCacheRecord {
             push_gateway_url: "https://floria.example".to_owned(),
             service_base_url: "https://floria.example/_cokret/edge/push".to_owned(),
@@ -1144,7 +1144,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_record_contract_snapshot_first_time_stored_pending_then_trusted() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
 
         // First snapshot: pending trust → stored, but verify rejects as Unknown.
         store
@@ -1181,7 +1181,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_match() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -1196,7 +1196,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_digest_mismatch_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -1215,7 +1215,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_stale_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -1244,7 +1244,7 @@ mod tests {
         let store = MemoryPushBridgeCacheStore::new();
         let result = store
             .verify_contract_freshness(
-                "https://never-seen.example/_cokret/edge/push/bridge/describe",
+                "https://never-seen.example/_floria/push/bridge/describe",
                 "sha256:abc",
                 chrono::Duration::hours(24),
             )
@@ -1260,7 +1260,7 @@ mod tests {
     #[tokio::test]
     async fn push_bridge_verify_contract_freshness_revoked_snapshot_rejected() {
         let store = MemoryPushBridgeCacheStore::new();
-        let url = "https://floria.example/_cokret/edge/push/bridge/describe";
+        let url = "https://floria.example/_floria/push/bridge/describe";
         store
             .record_contract_snapshot(url, "sha256:abc", "etag-abc", "trusted")
             .await
@@ -1816,12 +1816,12 @@ mod tests {
 
     #[tokio::test]
     async fn memory_webrtc_store_put_get_append_signal_matches_trait() {
-        let store = MemoryWebrtcSessionStore::new();
+        let store = MemoryWebRtcSessionStore::new();
         let now = Utc::now();
         let mut participants = BTreeSet::new();
         participants.insert("did:web:alice.example".to_owned());
         participants.insert("did:web:bob.example".to_owned());
-        let record = WebrtcSessionRecord {
+        let record = WebRtcSessionRecord {
             session_id: "ck:call:01".to_owned(),
             realm_id: "ck:realm:0196419b-0000-7000-8000-000000000001".to_owned(),
             created_by: "did:web:alice.example".to_owned(),
@@ -1847,7 +1847,7 @@ mod tests {
             .append_signal(
                 "ck:call:01",
                 "did:web:alice.example",
-                Box::new(move |seq| WebrtcSignalRecord {
+                Box::new(move |seq| WebRtcSignalRecord {
                     seq,
                     sender: "did:web:alice.example".to_owned(),
                     message_type: "offer".to_owned(),
@@ -1871,7 +1871,7 @@ mod tests {
                 .append_signal(
                     "ck:call:01",
                     "did:web:carol.example",
-                    Box::new(move |seq| WebrtcSignalRecord {
+                    Box::new(move |seq| WebRtcSignalRecord {
                         seq,
                         sender: "did:web:carol.example".to_owned(),
                         message_type: "answer".to_owned(),

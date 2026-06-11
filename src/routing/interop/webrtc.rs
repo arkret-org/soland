@@ -33,11 +33,11 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, SessionRecord, WebrtcSessionRecord, WebrtcSignalRecord};
+use crate::state::{AppState, SessionRecord, WebRtcSessionRecord, WebRtcSignalRecord};
 use crate::wire::{
-    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CreateWebrtcSessionOutcome,
-    CreateWebrtcSessionRequestBody, OkOutcome, SolandCallMediaTokenExchangeRequestBody,
-    WebrtcSignalOutcome, WebrtcSignalRequestBody, WebrtcSignalsOutcome,
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CreateWebRtcSessionOutcome,
+    CreateWebRtcSessionRequestBody, OkOutcome, SolandCallMediaTokenExchangeRequestBody,
+    WebRtcSignalOutcome, WebRtcSignalRequestBody, WebRtcSignalsOutcome,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -310,10 +310,10 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.webrtc.create_session"))]
 async fn create_webrtc_session(
     aa: AuthArgs,
-    body: JsonBody<CreateWebrtcSessionRequestBody>,
+    body: JsonBody<CreateWebRtcSessionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CreateWebrtcSessionOutcome> {
+) -> JsonResult<CreateWebRtcSessionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -348,7 +348,7 @@ async fn create_webrtc_session(
     let expires_at = created_at + Duration::milliseconds(ttl_ms as i64);
     let session_id = ids::generate("call");
     let participant_list = participants.iter().cloned().collect::<Vec<_>>();
-    let record = WebrtcSessionRecord {
+    let record = WebRtcSessionRecord {
         session_id: session_id.clone(),
         realm_id: body.realm_id.clone(),
         created_by: session.actor,
@@ -368,7 +368,7 @@ async fn create_webrtc_session(
         .put(record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(CreateWebrtcSessionOutcome {
+    json_ok(CreateWebRtcSessionOutcome {
         session_id,
         realm_id: body.realm_id,
         participants: participant_list,
@@ -389,10 +389,10 @@ async fn create_webrtc_session(
 async fn put_webrtc_signal(
     aa: AuthArgs,
     session_id: PathParam<String>,
-    body: JsonBody<WebrtcSignalRequestBody>,
+    body: JsonBody<WebRtcSignalRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<WebrtcSignalOutcome> {
+) -> JsonResult<WebRtcSignalOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
@@ -441,7 +441,7 @@ async fn put_webrtc_signal(
     let payload = body.payload;
     let proofs = body.proofs;
     let created_at = now();
-    let builder = Box::new(move |seq: u64| WebrtcSignalRecord {
+    let builder = Box::new(move |seq: u64| WebRtcSignalRecord {
         seq,
         sender: actor,
         message_type,
@@ -465,7 +465,7 @@ async fn put_webrtc_signal(
                 .flatten()
                 .map(|record| call_state_for_webrtc_session(&record).to_owned())
                 .unwrap_or_else(|| "ringing".to_owned());
-            json_ok(WebrtcSignalOutcome {
+            json_ok(WebRtcSignalOutcome {
                 ok: true,
                 session_id: session_id.clone(),
                 seq: appended.seq,
@@ -496,7 +496,7 @@ async fn get_webrtc_signals(
     limit: QueryParam<usize, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<WebrtcSignalsOutcome> {
+) -> JsonResult<WebRtcSignalsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session_id = session_id.into_inner();
@@ -545,7 +545,7 @@ async fn get_webrtc_signals(
         .and_then(|event| event["seq"].as_u64())
         .unwrap_or(since)
         .to_string();
-    json_ok(WebrtcSignalsOutcome {
+    json_ok(WebRtcSignalsOutcome {
         session_id,
         call_state,
         events,
@@ -1029,7 +1029,7 @@ async fn handle_rtc_token(
 /// MEDIA-2 oldest-membership-wins focus selection.
 fn session_focus_for_call(
     state: &AppState,
-    webrtc: &WebrtcSessionRecord,
+    webrtc: &WebRtcSessionRecord,
     media_epoch: &MediaServiceEpoch,
 ) -> Result<String, AppError> {
     let (committed_focus, mut member_order) = {
@@ -1256,7 +1256,7 @@ fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, A
     ))
 }
 
-fn focus_preferences_for_member(webrtc: &WebrtcSessionRecord, actor: &str) -> Vec<String> {
+fn focus_preferences_for_member(webrtc: &WebRtcSessionRecord, actor: &str) -> Vec<String> {
     for signal in webrtc.signals.iter().rev() {
         if signal.sender != actor {
             continue;
@@ -1490,14 +1490,14 @@ fn normalized_webrtc_signal_type(value: &str) -> &str {
     value.rsplit('.').next().unwrap_or(value)
 }
 
-fn call_state_for_webrtc_session(record: &WebrtcSessionRecord) -> &'static str {
+fn call_state_for_webrtc_session(record: &WebRtcSessionRecord) -> &'static str {
     webrtc_state_by_seq(record)
         .last()
         .map(|(_, state)| *state)
         .unwrap_or("ringing")
 }
 
-fn webrtc_state_by_seq(record: &WebrtcSessionRecord) -> Vec<(u64, &'static str)> {
+fn webrtc_state_by_seq(record: &WebRtcSessionRecord) -> Vec<(u64, &'static str)> {
     let mut saw_connecting = false;
     let mut saw_active = false;
     let mut saw_ended = false;
@@ -1549,7 +1549,7 @@ fn webrtc_signal_proof_matches_actor(proofs: &[Value], actor: &str) -> bool {
         })
 }
 
-fn webrtc_signal_to_json(signal: &WebrtcSignalRecord, call_state_after: &str) -> Value {
+fn webrtc_signal_to_json(signal: &WebRtcSignalRecord, call_state_after: &str) -> Value {
     json!({
         "seq": signal.seq,
         "sender": signal.sender,

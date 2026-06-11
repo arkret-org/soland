@@ -2645,7 +2645,7 @@ mod canonical_conformance_vectors {
             "/_cokret/open/mimi",
             // soland consumes this when talking to a push gateway service; it
             // is intentionally external to soland's own router.
-            "/_cokret/edge/push/bridge/describe",
+            "/_floria/push/bridge/describe",
             // Audit agent endpoints are remote applet/service callbacks,
             // never soland-local listeners.
             "/_cokret/self/audit-agent/identity",

@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
-use super::push_outbound::{derive_push_gateway_service_base_url, join_edge_push_url};
+use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex, validate_canonical_json_value};
 use crate::error::AppError;
 use crate::persistence::DriftResult;
@@ -416,7 +416,7 @@ async fn verify_push_gateway_contract_drift(
         return DriftResult::Unknown;
     };
     let bridge_describe_url =
-        join_edge_push_url(&service_base_url, "/_cokret/edge/push/bridge/describe");
+        join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
     let cache = state.persistence.push_bridge_cache();
     let snapshot_digest = match cache.current_contract(&bridge_describe_url).await {
         Ok(Some(record)) => record.contract_digest,
