@@ -23,53 +23,20 @@ otel = [
 ]
 
 [dependencies]
-anyhow = "1.0.102"
-chrono = { version = "0.4.45", features = ["serde"] }
-cokret-sdk = { package = "cokret", path = "../cokret-rust-sdk/crates/sdk", features = ["full-surface", "device-runtime", "applet-runtime", "salvo", "signer"] }
-diesel = { version = "2.3.10", features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"] }
-diesel-async = { version = "0.9", features = ["postgres", "deadpool", "async-connection-wrapper"] }
-deadpool = { version = "0.13", features = ["rt_tokio_1"] }
-async-trait = "0.1.89"
-diesel_migrations = { version = "2.3.2", features = ["postgres"] }
-dotenvy = "0.15.7"
-base64 = "0.22.1"
-salvo = { version = "0.93.0", default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"] }
-salvo-oapi = { version = "0.93.0", features = ["yaml"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-sha2 = "0.11.0"
-hmac = "0.13"
 # Constant-time equality for MAC/signature token comparison (SOL-03-004:
 # presign-token check). Already in the lock tree via the crypto stack.
-subtle = "2.6.1"
-thiserror = "2"
-tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # events.subscribe streaming. `bytes` for the
 # Bytes chunks `salvo::Response::stream` consumes; `futures-util` for
 # Stream combinators; `async-stream` for the `stream!` async-generator
 # macro that lets us interleave history yields + tokio::select on the
 # broadcast channel + heartbeat ticker.
-bytes = "1.11.1"
-futures-util = "0.3.32"
-async-stream = "0.3.6"
-object_store = { version = "0.13.2", features = ["aws"] }
 # Production Ed25519 JWS verification. ed25519-dalek
 # does the verify; bs58 decodes the multibase (base58btc-prefixed-z) public key
 # segment of did:key DID URLs and didDocument verificationMethod entries.
-ed25519-dalek = "2.2.0"
-bs58 = "0.5.1"
 # Lock-free pointer swap for the AnchorerWorker signing key. Used
 # by `rotate-signing-key` admin endpoint so concurrent signing passes never
 # observe a torn read across the rotation.
-arc-swap = "1.9.1"
 # `rand` for fresh ed25519 seed generation in rotate-signing-key.
-rand = "0.10.1"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
-opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"], optional = true }
-opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace", "rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["trace", "grpc-tonic"], optional = true }
-tracing-opentelemetry = { version = "0.33.0", default-features = false, optional = true }
 # Durable, observable tracing output when the runner harness sets
 # `SOLAND_LOG_FILE`. Without this appender, Windows fully-buffers stdout
 # when it's redirected to a file (PowerShell `Start-Process
@@ -77,13 +44,89 @@ tracing-opentelemetry = { version = "0.33.0", default-features = false, optional
 # output is lost on graceful shutdown. The non-blocking appender keeps
 # write latency off the request path; we hold its guard for the
 # process lifetime so the channel flushes before exit.
-tracing-appender = "0.2.5"
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-uuid = { version = "1.23.3", features = ["v4", "v7", "serde"] }
+anyhow = {workspace = true}
+arc-swap = {workspace = true}
+async-stream = {workspace = true}
+async-trait = {workspace = true}
+base64 = {workspace = true}
+bs58 = {workspace = true}
+bytes = {workspace = true}
+chrono = {workspace = true,features = ["serde"]}
+cokret-sdk = {workspace = true,features = ["full-surface", "device-runtime", "applet-runtime", "salvo", "signer"]}
+deadpool = {workspace = true,features = ["rt_tokio_1"]}
+diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
+diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
+diesel_migrations = {workspace = true,features = ["postgres"]}
+dotenvy = {workspace = true}
+ed25519-dalek = {workspace = true}
+futures-util = {workspace = true}
+hmac = {workspace = true}
+object_store = {workspace = true,features = ["aws"]}
+opentelemetry = {workspace = true,default-features = false,features = ["trace"],optional = true}
+opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}
+opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
+rand = {workspace = true}
+reqwest = {workspace = true,default-features = false,features = ["blocking", "json", "rustls-tls"]}
+salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
+salvo-oapi = {workspace = true,features = ["yaml"]}
+serde = {workspace = true,features = ["derive"]}
+serde_json = {workspace = true}
+sha2 = {workspace = true}
+subtle = {workspace = true}
+thiserror = {workspace = true}
+tokio = {workspace = true,features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"]}
+tracing = {workspace = true}
+tracing-appender = {workspace = true}
+tracing-opentelemetry = {workspace = true,default-features = false,optional = true}
+tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
+uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 # Stream J conformance gates (`tests/conformance_gates.rs`): operation_id
 # registry diff + forbidden-terms scan. `walkdir` for recursing src/,
 # `regex` for the line-level pattern scan.
-walkdir = "2.5"
+regex = {workspace = true}
+walkdir = {workspace = true}
+
+[workspace]
+resolver = "3"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+arc-swap = "1.9.1"
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bs58 = "0.5.1"
+bytes = "1.11.1"
+chrono = "0.4.45"
+cokret-sdk = {package = "cokret",path = "../cokret-rust-sdk/crates/sdk"}
+deadpool = "0.13"
+diesel = "2.3.10"
+diesel-async = "0.9"
+diesel_migrations = "2.3.2"
+dotenvy = "0.15.7"
+ed25519-dalek = "2.2.0"
+futures-util = "0.3.32"
+hmac = "0.13"
+object_store = "0.13.2"
+opentelemetry = {version = "0.32.0",default-features = false}
+opentelemetry-otlp = {version = "0.32.0",default-features = false}
+opentelemetry_sdk = {version = "0.32.1",default-features = false}
+rand = "0.10.1"
 regex = "1.12"
+reqwest = {version = "0.13.4",default-features = false}
+salvo = {version = "0.93.0",default-features = false}
+salvo-oapi = "0.93.0"
+serde = "1.0.228"
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+subtle = "2.6.1"
+thiserror = "2"
+tokio = "1.52.3"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-opentelemetry = {version = "0.33.0",default-features = false}
+tracing-subscriber = "0.3.23"
+uuid = "1.23.3"
+walkdir = "2.5"
