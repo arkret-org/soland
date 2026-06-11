@@ -193,7 +193,7 @@ async fn snapshot_v1_audit_path_verifies_against_merkle_root() {
     // through `SnapshotMerkleTree::verify`.
     let chunk_count = head["chunk_count"].as_u64().unwrap();
     let tree_size = chunk_count as usize;
-    let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
+    let snapshot_ref = head["id"].as_str().unwrap();
     let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     for chunk_id in 0..chunk_count {
         let chunk: Value = TestClient::get(format!(
@@ -306,7 +306,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
 
     // For each chunk, audit_path MUST be non-empty (multi-chunk case)
     // AND reconstruct to merkle_root via SnapshotMerkleTree::verify.
-    let snapshot_ref = head["snapshot_ref"].as_str().unwrap();
+    let snapshot_ref = head["id"].as_str().unwrap();
     let root = cokret_sdk::Hash::new(head["merkle_root"].as_str().unwrap().to_owned()).unwrap();
     let tree_size = chunk_count as usize;
     let mut any_non_empty_path = false;

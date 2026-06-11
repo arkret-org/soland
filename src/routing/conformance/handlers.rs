@@ -49,8 +49,10 @@ const MAX_CONFORMANCE_BATCH: usize = 1_000;
 const MAX_CONFORMANCE_RELATION_DEPTH: u64 = 32;
 const MAX_CONFORMANCE_ENVELOPE_BYTES: usize = 1024 * 1024;
 
+// Spec `snapshot.schema.json`: the manifest's own identifier field is `id`
+// (`snapshot_ref` only appears at external reference positions).
 const SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
-    "snapshot_ref",
+    "id",
     "realm_id",
     "reducer_profile",
     "schema_profile_refs",

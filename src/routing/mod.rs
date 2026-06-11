@@ -1471,14 +1471,17 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 #[derive(Clone)]
 pub struct CokretOpenApiDoc(pub OpenApi);
 
-/// Snapshot bundle: surfaces the head fields (`snapshot_ref` / `state_digest` /
+/// Snapshot bundle: surfaces the head fields (`id` / `state_digest` /
 /// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
 /// [`cokret_sdk::SnapshotChunk`] partitions + a binary
 /// [`cokret_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
 /// generator proof. Receivers verify the proof first, then fetch chunks lazily
 /// and check each one against `merkle_root` via `SnapshotMerkleTree::verify`.
+/// Spec rename: the manifest's own identifier is `id`; `snapshot_ref` only
+/// survives at external reference positions (e.g. the chunk query param).
 pub(crate) struct SnapshotBundle {
-    pub snapshot_ref: String,
+    /// The bundle's own identifier (`ck:snapshot:<realm>:<hash>` dev form).
+    pub id: String,
     /// `sha256:<hex>` digest over the full serialized state document.
     /// Doubles as the snapshot's `state_root` until the
     /// `effective_seal_view`-driven state root is wired in.
@@ -1678,7 +1681,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
     });
     let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
     let state_digest = cokret_sdk::canonical::sha256_digest(&chunk_bytes);
-    let snapshot_ref = format!(
+    let snapshot_id = format!(
         "ck:snapshot:{}:{}",
         realm_id,
         state_digest.trim_start_matches("sha256:")
@@ -1740,7 +1743,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
     // snapshot-head operations stay `not_implemented`; the bundle only backs
     // the `/_soland/` dev download surface.
     Some(SnapshotBundle {
-        snapshot_ref,
+        id: snapshot_id,
         state_digest,
         frontier,
         chunks,

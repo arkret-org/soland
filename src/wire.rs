@@ -613,25 +613,11 @@ pub struct UpsertPushRuleRequestBody {
     pub conditions: Value,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandModerationReportRequestBody {
-    pub realm_id: String,
-    pub target_ref: String,
-    pub report_reason_code: String,
-    // SOL-04-002: field order matches moderation-report.schema.json
-    // (description before reporter).
-    pub description: Option<String>,
-    pub reporter: String,
-    #[serde(default)]
-    pub evidence_refs: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandModerationReportOutcome {
-    pub report_id: String,
-    pub status: String,
-    pub routed_to: Vec<String>,
-}
+// Moderation report request/outcome are the SDK DTOs (`model/api.rs` carries
+// `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
+// `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
+// no soland mirrors.
+pub use cokret_sdk::model::{ModerationReportOutcome, ModerationReportRequestBody};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPolicyDocumentRequestBody {

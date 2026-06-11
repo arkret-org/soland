@@ -156,6 +156,13 @@ const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 25_000;
 const ACCOUNT_SUBSCRIBE_MAX_WAIT_MS: u64 = 60_000;
 /// Default reconnect guard advertised on subscribe terminal control frames.
 const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
+/// SOL-02-005 — debounce window for `account_subscribe` long-poll wakeups.
+/// When a broadcast notification passes the visibility filter, further
+/// notifications arriving within this window are drained and coalesced so a
+/// burst of N broadcasts triggers ONE snapshot rebuild instead of N. Keeps
+/// the read-amplification of busy Realms bounded at the cost of up to this
+/// much extra delivery latency per long-poll turn.
+const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
 /// Maximum lifetime of an issued sync cursor (mirrors the 1h TTL minted by
 /// [`sync_token_for_client_sync`]). A revocation record is retained for at
 /// least this long so a leaked cursor cannot outlive its revocation.
@@ -294,8 +301,44 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
                             if !realm_id_accessible(&state, &notification.realm_id, session.as_ref()).await {
                                 continue;
                             }
+                            // SOL-02-005 debounce: drain notifications that
+                            // arrive within the coalescing window (bounded by
+                            // the long-poll deadline) so a broadcast burst
+                            // rebuilds the snapshot once. Coalesced
+                            // notifications need no individual handling — the
+                            // rebuilt snapshot covers everything visible.
+                            let mut lagged_during_drain = false;
+                            let drain_until = (tokio::time::Instant::now()
+                                + Duration::from_millis(SUBSCRIBE_REBUILD_DEBOUNCE_MS))
+                            .min(deadline);
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    _ = tokio::time::sleep_until(drain_until) => break,
+                                    more = rx.recv() => match more {
+                                        Ok(_) => {}
+                                        Err(RecvError::Lagged(_)) => {
+                                            lagged_during_drain = true;
+                                            break;
+                                        }
+                                        Err(RecvError::Closed) => break,
+                                    }
+                                }
+                            }
                             response = build_sync_snapshot(&state, session.as_ref(), &body, &after_cursor).await;
                             if !delta_is_empty(&response) {
+                                break;
+                            }
+                            if lagged_during_drain {
+                                // Same terminal handling as the direct
+                                // `Lagged` arm below: gate reconnect and
+                                // close with a control frame.
+                                arm_subscribe_reconnect(&state, &subscribe_scope_key, SUBSCRIBE_RECONNECT_AFTER_MS);
+                                control_frame = Some(account_reconnect_control_frame(
+                                    body.after.as_deref(),
+                                    "broadcast_lagged",
+                                    SUBSCRIBE_RECONNECT_AFTER_MS,
+                                ));
                                 break;
                             }
                         }
@@ -3540,16 +3583,13 @@ async fn snapshot_head_dev(
         .collect();
     let merkle_root = bundle.tree.root().as_str().to_owned();
     let service_did = state.config.service_did.clone();
-    let digest_payload = format!(
-        "{}:{}:{}",
-        bundle.snapshot_ref, bundle.state_digest, service_did
-    );
+    let digest_payload = format!("{}:{}:{}", bundle.id, bundle.state_digest, service_did);
     crate::result::json_ok(json!({
-        "snapshot_ref": bundle.snapshot_ref,
+        "id": bundle.id,
         "state_digest": bundle.state_digest,
         "chunks": chunk_descriptors,
         "frontier": bundle.frontier,
-        // Dev integrity digest over (snapshot_ref, state_digest, service
+        // Dev integrity digest over (id, state_digest, service
         // DID). Deliberately NOT named `signature`: the spec forbids
         // fabricating snapshot manifest signatures.
         "dev_digest": {
@@ -3587,7 +3627,7 @@ async fn snapshot_chunk(
     let bundle = snapshot_bundle_for_realm(state, &realm_id)
         .await
         .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    if bundle.snapshot_ref != snapshot_ref || bundle.state_digest != expected_hash {
+    if bundle.id != snapshot_ref || bundle.state_digest != expected_hash {
         return Err(crate::error::AppError::new(
             crate::error::ErrorCode::StaleFrontier,
             "snapshot_ref no longer matches the current snapshot frontier",

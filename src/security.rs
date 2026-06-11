@@ -80,61 +80,6 @@ pub fn validate_http_url_for_egress_with_pinned_client(
     Ok((url, client))
 }
 
-/// Blocking analogue of [`validate_http_url_for_egress_with_pinned_client`]:
-/// validate the URL, then build a `reqwest::blocking::Client` that pins the
-/// validated socket addresses so the egress check and the actual connection
-/// resolve to the same IPs (closes the DNS-rebinding TOCTOU window).
-pub fn validate_http_url_for_egress_with_pinned_blocking_client(
-    raw_url: &str,
-    purpose: &str,
-    development_mode: bool,
-    request_timeout: Duration,
-) -> Result<(Url, reqwest::blocking::Client), String> {
-    let url = Url::parse(raw_url).map_err(|error| format!("{purpose}: invalid URL: {error}"))?;
-    let allow_private = private_networks_allowed(development_mode);
-    let socket_addrs = match resolve_and_validate_url_for_egress(&url, purpose, allow_private) {
-        Ok(addrs) => addrs,
-        Err(error) => {
-            record_egress_denial(&url, purpose, &error);
-            return Err(error);
-        }
-    };
-    let host = url
-        .host_str()
-        .ok_or_else(|| format!("{purpose}: URL host is required"))?;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(DEFAULT_CONNECT_TIMEOUT.min(request_timeout))
-        .timeout(request_timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .resolve_to_addrs(host, &socket_addrs)
-        .build()
-        .map_err(|error| format!("failed to build pinned blocking egress HTTP client: {error}"))?;
-    Ok((url, client))
-}
-
-pub fn build_blocking_egress_http_client(
-    connect_timeout: Duration,
-    request_timeout: Duration,
-) -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(connect_timeout)
-        .timeout(request_timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|error| format!("failed to build managed blocking egress HTTP client: {error}"))
-}
-
-pub fn build_default_blocking_egress_http_client(
-    request_timeout: Duration,
-) -> Result<reqwest::blocking::Client, String> {
-    build_blocking_egress_http_client(
-        DEFAULT_CONNECT_TIMEOUT.min(request_timeout),
-        request_timeout,
-    )
-}
-
 pub fn validate_url_for_egress(
     url: &Url,
     purpose: &str,

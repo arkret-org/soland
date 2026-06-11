@@ -954,7 +954,8 @@ async fn authenticated_oauth_session(
         introspection_bearer,
         token,
         state.config.development_mode,
-    )?;
+    )
+    .await?;
     let oauth = parse_oauth_introspection(&value, token)?;
     ensure_oauth_account(state, &oauth).await?;
     if let Some((status, code, _reason_detail, message)) =
@@ -985,69 +986,38 @@ async fn authenticated_oauth_session(
 //   2. A constant-time floor: we always wait at least `OAUTH_INTROSPECTION_MIN_LATENCY` before
 //      returning, with a small random jitter on top so the floor itself is not observable as a
 //      sharp edge.
-//
-// The work is dispatched onto the current tokio runtime (the auth path is
-// reached from `async fn` handlers; this function is sync only because
-// `Salvo` extractors give us a sync bridge), gated behind
-// `block_in_place` so a slow upstream cannot starve the runtime.
 const OAUTH_INTROSPECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const OAUTH_INTROSPECTION_MIN_LATENCY: std::time::Duration = std::time::Duration::from_millis(40);
 const OAUTH_INTROSPECTION_JITTER_MAX: std::time::Duration = std::time::Duration::from_millis(20);
 
-fn request_oauth_introspection(
+async fn request_oauth_introspection(
     introspection_url: &str,
     introspection_bearer: &str,
     token: &str,
     development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
-    let introspection_url = introspection_url.to_owned();
-    let introspection_bearer = introspection_bearer.to_owned();
-    let token = token.to_owned();
-
-    let runtime_handle = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle,
-        Err(_) => {
-            // Not on a tokio runtime — should only happen in unit tests
-            // that bypass the salvo runtime. Fall back to the legacy
-            // blocking client; it applies the same latency floor as the
-            // async path so the security property does not depend on the
-            // caller's runtime context.
-            return legacy_blocking_introspection(
-                &introspection_url,
-                &introspection_bearer,
-                &token,
-                development_mode,
-            );
-        }
-    };
-
-    tokio::task::block_in_place(|| {
-        runtime_handle.block_on(async move {
-            let started = tokio::time::Instant::now();
-            let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
-            let result = perform_oauth_introspection(
-                &introspection_url,
-                &introspection_bearer,
-                &token,
-                development_mode,
-            )
-            .await;
-            // Constant-time floor: regardless of whether the upstream
-            // returned 200, 401, or timed out, sleep until at least
-            // `min_latency + jitter` has elapsed. This collapses the
-            // observable timing distribution between "token unknown to
-            // soland" (fast 401), "token known to coauth, active"
-            // (slow round-trip), and "token known to coauth, inactive"
-            // (slow round-trip) into a single floor.
-            let floor =
-                OAUTH_INTROSPECTION_MIN_LATENCY + std::time::Duration::from_micros(jitter_micros);
-            let elapsed = started.elapsed();
-            if elapsed < floor {
-                tokio::time::sleep(floor - elapsed).await;
-            }
-            result
-        })
-    })
+    let started = tokio::time::Instant::now();
+    let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
+    let result = perform_oauth_introspection(
+        introspection_url,
+        introspection_bearer,
+        token,
+        development_mode,
+    )
+    .await;
+    // Constant-time floor: regardless of whether the upstream
+    // returned 200, 401, or timed out, sleep until at least
+    // `min_latency + jitter` has elapsed. This collapses the
+    // observable timing distribution between "token unknown to
+    // soland" (fast 401), "token known to coauth, active"
+    // (slow round-trip), and "token known to coauth, inactive"
+    // (slow round-trip) into a single floor.
+    let floor = OAUTH_INTROSPECTION_MIN_LATENCY + std::time::Duration::from_micros(jitter_micros);
+    let elapsed = started.elapsed();
+    if elapsed < floor {
+        tokio::time::sleep(floor - elapsed).await;
+    }
+    result
 }
 
 async fn perform_oauth_introspection(
@@ -1132,78 +1102,6 @@ async fn perform_oauth_introspection(
             ))
         }
     }
-}
-
-fn legacy_blocking_introspection(
-    introspection_url: &str,
-    introspection_bearer: &str,
-    token: &str,
-    development_mode: bool,
-) -> Result<Value, (StatusCode, &'static str, &'static str)> {
-    let started = std::time::Instant::now();
-    let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
-    let result = (|| {
-        let request = OAuthIntrospectionRequestBody {
-            token,
-            token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
-        };
-        // SOL-03-002: pin validated IPs into the (blocking) client to close the
-        // DNS-rebinding TOCTOU window, matching the async path. (This legacy
-        // blocking path is only reachable outside the request-serving runtime; see
-        // SOL-08-002/SOL-99-002 for its planned removal.)
-        let (introspection_url, client) =
-            crate::security::validate_http_url_for_egress_with_pinned_blocking_client(
-                introspection_url,
-                "OAuth introspection",
-                development_mode,
-                OAUTH_INTROSPECTION_TIMEOUT,
-            )
-            .map_err(|error| {
-                tracing::warn!(%error, "OAuth introspection denied by egress policy");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
-                    "OAuth introspection service unavailable",
-                )
-            })?;
-        let response = client
-            .post(introspection_url)
-            .bearer_auth(introspection_bearer)
-            .form(&request)
-            .send()
-            .map_err(|error| {
-                tracing::warn!(%error, "OAuth introspection request failed");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
-                    "OAuth introspection service unavailable",
-                )
-            })?;
-        if !response.status().is_success() {
-            tracing::warn!(
-                status = response.status().as_u16(),
-                "OAuth introspection rejected the service bearer"
-            );
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "invalid bearer token",
-            ));
-        }
-        response.json::<Value>().map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection returned invalid JSON");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "OAuth introspection response was invalid",
-            )
-        })
-    })();
-    let floor = OAUTH_INTROSPECTION_MIN_LATENCY + std::time::Duration::from_micros(jitter_micros);
-    if let Some(delay) = floor.checked_sub(started.elapsed()) {
-        std::thread::sleep(delay);
-    }
-    result
 }
 
 /// Sample a small jitter in microseconds for the introspection constant-time

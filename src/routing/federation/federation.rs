@@ -701,7 +701,7 @@ pub(super) async fn federation_pull_operations(
         let manifest = json!({
             "type": "snapshot_bootstrap",
             "realm_id": realm_id,
-            "snapshot_ref": ids::generate_snapshot_id(),
+            "id": ids::generate_snapshot_id(),
             "operation_count": realm_operations.len(),
             "created_at": now(),
         });
@@ -1534,7 +1534,7 @@ fn public_base_url_authority(state: &AppState) -> Option<String> {
     )
 }
 
-fn trust_domain_from_service_did(service_did: &str) -> String {
+pub(crate) fn trust_domain_from_service_did(service_did: &str) -> String {
     let scope = service_did
         .strip_prefix("did:web:")
         .or_else(|| service_did.strip_prefix("did:key:"))

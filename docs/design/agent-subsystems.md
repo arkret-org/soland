@@ -1,5 +1,7 @@
 # Agent 子系统设计(soland)
 
+> 勘察快照,截至 d28714b。本文「现状基线」描述以该 commit 为准,后续实现演进可能使其失真。
+
 支撑 CKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `cokret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 CKP-0008/0009。
 
 设计原则:复用现有事件管线与 reducer/cell 投影模型,不另起并行栈;字段顺序与 spec 一致;直接改现有 SQL;无兼容层。

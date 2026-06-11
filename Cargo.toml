@@ -67,7 +67,7 @@ opentelemetry = {workspace = true,default-features = false,features = ["trace"],
 opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}
 opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
 rand = {workspace = true}
-reqwest = {workspace = true,default-features = false,features = ["blocking", "form", "json", "rustls"]}
+reqwest = {workspace = true,default-features = false,features = ["form", "json", "rustls"]}
 salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
 salvo-oapi = {workspace = true,features = ["yaml"]}
 serde = {workspace = true,features = ["derive"]}

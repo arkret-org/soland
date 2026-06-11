@@ -673,7 +673,7 @@ async fn export_account(
     // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
     // include account / profile / realms / messages / devices / audit_log
     // facets. We assemble each from the existing persistence stores; the
-    // bundle is shipped as a single JSON blob, and a `ck.audit.exported`
+    // bundle is shipped as a single JSON blob, and a `org.cokret.soland.audit.exported`
     // audit entry records the operation so subsequent governance reviews
     // can see who requested an export.
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -733,13 +733,13 @@ async fn export_account(
         .collect();
 
     // Append the audit entry FIRST so the export bundle (assembled
-    // immediately after) carries the ck.audit.exported row inline.
+    // immediately after) carries the org.cokret.soland.audit.exported row inline.
     // After erasure the actor's session token is invalidated, so the
     // export-bundle slot is the only path back to the audit trail.
     append_audit_log(
         state,
         Some(&actor),
-        "ck.audit.exported",
+        "org.cokret.soland.audit.exported",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -899,8 +899,9 @@ async fn append_account_state_change_audit(
     sessions_revoked: usize,
     devices_revoked: usize,
 ) {
+    // 产品私有审计语义:不得占用协议 `ck.` 前缀,统一用 soland 反向域名。
     let payload = json!({
-        "schema": "ck.account.state_change.v1",
+        "schema": "org.cokret.soland.account.state_change.v1",
         "actor": did,
         "subject": did,
         "from": previous_state,
@@ -914,7 +915,7 @@ async fn append_account_state_change_audit(
     append_audit_log(
         state,
         Some(did),
-        "ck.account.state_change",
+        "org.cokret.soland.account.state_change",
         payload.clone(),
         "accepted",
     )
@@ -923,7 +924,7 @@ async fn append_account_state_change_audit(
         append_audit_log(
             state,
             Some(changed_by),
-            "ck.account.state_change",
+            "org.cokret.soland.account.state_change",
             payload,
             "accepted",
         )
@@ -990,7 +991,7 @@ async fn erase_account(
     append_audit_log(
         state,
         Some(&actor),
-        "ck.audit.erasure_initiated",
+        "org.cokret.soland.audit.erasure_initiated",
         json!({"actor": actor.clone()}),
         "accepted",
     )
@@ -1163,7 +1164,7 @@ async fn erase_account(
         append_audit_log(
             state,
             Some(&actor),
-            "ck.audit.erasure_receipt.fanout_failed",
+            "org.cokret.soland.audit.erasure_receipt.fanout_failed",
             json!({
                 "actor": actor.clone(),
                 "affected_realms": affected_realms,
@@ -1248,7 +1249,7 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     append_audit_log(
         state,
         Some(actor),
-        "ck.audit.actor_audit_redacted",
+        "org.cokret.soland.audit.actor_audit_redacted",
         json!({
             "actor": actor,
             "redacted_entry_count": entries.len(),

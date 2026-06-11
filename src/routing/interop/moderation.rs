@@ -23,7 +23,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{SolandModerationReportOutcome, SolandModerationReportRequestBody};
+use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
@@ -44,29 +44,28 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.moderation.report"))]
 async fn moderation_report(
     aa: AuthArgs,
-    body: JsonBody<SolandModerationReportRequestBody>,
+    body: JsonBody<ModerationReportRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandModerationReportOutcome> {
+) -> JsonResult<ModerationReportOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if RealmId::new(body.realm_id.clone()).is_err() || validate_did(&body.reporter).is_err() {
-        return Err(AppError::invalid_param("invalid realm_id or reporter"));
-    }
-    if body.reporter != session.actor {
+    if body.reporter.as_str() != session.actor {
         return Err(AppError::capability_denied(
             "reporter must match authenticated actor",
         ));
     }
-    if !realm_has_member(state, &body.realm_id, &session.actor).await {
+    if !realm_has_member(state, body.realm_id.as_str(), &session.actor).await {
         return Err(AppError::capability_denied(
             "reporter cannot see the target realm",
         ));
     }
     let report_id = ids::generate_report_id();
-    let moderation_service = format!("{}#moderation", state.config.service_did);
-    let audit_policy = audit_disclosure_policy_for_realm(state, &body.realm_id).await;
+    // Internal assignment keeps the `<did>#moderation` role form; the wire
+    // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
+    let moderation_role = format!("{}#moderation", state.config.service_did);
+    let audit_policy = audit_disclosure_policy_for_realm(state, body.realm_id.as_str()).await;
     let report_payload = json!({
         "report_id": report_id,
         "realm_id": body.realm_id,
@@ -92,7 +91,7 @@ async fn moderation_report(
             "realm_id": body.realm_id,
             "target_ref": body.target_ref,
             "status": "open",
-            "assigned_to": moderation_service.clone(),
+            "assigned_to": moderation_role.clone(),
             "created_at": now(),
         }))
         .await
@@ -111,7 +110,7 @@ async fn moderation_report(
         "status": "submitted",
         "priority": "normal",
         "visibility": "metadata_only",
-        "assigned_to": [moderation_service.clone()],
+        "assigned_to": [moderation_role],
         "audit_refs": [],
         "created_at": now(),
     });
@@ -128,18 +127,34 @@ async fn moderation_report(
         Some(&session.actor),
         "moderation.report",
         json!({"report_id": report_id.clone(), "id": queue_item_ref}),
-        "queued",
+        "submitted",
     )
     .await;
-    let mut routed_to = vec![moderation_service];
+    let mut routed_to = Vec::new();
+    match validate_did(&state.config.service_did) {
+        Ok(did) => routed_to.push(did),
+        Err(()) => tracing::warn!(
+            service_did = %state.config.service_did,
+            "service_did is not a valid bare DID; omitted from routed_to"
+        ),
+    }
     if let Some(audit_agent_principal_id) =
         notify_audit_agent_for_report(state, audit_policy.as_ref(), &report_payload).await
     {
-        routed_to.push(audit_agent_principal_id);
+        // `routed_to` is spec-constrained to bare DIDs; the audit-agent
+        // principal id may come from an external identity response, so it
+        // only rides the wire when it parses as a DID.
+        match validate_did(&audit_agent_principal_id) {
+            Ok(did) => routed_to.push(did),
+            Err(()) => tracing::warn!(
+                %audit_agent_principal_id,
+                "audit agent principal id is not a bare DID; omitted from routed_to"
+            ),
+        }
     }
-    json_ok(SolandModerationReportOutcome {
+    json_ok(ModerationReportOutcome {
         report_id,
-        status: "queued".to_owned(),
+        status: "submitted".to_owned(),
         routed_to,
     })
 }
@@ -347,7 +362,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "ck.audit.agent_invite",
+                "org.cokret.soland.audit.agent_invite",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -362,7 +377,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "ck.audit.agent_invite",
+                "org.cokret.soland.audit.agent_invite",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -376,7 +391,7 @@ async fn notify_audit_agent_for_report(
     }
 
     let event_body = json!({
-        "kind": "ck.audit.report",
+        "kind": "org.cokret.soland.audit.report",
         "event": report_payload,
     });
     match client.post(events_url).json(&event_body).send().await {
@@ -395,7 +410,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "ck.audit.report",
+                "org.cokret.soland.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -410,7 +425,7 @@ async fn notify_audit_agent_for_report(
             append_audit_log(
                 state,
                 None,
-                "ck.audit.report",
+                "org.cokret.soland.audit.report",
                 json!({
                     "realm_id": realm_id,
                     "report_id": report_id,
@@ -434,9 +449,9 @@ async fn append_audit_agent_invite_log(
     append_audit_log(
         state,
         None,
-        "ck.audit.agent_invite",
+        "org.cokret.soland.audit.agent_invite",
         json!({
-            "kind": "ck.audit.agent_invite",
+            "kind": "org.cokret.soland.audit.agent_invite",
             "realm_id": report_payload.get("realm_id").cloned().unwrap_or(Value::Null),
             "report_id": report_payload.get("report_id").cloned().unwrap_or(Value::Null),
             "target_ref": report_payload.get("target_ref").cloned().unwrap_or(Value::Null),

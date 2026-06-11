@@ -694,12 +694,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     .await
     .unwrap();
     assert_eq!(snapshot["frontier"]["message_count"], 3);
-    assert!(
-        snapshot["snapshot_ref"]
-            .as_str()
-            .unwrap()
-            .starts_with("ck:snapshot:")
-    );
+    assert!(snapshot["id"].as_str().unwrap().starts_with("ck:snapshot:"));
     assert!(
         !snapshot["dev_digest"]["digest"]
             .as_str()
@@ -733,7 +728,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
 
     let snapshot_chunk: Value = TestClient::get(format!(
         "http://server/_soland/self/sync/snapshot-chunk?snapshot_ref={}&chunk_id=0",
-        snapshot["snapshot_ref"].as_str().unwrap()
+        snapshot["id"].as_str().unwrap()
     ))
     .send(&app_from_state(state.clone()))
     .await

@@ -108,6 +108,79 @@ async fn peer_events_submit_query_and_frontier_use_peer_surface() {
     );
 }
 
+/// SOL-02-007 — the federation submit path MUST bind the envelope actor to
+/// the asserted `source-trust-domain`: an actor whose home domain differs
+/// from the source domain AND who is not a known member of the binding
+/// Realm is rejected before any session is constructed.
+#[tokio::test]
+async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let mut event = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-fede00000099",
+        1,
+        Vec::new(),
+    );
+    // Re-author the envelope as an actor that is neither homed in the
+    // source trust domain (`remote.example`) nor a member of the demo
+    // Realm's membership index.
+    event["actor_id"] = serde_json::json!("did:web:intruder.evil");
+    event["canonical_digest"] = serde_json::json!(event_canonical_digest(&event));
+    let body = peer_submit_body(&event);
+    let target = "http://server/_cokret/peer/events";
+    let mut submit = TestClient::post(target).json(&body);
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    {
+        submit = submit.add_header(name, value, true);
+    }
+    let outcome: Value = submit
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(outcome["status"], "partial");
+    assert!(outcome["accepted"].as_array().unwrap().is_empty());
+    let rejected = outcome["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0]["reason_code"], "capability_denied");
+    assert!(
+        rejected[0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("source-trust-domain")
+    );
+}
+
+/// SOL-02-007 — counterpart positive path: a known member of the binding
+/// Realm may be relayed by a foreign source domain (identity is still
+/// re-verified by the downstream proof chain).
+#[tokio::test]
+async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    // `did:web:alice.example` is seeded into the demo Realm's membership
+    // index; the source domain is `remote.example` (mismatched home), so
+    // acceptance exercises the membership-index path.
+    let event = signed_event_envelope(
+        "ck:event:01904100-0000-7000-8000-fede00000098",
+        1,
+        Vec::new(),
+    );
+    let body = peer_submit_body(&event);
+    let target = "http://server/_cokret/peer/events";
+    let mut submit = TestClient::post(target).json(&body);
+    for (name, value) in signed_federation_push_headers(PEER_SOURCE_DID, SERVICE_DID, target, &body)
+    {
+        submit = submit.add_header(name, value, true);
+    }
+    let outcome: Value = submit
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(outcome["status"], "accepted");
+}
+
 #[tokio::test]
 async fn self_events_reject_federation_wire() {
     let state = AppState::new(test_config(), Db { pool: None });

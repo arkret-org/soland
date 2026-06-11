@@ -841,6 +841,27 @@ pub(super) async fn submit_federation_events(
             }));
             continue;
         }
+        // SOL-02-007 — bind the envelope actor to the asserted source trust
+        // domain BEFORE constructing a session, instead of leaving author
+        // identity entirely to the downstream proof chain. Two acceptance
+        // paths:
+        //   1. the actor's home trust domain (derived from its DID host,
+        //      same derivation as the service-DID → trust-domain rule)
+        //      equals the `source-trust-domain` header; or
+        //   2. the actor is already a member of the binding Realm in the
+        //      local membership index (the source domain is then relaying
+        //      for a known member; identity is re-verified downstream by
+        //      `validate_event_envelope`'s proof checks).
+        if !federation_actor_origin_acceptable(state, &actor, &source_trust_domain, &binding_realm)
+            .await
+        {
+            rejected.push(json!({
+                "id": id,
+                "reason_code": "capability_denied",
+                "detail": "actor_id home domain does not match source-trust-domain and the actor is not a known member of the binding realm",
+            }));
+            continue;
+        }
         let device_id = event_string_field_from_value(&envelope, "device_id")
             .unwrap_or_else(|| format!("federation:{source_trust_domain}"));
         let session = SessionRecord {
@@ -903,6 +924,25 @@ fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
     value
         .as_object()
         .and_then(|object| event_string_field(object, &[field]))
+}
+
+/// SOL-02-007 — federation actor↔source binding. Accept the envelope actor
+/// when its derived home trust domain equals the asserted
+/// `source-trust-domain`, or when the actor is already present in the local
+/// membership index of the binding Realm (the source domain relays for a
+/// known member; proofs are still verified downstream).
+async fn federation_actor_origin_acceptable(
+    state: &AppState,
+    actor: &str,
+    source_trust_domain: &str,
+    binding_realm: &str,
+) -> bool {
+    let actor_home_domain =
+        crate::routing::federation::federation::trust_domain_from_service_did(actor);
+    if actor_home_domain == source_trust_domain {
+        return true;
+    }
+    realm_has_member(state, binding_realm, actor).await
 }
 
 fn events_submit_status_label(status: EventsSubmitStatus) -> &'static str {

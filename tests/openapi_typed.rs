@@ -249,8 +249,8 @@ async fn typed_describe_handlers_publish_response_schemas() {
     // All wire types already carry `ToSchema`; the conversions attach
     // operation_id + typed request/response/path/query schemas.
     for typed_now in [
-        "SolandModerationReportRequestBody",
-        "SolandModerationReportOutcome",
+        "ModerationReportRequestBody",
+        "ModerationReportOutcome",
         "PushUnregisterRequestBody",
         "PushNotifyRequestBody",
         "PushNotifyOutcome",

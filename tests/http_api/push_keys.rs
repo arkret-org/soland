@@ -408,7 +408,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(report["status"], "queued");
+    assert_eq!(report["status"], "submitted");
     assert!(
         state
             .persistence
@@ -418,7 +418,7 @@ async fn push_profile_and_moderation_contracts_work() {
             .unwrap()
             .iter()
             .any(|entry| {
-                entry["action"] == "moderation.report" && entry["outcome"] == "queued"
+                entry["action"] == "moderation.report" && entry["outcome"] == "submitted"
             })
     );
     assert!(

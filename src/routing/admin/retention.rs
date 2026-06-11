@@ -62,7 +62,7 @@ async fn configure_retention_policy(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.audit.retention_policy.updated",
+        "org.cokret.soland.audit.retention_policy.updated",
         json!({
             "realm_id": realm_id,
             "ttl_seconds": ttl_seconds,
@@ -163,7 +163,7 @@ async fn sweep_retention_policy(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.audit.retention_sweep",
+        "org.cokret.soland.audit.retention_sweep",
         json!({
             "realm_id": realm_id,
             "examined": examined,
