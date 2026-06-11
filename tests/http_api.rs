@@ -15,6 +15,8 @@ mod common;
 mod account_data;
 #[path = "http_api/account_workflow.rs"]
 mod account_workflow;
+#[path = "http_api/admin_b_track.rs"]
+mod admin_b_track;
 #[path = "http_api/agent_bridge.rs"]
 mod agent_bridge;
 #[path = "http_api/auth.rs"]
