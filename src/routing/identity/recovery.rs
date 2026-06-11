@@ -727,7 +727,8 @@ async fn verify_principal_signing_proof(
         .ok_or_else(|| AppError::invalid_param("proof.verification_method is required"))?;
     let principal_did = Did::new(record.principal_id.clone())
         .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
-    // 高风险:recovery 验签前强制 DID 文档新鲜度门禁(fail-closed-on-stale)。
+    // High-risk path: enforce DID document freshness before recovery
+    // signature verification (fail-closed-on-stale).
     let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &principal_did,
@@ -1086,9 +1087,9 @@ async fn expire_if_elapsed(
 /// Generate a 256-bit anti-replay challenge (base64url, no padding). Pulled
 /// from the OS CSPRNG.
 fn generate_recovery_challenge() -> String {
-    use rand::RngCore;
+    use rand::RngExt;
     let mut buf = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::rng().fill(&mut buf);
     URL_SAFE_NO_PAD.encode(buf)
 }
 
@@ -1731,7 +1732,8 @@ async fn verify_recovery_auth_signature(
         .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
     let principal_did = Did::new(principal_id.to_owned())
         .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
-    // 高风险:recovery 验签前强制 DID 文档新鲜度门禁(fail-closed-on-stale)。
+    // High-risk path: enforce DID document freshness before recovery
+    // signature verification (fail-closed-on-stale).
     let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &principal_did,

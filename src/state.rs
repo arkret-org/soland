@@ -1282,7 +1282,7 @@ pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX: u32 = 256;
 
 /// Rolling window over which a principal's key-backup ciphertext downloads
 /// accumulate before further reads are rejected. Spec §7.8 phrases the limit
-/// as "每 principal 每 24h".
+/// as "per principal per 24h".
 pub const KEY_BACKUP_DOWNLOAD_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
 /// A revoked cursor authority recorded by `ck.self.account.cursor_revoke`.
@@ -1371,15 +1371,17 @@ pub struct WebvhDocumentRecord {
     pub key_log_head: Option<String>,
     pub seq: u64,
     pub method_evidence: Value,
-    /// 本记录被本节点 ingest(写入)的时刻。高风险验签路径据此判断缓存
-    /// 公钥是否陈旧(`age = now - fetched_at` 与调用方传入的 `max_age` 比较,
-    /// 见 `verify_did_document_freshness`)。写入即 ingest:`put_document`
-    /// 落库时以"现在"为基线写入本字段,因此持久化的记录恒有新鲜度证据。
+    /// Time this record was ingested by this node. High-risk verification
+    /// paths compare `age = now - fetched_at` with the caller-provided
+    /// `max_age` via `verify_did_document_freshness`. Writes are ingestion:
+    /// `put_document` stamps this field with "now", so persisted records
+    /// always carry freshness evidence.
     pub fetched_at: chrono::DateTime<chrono::Utc>,
-    /// 高风险基线过期点,通常等于 `fetched_at + 高风险基线 TTL`(15min)。
-    /// 仅作存储与按过期点清理的索引提示(规范 §3.4:缓存 MUST 绑定 expiry);
-    /// 实际新鲜度判定以 `age vs max_age` 为准,degraded 只读路径可用更大的
-    /// `max_age`(24h)读取已过 `expires_at` 的记录并打标。
+    /// High-risk baseline expiry hint, usually `fetched_at + high-risk
+    /// baseline TTL` (15 minutes). This is only a storage and cleanup-index
+    /// hint per §3.4; actual freshness uses `age vs max_age`. Degraded
+    /// read-only paths may use a larger `max_age` (24h) and mark records that
+    /// have passed `expires_at`.
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -2583,11 +2585,11 @@ impl AppState {
 }
 
 /// Fill `out` with cryptographically secure random bytes via
-/// `rand::OsRng`. Used by both the boot path (one-shot KeyStore mint) and
+/// `rand::rng`. Used by both the boot path (one-shot KeyStore mint) and
 /// the rotate-signing-key endpoint.
 pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
-    use rand::RngCore;
-    rand::rngs::OsRng.fill_bytes(out);
+    use rand::RngExt;
+    rand::rng().fill(out);
 }
 
 /// Read Space-container / Flow / Morph projection rows from durable

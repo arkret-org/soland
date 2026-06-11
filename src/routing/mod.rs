@@ -1376,9 +1376,10 @@ fn pattern_matches_path(pattern: &str, path: &str) -> bool {
 ///
 /// Per `cokret-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
 /// posture for browser-facing services is `Access-Control-Allow-Origin: *`,
-/// and §10 explicitly says browser-accessible private endpoints "不得依赖
-/// cookie 作为唯一认证方式" — meaning credentials need not be reflected to
-/// the browser. Salvo's `Cors` builder also panics if `*` is combined with
+/// and §10 explicitly says browser-accessible private endpoints must not rely
+/// on cookies as the sole authentication mechanism, meaning credentials need
+/// not be reflected to the browser. Salvo's `Cors` builder also panics if `*`
+/// is combined with
 /// `allow_credentials(true)`, so we branch:
 ///
 /// - `"*"` → mirror the request origin (universally usable as a `*` substitute that survives the

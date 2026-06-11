@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 pub use cokret_sdk::api::ops::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
@@ -345,7 +343,8 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // no private copies that could drift. NOTE: the explicit `model::` path
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
-pub use cokret_sdk::model::{SyncDescription, SyncRequestBody};
+pub use cokret_sdk::SyncRequestBody;
+pub use cokret_sdk::model::SyncDescription;
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandHandleClaim {
@@ -1641,21 +1640,6 @@ pub fn describe(
         reducer_profile: Some("ck.reducer.v1".to_owned()),
         last_materialized_at: None,
     }
-}
-
-pub fn sync_token() -> String {
-    let now = Utc::now();
-    let expires_at = now + chrono::Duration::hours(1);
-    let cursor = json!({
-        "v": "1",
-        "purpose": "stream",
-        "t": now.to_rfc3339(),
-        "x": expires_at.timestamp_millis(),
-        "h": format!("wire:{}", now.timestamp_micros())
-    });
-    let bytes = cokret_sdk::canonical::canonical_json_bytes(&cursor)
-        .unwrap_or_else(|_| cursor.to_string().into_bytes());
-    format!("ck:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub fn now() -> DateTime<Utc> {

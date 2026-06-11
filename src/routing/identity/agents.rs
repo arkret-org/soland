@@ -27,9 +27,9 @@
 
 use chrono::SecondsFormat;
 use cokret_sdk::model::{
-    AgentParticipation, AgentParticipationEntry, AgentParticipationResBody,
-    AgentParticipationScope, AgentParticipationSetReqBody, effective_participation,
-    validate_selection_within_ceiling,
+    AgentParticipation, AgentParticipationEntry, AgentParticipationOutcome as AgentParticipationResBody,
+    AgentParticipationScope, AgentParticipationSetRequestBody as AgentParticipationSetReqBody,
+    effective_participation, validate_selection_within_ceiling,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -934,8 +934,9 @@ async fn ensure_sidecar_thread_impl(
     let realm_id = body
         .context_realm_id
         .unwrap_or_else(|| ids::generate("realm"));
-    // `sidecar_circle_id` 描述的是该值的用途(sidecar 线程的 Circle),其 typed
-    // 前缀必须是已注册的 `ck:circle:`,而非未注册的 `ck:sidecar_circle:`。
+    // `sidecar_circle_id` describes the value's use (the sidecar thread's
+    // Circle). Its typed prefix must be registered `ck:circle:`, not the
+    // unregistered `ck:sidecar_circle:`.
     let sidecar_circle_id = ids::generate("circle");
     append_audit_log(
         state,

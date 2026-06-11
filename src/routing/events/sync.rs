@@ -1723,7 +1723,7 @@ pub(super) fn encode_sync_cursor_value(cursor: Value) -> String {
 /// churn, no new row). 16 bytes → 128 bits → ≥22 base64url chars, satisfying
 /// `cursor.schema.json` `h`.
 fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let mut mac = <Hmac<Sha256>>::new_from_slice(cursor_key).expect("HMAC accepts any key length");
     mac.update(canonical_binding);

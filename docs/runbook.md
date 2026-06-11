@@ -166,7 +166,8 @@ cargo run --bin soland-rotate-drill --release
 
 ## R3 operational additions
 
-The sections below cover the R3 sync (`cokret-spec @ b47ff6ec`). They are
+The sections below cover the R3 sync and later v1 updates
+(`cokret-spec @ 8a9c32a`). They are
 intentionally separable from the legacy runbook above so that you can
 on-call a fresh ops engineer who has not seen pre-R3 soland.
 

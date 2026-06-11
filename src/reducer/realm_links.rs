@@ -33,7 +33,7 @@
 //!
 //! 3. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
 //!    `ck.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
-//!    yield any inherited rules ("禁止隐式级联", §5). The [`effective_policy_for_realm`] helper
+//!    yield any inherited rules ("no implicit cascading", §5). The [`effective_policy_for_realm`] helper
 //!    enforces this: when no `RealmInheritancePolicyState` is present for the realm,
 //!    `inheritance_mode` is `"none"` and the chain is empty regardless of how many `governed_by` /
 //!    `inherits_policy_from` parents exist in the link graph.
@@ -44,8 +44,8 @@
 //!    link-graph fanout, and re-computing on each query keeps the invalidation surface ("recompute
 //!    on link change OR policy change") trivially correct.
 //!
-//! Per `realm-links.md §6.3` "本地 deny / revoke / ban 覆盖 inherited
-//! allow" — local policy wins. At this layer we expose the inherited
+//! Per `realm-links.md §6.3`, local deny / revoke / ban overrides inherited
+//! allow. At this layer we expose the inherited
 //! set; downstream policy evaluators apply the local-override rule on
 //! top.
 
@@ -121,7 +121,7 @@ pub fn path_exists(
 /// `Explicit` mirrors `realm-links.md §6` opt-in semantics: the realm
 /// has projected a `ck.realm.inheritance_policy` declaring which parent
 /// policies / capability bundles it accepts. `None` means no
-/// declaration — per §5 "禁止隐式级联", the effective policy is the
+/// declaration; per §5 "no implicit cascading", the effective policy is the
 /// realm's own local policy only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -197,7 +197,7 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
         // unconditionally — but the chain walk to the declared
         // `source_realm_id` requires a *currently active* `governed_by`
         // / `inherits_policy_from` link from `realm_id` to that source.
-        // Spec §6.3: "本地 deny / revoke / ban 覆盖 inherited allow" —
+        // Spec §6.3: local deny / revoke / ban overrides inherited allow.
         // tombstoning or rejecting the underlying link severs the
         // inheritance even if the inheritance_policy declaration is
         // still on file.
@@ -286,7 +286,7 @@ fn walk_inheritance(
     }
     // Follow `governed_by` / `inherits_policy_from` active links from
     // the current ancestor — these are the spec's policy-bearing links
-    // (`realm-links.md §3` table: rows where "是否允许授权派生" is MAY).
+    // (`realm-links.md §3` table: rows where authorization derivation is MAY).
     let Some(outbound) = state.realm_links.get(current) else {
         return;
     };

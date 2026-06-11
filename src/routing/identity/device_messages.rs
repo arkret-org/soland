@@ -20,12 +20,13 @@ use super::{
     validate_device_message_target,
 };
 use crate::error::{AppError, ErrorCode};
+use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
 use crate::wire::{
     DeviceMessageEnvelope, DeviceMessagesGetOutcome, DeviceMessagesPutOutcome,
-    DeviceMessagesPutRequestBody, sync_token,
+    DeviceMessagesPutRequestBody,
 };
 
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
@@ -73,7 +74,7 @@ async fn send_device_messages(
         .get("Idempotency-Key")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
-        .unwrap_or_else(sync_token);
+        .unwrap_or_else(ids::generate_request_id);
     let body = body.into_inner();
     for devices in body.messages.values() {
         for target in devices.values() {

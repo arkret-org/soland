@@ -29,9 +29,10 @@ use crate::persistence::{
 };
 use crate::state::AppState;
 
-/// 高风险验签路径的 DID 文档新鲜度阈值。等于持久化层的基线 TTL
-/// (15min)。超过此年龄、或缺少新鲜度证据(旧记录),高风险路径即
-/// fail-closed——因 soland 不做按需网络拉取,无法刷新即视为不可用。
+/// DID document freshness threshold for high-risk verification paths. Equal
+/// to the persistence-layer baseline TTL (15min). Records older than this,
+/// or records without freshness evidence, fail closed because soland does not
+/// perform on-demand network refreshes.
 pub const HIGH_RISK_DID_FRESHNESS_MAX_SECS: i64 = WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS;
 
 /// Resolved Ed25519 verification key with the document metadata that
@@ -149,22 +150,25 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
     Ok(document)
 }
 
-/// 高风险路径的 DID 文档新鲜度门禁(fail-closed-on-stale)。
+/// DID document freshness gate for high-risk paths (fail-closed-on-stale).
 ///
-/// 从持久化层取该 DID 的 [`WebvhDocumentRecord`](即"已 ingest 的文档"),
-/// 用 [`verify_did_document_freshness`] 判定:
+/// Fetches the DID's persisted [`WebvhDocumentRecord`] (the ingested
+/// document) and evaluates it with [`verify_did_document_freshness`]:
 ///
-/// * [`WebvhFreshness::Fresh`] → `Ok(())`,放行。
-/// * [`WebvhFreshness::Stale`] → `Err`,缓存公钥已超过高风险 TTL,fail-closed。
+/// * [`WebvhFreshness::Fresh`] returns `Ok(())`.
+/// * [`WebvhFreshness::Stale`] returns `Err`; the cached public key exceeded
+///   the high-risk TTL and must fail closed.
 ///
-/// 若该 DID 在持久化层没有任何记录(`get_document` 返回 `None`):说明没有
-/// 任何可信的 ingest 证据可用于高风险验签,同样 fail-closed。注意:dev /
-/// extension 等本地即时文档不入此持久化路径,故不受影响——它们由
-/// `verify_jws_ed25519` 内部的 SDK resolver 直接处理,本门禁仅约束"缓存的
-/// 远端/已提交文档"。
+/// If persistence has no record for the DID (`get_document` returns `None`),
+/// there is no trusted ingestion evidence for high-risk verification and the
+/// path also fails closed. Local immediate documents such as dev / extension
+/// actors are not persisted here and are handled directly by the SDK resolver
+/// inside `verify_jws_ed25519`; this gate only covers cached remote/submitted
+/// documents.
 ///
-/// soland 不做按需网络拉取,因此"陈旧"等价于"不可用":这是高风险写入路径
-/// 刻意的保守取舍,degraded 只读放宽不适用于此。
+/// Because soland does not perform on-demand network fetches, "stale" means
+/// "unavailable" for high-risk writes; degraded read-only relaxation does not
+/// apply here.
 pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
     let max_age = chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
     let record = state
@@ -174,7 +178,8 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
         .await
         .map_err(|error| format!("DID freshness lookup failed: {error}"))?;
     let Some(record) = record else {
-        // 无任何 ingest 记录:高风险路径无可信新鲜度证据,fail-closed。
+        // No ingested record means no trusted freshness evidence for a
+        // high-risk path, so fail closed.
         return Err(format!(
             "DID document freshness unavailable for high-risk verification: no ingested record for {did}"
         ));
@@ -187,15 +192,17 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
     }
 }
 
-/// [`resolve_ed25519_verification_key_for_did`] 的高风险变体:在解析公钥
-/// 之前(或之后)强制执行新鲜度门禁。federation receive / recovery 等高风险
-/// 调用点改用此变体。读侧若不需 fail-closed,仍可调用非 `_fresh` 版本。
+/// High-risk variant of [`resolve_ed25519_verification_key_for_did`]: enforce
+/// freshness before resolving the public key. High-risk callers such as
+/// federation receive and recovery use this variant. Read-side callers that
+/// do not need fail-closed semantics can still call the non-`_fresh` version.
 pub async fn resolve_ed25519_verification_key_for_did_fresh(
     state: &AppState,
     did: &Did,
     verification_method: &str,
 ) -> Result<ResolvedVerificationKey, String> {
-    // 先做新鲜度门禁:陈旧/缺失证据直接拒绝,不再解析公钥。
+    // Enforce freshness first: stale or missing evidence rejects before key
+    // resolution.
     enforce_high_risk_did_freshness(state, did).await?;
     resolve_ed25519_verification_key_for_did(state, did, verification_method).await
 }

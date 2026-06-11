@@ -364,14 +364,13 @@ pub fn compute_audit_policy_hash(
     trust_domain: &cokret_sdk::TypedTrustDomainId,
     audit_disclosure: &Value,
     audit_assurance: &Value,
-) -> [u8; 32] {
+) -> cokret_sdk::Result<[u8; 32]> {
     cokret_sdk::compute_audit_policy_version_digest(
         realm_id,
         trust_domain,
         audit_disclosure,
         audit_assurance,
     )
-    .unwrap_or([0u8; 32])
 }
 
 /// Spec B1.16 — build a `ck.audit.policy_access` payload for the
@@ -417,13 +416,15 @@ mod audit_policy_tests {
             &td(),
             &json!({"mode": "strict"}),
             &json!("attested_hardware"),
-        );
+        )
+        .expect("audit policy digest should compute");
         let h2 = compute_audit_policy_hash(
             &realm(),
             &other_td(),
             &json!({"mode": "strict"}),
             &json!("attested_hardware"),
-        );
+        )
+        .expect("audit policy digest should compute");
         assert_ne!(h1, h2);
     }
 

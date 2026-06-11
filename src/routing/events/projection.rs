@@ -2412,7 +2412,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
 
 /// Spec invite-addressing.md / event-kind-registry — project an accepted
 /// `ck.invite.accept` durable event. The invitee submits it to close the
-/// "拉群" loop:
+/// group-invite loop:
 ///   1. resolve the referenced invite, validating it is still `pending` and that the accepting
 ///      sender == the invite's `invitee`;
 ///   2. flip the `RealmInviteRecord` to `accepted`;

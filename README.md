@@ -1,6 +1,6 @@
 # soland
 
-> **Spec target**: [cokret-spec @ c2848a4](../cokret-spec) (R3.4 sync 2026-05-31)
+> **Spec target**: [cokret-spec @ 8a9c32a](../cokret-spec) (v1 sync 2026-06-11)
 
 Reference Cokret v1 principal server, built with Salvo, Diesel, and
 PostgreSQL. The HTTP surface mirrors `cokret-spec/spec/v1/artifacts/openapi/cokret-service-api.openapi.yaml`;

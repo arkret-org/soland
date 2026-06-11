@@ -84,32 +84,35 @@ pub enum PersistenceError {
 /// Result type for persistence operations.
 pub type PersistenceResult<T> = Result<T, PersistenceError>;
 
-/// 高风险验签路径的 DID 文档新鲜度基线 TTL(15 分钟)。
+/// Baseline DID document freshness TTL for high-risk verification paths
+/// (15 minutes).
 ///
-/// `put_document` 写入时以 `expires_at = fetched_at + 此值` 标注记录;
-/// 高风险阈值默认同样取此值(见 `verify_did_document_freshness` 的
-/// `max_age` 调用约定)。选 15min 与 push 合约新鲜度门禁的保守取值一致,
-/// 因为 soland 本身不做按需网络拉取——缓存的公钥越新越好。
+/// `put_document` stamps records with
+/// `expires_at = fetched_at + this value`; high-risk callers use the same
+/// value as their default `max_age` for `verify_did_document_freshness`.
+/// The 15-minute window matches the conservative push-contract freshness
+/// gate because soland does not perform on-demand network refreshes.
 pub const WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
 
-/// degraded 只读放宽窗口(24h)。复用
+/// Degraded read-only relaxation window (24h). Reuses the same duration as
 /// `routing::identity::webvh_validation::WEBVH_DEGRADED_NO_WITNESS_MAX_SECS`
-/// 的同一时长。仅供读侧(非高风险)在 degraded 模式下放行并打标使用;
-/// 高风险写入路径绝不走此窗口。
+/// and is only for non-high-risk read paths in degraded mode. High-risk
+/// write paths never use this window.
 pub const WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS: i64 = 24 * 60 * 60;
 
-/// `verify_did_document_freshness` 的判定结果。语义对齐
-/// [`DriftResult`]:高风险路径将除 `Fresh` 外的一切视为 fail-closed。
+/// Result of `verify_did_document_freshness`. Semantics match
+/// [`DriftResult`]: high-risk paths fail closed on anything other than
+/// `Fresh`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebvhFreshness {
-    /// 记录年龄在 `max_age` 内,可放行。
+    /// Record age is within `max_age` and may be accepted.
     Fresh,
-    /// 记录年龄已超过 `max_age`,高风险须拒绝。
+    /// Record age exceeds `max_age`; high-risk callers must reject it.
     Stale,
 }
 
 impl WebvhFreshness {
-    /// 稳定字符串标签,用于审计 `outcome` 字段与拒绝响应。
+    /// Stable string label for audit `outcome` fields and rejection payloads.
     pub fn as_str(self) -> &'static str {
         match self {
             WebvhFreshness::Fresh => "fresh",
@@ -118,20 +121,22 @@ impl WebvhFreshness {
     }
 }
 
-/// 判定一条 [`WebvhDocumentRecord`] 在 `now` 时刻、给定 `max_age` 下的
-/// 新鲜度。风格对齐 [`verify_contract_freshness`] / [`evaluate_drift`]:
-/// 纯函数,fail-closed 语义集中在一处。
+/// Decide the freshness of a [`WebvhDocumentRecord`] at `now` under the
+/// supplied `max_age`. This follows [`verify_contract_freshness`] /
+/// [`evaluate_drift`]: a pure function with fail-closed semantics centralized
+/// in one place.
 ///
-/// 判定以 `age = now - record.fetched_at` 与 `max_age` 比较为准:
-/// `age > max_age` → [`WebvhFreshness::Stale`],否则 [`WebvhFreshness::Fresh`]。
+/// The decision compares `age = now - record.fetched_at` against `max_age`:
+/// `age > max_age` returns [`WebvhFreshness::Stale`], otherwise
+/// [`WebvhFreshness::Fresh`].
 ///
-/// 不直接看 `record.expires_at`:`expires_at` 是写入时固化的高风险过期提示
-/// (= fetched_at + 15min,仅用于存储与清理索引,见 §3.4 "缓存 MUST 绑定
-/// expiry")。由调用方按路径风险选择 `max_age`——高风险传 15min(等价于
-/// `expires_at`),degraded 只读传 24h 以放行已过 `expires_at` 的记录并打标。
-/// 持久化记录恒有 `fetched_at`(`put_document` 落库时写入),故无 "Missing"
-/// 状态;"无任何 ingest 记录" 的 fail-closed 由调用方在 `get_document` 返回
-/// `None` 时处理(见 `enforce_high_risk_did_freshness`)。
+/// `record.expires_at` is not read directly: it is the write-time high-risk
+/// expiry hint (`fetched_at + 15min`) used for storage and cleanup indexing
+/// per §3.4. Callers choose `max_age` by path risk: high-risk callers pass
+/// 15 minutes, while degraded read-only callers may pass 24 hours and mark
+/// the result. Persisted records always have `fetched_at`; the "no ingested
+/// record" fail-closed case is handled by callers when `get_document`
+/// returns `None`.
 pub fn verify_did_document_freshness(
     record: &WebvhDocumentRecord,
     now: chrono::DateTime<Utc>,
@@ -145,12 +150,13 @@ pub fn verify_did_document_freshness(
     }
 }
 
-/// 计算 `put_document` 落库时写入的新鲜度证据 `(fetched_at, expires_at)`。
+/// Compute the freshness evidence `(fetched_at, expires_at)` stamped by
+/// `put_document`.
 ///
-/// 写入即 ingest:权威地以"现在"为基线标注——`fetched_at = now`、
-/// `expires_at = now + WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS`。调用方在构造
-/// `WebvhDocumentRecord` 时填的两字段值会被此处覆盖(它们无法预知真正的
-/// ingest 时刻)。Memory 与 Pg 两个 backend 共用此函数,确保写入语义不漂移。
+/// Writes are ingestion: the backend authoritatively stamps `fetched_at = now`
+/// and `expires_at = now + WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS`. Values supplied
+/// by callers are overwritten because they cannot know the actual ingestion
+/// instant. Memory and Pg backends share this helper to avoid drift.
 fn webvh_freshness_on_put() -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
     let fetched_at = Utc::now();
     let expires_at = fetched_at + chrono::Duration::seconds(WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS);
@@ -1559,7 +1565,8 @@ mod tests {
             key_log_head: Some("sha256:head".to_owned()),
             seq: 1,
             method_evidence: serde_json::json!({"method": "key-rotation"}),
-            // 构造值会被 put_document 以 ingest 时刻覆盖,这里给占位即可。
+            // put_document overwrites these with the ingestion instant, so
+            // placeholders are enough here.
             fetched_at: now,
             expires_at: now,
             updated_at: now,
@@ -1618,7 +1625,7 @@ mod tests {
         );
     }
 
-    // ---- L3:DID 文档新鲜度判定 ----
+    // ---- L3: DID document freshness decisions ----
 
     fn webvh_record_with_freshness(
         fetched_at: chrono::DateTime<Utc>,
@@ -1651,7 +1658,8 @@ mod tests {
     #[test]
     fn freshness_stale_when_age_exceeds_max_age() {
         let now = Utc::now();
-        // fetched_at 已超过 15min max_age → Stale(expires_at 不参与判定)。
+        // fetched_at exceeds the 15-minute max_age, so the record is stale;
+        // expires_at does not participate in the decision.
         let record = webvh_record_with_freshness(
             now - chrono::Duration::seconds(20 * 60),
             now - chrono::Duration::seconds(5 * 60),
@@ -1663,9 +1671,11 @@ mod tests {
 
     #[test]
     fn freshness_degraded_read_window_within_24h() {
-        // degraded 只读放宽:用 24h 阈值时,2h 前 ingest 的记录仍判 Fresh
-        // (供读侧打标放行;高风险写入路径不传此阈值)。即便记录的 expires_at
-        // (高风险 15min 过期点)早已过,degraded 仍以更大的 max_age 放行。
+        // Degraded read-only relaxation: with a 24h threshold, a record
+        // ingested 2h ago remains Fresh for read-side marking. High-risk
+        // write paths never pass this threshold. Even if expires_at
+        // (the high-risk 15-minute expiry hint) has passed, degraded reads
+        // use the larger max_age.
         let now = Utc::now();
         let record = webvh_record_with_freshness(
             now - chrono::Duration::hours(2),
@@ -1676,7 +1686,7 @@ mod tests {
             verify_did_document_freshness(&record, now, degraded),
             WebvhFreshness::Fresh
         );
-        // 但同一记录在高风险 15min 阈值下判 Stale。
+        // The same record is Stale under the high-risk 15-minute threshold.
         assert_eq!(
             verify_did_document_freshness(
                 &record,
@@ -1689,8 +1699,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_document_stamps_freshness_at_ingest() {
-        // put_document 落库时以 ingest 时刻权威覆盖 fetched_at/expires_at,
-        // 无论构造时填了什么(这里故意填很旧的占位值)。
+        // put_document authoritatively overwrites fetched_at/expires_at with
+        // the ingestion instant regardless of constructor placeholders.
         let store = MemoryWebvhStore::new();
         let stale = Utc::now() - chrono::Duration::hours(3);
         let record = webvh_record_with_freshness(stale, stale);
@@ -1700,10 +1710,11 @@ mod tests {
             .await
             .unwrap()
             .expect("document present");
-        // expires_at ≈ fetched_at + 高风险基线 TTL。
+        // expires_at is fetched_at plus the high-risk baseline TTL.
         let delta = stored.expires_at.signed_duration_since(stored.fetched_at);
         assert_eq!(delta.num_seconds(), WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS);
-        // 旧占位值已被 ingest 时刻覆盖:落库后立即按高风险阈值判定应为 Fresh。
+        // The stale placeholders were overwritten at ingestion, so the stored
+        // record is Fresh under the high-risk threshold immediately after put.
         assert_eq!(
             verify_did_document_freshness(
                 &stored,

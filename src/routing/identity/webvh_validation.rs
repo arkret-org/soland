@@ -9,8 +9,8 @@
 //!    versionId-stripped) entry. Spec: `identity/identity-did.md` §3.4 ("entry hash chain") and the
 //!    DIF didwebvh v1.0 method spec.
 //! 2. **SCID mismatch rejection** — the SCID embedded in the DID string MUST equal the SCID
-//!    derivable from the genesis entry (§3 / §3.4 — "DNS hijack protection" / "可审计的 DID
-//!    控制历史").
+//!    derivable from the genesis entry (§3 / §3.4, covering DNS hijack protection and auditable
+//!    DID control history).
 //! 3. **Witness signature verification** — every witness proof present on an entry must verify,
 //!    distinct valid witnesses are counted toward the configured quorum, and entries with
 //!    configured witnesses may only remain in `degraded_no_witness` for 24h. Rotation entries fail
@@ -215,7 +215,7 @@ impl From<WebvhValidationError> for AppError {
 /// Iterate pairwise over a log and reject the first chain break.
 ///
 /// Spec: `identity/identity-did.md` §3.4 — `did:webvh` provides
-/// "`did.jsonl` 历史 (SCID + entry hash chain + controller proof)" —
+/// "`did.jsonl` history (SCID + entry hash chain + controller proof)" -
 /// and the embedded provider uses `versionId = "<seq>-<multibase-multihash>"`
 /// where the multihash is sha256 over the canonical JSON of the entry
 /// with `proof` and `versionId` stripped (see `webvh_entry_hash` below;
@@ -848,13 +848,13 @@ pub fn resolver_health_verdict(
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
-    use rand::RngCore;
+    use rand::RngExt;
 
     use super::*;
 
     fn fresh_signing_key() -> SigningKey {
         let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rand::rng().fill(&mut bytes);
         SigningKey::from_bytes(&bytes)
     }
 

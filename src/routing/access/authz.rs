@@ -58,8 +58,9 @@ async fn authz_check(
     req: &mut Request,
 ) -> JsonResult<SolandAuthzCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    // TODO(authz-scoping): spec service-http-binding.md:140 要求按 caller
-    // 身份(本人/服务签名)进一步限定,此处先关闭匿名访问。
+    // TODO(authz-scoping): service-http-binding.md §account_auth / §self authorization
+    // requires caller-shape scoping (principal session vs service signature).
+    // Until that is fully wired, anonymous access remains closed.
     let session = aa.authenticated_session(state, req).await?;
     let _ = &session;
     let body = body.into_inner();
@@ -365,7 +366,8 @@ async fn create_grant(
         }
     } else {
         // Root grant: only the Realm owner MAY issue. capabilities.md §3
-        // (Grant 由 issuer 持有,且 issuer MUST hold the action — owner does).
+        // (the grant is held by the issuer, and the issuer MUST hold the
+        // action; the owner does).
         require_realm_owner(state, &body.realm_id, &session.actor).await?;
         state.authz.create_grant_with_options(
             body.realm_id,

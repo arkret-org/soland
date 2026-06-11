@@ -1403,7 +1403,7 @@ fn origin_key_state_digest_for_service(
     hasher.update(b"soland:federation-origin-key-state:v1:");
     hasher.update(service_did.as_bytes());
     hasher.update(verifying_key.to_bytes());
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 fn decode_signature_header(value: &str) -> Result<Signature, &'static str> {
@@ -1618,8 +1618,8 @@ async fn verify_federation_actor_signature(
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = parse_federation_actor_signature(&body.signature)?;
-    // 高风险:federation receive 验签前强制 DID 文档新鲜度门禁
-    // (fail-closed-on-stale)。
+    // High-risk path: enforce DID document freshness before federation receive
+    // signature verification (fail-closed-on-stale).
     let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &body.actor_id,
@@ -2135,7 +2135,7 @@ async fn enqueue_outbound_for(
     hasher.update(resource_kind.as_bytes());
     hasher.update(b"|");
     hasher.update(resource_id.as_bytes());
-    let idempotency_key = format!("ck:outbox:{:x}", hasher.finalize());
+    let idempotency_key = format!("ck:outbox:{}", hex::encode(hasher.finalize()));
     if let Err(error) = crate::routing::federation::outbox::enqueue_outbound(
         state,
         peer.url.as_str(),

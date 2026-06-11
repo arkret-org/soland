@@ -1008,8 +1008,9 @@ fn request_oauth_introspection(
         Err(_) => {
             // Not on a tokio runtime — should only happen in unit tests
             // that bypass the salvo runtime. Fall back to the legacy
-            // blocking client; the timing-leak window is irrelevant
-            // outside the request-serving runtime.
+            // blocking client; it applies the same latency floor as the
+            // async path so the security property does not depend on the
+            // caller's runtime context.
             return legacy_blocking_introspection(
                 &introspection_url,
                 &introspection_bearer,
@@ -1138,30 +1139,33 @@ fn legacy_blocking_introspection(
     token: &str,
     development_mode: bool,
 ) -> Result<Value, (StatusCode, &'static str, &'static str)> {
-    let request = OAuthIntrospectionRequestBody {
-        token,
-        token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
-    };
-    // SOL-03-002: pin validated IPs into the (blocking) client to close the
-    // DNS-rebinding TOCTOU window, matching the async path. (This legacy
-    // blocking path is only reachable outside the request-serving runtime; see
-    // SOL-08-002/SOL-99-002 for its planned removal.)
-    let (introspection_url, client) =
-        crate::security::validate_http_url_for_egress_with_pinned_blocking_client(
-            introspection_url,
-            "OAuth introspection",
-            development_mode,
-            OAUTH_INTROSPECTION_TIMEOUT,
-        )
-        .map_err(|error| {
-            tracing::warn!(%error, "OAuth introspection denied by egress policy");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "OAuth introspection service unavailable",
+    let started = std::time::Instant::now();
+    let jitter_micros = jitter_micros(OAUTH_INTROSPECTION_JITTER_MAX);
+    let result = (|| {
+        let request = OAuthIntrospectionRequestBody {
+            token,
+            token_type_hint: OAUTH_INTROSPECTION_TOKEN_TYPE_HINT,
+        };
+        // SOL-03-002: pin validated IPs into the (blocking) client to close the
+        // DNS-rebinding TOCTOU window, matching the async path. (This legacy
+        // blocking path is only reachable outside the request-serving runtime; see
+        // SOL-08-002/SOL-99-002 for its planned removal.)
+        let (introspection_url, client) =
+            crate::security::validate_http_url_for_egress_with_pinned_blocking_client(
+                introspection_url,
+                "OAuth introspection",
+                development_mode,
+                OAUTH_INTROSPECTION_TIMEOUT,
             )
-        })?;
-    let response = client
+            .map_err(|error| {
+                tracing::warn!(%error, "OAuth introspection denied by egress policy");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_unavailable",
+                    "OAuth introspection service unavailable",
+                )
+            })?;
+        let response = client
             .post(introspection_url)
             .bearer_auth(introspection_bearer)
             .form(&request)
@@ -1174,38 +1178,44 @@ fn legacy_blocking_introspection(
                     "OAuth introspection service unavailable",
                 )
             })?;
-    if !response.status().is_success() {
-        tracing::warn!(
-            status = response.status().as_u16(),
-            "OAuth introspection rejected the service bearer"
-        );
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "invalid bearer token",
-        ));
+        if !response.status().is_success() {
+            tracing::warn!(
+                status = response.status().as_u16(),
+                "OAuth introspection rejected the service bearer"
+            );
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "invalid bearer token",
+            ));
+        }
+        response.json::<Value>().map_err(|error| {
+            tracing::warn!(%error, "OAuth introspection returned invalid JSON");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "OAuth introspection response was invalid",
+            )
+        })
+    })();
+    let floor = OAUTH_INTROSPECTION_MIN_LATENCY + std::time::Duration::from_micros(jitter_micros);
+    if let Some(delay) = floor.checked_sub(started.elapsed()) {
+        std::thread::sleep(delay);
     }
-    response.json::<Value>().map_err(|error| {
-        tracing::warn!(%error, "OAuth introspection returned invalid JSON");
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "auth_unavailable",
-            "OAuth introspection response was invalid",
-        )
-    })
+    result
 }
 
 /// Sample a small jitter in microseconds for the introspection constant-time
 /// floor. We pull from `rand::OsRng` rather than a fast PRNG so the floor
 /// itself is not predictable from an external observer.
 fn jitter_micros(max: std::time::Duration) -> u64 {
-    use rand::RngCore;
+    use rand::RngExt;
     let max_micros = max.as_micros().min(u128::from(u64::MAX)) as u64;
     if max_micros == 0 {
         return 0;
     }
     let mut buf = [0u8; 8];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::rng().fill(&mut buf);
     u64::from_le_bytes(buf) % max_micros
 }
 
@@ -1459,7 +1469,7 @@ fn derived_oauth_device_id(value: &Value, token: &str) -> String {
         .or_else(|| string_field(value, "jti"))
         .or_else(|| string_field(value, "sub"))
         .unwrap_or(token);
-    let digest = format!("{:x}", Sha256::digest(seed.as_bytes()));
+    let digest = hex::encode(Sha256::digest(seed.as_bytes()));
     format!(
         "ck:device:{}-{}-7{}-8{}-{}",
         &digest[0..8],
@@ -1472,7 +1482,7 @@ fn derived_oauth_device_id(value: &Value, token: &str) -> String {
 
 fn short_hex(bytes: &[u8], len: usize) -> String {
     let digest = Sha256::digest(bytes);
-    format!("{digest:x}").chars().take(len).collect()
+    hex::encode(digest).chars().take(len).collect()
 }
 
 /// Revoke every active bearer session for an actor.

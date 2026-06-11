@@ -643,7 +643,7 @@ fn index_query_fingerprint(
     });
     let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
     let digest = Sha256::digest(bytes);
-    format!("{digest:x}")[..16].to_owned()
+    hex::encode(digest)[..16].to_owned()
 }
 
 fn encode_index_cursor(offset: usize, fingerprint: &str) -> String {

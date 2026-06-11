@@ -65,6 +65,46 @@ RUST_LOG=soland=info,salvo=info,warn
 1 MiB body cap; requests above the cap return `413 Payload Too Large` before
 the route handler reads JSON or form data.
 
+### Advanced environment reference
+
+Most deployments only need the variables in the sample above. The table below
+lists the remaining runtime variables soland reads, including security-sensitive
+and rollout-only switches that should be managed deliberately.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT` | unset | Reject legacy accountable-principal payloads instead of accepting with compatibility handling. |
+| `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
+| `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
+| `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` | ephemeral seed | Optional base64 ed25519 seed for agent audit-binding signatures; store and rotate like other signing keys. |
+| `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` | `604800` | Minimum anchor age before compaction pruning may consider it. |
+| `SOLAND_COMPACTION_MIN_WITNESSES` | `1` | Minimum compaction witnesses required before pruning. |
+| `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis anchors during compaction pruning. |
+| `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor anchor chains. |
+| `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
+| `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
+| `SOLAND_ENABLE_CONFORMANCE_ENDPOINTS` | unset | Enables local conformance helper endpoints; keep unset in production. |
+| `SOLAND_ERASURE_PROPAGATION_WINDOW_MS` | `604800000` | Erasure receipt propagation window. |
+| `SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_DID` | unset | Expected service DID when probing `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL`. |
+| `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
+| `SOLAND_FEDERATION_POLICY` | `mesh` | Federation policy mode (`mesh` or `hub`). |
+| `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
+| `SOLAND_JWS_REPLAY_WINDOW_SECONDS` | `300` | Accepted JWS replay window; `0` disables replay-window enforcement. |
+| `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT` | spec default | Per-principal daily key-backup download limit. |
+| `SOLAND_MEDIA_SERVICE_LEGACY_REJECT` | unset | Reject legacy realm media-service payloads instead of compatibility handling. |
+| `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
+| `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
+| `SOLAND_PROFILE_STATELESS_CURSOR` | unset | Advertise and allow the stateless cursor profile. |
+| `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |
+| `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
+| `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |
+| `SOLAND_TRUST_X_FORWARDED_FOR` | `false` | Backward-compatible alias for `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR`. |
+| `SOLAND_RESUMABLE_UPLOAD_DIR` | `./soland-resumable-uploads` | Directory for resumable-upload staging files. |
+| `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` | `86400` | Incomplete resumable-upload TTL; minimum 60 seconds. |
+| `SOLAND_SOVEREIGN_ENCLAVE` | `false` | Enables the sovereign-enclave profile and startup invariant checks. |
+| `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS` | empty | Comma-separated outbound host allow-list for sovereign-enclave deployments. |
+| `SOLAND_VERIFIED_PROFILES_ARTIFACT` | unset | Path to a cotest `verified-profiles.json` artifact to advertise verified profiles. |
+
 Validate the env block on the target host once:
 
 ```bash

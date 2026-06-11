@@ -1,13 +1,14 @@
 //! CKP-0007 — Circle administration HTTP surface.
 //!
 //! Hosts the `/_soland/self/circles/*` admin/CRUD layer (mounted under the
-//! `/_soland/self` 产品面; see `routing/mod.rs`). The Circle *data
-//! model* `ck.circle.*` is spec-canonical; this HTTP surface is the self-面
+//! `/_soland/self` product surface; see `routing/mod.rs`). The Circle *data
+//! model* `ck.circle.*` is spec-canonical; this HTTP surface is the self
 //! convenience wrapper that builds the canonical operations.
 //!
-//! 命名空间依据 CKP-0014 §5:circle 是**候选操作**,未入正式 catalog 前
-//! MUST 挂 `/_soland`(产品面)、MUST NOT 挂 `/_cokret`(协议面)。待 circle
-//! 正式入 catalog 后,本表整体迁回 `/_cokret/self/circles/*`。
+//! Namespace rule from CKP-0014 §5: circles are candidate operations. Until
+//! they enter the formal catalog they MUST mount under `/_soland` (product
+//! surface) and MUST NOT mount under `/_cokret` (protocol surface). Once
+//! circles enter the catalog, this surface moves to `/_cokret/self/circles/*`.
 //!
 //! Each handler builds a `ck.circle.*` Operation and routes it through the standard
 //! `accept_local_operations` pipeline so the reducer's invariants

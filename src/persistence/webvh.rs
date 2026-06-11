@@ -62,7 +62,8 @@ impl WebvhStore for MemoryWebvhStore {
     }
 
     async fn put_document(&self, mut record: WebvhDocumentRecord) -> PersistenceResult<()> {
-        // 写入即 ingest:以"现在"为基线权威标注新鲜度证据,与 Pg backend 一致。
+        // Writes are ingestion: stamp freshness evidence with "now", matching
+        // the Pg backend.
         let (fetched_at, expires_at) = webvh_freshness_on_put();
         record.fetched_at = fetched_at;
         record.expires_at = expires_at;
@@ -202,8 +203,8 @@ impl WebvhStore for PgWebvhStore {
 
     async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        // 写入即 ingest:以"现在"为基线权威标注新鲜度证据
-        // (`fetched_at = now`、`expires_at = now + 高风险基线 TTL`)。
+        // Writes are ingestion: stamp freshness evidence with "now"
+        // (`fetched_at = now`, `expires_at = now + high-risk baseline TTL`).
         let (fetched_at, expires_at) = webvh_freshness_on_put();
         sql_query(
             "INSERT INTO webvh_documents \

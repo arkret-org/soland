@@ -3138,8 +3138,9 @@ async fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
-            // 高风险:event proof 验签前强制 DID 文档新鲜度门禁
-            // (fail-closed-on-stale)。陈旧/缺证据的缓存公钥不得用于验签。
+            // High-risk path: enforce DID document freshness before event
+            // proof verification (fail-closed-on-stale). Stale or missing
+            // evidence must not be used for signature verification.
             let actor_id = cokret_sdk::Did::new(actor_id.to_owned()).map_err(|error| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -3536,7 +3537,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 
 /// SEC-04 — receiver-side independent enforcement of the 24h inception-key
 /// online-window hard cap (`identity/key-management.md` §5.0.1 step 5,
-/// "接收端独立 enforce").
+/// receiver-side independent enforcement).
 ///
 /// Only inception-key-signed control events are gated: a
 /// `ck.device.authorize` / `ck.session.grant` whose envelope `refs[]` carries a
@@ -5129,8 +5130,9 @@ mod proof_strictness_tests {
         }
     }
 
-    /// 测试辅助:为 `did` ingest 一条新鲜的 webvh 文档(put_document 会以
-    /// ingest 时刻权威标注 fetched_at/expires_at),使高风险新鲜度门禁通过。
+    /// Test helper: ingest a fresh webvh document for `did` so the high-risk
+    /// freshness gate passes. put_document stamps fetched_at/expires_at with
+    /// the ingestion instant.
     async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
         let now = chrono::Utc::now();
         state
@@ -5142,7 +5144,8 @@ mod proof_strictness_tests {
                 key_log_head: Some("sha256:head".to_owned()),
                 seq: 1,
                 method_evidence: json!({ "mode": "test" }),
-                // 占位值,put_document 会以 ingest 时刻覆盖。
+                // Placeholder values; put_document overwrites them with the
+                // ingestion instant.
                 fetched_at: now,
                 expires_at: now,
                 updated_at: now,
@@ -5875,8 +5878,8 @@ mod proof_strictness_tests {
     async fn production_rejects_full_proof_without_valid_jws_signature() {
         let state = make_state(false);
         let session = session();
-        // 先 ingest 一条新鲜的 webvh 文档,使高风险新鲜度门禁通过,
-        // 从而让本测试聚焦于其本意:JWS 签名验证失败。
+        // First ingest a fresh webvh document so the high-risk freshness gate
+        // passes and this test focuses on JWS signature verification failure.
         ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
         let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
@@ -5911,13 +5914,15 @@ mod proof_strictness_tests {
         );
     }
 
-    /// L3 — 高风险 event proof 路径在 DID 文档陈旧/无 ingest 记录时
-    /// fail-closed,且在 JWS 验签之前先被新鲜度门禁拦下。
+    /// L3 - high-risk event proof paths fail closed when the DID document is
+    /// stale or has no ingested record, and the freshness gate rejects before
+    /// JWS verification.
     #[tokio::test]
     async fn production_event_proof_fails_closed_when_did_document_stale() {
         let state = make_state(false);
         let session = session();
-        // 刻意不 ingest 任何 webvh 文档:actor 在持久化层无新鲜度证据。
+        // Deliberately ingest no webvh document: the actor has no freshness
+        // evidence in persistence.
         let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ck:event:test"}"#;
         let event_digest = cokret_sdk::canonical::sha256_digest(canonical_bytes);
         let mut object = serde_json::Map::new();

@@ -317,7 +317,7 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
 
 /// Spec invite-addressing.md §2 — introduction-evidence trust tiers.
 /// High = `{locator_ref, consent_grant, shared_realm}`; Low =
-/// `{same_principal_server, explicit_address, 无/非法 evidence}`. The tier
+/// `{same_principal_server, explicit_address, missing/invalid evidence}`. The tier
 /// drives both the receive action and the §5.1 graded disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrustTier {

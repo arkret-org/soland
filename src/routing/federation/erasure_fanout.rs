@@ -59,8 +59,9 @@ struct ErasurePeerTarget {
 /// when the receipt has no `scope.realm_id` (account-private scope)
 /// or when `config.federation_peers` is empty.
 ///
-/// Spec `realm-and-space.md` §2.5.2: "推送到每个曾经接收过该 Realm
-/// 内容的 federation peer". We use the full configured peer set as a
+/// Spec `realm-and-space.md` §2.5.2 requires pushing to every federation
+/// peer that has ever received content from the Realm. We use the full
+/// configured peer set as a
 /// conservative super-set; per-Realm peer-set tracking ships when
 /// the federation membership projection grows that surface.
 pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
@@ -172,7 +173,8 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
         hasher.update(b"erasure_receipt");
         hasher.update(b"|");
         hasher.update(operation.operation_id.as_str().as_bytes());
-        let idempotency_key = format!("ck:outbox:erasure_receipt:{:x}", hasher.finalize());
+        let idempotency_key =
+            format!("ck:outbox:erasure_receipt:{}", hex::encode(hasher.finalize()));
 
         match crate::routing::federation::outbox::enqueue_outbound(
             state,

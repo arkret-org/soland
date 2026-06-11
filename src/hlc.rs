@@ -21,8 +21,13 @@ pub struct ServerHlc {
 impl ServerHlc {
     /// Create a new server HLC with the given node identifier (typically service DID).
     pub fn new(node_identifier: &str) -> Self {
+        let local_secret = node_identifier.as_bytes();
         Self {
-            inner: Arc::new(Mutex::new(HlcGenerator::new(node_identifier))),
+            inner: Arc::new(Mutex::new(HlcGenerator::new(
+                "soland:deployment",
+                node_identifier,
+                local_secret,
+            ))),
         }
     }
 

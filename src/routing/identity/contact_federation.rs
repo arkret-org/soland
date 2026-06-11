@@ -188,7 +188,7 @@ fn contact_delivery_idempotency_key(
         hasher.update(part.as_bytes());
         hasher.update(b"|");
     }
-    format!("ck:contact-outbox:{:x}", hasher.finalize())
+    format!("ck:contact-outbox:{}", hex::encode(hasher.finalize()))
 }
 
 #[endpoint(

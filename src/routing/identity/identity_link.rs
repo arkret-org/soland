@@ -19,14 +19,13 @@ pub fn identity_link_policy_frontier_digest(
     history_visibility: &Value,
     identity_disclosure_profile: &Value,
     minimal_metadata_mode: &Value,
-) -> [u8; 32] {
+) -> cokret_sdk::Result<[u8; 32]> {
     compute_policy_frontier_digest(
         disclosure_policy,
         history_visibility,
         identity_disclosure_profile,
         minimal_metadata_mode,
     )
-    .unwrap_or([0u8; 32])
 }
 
 /// Spec T13 — five governance-input change classifications that MUST
@@ -53,13 +52,15 @@ mod tests {
             &json!("members_only"),
             &json!({"profile": "default"}),
             &json!(false),
-        );
+        )
+        .expect("policy frontier digest should compute");
         let b = identity_link_policy_frontier_digest(
             &json!({"mode": "strict"}),
             &json!("members_only"),
             &json!({"profile": "default"}),
             &json!(false),
-        );
+        )
+        .expect("policy frontier digest should compute");
         assert_eq!(a, b);
     }
 }
