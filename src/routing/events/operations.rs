@@ -25,7 +25,7 @@
 //! around the 100+ event kinds the reducer doesn't cover yet).
 
 use cokret_sdk::schema::event_payload_validator_catalog;
-use cokret_sdk::{DeviceMessageTarget, Hash, Operation};
+use cokret_sdk::{DeviceMessageTarget, Operation};
 use serde_json::Value;
 
 use super::{is_json_integer, is_valid_sha256_digest, validate_did};
@@ -1469,7 +1469,6 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 }
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
-    validate_sender_commitment_payload_binding(&operation.payload)?;
     if operation.payload.get("track").is_some() {
         return Err("message operation field 'track' is retired; use track_name");
     }
@@ -1802,43 +1801,6 @@ fn validate_read_cursor_hlc(hlc: &str) -> Result<(), &'static str> {
         })
     {
         return Err("read marker position.hlc is invalid");
-    }
-    Ok(())
-}
-
-const SENDER_COMMITMENT_FEATURE: &str = "ck.profile.franking.sender_commitment.v1";
-
-fn validate_sender_commitment_payload_binding(
-    payload: &serde_json::Value,
-) -> Result<(), &'static str> {
-    if !payload
-        .pointer("/requirements/features")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|features| {
-            features
-                .iter()
-                .any(|feature| feature.as_str() == Some(SENDER_COMMITMENT_FEATURE))
-        })
-    {
-        return Ok(());
-    }
-    let Some(declared_digest) = payload
-        .pointer("/franking/sender_commitment_digest")
-        .and_then(serde_json::Value::as_str)
-        .filter(|digest| is_valid_sha256_digest(digest))
-    else {
-        return Err("sender_commitment_missing");
-    };
-    let Some(commitment) = payload
-        .pointer("/unsigned/franking/sender_commitment")
-        .or_else(|| payload.pointer("/_unsigned/franking/sender_commitment"))
-    else {
-        return Err("sender_commitment_missing");
-    };
-    let expected_digest =
-        canonical_json_digest(commitment).map_err(|_| "sender_commitment_invalid")?;
-    if declared_digest != expected_digest.as_str() {
-        return Err("sender_commitment_invalid");
     }
     Ok(())
 }
@@ -4049,15 +4011,6 @@ pub fn validate_canonical_json_value_inner(
     Ok(())
 }
 
-/// Compute a canonical SHA-256 digest of a JSON value using SDK canonical encoding.
-pub fn canonical_json_digest(value: &serde_json::Value) -> Result<Hash, String> {
-    cokret_sdk::canonical::canonical_sha256(value)
-        .and_then(|digest| {
-            Hash::new(digest).map_err(|e| cokret_sdk::Error::Protocol(e.to_string()))
-        })
-        .map_err(|e| e.to_string())
-}
-
 pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
     let Some(block) = block.as_object() else {
         return Err("content block must be a JSON object");
@@ -4663,54 +4616,6 @@ mod spec_sync_validator_tests {
             kind,
             payload,
         )
-    }
-
-    #[test]
-    fn sender_commitment_feature_requires_matching_unsigned_sidecar() {
-        let commitment = json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "seq": 1
-        });
-        let digest = canonical_json_digest(&commitment).unwrap().to_string();
-        let valid = op(
-            kinds::CK_MESSAGE_CREATE,
-            json!({
-                "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
-                "track_name": "discussion",
-                "content": {"kind": "ck.content.text", "body": "hello"},
-                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
-                "franking": {"sender_commitment_digest": digest},
-                "unsigned": {"franking": {"sender_commitment": commitment}}
-            }),
-        );
-        assert!(validate_message_operation_payload(&valid).is_ok());
-
-        let missing = op(
-            kinds::CK_MESSAGE_CREATE,
-            json!({
-                "body": "hello",
-                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
-                "franking": {}
-            }),
-        );
-        assert_eq!(
-            validate_message_operation_payload(&missing),
-            Err("sender_commitment_missing")
-        );
-
-        let invalid = op(
-            kinds::CK_MESSAGE_CREATE,
-            json!({
-                "body": "hello",
-                "requirements": {"features": [SENDER_COMMITMENT_FEATURE]},
-                "franking": {"sender_commitment_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
-                "unsigned": {"franking": {"sender_commitment": {"seq": 2}}}
-            }),
-        );
-        assert_eq!(
-            validate_message_operation_payload(&invalid),
-            Err("sender_commitment_invalid")
-        );
     }
 
     #[test]

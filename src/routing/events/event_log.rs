@@ -1657,7 +1657,6 @@ async fn validate_event_envelope(
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
     }
     validate_audit_accessed_payload(&kind, object)?;
-    validate_sender_commitment_binding(object)?;
     // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
     // signature check (verified below in `validate_event_proofs`). Aggressive
     // mode: payload missing the new required fields surfaces as
@@ -2021,7 +2020,6 @@ fn validate_event_critical_features(
     Ok(())
 }
 
-const SENDER_COMMITMENT_FEATURE: &str = "ck.profile.franking.sender_commitment.v1";
 const CK_AUDIT_ACCESSED: &str = "ck.audit.accessed";
 const CK_MODERATION_FRANKING_PROOF: &str = "ck.moderation.franking_proof";
 const MANAGE_OTHERS_AUDIT_MISSING: &str = "manage_others_audit_missing";
@@ -2120,66 +2118,6 @@ fn franking_proof_digest(proof: &Value) -> String {
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
     cokret_sdk::canonical::sha256_digest(&bytes)
-}
-
-fn validate_sender_commitment_binding(
-    object: &serde_json::Map<String, Value>,
-) -> Result<(), EventValidationError> {
-    if !event_requirements_features(object).any(|feature| feature == SENDER_COMMITMENT_FEATURE) {
-        return Ok(());
-    }
-    let Some(declared_digest) = object
-        .get("payload")
-        .and_then(|payload| payload.get("franking"))
-        .and_then(|franking| franking.get("sender_commitment_digest"))
-        .and_then(Value::as_str)
-        .filter(|digest| is_valid_sha256_digest(digest))
-    else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "sender_commitment_missing",
-            "sender commitment digest is required",
-        ));
-    };
-    let Some(commitment) = object
-        .get("unsigned")
-        .and_then(|unsigned| unsigned.get("franking"))
-        .and_then(|franking| franking.get("sender_commitment"))
-    else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "sender_commitment_missing",
-            "unsigned.franking.sender_commitment is required",
-        ));
-    };
-    let commitment_bytes = canonical::canonical_json_bytes(commitment).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "sender_commitment_invalid",
-            "sender commitment cannot be canonicalized",
-        )
-    })?;
-    let expected_digest = cokret_sdk::canonical::sha256_digest(&commitment_bytes);
-    if declared_digest != expected_digest {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "sender_commitment_invalid",
-            "sender commitment digest does not match unsigned sidecar",
-        ));
-    }
-    Ok(())
-}
-
-fn event_requirements_features(
-    object: &serde_json::Map<String, Value>,
-) -> impl Iterator<Item = &str> {
-    object
-        .get("requirements")
-        .and_then(|requirements| requirements.get("features"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
 }
 
 fn validate_audit_accessed_payload(
