@@ -27,9 +27,10 @@
 
 use chrono::SecondsFormat;
 use cokret_sdk::model::{
-    AgentParticipation, AgentParticipationEntry, AgentParticipationOutcome as AgentParticipationResBody,
-    AgentParticipationScope, AgentParticipationSetRequestBody as AgentParticipationSetReqBody,
-    effective_participation, validate_selection_within_ceiling,
+    AgentParticipation, AgentParticipationEntry,
+    AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
+    AgentParticipationSetRequestBody as AgentParticipationSetReqBody, effective_participation,
+    validate_selection_within_ceiling,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

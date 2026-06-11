@@ -700,9 +700,8 @@ async fn session_revoke(
     // The empty-body form is valid, so parse by hand instead of `JsonBody`
     // (which answers a missing body with a 400 before the handler runs).
     let body: SessionRevokeRequestBody = match req.payload().await {
-        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes).map_err(|error| {
-            AppError::bad_json(format!("invalid session-revoke body: {error}"))
-        })?,
+        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes)
+            .map_err(|error| AppError::bad_json(format!("invalid session-revoke body: {error}")))?,
         _ => SessionRevokeRequestBody {
             target_grant_id: None,
             target_device_id: None,
@@ -712,7 +711,9 @@ async fn session_revoke(
     };
     if body.all_sessions == Some(false) {
         // Schema pins `all_sessions` to `const true`; `false` is a shape error.
-        return Err(AppError::invalid_param("all_sessions must be true when present"));
+        return Err(AppError::invalid_param(
+            "all_sessions must be true when present",
+        ));
     }
     let selector_count = usize::from(body.target_grant_id.is_some())
         + usize::from(body.target_device_id.is_some())

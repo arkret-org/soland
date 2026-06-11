@@ -2012,7 +2012,10 @@ mod tests {
             .expect_err("genesis envelope carrying `supersedes` must be series_chain_broken");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(err.wire_code_override.as_deref(), Some("series_chain_broken"));
+        assert_eq!(
+            err.wire_code_override.as_deref(),
+            Some("series_chain_broken")
+        );
         assert!(err.message.contains("`supersedes`"));
     }
 
@@ -2022,16 +2025,18 @@ mod tests {
         // `supersedes_digest` even when `supersedes` itself is absent.
         let mut body =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
-        body["supersedes_digest"] = json!(
-            "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-        );
+        body["supersedes_digest"] =
+            json!("sha256:3333333333333333333333333333333333333333333333333333333333333333");
 
         let err = validate_series_genesis_shape(&body).expect_err(
             "genesis envelope carrying `supersedes_digest` must be series_chain_broken",
         );
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(err.wire_code_override.as_deref(), Some("series_chain_broken"));
+        assert_eq!(
+            err.wire_code_override.as_deref(),
+            Some("series_chain_broken")
+        );
         assert!(err.message.contains("supersedes_digest"));
     }
 

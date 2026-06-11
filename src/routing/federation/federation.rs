@@ -308,10 +308,7 @@ pub(super) async fn federation_transaction(
     tags("federation"),
     summary = "Accept a batch of operations pushed from a peer service"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.federation.push_operations")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.push_operations"))]
 pub(super) async fn federation_push_operations(
     body: JsonBody<cokret_sdk::FederationPushOperationsRequestBody>,
     depot: &mut Depot,
@@ -677,10 +674,7 @@ fn operation_actor_id(operation: &Operation) -> Option<&str> {
     tags("federation"),
     summary = "Pull a page of operations for a federated Realm, with optional snapshot bootstrap"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.federation.pull_operations")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.pull_operations"))]
 pub(super) async fn federation_pull_operations(
     realm_id: QueryParam<String, true>,
     after_cursor: QueryParam<String, false>,

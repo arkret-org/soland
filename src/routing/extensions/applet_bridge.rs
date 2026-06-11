@@ -313,7 +313,10 @@ async fn revoke_install_endpoint(
     summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
     status_codes(200, 201, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.self.applet.ghost_actor.provision"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.self.applet.ghost_actor.provision")
+)]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -391,8 +394,9 @@ async fn provision_ghost_actor_endpoint(
         authorization_ref,
         display_name: provision.display_name,
     };
-    let response = serde_json::to_value(&outcome)
-        .map_err(|error| AppError::internal(format!("ghost provision outcome serialize: {error}")))?;
+    let response = serde_json::to_value(&outcome).map_err(|error| {
+        AppError::internal(format!("ghost provision outcome serialize: {error}"))
+    })?;
     json_ok(response)
 }
 

@@ -398,7 +398,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces WHERE id = $1"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(container_space_id))
-        .get_result::<SpaceContainerProjectionRow>(&mut *conn).await
+        .get_result::<SpaceContainerProjectionRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(SpaceContainerProjectionRecord::from))
         .map_err(PersistenceError::from)
@@ -470,7 +471,8 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces ORDER BY id"
         ))
-        .load::<SpaceContainerProjectionRow>(&mut *conn).await
+        .load::<SpaceContainerProjectionRow>(&mut *conn)
+        .await
         .map(|rows| {
             rows.into_iter()
                 .map(SpaceContainerProjectionRecord::from)

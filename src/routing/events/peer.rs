@@ -630,9 +630,7 @@ pub(in crate::routing) fn validate_peer_request(
     // The bare trust-header checks above are necessary but not sufficient; the
     // signature verification (which also re-binds the request-canonical-digest and
     // runs the deny policy) is the authoritative gate.
-    crate::routing::federation::federation::verify_inbound_peer_http_signature(
-        state, req, body,
-    )?;
+    crate::routing::federation::federation::verify_inbound_peer_http_signature(state, req, body)?;
     Ok(())
 }
 

@@ -27,7 +27,10 @@ async fn policy_check_and_validation_work() {
         .unwrap();
     assert_eq!(policy["decision"], "allow");
     assert_eq!(policy["decision_trace"]["request_id"], "req1");
-    assert_eq!(policy["decision_trace"]["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        policy["decision_trace"]["actor_id"],
+        "did:web:alice.example"
+    );
     assert_eq!(policy["decision_trace"]["action"], "message.send");
     assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 

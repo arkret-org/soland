@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
@@ -17,7 +17,7 @@ use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
-use crate::persistence::{SolandMemoryPersistenceStore, PersistenceStore, PgPersistenceStore};
+use crate::persistence::{PersistenceStore, PgPersistenceStore, SolandMemoryPersistenceStore};
 use crate::reducer::ProjectionState;
 use crate::verified_profiles::VerifiedProfileDescriptor;
 
@@ -2341,7 +2341,12 @@ impl AppState {
         // a revoked cursor MUST keep returning `cursor_revoked` and MUST NOT
         // advance to-device ack / resume / wait-for / dropped-recovery
         // state). Built off-lock first; merge under a short critical section.
-        match self.persistence.sync_cursors().active_revocations(now).await {
+        match self
+            .persistence
+            .sync_cursors()
+            .active_revocations(now)
+            .await
+        {
             Ok(revocations) => {
                 let mut cache = self
                     .sync_cursor_revocations

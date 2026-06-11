@@ -311,9 +311,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             version,
             trust_domain: row.trust_domain,
             allowed_proof_kinds: row.allowed_proof_kinds,
-            supersedes: row
-                .supersedes
-                .map(|u| ids::format_typed_uuid("policy", &u)),
+            supersedes: row.supersedes.map(|u| ids::format_typed_uuid("policy", &u)),
             expires_at: row.expires_at,
             issued_at: row.issued_at,
             raw_payload: row.raw_payload,

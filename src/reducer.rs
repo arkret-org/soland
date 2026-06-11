@@ -8437,7 +8437,11 @@ impl ProjectionState {
     }
 
     /// Get relations for a Realm, optionally filtered by kind.
-    pub fn relations_for_realm(&self, realm_id: &str, kind: Option<&str>) -> Vec<&SolandRelationState> {
+    pub fn relations_for_realm(
+        &self,
+        realm_id: &str,
+        kind: Option<&str>,
+    ) -> Vec<&SolandRelationState> {
         self.relations
             .values()
             .filter(|r| {

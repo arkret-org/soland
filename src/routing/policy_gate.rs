@@ -91,9 +91,8 @@ pub(crate) async fn enforce_operation_policy_server(
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str())
         .to_owned();
-    let policy_request =
-        policy_request_for_operation(state, actor_id, operation, &action, surface)
-            .map_err(PolicyGateRejection::forbidden_request)?;
+    let policy_request = policy_request_for_operation(state, actor_id, operation, &action, surface)
+        .map_err(PolicyGateRejection::forbidden_request)?;
     let mut request_ctx = RequestContext {
         realm_id: realm_id.to_owned(),
         actor_id: actor_id.to_owned(),

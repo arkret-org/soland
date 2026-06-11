@@ -341,8 +341,7 @@ impl From<ContactRow> for ContactRecord {
     }
 }
 
-const CONTACT_COLUMNS: &str =
-    "requester_id AS requester, target_id AS target, scope, status, message, peer_service_id AS peer_service_did, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, message, peer_service_id AS peer_service_did, created_at, updated_at";
 
 #[async_trait]
 impl ContactStore for PgContactStore {
@@ -515,9 +514,10 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         &self,
     ) -> PersistenceResult<Vec<(String, cokret_sdk::InviteReceivePolicy)>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query("SELECT id AS subject_id, policy_payload FROM invite_receive_policies")
-            .get_results::<InviteReceivePolicyRow>(&mut *conn)
-            .await?;
+        let rows =
+            sql_query("SELECT id AS subject_id, policy_payload FROM invite_receive_policies")
+                .get_results::<InviteReceivePolicyRow>(&mut *conn)
+                .await?;
         rows.into_iter()
             .map(InviteReceivePolicyRow::into_pair)
             .collect()

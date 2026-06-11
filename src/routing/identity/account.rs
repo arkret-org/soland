@@ -88,8 +88,7 @@ use crate::{JsonResult, json_ok};
 /// mirror at `/_soland/self/account/register` (handle-based body) stays in
 /// `router()` below until product clients migrate.
 pub(super) fn protocol_gate_router() -> Router {
-    Router::with_path("account")
-        .push(Router::with_path("register").post(gate_account_register))
+    Router::with_path("account").push(Router::with_path("register").post(gate_account_register))
 }
 
 pub(super) fn protocol_router() -> Router {
@@ -605,8 +604,9 @@ async fn transfer_handle(
         None => {
             // Registry code `principal_unknown` (404): the referenced
             // principal DID is unknown or not visible to the caller.
-            return Err(AppError::not_found("target account not found")
-                .with_wire_code("principal_unknown"));
+            return Err(
+                AppError::not_found("target account not found").with_wire_code("principal_unknown")
+            );
         }
     };
     // Park the source on a synthetic DID-derived handle and check it's
@@ -1890,10 +1890,7 @@ fn mention_token_matches(text: &str, actor: &str, actor_handle: &str) -> bool {
     tags("notifications"),
     summary = "Stamp the authenticated actor's `last_read_at` marker to Utc::now()"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.notifications.mark_all_read")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.notifications.mark_all_read"))]
 async fn notifications_mark_all_read(
     aa: AuthArgs,
     depot: &mut Depot,

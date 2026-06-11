@@ -4,6 +4,9 @@
 //! between in-memory and PostgreSQL backends.
 
 // Re-exports for submodules (`use super::*;`). These also serve the root module.
+pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
+pub(crate) use std::sync::{Arc, Mutex};
+
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use cokret_sdk::Operation;
@@ -14,59 +17,58 @@ pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query};
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncPgConnection, RunQueryDsl};
 pub(crate) use serde_json::Value;
-pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
-pub(crate) use std::sync::{Arc, Mutex};
 pub(crate) use uuid::Uuid;
+
 pub(crate) use crate::db::PgPool;
 pub(crate) use crate::ids;
 pub(crate) use crate::state::*;
 
 mod accounts;
-mod sessions;
-mod devices;
-mod contacts;
-mod projection;
-mod events;
-mod blobs;
-mod federation;
 mod agents;
-mod mls;
-mod recovery;
+mod audit;
+mod blobs;
+mod contacts;
+mod devices;
+mod events;
+mod federation;
 mod key_backup;
+mod mls;
 mod moderation;
+mod multisig;
 mod notifications;
-mod push;
+mod policy;
 mod presence;
+mod projection;
+mod push;
+mod realm_invites;
+mod recovery;
+mod sessions;
+mod sync_cursor;
 mod webrtc;
 mod webvh;
-mod realm_invites;
-mod policy;
-mod sync_cursor;
-mod multisig;
-mod audit;
 pub use accounts::*;
-pub use sessions::*;
-pub use devices::*;
-pub use contacts::*;
-pub use projection::*;
-pub use events::*;
-pub use blobs::*;
-pub use federation::*;
 pub use agents::*;
-pub use mls::*;
-pub use recovery::*;
+pub use audit::*;
+pub use blobs::*;
+pub use contacts::*;
+pub use devices::*;
+pub use events::*;
+pub use federation::*;
 pub use key_backup::*;
+pub use mls::*;
 pub use moderation::*;
+pub use multisig::*;
 pub use notifications::*;
-pub use push::*;
+pub use policy::*;
 pub use presence::*;
+pub use projection::*;
+pub use push::*;
+pub use realm_invites::*;
+pub use recovery::*;
+pub use sessions::*;
+pub use sync_cursor::*;
 pub use webrtc::*;
 pub use webvh::*;
-pub use realm_invites::*;
-pub use policy::*;
-pub use sync_cursor::*;
-pub use multisig::*;
-pub use audit::*;
 
 /// Error type for persistence operations.
 #[derive(Debug, thiserror::Error)]

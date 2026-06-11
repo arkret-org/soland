@@ -1268,7 +1268,7 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: default_did_document(did),
+            did_document: default_did_document(state, did),
             key_log_head: None,
             seq: 0,
             method_evidence: json!({"mode": "development_local"}),
@@ -1280,11 +1280,31 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
         })
 }
 
-fn default_did_document(did: &str) -> Value {
+fn default_did_document(state: &AppState, did: &str) -> Value {
+    let mut verification_methods = Vec::new();
+    let mut authentication = Vec::new();
+    let mut assertion_method = Vec::new();
+    if did == state.config.service_did {
+        let public_key = cokret_sdk::ed25519_pubkey_to_did_key_multibase(
+            state.anchorer_signing_key().verifying_key().as_bytes(),
+        );
+        for fragment in ["anchorer-key", "snapshot-key-1"] {
+            let key_id = format!("{did}#{fragment}");
+            verification_methods.push(json!({
+                "id": key_id,
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": public_key.clone(),
+            }));
+            authentication.push(json!(key_id));
+            assertion_method.push(json!(key_id));
+        }
+    }
     json!({
         "id": did,
-        "verificationMethod": [],
-        "authentication": [],
+        "verificationMethod": verification_methods,
+        "authentication": authentication,
+        "assertionMethod": assertion_method,
         "service": [{"id": "soland", "type": "CokretPrincipalServer", "serviceEndpoint": "/_cokret"}]
     })
 }

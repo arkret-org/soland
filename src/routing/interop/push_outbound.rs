@@ -241,10 +241,7 @@ async fn outbound_push_bridge_resolve(
     tags("push"),
     summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.push.outbound_bridge_fetch")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.push.outbound_bridge_fetch"))]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequestBody>,
     depot: &mut Depot,

@@ -319,46 +319,47 @@ impl FederationDispatcher {
         // (egress check and connection resolve to the same addresses), closing
         // the DNS-rebinding TOCTOU window. Peer URLs vary per delivery, so the
         // pinning is per-row rather than on the long-lived `self.client`.
-        let (parsed_url, client) = match crate::security::validate_http_url_for_egress_with_pinned_client(
-            &url,
-            "federation outbox",
-            self.state.config.development_mode,
-            REQUEST_TIMEOUT,
-        ) {
-            Ok(pair) => pair,
-            Err(error) => {
-                row.attempts = row.attempts.saturating_add(1);
-                row.delivered_at = Some(now_unix_secs());
-                row.last_status = Some(EGRESS_POLICY_DENIED_STATUS_SENTINEL);
-                row.last_response_excerpt =
-                    Some(excerpt(&format!("egress_policy_denied: {error}")));
-                tracing::warn!(
-                    target = "federation_outbox",
-                    worker = "federation_outbox",
-                    outbox_id = %row.id,
-                    peer_did = %row.peer_did,
-                    endpoint = %row.endpoint,
-                    %error,
-                    "federation outbox delivery denied by egress policy"
-                );
-                if let Err(error) = self
-                    .state
-                    .persistence
-                    .federation_outbox()
-                    .update(&row)
-                    .await
-                {
+        let (parsed_url, client) =
+            match crate::security::validate_http_url_for_egress_with_pinned_client(
+                &url,
+                "federation outbox",
+                self.state.config.development_mode,
+                REQUEST_TIMEOUT,
+            ) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    row.attempts = row.attempts.saturating_add(1);
+                    row.delivered_at = Some(now_unix_secs());
+                    row.last_status = Some(EGRESS_POLICY_DENIED_STATUS_SENTINEL);
+                    row.last_response_excerpt =
+                        Some(excerpt(&format!("egress_policy_denied: {error}")));
                     tracing::warn!(
-                        %error,
+                        target = "federation_outbox",
                         worker = "federation_outbox",
                         outbox_id = %row.id,
-                        target = "federation_outbox",
-                        "failed to persist federation outbox egress-policy denial"
+                        peer_did = %row.peer_did,
+                        endpoint = %row.endpoint,
+                        %error,
+                        "federation outbox delivery denied by egress policy"
                     );
+                    if let Err(error) = self
+                        .state
+                        .persistence
+                        .federation_outbox()
+                        .update(&row)
+                        .await
+                    {
+                        tracing::warn!(
+                            %error,
+                            worker = "federation_outbox",
+                            outbox_id = %row.id,
+                            target = "federation_outbox",
+                            "failed to persist federation outbox egress-policy denial"
+                        );
+                    }
+                    return;
                 }
-                return;
-            }
-        };
+            };
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(

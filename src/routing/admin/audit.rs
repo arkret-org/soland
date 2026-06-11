@@ -72,10 +72,7 @@ async fn verify_franking_proof(
     tags("audit"),
     summary = "List ck.audit.erasure_receipt projection rows + fanout state"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.audit.erasure_receipts.list")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.erasure_receipts.list"))]
 async fn audit_erasure_receipts(
     aa: AuthArgs,
     depot: &mut Depot,

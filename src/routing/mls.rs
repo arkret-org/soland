@@ -8,10 +8,10 @@
 //! - `POST /_cokret/self/keys/keypackages/claim`  — op `ck.self.keys.keypackages.claim` (atomically
 //!   claim a published KeyPackage; second claim of the same id returns `409 cas_conflict`).
 //! - `GET  /_soland/self/keys/keypackages/welcomes/pending` — extension op
-//!   `org.cokret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at
-//!   50 per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
-//!   redeliver). This is a soland-specific extension (not in the canonical spec registry), so it
-//!   is served from the `/_soland/` product surface only.
+//!   `org.cokret.soland.mls.welcomes.pending` (drain the calling device's Welcome queue; caps at 50
+//!   per call; marks delivered rows with `delivered_at = now()` so subsequent polls don't
+//!   redeliver). This is a soland-specific extension (not in the canonical spec registry), so it is
+//!   served from the `/_soland/` product surface only.
 //!
 //! MLS *commits* are no longer served by a dedicated REST surface — clients
 //! submit `ck.mls.commit` events via the normal `POST /_cokret/self/events`

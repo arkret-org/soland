@@ -1201,13 +1201,8 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
 ];
 
 /// Spec operations soland deliberately does NOT declare even though their
-/// surface group is otherwise supported. `ck.self.snapshot.head` must return
-/// a real signed `ck.schema.snapshot.v1` manifest; deployments that cannot
-/// produce a Snapshot detached proof MUST NOT declare the operation and MUST
-/// answer `not_implemented` (service-surface.md §5.2,
-/// service-http-binding.md §6.1). The handler in
-/// `routing::events::sync::snapshot_head` fails closed accordingly.
-const UNDECLARED_OPERATION_IDS: &[&str] = &["ck.self.snapshot.head"];
+/// surface group is otherwise supported.
+const UNDECLARED_OPERATION_IDS: &[&str] = &[];
 
 fn canonical_supported_operations() -> Vec<String> {
     let missing = artifacts::missing_operation_ids(SUPPORTED_STANDALONE_OPERATION_IDS);
@@ -1314,8 +1309,8 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "snapshot.head",
-            "status": "not_implemented_fail_closed",
-            "reason": "no real ck.schema.snapshot.v1 detached-proof signing path exists; ck.self.snapshot.head / ck.peer.snapshot.head are undeclared and return not_implemented (dev snapshot chunks stay on the /_soland product face)"
+            "status": "standard_self_supported",
+            "reason": "ck.self.snapshot.head returns a signed ck.schema.snapshot.v1 manifest; the legacy /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",

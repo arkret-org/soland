@@ -899,10 +899,7 @@ pub(super) async fn admin_list_bottom_global(
     tags("admin", "bottom"),
     summary = "Submit repair Move for a Bottom cell"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.admin.realms.bottom.repair")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.bottom.repair"))]
 pub(super) async fn admin_repair_bottom(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1110,10 +1107,7 @@ pub(super) async fn admin_repair_bottom(
     tags("admin", "anchor-dag"),
     summary = "Get Anchor DAG snapshot for a Space"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.get")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.anchor_dag.get"))]
 pub(super) async fn admin_get_anchor_dag(
     aa: AuthArgs,
     depot: &mut Depot,

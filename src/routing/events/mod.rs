@@ -35,7 +35,8 @@ use super::{
     query_param_all, realm_allows_plaintext_service, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
     realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_realm,
-    touch_realm, typing_ephemeral_for_realm, validate_did, validate_space_id,
+    snapshot_manifest_for_realm, touch_realm, typing_ephemeral_for_realm, validate_did,
+    validate_space_id,
 };
 
 pub fn router() -> Router {

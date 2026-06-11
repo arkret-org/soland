@@ -1010,9 +1010,9 @@ async fn handle_rtc_token(
     // Spec `CallMediaTokenExchangeOutcome` requires `connect_url`; a focus
     // that does not declare one cannot be exchanged into a usable media
     // session, so fail closed instead of returning a partial outcome.
-    let connect_url = issued_token.connect_url.ok_or_else(|| {
-        focus_unavailable_error("selected focus does not declare a connect_url")
-    })?;
+    let connect_url = issued_token
+        .connect_url
+        .ok_or_else(|| focus_unavailable_error("selected focus does not declare a connect_url"))?;
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,

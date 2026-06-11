@@ -9,8 +9,8 @@
 //!    versionId-stripped) entry. Spec: `identity/identity-did.md` §3.4 ("entry hash chain") and the
 //!    DIF didwebvh v1.0 method spec.
 //! 2. **SCID mismatch rejection** — the SCID embedded in the DID string MUST equal the SCID
-//!    derivable from the genesis entry (§3 / §3.4, covering DNS hijack protection and auditable
-//!    DID control history).
+//!    derivable from the genesis entry (§3 / §3.4, covering DNS hijack protection and auditable DID
+//!    control history).
 //! 3. **Witness signature verification** — every witness proof present on an entry must verify,
 //!    distinct valid witnesses are counted toward the configured quorum, and entries with
 //!    configured witnesses may only remain in `degraded_no_witness` for 24h. Rotation entries fail

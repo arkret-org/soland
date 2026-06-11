@@ -33,8 +33,8 @@
 //!
 //! 3. **Explicit inheritance** — `realm-links.md §6` requires the child Realm to opt in via
 //!    `ck.realm.inheritance_policy`. Walking the link graph for policy without that opt-in MUST NOT
-//!    yield any inherited rules ("no implicit cascading", §5). The [`effective_policy_for_realm`] helper
-//!    enforces this: when no `RealmInheritancePolicyState` is present for the realm,
+//!    yield any inherited rules ("no implicit cascading", §5). The [`effective_policy_for_realm`]
+//!    helper enforces this: when no `RealmInheritancePolicyState` is present for the realm,
 //!    `inheritance_mode` is `"none"` and the chain is empty regardless of how many `governed_by` /
 //!    `inherits_policy_from` parents exist in the link graph.
 //!

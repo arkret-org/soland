@@ -102,12 +102,14 @@ impl AuditStore for PgAuditStore {
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("SELECT payload FROM audit_logs WHERE actor_id = $1 ORDER BY created_at ASC, id ASC")
-            .bind::<Text, _>(actor)
-            .load::<AuditPayloadRow>(&mut *conn)
-            .await
-            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
-            .map_err(PersistenceError::from)
+        sql_query(
+            "SELECT payload FROM audit_logs WHERE actor_id = $1 ORDER BY created_at ASC, id ASC",
+        )
+        .bind::<Text, _>(actor)
+        .load::<AuditPayloadRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+        .map_err(PersistenceError::from)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {

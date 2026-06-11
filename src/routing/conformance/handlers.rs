@@ -524,10 +524,7 @@ pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
     tags("conformance"),
     summary = "Inspect a committed operation during local chaos testing"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.conformance.chaos_operation")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.chaos_operation"))]
 pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Value> {
     super::ensure_enabled()?;
     let state = depot.obtain::<AppState>().expect("state injected");

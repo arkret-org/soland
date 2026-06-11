@@ -48,8 +48,9 @@ use super::{
     projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_bundle_for_realm, sync_timeline_message_json_with_projection, truncate_gap_events,
-    typing_ephemeral_for_realm, validate_did,
+    snapshot_bundle_for_realm, snapshot_manifest_for_realm,
+    sync_timeline_message_json_with_projection, truncate_gap_events, typing_ephemeral_for_realm,
+    validate_did,
 };
 use crate::ids;
 use crate::persistence::SyncCursorRecord;
@@ -125,8 +126,9 @@ async fn account_describe(depot: &mut Depot) -> crate::result::JsonResult<SyncDe
     if is_stateless_cursor_profile_declared(state) {
         supported_sync_profiles.push("ck.profile.stateless_cursor.v1".to_owned());
     }
-    let service_did = validate_did(&state.config.service_did)
-        .map_err(|_| crate::error::AppError::internal("configured service_did is not a valid DID"))?;
+    let service_did = validate_did(&state.config.service_did).map_err(|_| {
+        crate::error::AppError::internal("configured service_did is not a valid DID")
+    })?;
     crate::result::json_ok(SyncDescription {
         service_did,
         supported_sync_profiles,
@@ -3389,28 +3391,49 @@ async fn sync_gap_backfill(
     }))
 }
 
-/// Spec resolution (2026-06-11): `ck.self.snapshot.head` returns the full
-/// signed `ck.schema.snapshot.v1` manifest. soland cannot produce a real
-/// Snapshot detached proof yet, and the spec forbids serving a dev-signed
-/// stand-in (`signature` / `authority_binding` / `event_set_commitment`
-/// MUST NOT be fabricated — service-http-binding.md §6.1, service-surface.md
-/// §5.2). The operation is therefore not declared in
-/// `describe.supported_operations` and the endpoint fails closed with
-/// `not_implemented` until a real signing path lands. The dev snapshot
-/// bundle remains reachable on the `/_soland/` product face
-/// (`org.cokret.soland.sync.snapshot_chunk`).
 #[endpoint(
     operation_id = "ck.self.snapshot.head",
     tags("sync"),
-    summary = "Read the snapshot-v1 manifest head for a Realm (not implemented)"
+    summary = "Read the signed snapshot-v1 manifest head for a Realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.snapshot.head"))]
-async fn snapshot_head() -> crate::result::JsonResult<serde_json::Value> {
-    Err(crate::error::AppError::new(
-        crate::error::ErrorCode::NotImplemented,
-        "ck.self.snapshot.head is not implemented: this deployment cannot \
-         produce a signed ck.schema.snapshot.v1 manifest",
-    ))
+async fn snapshot_head(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> crate::result::JsonResult<serde_json::Value> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let realm_id = query_param(req, "realm_id")
+        .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
+    let realm_id = scope_selector_to_realm_id(&realm_id)?;
+    let session = authenticated_session(state, req)
+        .await
+        .map_err(|(status, code, message)| {
+            crate::error::AppError::invalid_param(message)
+                .with_status(status)
+                .with_wire_code(code)
+        })?;
+    if is_realm_deleted(state, &realm_id).await
+        || !realm_id_accessible(state, &realm_id, Some(&session)).await
+    {
+        return Err(crate::error::AppError::not_found("not found"));
+    }
+    let manifest = snapshot_manifest_for_realm(state, &realm_id)
+        .await
+        .map_err(|error| {
+            if error.code == crate::error::ErrorCode::NotFound {
+                error
+            } else if error.code == crate::error::ErrorCode::InternalError {
+                error
+            } else {
+                crate::error::AppError::new(
+                    crate::error::ErrorCode::SnapshotUnavailable,
+                    error.message,
+                )
+            }
+        })?;
+    let value = serde_json::to_value(manifest)
+        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
+    crate::result::json_ok(value)
 }
 
 /// Deployment-local dev snapshot head (`/_soland/self/sync/snapshot-head`).

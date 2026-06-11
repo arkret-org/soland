@@ -700,7 +700,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .unwrap()
             .starts_with("ck:snapshot:")
     );
-    assert!(!snapshot["dev_digest"]["digest"].as_str().unwrap().is_empty());
+    assert!(
+        !snapshot["dev_digest"]["digest"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
     // Snapshot v1 (round 9): chunk_id is now a typed integer in the SDK
     // shape; small test states fit in a single 256 KiB chunk so chunk[0]
     // .digest is the state_digest and chunk_count == 1.

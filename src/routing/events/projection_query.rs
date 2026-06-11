@@ -112,7 +112,10 @@ fn total_count(len: usize) -> Result<u64, AppError> {
     u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
 }
 
-fn relation_string_field<'a>(relation: &'a SolandRelationState, field_name: &str) -> Option<&'a str> {
+fn relation_string_field<'a>(
+    relation: &'a SolandRelationState,
+    field_name: &str,
+) -> Option<&'a str> {
     relation
         .fields
         .get(field_name)

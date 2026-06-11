@@ -5,11 +5,9 @@
 //! a peer's quota across the rest of the API surface. We currently
 //! recognize three endpoint classes:
 //!
-//! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the
-//!   spec-canonical `/_cokret/gate/account/session-grants` and
-//!   `/_cokret/gate/account/agent-key-pair`, plus the legacy
-//!   `/_soland/gate/auth/*` auth routes. Must be hardened against
-//!   credential-stuffing.
+//! - `auth`   — the credential/bearer-issuing surface (strict, low ceiling): the spec-canonical
+//!   `/_cokret/gate/account/session-grants` and `/_cokret/gate/account/agent-key-pair`, plus the
+//!   legacy `/_soland/gate/auth/*` auth routes. Must be hardened against credential-stuffing.
 //! - `api`    — every other `/_cokret/*` request (moderate ceiling).
 //! - `other`  — anything outside `/_cokret/*` (default ceiling).
 //!

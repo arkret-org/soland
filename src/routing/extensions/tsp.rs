@@ -403,10 +403,7 @@ async fn establish_route_endpoint(
     tags("extensions"),
     summary = "Fetch the audit chain for a TSP route"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.extensions.tsp.routes.audit")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.tsp.routes.audit"))]
 async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;

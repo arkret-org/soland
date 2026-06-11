@@ -199,10 +199,7 @@ async fn get_organization_policy(
     tags("organizations", "policy"),
     summary = "Publish an organization moderation policy"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.organizations.policy.upsert")
-)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.organizations.policy.upsert"))]
 async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -173,8 +173,10 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
         hasher.update(b"erasure_receipt");
         hasher.update(b"|");
         hasher.update(operation.operation_id.as_str().as_bytes());
-        let idempotency_key =
-            format!("ck:outbox:erasure_receipt:{}", hex::encode(hasher.finalize()));
+        let idempotency_key = format!(
+            "ck:outbox:erasure_receipt:{}",
+            hex::encode(hasher.finalize())
+        );
 
         match crate::routing::federation::outbox::enqueue_outbound(
             state,

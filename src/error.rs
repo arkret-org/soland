@@ -229,8 +229,7 @@ pub mod reasons {
     // Recovery / handle (2 codes).
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
         core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;
-    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str =
-        core_error::ERROR_CODE_HANDLE_HOMOGRAPH_FORBIDDEN;
+    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = core_error::ERROR_CODE_HANDLE_HOMOGRAPH_FORBIDDEN;
 
     // ── R3.1 (2026-05-27, cokret-spec @ 7157ee8) — MemberIdentity append-
     // only replacement event error codes. Re-exported from the SDK's

@@ -9,8 +9,8 @@ mod push_outbound;
 mod webrtc;
 
 pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
-pub(crate) use blob_resumable::{TUS_EXTENSIONS, TUS_VERSIONS};
 pub use blob_resumable::spawn_resumable_upload_ttl_sweeper;
+pub(crate) use blob_resumable::{TUS_EXTENSIONS, TUS_VERSIONS};
 
 use super::admin::audit;
 use super::identity::auth;

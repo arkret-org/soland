@@ -7,10 +7,10 @@
 //! and cross-actor isolation.
 
 #![allow(unused_imports)]
-use super::common::*;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+
+use super::common::*;
 
 fn b64(value: &str) -> String {
     BASE64_STANDARD.encode(value.as_bytes())
@@ -108,7 +108,12 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         .await;
     assert_eq!(patch1.status_code.unwrap().as_u16(), 204);
     assert_eq!(
-        patch1.headers.get("upload-offset").unwrap().to_str().unwrap(),
+        patch1
+            .headers
+            .get("upload-offset")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         head.len().to_string()
     );
 
@@ -120,11 +125,21 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref() {
         .await;
     assert_eq!(probe.status_code.unwrap().as_u16(), 200);
     assert_eq!(
-        probe.headers.get("upload-offset").unwrap().to_str().unwrap(),
+        probe
+            .headers
+            .get("upload-offset")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         head.len().to_string()
     );
     assert_eq!(
-        probe.headers.get("upload-length").unwrap().to_str().unwrap(),
+        probe
+            .headers
+            .get("upload-length")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         payload.len().to_string()
     );
     assert_eq!(probe.headers.get("cache-control").unwrap(), "no-store");
@@ -279,7 +294,10 @@ async fn describe_advertises_tus_binding_and_limits() {
         tus_binding["base_url"],
         "http://server/_cokret/self/blob/resumable"
     );
-    assert_eq!(tus_binding["operations"], serde_json::json!(["ck.self.blob.upload"]));
+    assert_eq!(
+        tus_binding["operations"],
+        serde_json::json!(["ck.self.blob.upload"])
+    );
     assert!(tus_binding["extension_profile_required"].is_null());
     assert_eq!(tus_binding["tus_version"], serde_json::json!(["1.0.0"]));
     assert_eq!(

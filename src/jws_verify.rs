@@ -25,7 +25,7 @@ use cokret_sdk::{Did, Hash};
 use ed25519_dalek::VerifyingKey;
 
 use crate::persistence::{
-    WebvhFreshness, WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, verify_did_document_freshness,
+    WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, WebvhFreshness, verify_did_document_freshness,
 };
 use crate::state::AppState;
 
@@ -156,8 +156,8 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
 /// document) and evaluates it with [`verify_did_document_freshness`]:
 ///
 /// * [`WebvhFreshness::Fresh`] returns `Ok(())`.
-/// * [`WebvhFreshness::Stale`] returns `Err`; the cached public key exceeded
-///   the high-risk TTL and must fail closed.
+/// * [`WebvhFreshness::Stale`] returns `Err`; the cached public key exceeded the high-risk TTL and
+///   must fail closed.
 ///
 /// If persistence has no record for the DID (`get_document` returns `None`),
 /// there is no trusted ingestion evidence for high-risk verification and the

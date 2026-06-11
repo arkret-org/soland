@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
-use soland::persistence::{SolandMemoryPersistenceStore, PersistenceStore};
+use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 use soland::state::{CanonicalEventRecord, DeviceInventoryRecord, SessionRecord};
 
 use super::common::*;
@@ -95,7 +95,8 @@ async fn recovery_policy_rejects_tampered_signature_body() {
 async fn recovery_policy_production_accepts_verified_payload() {
     let mut config = test_config();
     config.development_mode = false;
-    let state = shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
+    let state =
+        shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
     let token = "prod_recovery_token";
     seed_bearer_session(&state, token).await;
     let signing = SigningKey::from_bytes(&[77u8; 32]);

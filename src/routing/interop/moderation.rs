@@ -23,7 +23,7 @@ use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::{SolandModerationReportRequestBody, SolandModerationReportOutcome};
+use crate::wire::{SolandModerationReportOutcome, SolandModerationReportRequestBody};
 
 pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))

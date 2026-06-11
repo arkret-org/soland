@@ -15,16 +15,15 @@
 //! `creation-with-upload`, `termination` and `expiration` extensions.
 //!
 //! Surfaces (all under `/_cokret/self/blob/resumable`):
-//! - `OPTIONS /`              — tus capability probe (no auth; endpoint-level
-//!   confirmation only, discovery is `/_cokret/describe`)
-//! - `POST    /`              — create an upload resource (`Upload-Length`
-//!   required; optional `application/offset+octet-stream` body for
-//!   creation-with-upload)
+//! - `OPTIONS /`              — tus capability probe (no auth; endpoint-level confirmation only,
+//!   discovery is `/_cokret/describe`)
+//! - `POST    /`              — create an upload resource (`Upload-Length` required; optional
+//!   `application/offset+octet-stream` body for creation-with-upload)
 //! - `HEAD    /{id}`          — query `Upload-Offset` to resume
 //! - `PATCH   /{id}`          — append a chunk at `Upload-Offset`
 //! - `DELETE  /{id}`          — terminate an in-progress upload
-//! - `POST    /{id}/finalize` — cokret extension: validate + ingest the
-//!   completed bytes into the blob store, returns `SolandBlobUploadOutcome`
+//! - `POST    /{id}/finalize` — cokret extension: validate + ingest the completed bytes into the
+//!   blob store, returns `SolandBlobUploadOutcome`
 //!
 //! Upload-Metadata keys understood at finalize time: `purpose`, `encrypted`
 //! (`"true"`/`"false"`), `realm_id`, `content_digest` (`sha256:<hex>`
@@ -176,9 +175,11 @@ fn is_expired(meta: &StagedUpload) -> bool {
 }
 
 fn http_date(rfc3339: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(rfc3339)
-        .ok()
-        .map(|t| t.with_timezone(&chrono::Utc).format("%a, %d %b %Y %H:%M:%S GMT").to_string())
+    chrono::DateTime::parse_from_rfc3339(rfc3339).ok().map(|t| {
+        t.with_timezone(&chrono::Utc)
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string()
+    })
 }
 
 fn set_tus_header(res: &mut Response) {
@@ -344,9 +345,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let upload_id = uuid::Uuid::new_v4().simple().to_string();
     let created_at = now().to_rfc3339();
     let expires_at = (chrono::Utc::now()
-        + chrono::Duration::seconds(
-            state.config.resumable_upload_incomplete_ttl_seconds as i64,
-        ))
+        + chrono::Duration::seconds(state.config.resumable_upload_incomplete_ttl_seconds as i64))
     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut meta = StagedUpload {
         upload_id: upload_id.clone(),
@@ -567,7 +566,12 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let chunk = match req.payload().await {
         Ok(bytes) => bytes.to_vec(),
         Err(_) => {
-            render_error(res, StatusCode::BAD_REQUEST, "bad_json", "invalid chunk body");
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                "invalid chunk body",
+            );
             return;
         }
     };
@@ -914,13 +918,10 @@ pub fn spawn_resumable_upload_ttl_sweeper(
 ) -> std::sync::Arc<tokio::task::JoinHandle<()>> {
     let ttl = std::time::Duration::from_secs(state.config.resumable_upload_incomplete_ttl_seconds);
     let dir = state.config.resumable_upload_dir.clone();
-    let interval = ttl
-        .checked_div(4)
-        .unwrap_or(ttl)
-        .clamp(
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(3600),
-        );
+    let interval = ttl.checked_div(4).unwrap_or(ttl).clamp(
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(3600),
+    );
     let task = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         // Skip the immediate first tick so we don't fire mid-boot.

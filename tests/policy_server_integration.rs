@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde_json::Value;
 use soland::authz::obligation_executor::RequestContext;
 use soland::authz::policy_client::{PolicyCheckRequestInput, PolicyClient};
-use soland::authz::{SolandAuthzEngine, MergedAuthzDecision, check_with_policy_server};
+use soland::authz::{MergedAuthzDecision, SolandAuthzEngine, check_with_policy_server};
 use soland::reducer::RealmPolicyServerConfig;
 
 const REALM_ID: &str = "ck:realm:01904100-0000-7000-8000-000000000001";
