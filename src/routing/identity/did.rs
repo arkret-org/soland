@@ -1288,9 +1288,9 @@ fn default_did_document(state: Option<&AppState>, did: &str) -> Value {
         && did == state.config.service_did
     {
         let public_key = cokret_sdk::ed25519_pubkey_to_did_key_multibase(
-            state.anchorer_signing_key().verifying_key().as_bytes(),
+            state.notary_signing_key().verifying_key().as_bytes(),
         );
-        for fragment in ["anchorer-key", "snapshot-key-1"] {
+        for fragment in ["notary-key", "snapshot-key-1"] {
             let key_id = format!("{did}#{fragment}");
             verification_methods.push(json!({
                 "id": key_id,

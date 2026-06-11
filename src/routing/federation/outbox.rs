@@ -3,7 +3,7 @@
 //! ## Surface
 //!
 //! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table. Called from
-//!   [`super::federation::broadcast_move_to_peers`] (and the symmetric anchor helper) after the
+//!   [`super::federation::broadcast_move_to_peers`] (and the symmetric seal helper) after the
 //!   per-peer transcript is persisted. Returns the row's [`FederationOutboxRecord`] (newly-inserted
 //!   or pre-existing when `(peer_did, idempotency_key)` already matched a prior row).
 //! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Polls the outbox every
@@ -79,7 +79,7 @@ fn now_unix_secs() -> i64 {
 ///
 /// Inserts one row per `(peer, resource)` tuple. Idempotent on
 /// `(peer_did, idempotency_key)`: a re-enqueue (e.g. restart-time
-/// re-broadcast of an already-anchored Move) returns the pre-existing
+/// re-broadcast of an already-sealed Move) returns the pre-existing
 /// row instead of creating a duplicate, matching the spec's
 /// `Idempotency-Key`-bound replay semantics in `federation.md` §8.5.
 ///
@@ -186,7 +186,7 @@ fn rfc9421_sign(
         request_canonical_digest,
         signature_params,
     );
-    let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());
+    let signature = state.notary_signing_key().sign(signature_base.as_bytes());
     let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
 
     insert_header_if_valid(&mut headers, "signature-input", &signature_input);

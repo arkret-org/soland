@@ -3,7 +3,7 @@ name: Multisig Drill
 # Production-grade backup / restore / rotate drill harness.
 #
 # Wires the three drill scripts/binaries to CI so the multisig persistence
-# and Anchorer signing-key rotation paths are exercised on every push to main,
+# and Notary signing-key rotation paths are exercised on every push to main,
 # weekly via cron, and on demand via workflow_dispatch.
 
 on:
@@ -126,30 +126,30 @@ jobs:
           set -euxo pipefail
           psql "$DATABASE_URL" <<'SQL'
           INSERT INTO multisig_pending(
-              anchor_id, space_id, threshold_k, threshold_n,
+              id, realm_id, threshold_k, threshold_n,
               members, canonical_b64, partials, claim_seq
           ) VALUES (
-              'ck:anchor:0196419b-0000-7000-8000-000000000a01',
-              'ck:space:0196419b-0000-7000-8000-000000000000',
+              'ck:seal:0196419b-0000-7000-8000-000000000a01',
+              '0196419b-0000-7000-8000-000000000000',
               2, 3,
               ARRAY['did:web:alice.example','did:web:bob.example','did:web:carol.example'],
               'Y2hlY2sgY2Fub25pY2FsX2I2NA==',
               jsonb_build_object(
                 'did:web:alice.example', jsonb_build_object(
                     'signature_b64', 'YWxpY2Utc2lnbmF0dXJl',
-                    'kid', 'did:web:alice.example#anchor-key',
+                    'kid', 'did:web:alice.example#seal-key',
                     'submitted_at', now()::text
                 ),
                 'did:web:bob.example', jsonb_build_object(
                     'signature_b64', 'Ym9iLXNpZ25hdHVyZQ==',
-                    'kid', 'did:web:bob.example#anchor-key',
+                    'kid', 'did:web:bob.example#seal-key',
                     'submitted_at', now()::text
                 )
               ),
               0
           );
           SQL
-          psql "$DATABASE_URL" -c "SELECT anchor_id, threshold_k, threshold_n FROM multisig_pending;"
+          psql "$DATABASE_URL" -c "SELECT id AS seal_id, threshold_k, threshold_n FROM multisig_pending;"
 
       - name: Run backup-drill.sh
         working-directory: soland
@@ -206,7 +206,7 @@ jobs:
           set -euxo pipefail
           export XDG_DATA_HOME="$GITHUB_WORKSPACE/_drill/keystore-xdg"
           mkdir -p "$XDG_DATA_HOME"
-          KEY_ID="cokret:signer:soland-anchorer:${SOLAND_SERVICE_DID}"
+          KEY_ID="cokret:signer:soland-notary:${SOLAND_SERVICE_DID}"
           SEED_B64="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
           mkdir -p _drill
           cat > _drill/seed-in.json <<EOF

@@ -15,12 +15,12 @@
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
 // comments) continues to compile.
 pub use cokret_sdk::lattice_registry::{
-    AccountStatus, AgentKey, AgentStatus, AnchorerCell, CapabilityDelegate, CapabilityDerived,
-    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog,
-    CoveredFrontier, CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate,
-    DevicePushRoute, DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
+    AccountStatus, AgentKey, AgentStatus, CapabilityDelegate, CapabilityDerived, CapabilityGrant,
+    CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog, CoveredFrontier,
+    CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, DevicePushRoute,
+    DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
     MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
-    PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
+    NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
     RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,
     RealmHistorySharingPolicy, RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule,
     RealmLink, RealmMediaService, RealmModerationPolicy, RealmOrganization,
@@ -92,7 +92,7 @@ mod tests {
     /// ([`lattice_bindings_for_sdk_registry`]) MUST cover every family
     /// the artifact registry knows about, with matching lattice +
     /// bottom mode. This is what drives `build_sdk_cell_registry()` →
-    /// `verify_move` / `apply_anchor`.
+    /// `verify_move` / `apply_seal`.
     #[test]
     fn sdk_lattice_binding_table_covers_artifact_families() {
         let bindings = lattice_bindings_for_sdk_registry()
@@ -115,7 +115,7 @@ mod tests {
     }
 
     /// Sanity: the SDK-defined registry covers every spec-normative
-    /// cell family plus reducer-local anchor/MLS families. Keep this in
+    /// cell family plus reducer-local seal/MLS families. Keep this in
     /// lockstep with `cokret-rust-sdk/crates/sdk/src/lattice_registry.rs`.
     #[test]
     fn default_registry_still_covers_every_spec_family() {

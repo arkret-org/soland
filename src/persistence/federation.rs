@@ -26,13 +26,13 @@ pub trait FederationTransactionStore: Send + Sync {
 ///
 /// Rows are inserted synchronously on the inbound write path
 /// (`routing::federation::federation::broadcast_move_to_peers` and
-/// `broadcast_anchor_to_peers`); the `FederationDispatcher` background
+/// `broadcast_seal_to_peers`); the `FederationDispatcher` background
 /// worker (`routing::federation::outbox::FederationDispatcher`) polls
 /// pending rows and posts them to peers.
 ///
 /// Idempotency: `(peer_did, idempotency_key)` is UNIQUE. Callers that
 /// re-enqueue the same logical request (replay of an accepted Move /
-/// Anchor on restart) MUST see `enqueue` return `Ok(false)` rather than
+/// Seal on restart) MUST see `enqueue` return `Ok(false)` rather than
 /// a duplicate-row error; the worker treats the existing row as the
 /// authoritative delivery state.
 #[async_trait]

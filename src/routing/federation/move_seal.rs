@@ -1,17 +1,17 @@
-//! Move / Anchor wire endpoints.
+//! Move / Seal wire endpoints.
 //!
 //! Surfaces:
 //! - `POST /_soland/peer/moves`   — submit a Move; verifier validates structural shape + signature
 //!   payload_digest + effect-shape against the cell registry, then stashes pending in
 //!   [`MoveStore`].
-//! - `POST /_soland/peer/anchors` — submit an Anchor; runs `apply_anchor` end-to-end: structural →
-//!   predecessor known → frontier monotonic → batch-verify Moves → atomic effect append → recompute
-//!   state_root → persist.
+//! - `POST /_soland/peer/seals` — submit a Seal; runs `apply_seal` end-to-end: structural →
+//!   predecessor known → delta coverage check → batch-verify Moves → atomic effect append →
+//!   recompute state_root → persist.
 //!
 //! Both endpoints back onto in-memory SDK store implementations on
 //! [`AppState`]. Production deployments will swap to Pg-backed
 //! implementations behind the same trait surface; the handlers don't
-//! care because they go through `&dyn MoveStore` / `&dyn AnchorStore`
+//! care because they go through `&dyn MoveStore` / `&dyn SealStore`
 //! / `&dyn CellStore` / `&dyn CellRegistry` types.
 //!
 //! JWS shape verification rejects mangled, empty, or sentinel signatures
@@ -19,8 +19,8 @@
 //! Ed25519 verification runs against the public key resolved from the
 //! `verification_method` DID URL.
 
-use cokret_sdk::state_res::{AnchorReject, apply_anchor, verify_move};
-use cokret_sdk::{Anchor, Move, RealmId};
+use cokret_sdk::state_res::{SealReject, apply_seal, verify_move};
+use cokret_sdk::{Move, RealmId, Seal};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -31,31 +31,34 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
-/// Map an SDK [`AnchorReject`] onto an [`AppError`].
+/// Map an SDK [`SealReject`] onto an [`AppError`].
 ///
 /// Every reject reason routes through the canonical Cokret error
 /// registry:
 ///
-/// - `UnknownPredecessor`, `FrontierNotMonotonic`, `Structural`, `MissingMove`, `StateRootMismatch`
-///   → [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally invalid anchor
-///   envelope).
+/// - `UnknownPredecessor`, coverage mismatches, `Structural`, `MissingMove`, `MoveRejected`,
+///   `StateRootMismatch` -> [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally
+///   invalid seal envelope).
 /// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
 ///
 /// The resulting `AppError` is rendered with HTTP `409 Conflict` to match
-/// the prior in-handler mapping at `submit_anchor` — the registry default
-/// for `SchemaViolation` is `422`, but anchor-rejects are conceptually a
+/// the prior in-handler mapping at `submit_seal` — the registry default
+/// for `SchemaViolation` is `422`, but seal-rejects are conceptually a
 /// causal / state-machine conflict so `409` is the historical wire status
 /// here. Call sites that need a different status can override after
 /// conversion via `.with_status(...)`.
-impl From<AnchorReject> for AppError {
-    fn from(reject: AnchorReject) -> Self {
+impl From<SealReject> for AppError {
+    fn from(reject: SealReject) -> Self {
         let code = match &reject {
-            AnchorReject::UnknownPredecessor
-            | AnchorReject::FrontierNotMonotonic
-            | AnchorReject::Structural(_)
-            | AnchorReject::MissingMove { .. }
-            | AnchorReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
-            AnchorReject::Store(_) => ErrorCode::InternalError,
+            SealReject::UnknownPredecessor
+            | SealReject::DeltaAlreadyCovered
+            | SealReject::Structural(_)
+            | SealReject::MissingMove { .. }
+            | SealReject::MoveRejected { .. }
+            | SealReject::ControlEventSetRootMismatch { .. }
+            | SealReject::CoveredSetMismatch
+            | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
+            SealReject::Store(_) => ErrorCode::InternalError,
         };
         AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
     }
@@ -64,24 +67,24 @@ impl From<AnchorReject> for AppError {
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("moves").post(submit_move))
-        .push(Router::with_path("anchors").post(submit_anchor))
+        .push(Router::with_path("seals").post(submit_seal))
 }
 
 pub(super) fn api_admin_router() -> Router {
-    Router::with_path("admin/anchors/sign").post(admin_sign_anchor)
+    Router::with_path("admin/seals/sign").post(admin_sign_seal)
 }
 
-// The anchorer uses `select_jws_verifier` which switches between
+// The notary uses `select_jws_verifier` which switches between
 // shape-only (dev mode) and real ed25519 (production) based on
 // `state.config.development_mode`.
 
 /// Pick the JWS verifier based on `config.development_mode`. Returns a
 /// closure of the exact type
-/// `verify_move` / `apply_anchor` expect (`Fn(&[u8], &str, &str, &str)
+/// `verify_move` / `apply_seal` expect (`Fn(&[u8], &str, &str, &str)
 /// -> Result<(), String> + Copy`). The closure captures `&AppState` by
 /// reference so the production branch can reach the DID resolver chain;
 /// `&AppState` is `Copy`, so the closure is `Copy` too — required by
-/// `apply_anchor`'s `F: Copy` bound for batch verify_move calls.
+/// `apply_seal`'s `F: Copy` bound for batch verify_move calls.
 pub fn select_jws_verifier(
     state: &AppState,
 ) -> impl Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy + use<'_> {
@@ -94,7 +97,7 @@ pub fn select_jws_verifier(
     }
 }
 
-/// JWS shape verifier used by `verify_move` / `apply_anchor`. Rejects:
+/// JWS shape verifier used by `verify_move` / `apply_seal`. Rejects:
 ///   - empty / sentinel signature segments
 ///   - JWS strings that don't have the `<protected>..<signature>` detached shape (RFC 7515 §3.2
 ///     with empty payload segment)
@@ -182,7 +185,7 @@ fn verify_jws_shape(
 /// Response from `POST /_soland/peer/moves`.
 ///
 /// `state` is one of `pending` / `rejected` so callers can distinguish
-/// "we've stashed it for the next anchorer batch" from "verifier said no
+/// "we've stashed it for the next notary batch" from "verifier said no
 /// before we even reached the queue".
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SubmitMoveOutcome {
@@ -195,7 +198,7 @@ pub struct SubmitMoveOutcome {
 #[endpoint(
     operation_id = "org.cokret.soland.moves.submit",
     tags("moves"),
-    summary = "Submit a Move for the next Anchor batch"
+    summary = "Submit a Move for the next Seal batch"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.moves.submit"))]
 async fn submit_move(
@@ -208,12 +211,12 @@ async fn submit_move(
     let _session = aa.authenticated_session(state, req).await?;
     let move_obj = body.into_inner();
 
-    // Verifier needs the per-Anchor pre-state. For the submit-time
+    // Verifier needs the per-Seal pre-state. For the submit-time
     // pre-check we use the current effective state under the existing
-    // leaves; the actual deciding pre-state is computed by apply_anchor
-    // when the anchorer signs the next batch. This catches obvious
+    // leaves; the actual deciding pre-state is computed by apply_seal
+    // when the notary signs the next batch. This catches obvious
     // failures (bad sig, bad effect shape) early without committing
-    // the Move to anchored storage.
+    // the Move to sealed storage.
     let pre_state = std::collections::BTreeMap::new();
     let registry = state.cell_registry.as_ref();
 
@@ -258,10 +261,10 @@ async fn submit_move(
     })
 }
 
-/// Response from `POST /_soland/peer/anchors`.
+/// Response from `POST /_soland/peer/seals`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitAnchorOutcome {
-    pub anchor_id: String,
+pub struct SubmitSealOutcome {
+    pub seal_id: String,
     pub accepted_move_ids: Vec<String>,
     pub rejected_moves: Vec<RejectedMoveEntry>,
     pub post_state_root: String,
@@ -274,60 +277,51 @@ pub struct RejectedMoveEntry {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.anchors.submit",
-    tags("anchors"),
-    summary = "Submit an Anchor; runs apply_anchor end-to-end"
+    operation_id = "org.cokret.soland.seals.submit",
+    tags("seals"),
+    summary = "Submit a Seal; runs apply_seal end-to-end"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.anchors.submit"))]
-async fn submit_anchor(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.seals.submit"))]
+async fn submit_seal(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<Anchor>,
-) -> JsonResult<SubmitAnchorOutcome> {
+    body: JsonBody<Seal>,
+) -> JsonResult<SubmitSealOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let anchor = body.into_inner();
+    let seal = body.into_inner();
 
-    // Round R2/R3 (T04) — frontier entries MUST be sha256:<hex>; reject the
-    // legacy `ck:event:<uuid>` form fail-closed.
-    let frontier_entries: Vec<String> = anchor
-        .frontier
-        .iter()
-        .map(|m| m.as_str().to_owned())
-        .collect();
-    if let Err((code, reason)) = validate_anchor_frontier_entries(&frontier_entries) {
+    // Seal delta entries MUST be sha256:<hex>; reject the legacy
+    // `ck:event:<uuid>` form fail-closed.
+    let delta_entries: Vec<String> = seal.delta.iter().map(|m| m.as_str().to_owned()).collect();
+    if let Err((code, reason)) = validate_seal_delta_entries(&delta_entries) {
         return Err(AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST));
     }
 
     let move_store = state.move_store.as_ref();
-    let anchor_store = state.anchor_store.as_ref();
+    let seal_store = state.seal_store.as_ref();
     let cell_store = state.cell_store.as_ref();
     let registry = state.cell_registry.as_ref();
 
-    // Replay-window check on Anchor.hlc.
-    // anchor.hlc is part of canonical_bytes_for_id signed by anchorer_signature;
+    // Replay-window check on Seal.hlc.
+    // seal.hlc is part of canonical_bytes_for_id signed by notary_signature;
     // window=0 (test config) bypasses entirely.
     if let Err(reject) =
-        crate::jws_verify::verify_replay_window(&anchor.hlc, state.config.jws_replay_window_seconds)
+        crate::jws_verify::verify_replay_window(&seal.hlc, state.config.jws_replay_window_seconds)
     {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            format!("anchor replay_window: {reject}"),
+            format!("seal replay_window: {reject}"),
         )
         .with_status(StatusCode::CONFLICT));
     }
     let verifier = select_jws_verifier(state);
-    // `AnchorReject` → `AppError` mapping lives in the `From` impl above;
+    // `SealReject` → `AppError` mapping lives in the `From` impl above;
     // `?` propagates with the canonical (registry-bound) error code and
     // the spec-compliant 409 wire status.
-    let effect = apply_anchor(
-        &anchor,
-        move_store,
-        anchor_store,
-        cell_store,
-        registry,
-        verifier,
+    let effect = apply_seal(
+        &seal, move_store, seal_store, cell_store, registry, verifier,
     )?;
 
     let rejected = effect
@@ -340,7 +334,7 @@ async fn submit_anchor(
         .collect();
 
     // Refresh ProjectionState::cells from CellStore
-    // for the anchored Realm so cell-keyed read paths
+    // for the sealed Realm so cell-keyed read paths
     // (read_receipt_policy / member.state / etc.) see the new effective
     // state immediately. Lock failures are non-fatal — read paths fall
     // back to the durable-event scan.
@@ -349,7 +343,7 @@ async fn submit_anchor(
     // shift after the reload writes the new value.
     let mls_epoch_cell = cokret_sdk::CellRef::new(format!(
         "ck:cell:ck.component.mls.epoch.v1:{}",
-        anchor.realm_id.as_str()
+        seal.realm_id.as_str()
     ))
     .ok();
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell.as_ref().and_then(|cell_id| {
@@ -360,17 +354,17 @@ async fn submit_anchor(
             .and_then(|proj| proj.cell_value(cell_id).cloned())
     });
     if let Ok(mut proj) = state.projection.lock() {
-        if let Err(error) = proj.reload_cells_from_store(&anchor.realm_id, cell_store, registry) {
-            tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_anchor");
+        if let Err(error) = proj.reload_cells_from_store(&seal.realm_id, cell_store, registry) {
+            tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
         }
     }
-    // Post-apply_anchor mid-stream control frames.
-    // 1. Frontier — every successful Anchor advances the frontier.
+    // Post-apply_seal mid-stream control frames.
+    // 1. Frontier — every successful Seal advances the frontier.
     let _ = state
         .event_broadcast
         .send(crate::state::EventNotification::frontier(
-            anchor.realm_id.as_str().to_owned(),
-            effect.anchor.as_str().to_owned(),
+            seal.realm_id.as_str().to_owned(),
+            effect.seal.as_str().to_owned(),
             effect.post_state_root.as_str().to_owned(),
         ));
     // 2. EpochRotation — only if mls.epoch cell value changed.
@@ -386,17 +380,17 @@ async fn submit_anchor(
             let _ = state
                 .event_broadcast
                 .send(crate::state::EventNotification::epoch_rotation(
-                    anchor.realm_id.as_str().to_owned(),
+                    seal.realm_id.as_str().to_owned(),
                     prev_epoch_value,
                     new_epoch,
                 ));
         }
     }
 
-    super::federation::broadcast_anchor_to_peers(state, effect.anchor.as_str()).await;
+    super::federation::broadcast_seal_to_peers(state, effect.seal.as_str()).await;
 
-    json_ok(SubmitAnchorOutcome {
-        anchor_id: effect.anchor.as_str().to_owned(),
+    json_ok(SubmitSealOutcome {
+        seal_id: effect.seal.as_str().to_owned(),
         accepted_move_ids: effect
             .accepted_move_ids
             .into_iter()
@@ -407,10 +401,10 @@ async fn submit_anchor(
     })
 }
 
-/// Request body for `POST /_soland/admin/anchors/sign`.
+/// Request body for `POST /_soland/admin/seals/sign`.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SignAnchorRequestBody {
-    /// Realm whose pending Moves should be batch-anchored.
+pub struct SignSealRequestBody {
+    /// Realm whose pending Moves should be batch-sealed.
     pub realm_id: String,
     /// Maximum number of pending Moves to consume in this pass.
     /// Default 100 if absent.
@@ -418,14 +412,14 @@ pub struct SignAnchorRequestBody {
     pub max_moves: Option<usize>,
 }
 
-/// Response body — mirrors `SubmitAnchorOutcome` but reports `None` when
-/// there were no pending Moves to anchor.
+/// Response body — mirrors `SubmitSealOutcome` but reports `None` when
+/// there were no pending Moves to seal.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SignAnchorOutcome {
-    /// `true` if an Anchor was published; `false` if nothing was pending.
+pub struct SignSealOutcome {
+    /// `true` if a Seal was published; `false` if nothing was pending.
     pub published: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_id: Option<String>,
+    pub seal_id: Option<String>,
     #[serde(default)]
     pub accepted_move_ids: Vec<String>,
     #[serde(default)]
@@ -435,25 +429,25 @@ pub struct SignAnchorOutcome {
 }
 
 /// Admin endpoint that triggers one
-/// signing pass by the in-process anchorer worker. Useful for tests and
-/// for ops to manually flush pending Moves into an Anchor without a
+/// signing pass by the in-process notary worker. Useful for tests and
+/// for ops to manually flush pending Moves into a Seal without a
 /// background ticker. Production deploys will eventually wire a
 /// periodic ticker to call the same worker function.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.anchors.sign",
-    tags("admin", "anchors"),
-    summary = "Trigger one anchorer signing pass for a Realm"
+    operation_id = "org.cokret.soland.admin.seals.sign",
+    tags("admin", "seals"),
+    summary = "Trigger one notary signing pass for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.anchors.sign"))]
-async fn admin_sign_anchor(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.seals.sign"))]
+async fn admin_sign_seal(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SignAnchorRequestBody>,
-) -> JsonResult<SignAnchorOutcome> {
+    body: JsonBody<SignSealRequestBody>,
+) -> JsonResult<SignSealOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let SignAnchorRequestBody {
+    let SignSealRequestBody {
         realm_id,
         max_moves,
     } = body.into_inner();
@@ -463,9 +457,9 @@ async fn admin_sign_anchor(
     })?;
     let limit = max_moves.unwrap_or(100).min(1000);
 
-    match crate::anchorer::run_one_signing_pass(state, &realm, limit) {
+    match crate::notary::run_one_signing_pass(state, &realm, limit) {
         Ok(Some(outcome)) => {
-            super::federation::broadcast_anchor_to_peers(state, outcome.anchor_id.as_str()).await;
+            super::federation::broadcast_seal_to_peers(state, outcome.seal_id.as_str()).await;
             let rejected = outcome
                 .rejected_moves
                 .into_iter()
@@ -474,9 +468,9 @@ async fn admin_sign_anchor(
                     reason,
                 })
                 .collect();
-            json_ok(SignAnchorOutcome {
+            json_ok(SignSealOutcome {
                 published: true,
-                anchor_id: Some(outcome.anchor_id.as_str().to_owned()),
+                seal_id: Some(outcome.seal_id.as_str().to_owned()),
                 accepted_move_ids: outcome
                     .accepted_move_ids
                     .into_iter()
@@ -486,16 +480,16 @@ async fn admin_sign_anchor(
                 post_state_root: Some(outcome.post_state_root.as_str().to_owned()),
             })
         }
-        Ok(None) => json_ok(SignAnchorOutcome {
+        Ok(None) => json_ok(SignSealOutcome {
             published: false,
-            anchor_id: None,
+            seal_id: None,
             accepted_move_ids: vec![],
             rejected_moves: vec![],
             post_state_root: None,
         }),
-        Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => Err(AppError::new(
+        Err(crate::notary::NotaryError::NotAuthorized(_)) => Err(AppError::new(
             ErrorCode::PolicyViolation,
-            "not authorized to sign anchors for this realm".to_owned(),
+            "not authorized to sign seals for this realm".to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN)),
         Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
@@ -519,24 +513,22 @@ impl MoveStorePutVia for cokret_sdk::state_res::MemoryMoveStore {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Anchor frontier digest validation (spec T04).
+// Seal delta digest validation.
 // ────────────────────────────────────────────────────────────────────────
 
-/// Validate every entry in an Anchor `frontier[]` is shaped as
-/// `sha256:<64 lowercase hex>` — never a `ck:event:<uuid>` form. Spec T04.
+/// Validate every entry in a Seal `delta[]` is shaped as
+/// `sha256:<64 lowercase hex>` — never a `ck:event:<uuid>` form.
 ///
 /// Receivers MUST recompute and verify entries; the strict shape check
 /// here guards against the legacy event-id form that was permitted in
 /// pre-T04 spec drafts.
-pub(crate) fn validate_anchor_frontier_entries(
-    frontier: &[String],
-) -> Result<(), (ErrorCode, String)> {
-    for entry in frontier {
+pub(crate) fn validate_seal_delta_entries(delta: &[String]) -> Result<(), (ErrorCode, String)> {
+    for entry in delta {
         if !is_sha256_digest(entry) {
             return Err((
                 ErrorCode::SchemaViolation,
                 format!(
-                    "anchor frontier entries must match sha256:<64 lowercase hex>; \
+                    "seal delta entries must match sha256:<64 lowercase hex>; \
                      got {entry:?}"
                 ),
             ));
@@ -556,20 +548,20 @@ fn is_sha256_digest(s: &str) -> bool {
 }
 
 #[cfg(test)]
-mod anchor_frontier_tests {
+mod seal_delta_tests {
     use super::*;
 
     #[test]
-    fn anchor_frontier_rejects_event_id_form() {
+    fn seal_delta_rejects_event_id_form() {
         let entries = vec!["ck:event:01904100-0000-7000-8000-000000000001".to_owned()];
-        let err = validate_anchor_frontier_entries(&entries).unwrap_err();
+        let err = validate_seal_delta_entries(&entries).unwrap_err();
         assert_eq!(err.0, ErrorCode::SchemaViolation);
     }
 
     #[test]
-    fn anchor_frontier_accepts_sha256() {
+    fn seal_delta_accepts_sha256() {
         let entries = vec![format!("sha256:{}", "a".repeat(64))];
-        validate_anchor_frontier_entries(&entries).unwrap();
+        validate_seal_delta_entries(&entries).unwrap();
     }
 }
 

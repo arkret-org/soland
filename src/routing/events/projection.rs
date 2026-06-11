@@ -711,7 +711,7 @@ pub fn tombstone_timeline_event_for_retention(
     );
     object.insert(
         "retention_anchor_preserved".to_owned(),
-        json!(tombstone.anchored),
+        json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
     object.insert(
@@ -741,7 +741,7 @@ pub fn retention_tombstone_payload_value(
             "retention_reason": tombstone.reason.as_str(),
             "retention_expired_at": tombstone.expired_at.to_rfc3339(),
             "retention_tombstoned_at": tombstone.tombstoned_at.to_rfc3339(),
-            "retention_anchor_preserved": tombstone.anchored,
+            "retention_anchor_preserved": tombstone.sealed,
             "physical_delete": false,
         });
     };
@@ -761,7 +761,7 @@ pub fn retention_tombstone_payload_value(
     );
     object.insert(
         "retention_anchor_preserved".to_owned(),
-        json!(tombstone.anchored),
+        json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
     object.insert(
@@ -1179,7 +1179,7 @@ async fn mirror_mls_effect_to_persistence(
         crate::reducer::MlsEffect::GroupGenesis {
             group_id,
             creator_actor_id,
-            covered_frontier,
+            covered_seals,
             ..
         } => {
             let binding = operation
@@ -1194,7 +1194,7 @@ async fn mirror_mls_effect_to_persistence(
                 .initialize_genesis(
                     group_id,
                     creator_actor_id,
-                    covered_frontier,
+                    covered_seals,
                     &binding,
                     operation.created_at.timestamp(),
                 )
@@ -1207,7 +1207,7 @@ async fn mirror_mls_effect_to_persistence(
             group_id,
             previous_epoch,
             leader_actor_id,
-            covered_frontier,
+            covered_seals,
             ..
         } => {
             let binding = operation
@@ -1223,7 +1223,7 @@ async fn mirror_mls_effect_to_persistence(
                     group_id,
                     *previous_epoch,
                     leader_actor_id,
-                    covered_frontier,
+                    covered_seals,
                     &binding,
                     operation.created_at.timestamp(),
                 )
@@ -1770,14 +1770,14 @@ pub async fn persist_projected_operation(
 /// `ProjectionState::cells` as a synthesized CasRegister value at the
 /// canonical cell
 /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`.
-/// This unifies the read path with the Move/Anchor pipeline: both durable-
-/// event ingestion AND Move/Anchor `apply_anchor` write to the same cells
+/// This unifies the read path with the Move/Seal pipeline: both durable-
+/// event ingestion AND Move/Seal `apply_seal` write to the same cells
 /// map, so `routing::events::effective_read_receipt_policy_for_realm`
 /// queries one source.
 ///
 /// Cas-register semantics: the projection writer wins-by-arrival here
 /// (we don't have HLC ordering on synthesized values yet); for full
-/// cas-register conflict semantics writes should go through Move/Anchor.
+/// cas-register conflict semantics writes should go through Move/Seal.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     let realm_id = operation.realm_id.clone();
     let payload = match operation.payload.as_object() {

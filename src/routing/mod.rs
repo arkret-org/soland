@@ -132,14 +132,14 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // matters only where paths overlap:
         //   1. `spec_router`   — canonical `ck.admin.*` (server/status,
         //      accounts, devices, moderation/queue).
-        //   2. `admin_router`  — operator surface (anchorer / multisig /
-        //      bottom / anchor-dag / gc-candidates / delivery-binding /
+        //   2. `admin_router`  — operator surface (notary / multisig /
+        //      bottom / seal-dag / gc-candidates / delivery-binding /
         //      moderation sub-actions). Registered BEFORE the collection so
         //      the concrete `/_soland/admin/bottom` wins over `{resource}`.
         //   3. `router`        — collection (`/_soland/admin/{resource}`),
         //      cells, control-frames, retention.
-        //   4. `admin_anchor_sign_router` — `POST /_soland/admin/anchors/sign`
-        //      operator anchor-signing trigger, detached from the
+        //   4. `admin_seal_sign_router` — `POST /_soland/admin/seals/sign`
+        //      operator seal-signing trigger, detached from the
         //      peer federation router so it sits in the admin namespace.
         .push(
             Router::with_path("_soland")
@@ -151,7 +151,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(Router::with_path("admin").push(admin::audit_router()))
                 .push(admin::admin_router())
                 .push(admin::router())
-                .push(federation::admin_anchor_sign_router())
+                .push(federation::admin_seal_sign_router())
                 .push(soland_local_router()),
         )
         .push(api_v1_router());
@@ -1474,7 +1474,7 @@ pub(crate) struct SnapshotBundle {
     pub snapshot_ref: String,
     /// `sha256:<hex>` digest over the full serialized state document.
     /// Doubles as the snapshot's `state_root` until the
-    /// `effective_anchor_view`-driven state root is wired in.
+    /// `effective_seal_view`-driven state root is wired in.
     pub state_digest: String,
     pub frontier: Value,
     /// Deterministic chunk partition (SDK
@@ -1609,7 +1609,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     };
     cokret_sdk::sign_snapshot_manifest_ed25519(
         &mut manifest,
-        state.anchorer_signing_key().as_ref(),
+        state.notary_signing_key().as_ref(),
         verification_method,
         created_at,
     )
@@ -1702,7 +1702,7 @@ pub(crate) async fn snapshot_bundle_for_realm(
         "chunk_bytes": chunk_target_bytes,
     });
     let proof_body_bytes = cokret_sdk::canonical::canonical_json_bytes(&proof_body).ok()?;
-    let signing_key = (*state.anchorer_signing_key()).clone();
+    let signing_key = (*state.notary_signing_key()).clone();
     let signer = cokret_sdk::Ed25519MoveSigner::new(
         signing_key,
         generator_did.clone(),
@@ -1992,7 +1992,7 @@ mod operation_conformance_tests {
                 // replay-window enforcement so they pass.
                 jws_replay_window_seconds: 0,
                 jws_replay_window_per_family: std::collections::BTreeMap::new(),
-                anchorer_signing_key_seed: None,
+                notary_signing_key_seed: None,
                 agent_audit_binding_signing_seed: None,
                 use_keystore: false,
                 federation_policy: crate::config::FederationPolicy::Mesh,
@@ -2005,7 +2005,7 @@ mod operation_conformance_tests {
                 push_bridge_trusted_service_dids: Vec::new(),
                 resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
                 resumable_upload_incomplete_ttl_seconds: 86_400,
-                compaction_min_anchor_age_seconds: 604_800,
+                seal_compaction_min_age_seconds: 604_800,
                 compaction_min_witnesses: 1,
                 compaction_preserve_genesis: true,
                 compaction_prune_only_singleton_successors: true,
@@ -2164,9 +2164,9 @@ mod operation_conformance_tests {
                     "encryption_profile": "mls_rfc9420",
                     "security_class": "standard",
                     "federation_policy": "restricted",
-                    "anchor_profile": "single_did",
+                    "notary_profile": "single_did",
                     "digest_algorithm": "sha256",
-                    "anchorer": {
+                    "notary": {
                         "type": "single_did",
                         "did": "did:web:alice.example",
                         "recovery_members": ["did:web:recovery.example"],
@@ -2609,7 +2609,7 @@ mod canonical_conformance_vectors {
                 .push(Router::with_path("admin").push(admin::audit_router()))
                 .push(admin::admin_router())
                 .push(admin::router())
-                .push(federation::admin_anchor_sign_router())
+                .push(federation::admin_seal_sign_router())
                 .push(soland_local_router()),
         );
         cokret_openapi_doc(&router)
@@ -3411,7 +3411,7 @@ mod framework_error_routing_tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
@@ -3424,7 +3424,7 @@ mod framework_error_routing_tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,

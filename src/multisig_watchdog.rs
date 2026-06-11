@@ -23,7 +23,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use chrono::Utc;
 use cokret_sdk::{
-    Anchor, AnchorId, Did, Hash, Hlc, MoveId, PartialSignature, RealmId, ThresholdAggregator,
+    Did, Hash, Hlc, MoveId, PartialSignature, RealmId, Seal, SealId, ThresholdAggregator,
 };
 
 use crate::state::{AppState, MultisigPendingRecord};
@@ -66,7 +66,7 @@ pub struct WatchdogPassReport {
     pub claimed: Vec<String>,
     pub aggregated: Vec<String>,
     pub failed: Vec<(String, String)>,
-    /// Anchors whose fenced delete was rejected because the row's
+    /// Seals whose fenced delete was rejected because the row's
     /// `claim_seq` no longer matched the snapshot we held (i.e. a stale
     /// leader's publish landed against a re-leased row).
     pub fenced_rejections: Vec<String>,
@@ -157,55 +157,51 @@ pub async fn run_watchdog_pass(
             continue;
         }
         let fence_seq = match store
-            .try_claim(&record.anchor_id, &config.node_id, now, lease_expiry)
+            .try_claim(&record.seal_id, &config.node_id, now, lease_expiry)
             .await
         {
             Ok((true, seq)) => {
-                report.claimed.push(record.anchor_id.clone());
+                report.claimed.push(record.seal_id.clone());
                 seq
             }
             Ok((false, _)) => continue,
             Err(error) => {
-                tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: try_claim failed");
+                tracing::warn!(%error, worker = "multisig_watchdog", seal_id = %record.seal_id, "watchdog: try_claim failed");
                 continue;
             }
         };
 
         match aggregate_and_publish(state, &record) {
-            Ok(_anchor) => {
+            Ok(_seal) => {
                 // Fenced delete: the row only goes away when our
                 // snapshotted `claim_seq` still matches. If a stale leader
                 // (whose lease was silently re-issued after a partition
                 // heal) tries to publish here, its `delete_with_fence`
                 // returns false and the row stays for the live leader.
                 match store
-                    .delete_with_fence(&record.anchor_id, &config.node_id, fence_seq)
+                    .delete_with_fence(&record.seal_id, &config.node_id, fence_seq)
                     .await
                 {
-                    Ok(true) => report.aggregated.push(record.anchor_id.clone()),
+                    Ok(true) => report.aggregated.push(record.seal_id.clone()),
                     Ok(false) => {
-                        report.fenced_rejections.push(record.anchor_id.clone());
+                        report.fenced_rejections.push(record.seal_id.clone());
                         tracing::warn!(
                             worker = "multisig_watchdog",
-                            anchor_id = %record.anchor_id,
+                            seal_id = %record.seal_id,
                             fence_seq,
                             node_id = %config.node_id,
                             "watchdog: fenced delete rejected — stale leader detected, dropping publish",
                         );
                     }
                     Err(error) => {
-                        tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: post-aggregate delete failed");
+                        tracing::warn!(%error, worker = "multisig_watchdog", seal_id = %record.seal_id, "watchdog: post-aggregate delete failed");
                     }
                 }
             }
             Err(error) => {
-                let _ = store
-                    .release_claim(&record.anchor_id, &config.node_id)
-                    .await;
-                report
-                    .failed
-                    .push((record.anchor_id.clone(), error.clone()));
-                tracing::warn!(%error, worker = "multisig_watchdog", anchor_id = %record.anchor_id, "watchdog: aggregate failed");
+                let _ = store.release_claim(&record.seal_id, &config.node_id).await;
+                report.failed.push((record.seal_id.clone(), error.clone()));
+                tracing::warn!(%error, worker = "multisig_watchdog", seal_id = %record.seal_id, "watchdog: aggregate failed");
             }
         }
     }
@@ -224,7 +220,7 @@ pub async fn run_watchdog_pass(
 pub async fn renew_lease_during_aggregation(
     state: &AppState,
     config: &MultisigWatchdogConfig,
-    anchor_id: &str,
+    seal_id: &str,
     fence_seq: i64,
 ) -> Result<bool, String> {
     let store = state.persistence.multisig_pending();
@@ -233,7 +229,7 @@ pub async fn renew_lease_during_aggregation(
         + chrono::Duration::from_std(config.lease_duration)
             .unwrap_or_else(|_| chrono::Duration::seconds(LEASE_DURATION_SECS as i64));
     store
-        .renew_claim(anchor_id, &config.node_id, fence_seq, new_until)
+        .renew_claim(seal_id, &config.node_id, fence_seq, new_until)
         .await
         .map_err(|e| e.to_string())
 }
@@ -244,19 +240,16 @@ fn is_threshold_met(record: &MultisigPendingRecord) -> bool {
 
 /// Build the `ThresholdAggregator`, run per-partial Ed25519 verification
 /// via the supplied `verify` callback, and produce the threshold-signed
-/// [`Anchor`] envelope. Errors are returned as plain strings so the caller
+/// [`Seal`] envelope. Errors are returned as plain strings so the caller
 /// can surface them in [`WatchdogPassReport`].
-fn aggregate_and_publish(
-    state: &AppState,
-    record: &MultisigPendingRecord,
-) -> Result<Anchor, String> {
+fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Result<Seal, String> {
     use base64::engine::general_purpose::STANDARD;
 
     let canonical_bytes = STANDARD
         .decode(&record.canonical_b64)
         .map_err(|e| format!("canonical_b64 decode failed: {e}"))?;
 
-    // Reconstruct the structured anchor body from the canonical JSON.
+    // Reconstruct the structured seal body from the canonical JSON.
     let body: serde_json::Value = serde_json::from_slice(&canonical_bytes)
         .map_err(|e| format!("canonical_bytes are not JSON: {e}"))?;
     let realm_id = body
@@ -273,8 +266,8 @@ fn aggregate_and_publish(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let frontier = body
-        .get("frontier")
+    let delta = body
+        .get("delta")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -294,11 +287,11 @@ fn aggregate_and_publish(
         .ok_or_else(|| "canonical body missing hlc".to_owned())?;
 
     let realm_id = RealmId::new(realm_id).map_err(|e| format!("invalid realm_id: {e}"))?;
-    let predecessor_refs: Vec<AnchorId> = predecessor_refs
+    let predecessor_refs: Vec<SealId> = predecessor_refs
         .into_iter()
-        .map(|s| AnchorId::new(s).map_err(|e| format!("invalid AnchorId: {e}")))
+        .map(|s| SealId::new(s).map_err(|e| format!("invalid SealId: {e}")))
         .collect::<Result<_, _>>()?;
-    let frontier: Vec<MoveId> = frontier
+    let delta: Vec<MoveId> = delta
         .into_iter()
         .map(|s| MoveId::new(s).map_err(|e| format!("invalid MoveId: {e}")))
         .collect::<Result<_, _>>()?;
@@ -337,17 +330,17 @@ fn aggregate_and_publish(
         })
         .map_err(|e| format!("aggregate: {e}"))?;
 
-    let anchor = Anchor::sign_threshold_partial(
+    let seal = Seal::sign_threshold_partial(
         realm_id,
         predecessor_refs,
-        frontier,
+        delta,
         state_root,
         hlc,
         &aggregator,
     )
     .map_err(|e| format!("sign_threshold_partial: {e}"))?;
 
-    Ok(anchor)
+    Ok(seal)
 }
 
 /// Per-partial verifier: resolves `partial.kid` to an Ed25519 public key
@@ -413,7 +406,7 @@ mod tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
@@ -426,7 +419,7 @@ mod tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
@@ -444,7 +437,7 @@ mod tests {
         AppState::new(config, Db { pool: None })
     }
 
-    fn make_record(anchor_id: &str, threshold_k: u32, partials: usize) -> MultisigPendingRecord {
+    fn make_record(seal_id: &str, threshold_k: u32, partials: usize) -> MultisigPendingRecord {
         let mut partials_map = BTreeMap::new();
         for i in 0..partials {
             partials_map.insert(
@@ -457,7 +450,7 @@ mod tests {
             );
         }
         MultisigPendingRecord {
-            anchor_id: anchor_id.to_owned(),
+            seal_id: seal_id.to_owned(),
             realm_id: "ck:realm:0196419b-0000-7000-8000-00000000014a".to_owned(),
             threshold_k,
             threshold_n: 3,
@@ -478,7 +471,7 @@ mod tests {
     async fn skips_rows_below_threshold() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
-        let record = make_record("ck:anchor:sha256:01", 3, 1);
+        let record = make_record("ck:seal:sha256:01", 3, 1);
         state
             .persistence
             .multisig_pending()
@@ -495,7 +488,7 @@ mod tests {
     async fn skips_rows_with_empty_canonical_bytes() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
-        let mut record = make_record("ck:anchor:sha256:02", 1, 1);
+        let mut record = make_record("ck:seal:sha256:02", 1, 1);
         record.canonical_b64 = String::new();
         state
             .persistence
@@ -511,7 +504,7 @@ mod tests {
     async fn claims_eligible_row_and_records_failure_on_invalid_canonical_bytes() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
-        let record = make_record("ck:anchor:sha256:03", 1, 1);
+        let record = make_record("ck:seal:sha256:03", 1, 1);
         state
             .persistence
             .multisig_pending()
@@ -528,7 +521,7 @@ mod tests {
         let row_back = state
             .persistence
             .multisig_pending()
-            .get("ck:anchor:sha256:03")
+            .get("ck:seal:sha256:03")
             .await
             .unwrap()
             .unwrap();
@@ -539,7 +532,7 @@ mod tests {
     async fn other_node_lease_is_respected_until_deadline() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(&state.config.service_did);
-        let mut record = make_record("ck:anchor:sha256:04", 1, 1);
+        let mut record = make_record("ck:seal:sha256:04", 1, 1);
         record.claimed_by_node_id = Some("other-node".to_owned());
         record.claimed_until = Some(Utc::now() + chrono::Duration::seconds(120));
         state
@@ -580,7 +573,7 @@ mod tests {
         };
 
         let store = state.persistence.multisig_pending();
-        let record = make_record("ck:anchor:sha256:partition-a", 1, 1);
+        let record = make_record("ck:seal:sha256:partition-a", 1, 1);
         store.upsert(record).await.unwrap();
 
         // t=0: Node A claims. Snapshot fence_seq for the post-aggregate
@@ -588,7 +581,7 @@ mod tests {
         let t0 = Utc::now();
         let lease_a_until = t0 + chrono::Duration::seconds(60);
         let (won_a, fence_seq_a) = store
-            .try_claim("ck:anchor:sha256:partition-a", "node-A", t0, lease_a_until)
+            .try_claim("ck:seal:sha256:partition-a", "node-A", t0, lease_a_until)
             .await
             .unwrap();
         assert!(won_a);
@@ -599,7 +592,7 @@ mod tests {
         let t70 = t0 + chrono::Duration::seconds(70);
         let lease_b_until = t70 + chrono::Duration::seconds(60);
         let (won_b, fence_seq_b) = store
-            .try_claim("ck:anchor:sha256:partition-a", "node-B", t70, lease_b_until)
+            .try_claim("ck:seal:sha256:partition-a", "node-B", t70, lease_b_until)
             .await
             .unwrap();
         assert!(won_b);
@@ -610,7 +603,7 @@ mod tests {
         // claim_seq=1; the row's current claim_seq is 2, so the delete
         // is rejected.
         let stale_delete_ok = store
-            .delete_with_fence("ck:anchor:sha256:partition-a", "node-A", fence_seq_a)
+            .delete_with_fence("ck:seal:sha256:partition-a", "node-A", fence_seq_a)
             .await
             .unwrap();
         assert!(
@@ -620,7 +613,7 @@ mod tests {
 
         // The row is still around for Node B to publish against.
         let row = store
-            .get("ck:anchor:sha256:partition-a")
+            .get("ck:seal:sha256:partition-a")
             .await
             .unwrap()
             .expect("row must survive the rejected stale publish");
@@ -629,13 +622,13 @@ mod tests {
 
         // Node B — the live leader — finishes and publishes successfully.
         let live_delete_ok = store
-            .delete_with_fence("ck:anchor:sha256:partition-a", "node-B", fence_seq_b)
+            .delete_with_fence("ck:seal:sha256:partition-a", "node-B", fence_seq_b)
             .await
             .unwrap();
         assert!(live_delete_ok);
         assert!(
             store
-                .get("ck:anchor:sha256:partition-a")
+                .get("ck:seal:sha256:partition-a")
                 .await
                 .unwrap()
                 .is_none()
@@ -660,7 +653,7 @@ mod tests {
         };
 
         let store = state.persistence.multisig_pending();
-        let record = make_record("ck:anchor:sha256:partition-b", 1, 1);
+        let record = make_record("ck:seal:sha256:partition-b", 1, 1);
         store.upsert(record).await.unwrap();
 
         // Simulate the dead leader: it had successfully claimed at t=-90s
@@ -670,7 +663,7 @@ mod tests {
         let dead_lease_until = now - chrono::Duration::seconds(30);
         let (won_dead, _seq_dead) = store
             .try_claim(
-                "ck:anchor:sha256:partition-b",
+                "ck:seal:sha256:partition-b",
                 "node-DEAD",
                 now - chrono::Duration::seconds(90),
                 dead_lease_until,
@@ -682,7 +675,7 @@ mod tests {
         // Inspect: the row is still leased to node-DEAD on paper, even
         // though that lease is in the past.
         let row_pre = store
-            .get("ck:anchor:sha256:partition-b")
+            .get("ck:seal:sha256:partition-b")
             .await
             .unwrap()
             .unwrap();
@@ -699,7 +692,7 @@ mod tests {
         let later = now + chrono::Duration::seconds(1);
         let (won_b, fence_seq_b) = store
             .try_claim(
-                "ck:anchor:sha256:partition-b",
+                "ck:seal:sha256:partition-b",
                 &cfg_b.node_id,
                 later,
                 later + chrono::Duration::seconds(60),
@@ -713,7 +706,7 @@ mod tests {
         );
 
         let row_post = store
-            .get("ck:anchor:sha256:partition-b")
+            .get("ck:seal:sha256:partition-b")
             .await
             .unwrap()
             .unwrap();
@@ -725,7 +718,7 @@ mod tests {
         // also rely on, but exercised here against a crashed-not-stale
         // node.
         let stale_delete_ok = store
-            .delete_with_fence("ck:anchor:sha256:partition-b", "node-DEAD", 1)
+            .delete_with_fence("ck:seal:sha256:partition-b", "node-DEAD", 1)
             .await
             .unwrap();
         assert!(
@@ -748,14 +741,14 @@ mod tests {
         };
 
         let store = state.persistence.multisig_pending();
-        let record = make_record("ck:anchor:sha256:partition-c", 1, 1);
+        let record = make_record("ck:seal:sha256:partition-c", 1, 1);
         store.upsert(record).await.unwrap();
 
         // Node A claims at t=0; lease until t=60.
         let t0 = Utc::now();
         let (_, fence_seq_a) = store
             .try_claim(
-                "ck:anchor:sha256:partition-c",
+                "ck:seal:sha256:partition-c",
                 "node-A",
                 t0,
                 t0 + chrono::Duration::seconds(60),
@@ -768,7 +761,7 @@ mod tests {
         let t70 = t0 + chrono::Duration::seconds(70);
         let (won_b, fence_seq_b) = store
             .try_claim(
-                "ck:anchor:sha256:partition-c",
+                "ck:seal:sha256:partition-c",
                 "node-B",
                 t70,
                 t70 + chrono::Duration::seconds(60),
@@ -782,7 +775,7 @@ mod tests {
         // token — must be rejected.
         let renewed = store
             .renew_claim(
-                "ck:anchor:sha256:partition-c",
+                "ck:seal:sha256:partition-c",
                 "node-A",
                 fence_seq_a,
                 t70 + chrono::Duration::seconds(60),
@@ -796,7 +789,7 @@ mod tests {
 
         // The row's lease is unchanged from Node B's claim.
         let row = store
-            .get("ck:anchor:sha256:partition-c")
+            .get("ck:seal:sha256:partition-c")
             .await
             .unwrap()
             .unwrap();
@@ -821,14 +814,14 @@ mod tests {
         };
 
         let store = state.persistence.multisig_pending();
-        let record = make_record("ck:anchor:sha256:happy-renewal", 1, 1);
+        let record = make_record("ck:seal:sha256:happy-renewal", 1, 1);
         store.upsert(record).await.unwrap();
 
         // Initial claim — fence_seq bumps to 1.
         let t0 = Utc::now();
         let (won, fence_seq) = store
             .try_claim(
-                "ck:anchor:sha256:happy-renewal",
+                "ck:seal:sha256:happy-renewal",
                 "node-A",
                 t0,
                 t0 + chrono::Duration::seconds(60),
@@ -841,18 +834,14 @@ mod tests {
         // The aggregation is still running 50s later. The watchdog
         // proactively renews the lease — same fence_seq, claimed_until
         // pushed out to t+110.
-        let renewed = renew_lease_during_aggregation(
-            &state,
-            &cfg,
-            "ck:anchor:sha256:happy-renewal",
-            fence_seq,
-        )
-        .await
-        .expect("renewal should not error");
+        let renewed =
+            renew_lease_during_aggregation(&state, &cfg, "ck:seal:sha256:happy-renewal", fence_seq)
+                .await
+                .expect("renewal should not error");
         assert!(renewed, "happy-path renewal must land");
 
         let row_after_renew = store
-            .get("ck:anchor:sha256:happy-renewal")
+            .get("ck:seal:sha256:happy-renewal")
             .await
             .unwrap()
             .unwrap();
@@ -875,13 +864,13 @@ mod tests {
         // Aggregation finishes — fenced delete with the *original*
         // fence_seq still works because the renewal didn't bump it.
         let deleted = store
-            .delete_with_fence("ck:anchor:sha256:happy-renewal", "node-A", fence_seq)
+            .delete_with_fence("ck:seal:sha256:happy-renewal", "node-A", fence_seq)
             .await
             .unwrap();
         assert!(deleted);
         assert!(
             store
-                .get("ck:anchor:sha256:happy-renewal")
+                .get("ck:seal:sha256:happy-renewal")
                 .await
                 .unwrap()
                 .is_none()

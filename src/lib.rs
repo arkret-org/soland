@@ -2,7 +2,6 @@
 // the default macro recursion limit. Bump it for the whole crate.
 #![recursion_limit = "512"]
 
-pub mod anchorer;
 pub mod artifacts;
 pub mod authz;
 pub mod compactor;
@@ -16,6 +15,7 @@ pub mod jws_verify;
 pub mod kinds;
 pub mod metrics;
 pub mod multisig_watchdog;
+pub mod notary;
 pub mod object_storage;
 pub mod otel;
 pub mod persistence;

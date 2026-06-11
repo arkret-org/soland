@@ -1,6 +1,5 @@
 use salvo::prelude::*;
 
-mod anchor;
 pub(crate) mod audit;
 mod cells;
 mod collection;
@@ -9,6 +8,7 @@ mod delivery_binding;
 mod introspect;
 mod moderation;
 mod retention;
+mod seal;
 mod spec;
 
 use audit::append_audit_log;
@@ -116,7 +116,7 @@ pub fn spec_router() -> Router {
 
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
-    // namespace (anchorer / anchor-DAG / bottom repair / multisig /
+    // namespace (notary / seal-DAG / bottom repair / multisig /
     // gc-candidates / delivery-binding / moderation). Realm-scoped
     // operations use `/admin/realms/{realm_id}`; Space containers are
     // reserved for `/admin/spaces/*`. Per cokret-spec
@@ -137,41 +137,40 @@ pub fn admin_router() -> Router {
             Router::with_path("realms/{realm_id}/members")
                 .get(collection::admin_list_realm_members),
         )
-        .push(Router::with_path("realms/{realm_id}/anchorer").get(anchor::admin_get_anchorer))
+        .push(Router::with_path("realms/{realm_id}/notary").get(seal::admin_get_notary))
         .push(
-            Router::with_path("realms/{realm_id}/anchorer/reconfigure")
-                .post(anchor::admin_reconfigure_anchorer),
+            Router::with_path("realms/{realm_id}/notary/reconfigure")
+                .post(seal::admin_reconfigure_notary),
         )
         .push(
-            Router::with_path("realms/{realm_id}/anchorer/rotate-signing-key")
-                .post(anchor::admin_rotate_signing_key),
+            Router::with_path("realms/{realm_id}/notary/rotate-signing-key")
+                .post(seal::admin_rotate_signing_key),
         )
-        .push(Router::with_path("realms/{realm_id}/bottom").get(anchor::admin_list_realm_bottom))
-        .push(Router::with_path("bottom").get(anchor::admin_list_bottom_global))
+        .push(Router::with_path("realms/{realm_id}/bottom").get(seal::admin_list_realm_bottom))
+        .push(Router::with_path("bottom").get(seal::admin_list_bottom_global))
         .push(
             Router::with_path("realms/{realm_id}/bottom/{cell_id}/repair")
-                .post(anchor::admin_repair_bottom),
+                .post(seal::admin_repair_bottom),
         )
-        .push(Router::with_path("realms/{realm_id}/anchor-dag").get(anchor::admin_get_anchor_dag))
+        .push(Router::with_path("realms/{realm_id}/seal-dag").get(seal::admin_get_seal_dag))
         .push(
-            Router::with_path("realms/{realm_id}/anchor-dag/compact")
-                .post(anchor::admin_compact_anchor_dag),
+            Router::with_path("realms/{realm_id}/seal-dag/compact")
+                .post(seal::admin_compact_seal_dag),
         )
         .push(
-            Router::with_path("realms/{realm_id}/anchor-dag/prune")
-                .post(anchor::admin_prune_anchor_dag),
+            Router::with_path("realms/{realm_id}/seal-dag/prune").post(seal::admin_prune_seal_dag),
         )
         .push(
             Router::with_path("realms/{realm_id}/multisig/pending")
-                .get(anchor::admin_list_multisig_pending),
+                .get(seal::admin_list_multisig_pending),
         )
         .push(
-            Router::with_path("realms/{realm_id}/multisig/{anchor_id}/partial")
-                .post(anchor::admin_submit_multisig_partial),
+            Router::with_path("realms/{realm_id}/multisig/{seal_id}/partial")
+                .post(seal::admin_submit_multisig_partial),
         )
         .push(
             Router::with_path("realms/{realm_id}/gc-candidates")
-                .get(anchor::admin_list_gc_candidates),
+                .get(seal::admin_list_gc_candidates),
         )
         .push(
             Router::with_path("realms/{realm_id}/delivery-binding-policy")

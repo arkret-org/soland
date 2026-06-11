@@ -1,6 +1,7 @@
-use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+use super::*;
 
 /// Trait for durable device inventory operations.
 #[async_trait]

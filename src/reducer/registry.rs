@@ -2,7 +2,7 @@
 //!
 //! The trait + registry types and the spec-normative cell-family
 //! bindings moved to `cokret_sdk::lattice_registry` (SDK-8) so all
-//! consumers (soland Move/Anchor pipeline, yougen Move pre-check,
+//! consumers (soland Move/Seal pipeline, yougen Move pre-check,
 //! cotest fixtures) share one canonical registry. This module is a
 //! thin re-export shim — existing soland call sites such as
 //! `crate::reducer::registry::LatticeKind` keep working without

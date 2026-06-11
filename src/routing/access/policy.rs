@@ -460,7 +460,7 @@ async fn policy_check(
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
     let signing_input = format!("{protected_b64u}.{payload_b64u}");
-    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
     let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     let jws_detached = format!("{protected_b64u}..{signature_b64u}");
 

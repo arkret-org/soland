@@ -16,7 +16,7 @@
 //! Call sites that need to make outbound HTTP MUST first check
 //! [`outbound_allowed`] and bail if false.
 //!
-//! Spec anchor: `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md`
+//! Spec seal: `cokret-spec/spec/v1/zh/sync/sovereign-deployment.md`
 //! §2 (sovereign client + trust roots), §4 (controlled collaboration
 //! Realm / enclave deployment), §5 (enclave boundary — no escape to
 //! main), §6 (network outage + audit).
@@ -1037,7 +1037,7 @@ mod tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
@@ -1050,7 +1050,7 @@ mod tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 0,
+            seal_compaction_min_age_seconds: 0,
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,

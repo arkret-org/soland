@@ -757,7 +757,7 @@ pub fn appeal_cell_id(appeal_id: &str) -> String {
 
 /// Spec T06 — when an appeal `decision` event has `verdict=overturn`, the
 /// reducer MUST find a paired `ck.moderation.decision.lift` event in the
-/// same Anchor batch referencing the original decision.
+/// same Seal batch referencing the original decision.
 ///
 /// Returns `Err(AppealOverturnMissingLift)` when the verdict is overturn
 /// but no qualifying lift event was provided in the batch.
@@ -776,7 +776,7 @@ pub fn appeal_decision_overturn_paired_check(
         return Err((
             ErrorCode::AppealOverturnMissingLift,
             "ck.moderation.appeal.decision verdict=overturn requires a paired \
-             ck.moderation.decision.lift in the same Anchor batch referencing \
+             ck.moderation.decision.lift in the same Seal batch referencing \
              the original decision"
                 .to_owned(),
         ));

@@ -2,7 +2,7 @@
 //!
 //! The sweeper records tombstones for expired timeline events and deliberately
 //! leaves canonical/projection records in place. Read paths render those
-//! tombstones as `[expired]`, preserving event_id / causal history for anchored
+//! tombstones as `[expired]`, preserving event_id / causal history for sealed
 //! chains without leaking retained content.
 
 use chrono::{DateTime, Duration, Utc};
@@ -124,7 +124,7 @@ async fn sweep_retention_policy(
             .collect()
     };
     for event in pending {
-        let anchored = state
+        let sealed = state
             .persistence
             .events()
             .contains(&event.event_id)
@@ -137,7 +137,7 @@ async fn sweep_retention_policy(
             policy_ttl_seconds: policy.ttl_seconds,
             expired_at: event.created_at + Duration::seconds(policy.ttl_seconds),
             tombstoned_at: now,
-            anchored,
+            sealed,
         };
         {
             let mut tombstones = state
@@ -230,7 +230,7 @@ fn tombstone_json(record: &RetentionTombstoneRecord) -> Value {
         "policy_ttl_seconds": record.policy_ttl_seconds,
         "expired_at": record.expired_at.to_rfc3339(),
         "tombstoned_at": record.tombstoned_at.to_rfc3339(),
-        "anchored": record.anchored,
+        "sealed": record.sealed,
         "physical_delete": false,
     })
 }

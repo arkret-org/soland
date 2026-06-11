@@ -3,7 +3,7 @@
 //! `events.subscribe` already dispatches five `EventNotificationKind`
 //! variants — `Event` / `EpochRotation` / `Frontier` / `ResyncRequired` /
 //! `Unauthorized` — onto NDJSON frames. The first three have natural
-//! triggers wired through the projection / Move-Anchor pipeline; the last
+//! triggers wired through the projection / Move-Seal pipeline; the last
 //! two need explicit ops triggers (a session got revoked, a snapshot got
 //! corrupted, a server-side compaction means clients MUST drop their
 //! local cache).
@@ -69,7 +69,7 @@ pub struct AdminControlFrameOutcome {
 /// `POST /_soland/admin/events/resync-required` — emit a
 /// `resync_required` mid-stream control frame to subscribers of one
 /// Space. Use cases:
-/// - Server-side compaction or recovery rewrote the Anchor DAG and client-cached cursors are no
+/// - Server-side compaction or recovery rewrote the Seal DAG and client-cached cursors are no
 ///   longer valid.
 /// - Operator detected per-subscriber drift via out-of-band monitoring.
 ///

@@ -91,7 +91,7 @@ ROWS_BAD=0
 while IFS= read -r line; do
     [ -z "$line" ] && continue
     ROWS_TOTAL=$((ROWS_TOTAL + 1))
-    anchor_id="$(echo "$line" | jq -r '.anchor_id')"
+    seal_id="$(echo "$line" | jq -r '.seal_id')"
     threshold_k="$(echo "$line" | jq -r '.threshold_k')"
     threshold_n="$(echo "$line" | jq -r '.threshold_n')"
     member_count="$(echo "$line" | jq -r '(.members // []) | length')"
@@ -150,10 +150,10 @@ while IFS= read -r line; do
     if [ -z "$bad_reason" ]; then
         ROWS_OK=$((ROWS_OK + 1))
         printf "  PASS  %s  (k=%s/n=%s partials=%s claim_seq=%s)\n" \
-            "$anchor_id" "$threshold_k" "$threshold_n" "$partial_count" "$claim_seq"
+            "$seal_id" "$threshold_k" "$threshold_n" "$partial_count" "$claim_seq"
     else
         ROWS_BAD=$((ROWS_BAD + 1))
-        printf "  FAIL  %s  %s\n" "$anchor_id" "$bad_reason"
+        printf "  FAIL  %s  %s\n" "$seal_id" "$bad_reason"
     fi
 done <"$WORKDIR/multisig_pending.jsonl"
 

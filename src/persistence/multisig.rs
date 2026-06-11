@@ -2,7 +2,7 @@ use super::*;
 
 /// MAL-11 — persistent multisig partial-signature buffer.
 ///
-/// The coordinator endpoints (`POST .../multisig/{anchor_id}/partial` and
+/// The coordinator endpoints (`POST .../multisig/{seal_id}/partial` and
 /// `GET .../multisig/pending`) operate against this store so partials
 /// survive restarts and can be picked up by a leader-election watchdog
 /// once the threshold is met. Memory backend is fine for dev/tests; the
@@ -10,16 +10,16 @@ use super::*;
 #[async_trait]
 pub trait MultisigPendingStore: Send + Sync {
     async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()>;
-    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>>;
+    async fn get(&self, seal_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>>;
     async fn add_partial(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord>;
     async fn list_for_realm(&self, realm_id: &str)
     -> PersistenceResult<Vec<MultisigPendingRecord>>;
-    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool>;
+    async fn delete(&self, seal_id: &str) -> PersistenceResult<bool>;
 
     /// List every row across all Realms. Used by the leader-election
     /// watchdog to scan for threshold-met rows that need aggregation +
@@ -41,7 +41,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// now owns the lease, `Ok((false, current_seq))` otherwise.
     async fn try_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
@@ -51,7 +51,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// aggregated + deleted, or when the caller decided to give up
     /// early). Idempotent — safe to call on a row that was already
     /// deleted.
-    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()>;
+    async fn release_claim(&self, seal_id: &str, node_id: &str) -> PersistenceResult<()>;
 
     /// Fenced delete. Only deletes the row when both the lease holder
     /// *and* the fencing token match. A stale leader (one whose lease
@@ -61,7 +61,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// happened.
     async fn delete_with_fence(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
     ) -> PersistenceResult<bool>;
@@ -74,7 +74,7 @@ pub trait MultisigPendingStore: Send + Sync {
     /// rejected. Returns `Ok(true)` iff the renewal landed.
     async fn renew_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
@@ -110,24 +110,24 @@ impl MemoryMultisigPendingStore {
 impl MultisigPendingStore for MemoryMultisigPendingStore {
     async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.insert(record.anchor_id.clone(), record);
+        data.insert(record.seal_id.clone(), record);
         Ok(())
     }
 
-    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+    async fn get(&self, seal_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
         let data = self.data.lock().expect("lock");
-        Ok(data.get(anchor_id).cloned())
+        Ok(data.get(seal_id).cloned())
     }
 
     async fn add_partial(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord> {
         let mut data = self.data.lock().expect("lock");
-        let record = data.get_mut(anchor_id).ok_or_else(|| {
-            PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
+        let record = data.get_mut(seal_id).ok_or_else(|| {
+            PersistenceError::NotFound(format!("multisig_pending row {seal_id} not found"))
         })?;
         record.partials.insert(signer_did.to_owned(), partial);
         Ok(record.clone())
@@ -145,9 +145,9 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
             .collect())
     }
 
-    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, seal_id: &str) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("lock");
-        Ok(data.remove(anchor_id).is_some())
+        Ok(data.remove(seal_id).is_some())
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
@@ -157,13 +157,13 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
 
     async fn try_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<(bool, i64)> {
         let mut data = self.data.lock().expect("lock");
-        let Some(record) = data.get_mut(anchor_id) else {
+        let Some(record) = data.get_mut(seal_id) else {
             return Ok((false, 0));
         };
         let claimable = match (&record.claimed_by_node_id, record.claimed_until) {
@@ -180,9 +180,9 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         Ok((true, record.claim_seq))
     }
 
-    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+    async fn release_claim(&self, seal_id: &str, node_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        if let Some(record) = data.get_mut(anchor_id)
+        if let Some(record) = data.get_mut(seal_id)
             && record.claimed_by_node_id.as_deref() == Some(node_id)
         {
             record.claimed_by_node_id = None;
@@ -193,30 +193,30 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
 
     async fn delete_with_fence(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
     ) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("lock");
         let matches = data
-            .get(anchor_id)
+            .get(seal_id)
             .map(|r| r.claimed_by_node_id.as_deref() == Some(node_id) && r.claim_seq == claim_seq)
             .unwrap_or(false);
         if !matches {
             return Ok(false);
         }
-        Ok(data.remove(anchor_id).is_some())
+        Ok(data.remove(seal_id).is_some())
     }
 
     async fn renew_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         let mut data = self.data.lock().expect("lock");
-        let Some(record) = data.get_mut(anchor_id) else {
+        let Some(record) = data.get_mut(seal_id) else {
             return Ok(false);
         };
         if record.claimed_by_node_id.as_deref() != Some(node_id) {
@@ -237,7 +237,7 @@ pub(crate) struct PgMultisigPendingStore {
 #[derive(QueryableByName)]
 struct MultisigPendingRow {
     #[diesel(sql_type = Text)]
-    anchor_id: String,
+    seal_id: String,
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
     #[diesel(sql_type = Integer)]
@@ -269,7 +269,7 @@ impl From<MultisigPendingRow> for MultisigPendingRecord {
             _ => BTreeMap::new(),
         };
         Self {
-            anchor_id: row.anchor_id,
+            seal_id: row.seal_id,
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             threshold_k: row.threshold_k as u32,
             threshold_n: row.threshold_n as u32,
@@ -310,7 +310,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                 canonical_b64 = EXCLUDED.canonical_b64, \
                 expires_at = EXCLUDED.expires_at",
         )
-        .bind::<Text, _>(&record.anchor_id)
+        .bind::<Text, _>(&record.seal_id)
         .bind::<SqlUuid, _>(realm_id_uuid)
         .bind::<Integer, _>(record.threshold_k as i32)
         .bind::<Integer, _>(record.threshold_n as i32)
@@ -324,14 +324,14 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn get(&self, anchor_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
+    async fn get(&self, seal_id: &str) -> PersistenceResult<Option<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE id = $1",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .get_result::<MultisigPendingRow>(&mut *conn)
         .await
         .optional()
@@ -341,7 +341,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     async fn add_partial(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         signer_did: &str,
         partial: Value,
     ) -> PersistenceResult<MultisigPendingRecord> {
@@ -351,14 +351,14 @@ impl MultisigPendingStore for PgMultisigPendingStore {
              SET partials = jsonb_set(partials, ARRAY[$2]::text[], $3, true) \
              WHERE id = $1",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .bind::<Text, _>(signer_did)
         .bind::<Jsonb, _>(&partial)
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
-        self.get(anchor_id).await?.ok_or_else(|| {
-            PersistenceError::NotFound(format!("multisig_pending row {anchor_id} not found"))
+        self.get(seal_id).await?.ok_or_else(|| {
+            PersistenceError::NotFound(format!("multisig_pending row {seal_id} not found"))
         })
     }
 
@@ -369,7 +369,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool).await?;
         let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
         sql_query(
-            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
@@ -381,10 +381,10 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn delete(&self, anchor_id: &str) -> PersistenceResult<bool> {
+    async fn delete(&self, seal_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("DELETE FROM multisig_pending WHERE id = $1")
-            .bind::<Text, _>(anchor_id)
+            .bind::<Text, _>(seal_id)
             .execute(&mut *conn)
             .await
             .map(|n| n > 0)
@@ -394,7 +394,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MultisigPendingRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS anchor_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
@@ -406,7 +406,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     async fn try_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
@@ -433,7 +433,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                     OR claimed_until <= $3) \
              RETURNING claim_seq",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .bind::<Text, _>(node_id)
         .bind::<Timestamptz, _>(now)
         .bind::<Timestamptz, _>(claimed_until)
@@ -450,7 +450,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             // row reports `0`.
             let cur: Option<ClaimSeqRow> =
                 sql_query("SELECT claim_seq FROM multisig_pending WHERE id = $1")
-                    .bind::<Text, _>(anchor_id)
+                    .bind::<Text, _>(seal_id)
                     .get_result::<ClaimSeqRow>(&mut *conn)
                     .await
                     .optional()
@@ -459,14 +459,14 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         }
     }
 
-    async fn release_claim(&self, anchor_id: &str, node_id: &str) -> PersistenceResult<()> {
+    async fn release_claim(&self, seal_id: &str, node_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_by_node_id = NULL, claimed_until = NULL \
              WHERE id = $1 AND claimed_by_node_id = $2",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .bind::<Text, _>(node_id)
         .execute(&mut *conn)
         .await
@@ -476,7 +476,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     async fn delete_with_fence(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
     ) -> PersistenceResult<bool> {
@@ -487,7 +487,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
         .execute(&mut *conn)
@@ -498,7 +498,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
 
     async fn renew_claim(
         &self,
-        anchor_id: &str,
+        seal_id: &str,
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
@@ -511,7 +511,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
-        .bind::<Text, _>(anchor_id)
+        .bind::<Text, _>(seal_id)
         .bind::<Text, _>(node_id)
         .bind::<BigInt, _>(claim_seq)
         .bind::<Timestamptz, _>(new_claimed_until)

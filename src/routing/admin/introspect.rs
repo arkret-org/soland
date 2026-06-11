@@ -77,10 +77,10 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
     use cokret_sdk::admin_scopes::*;
     let scopes = vec![
-        ANCHORER_RECONFIGURE.to_owned(),
-        ANCHORER_ROTATE_SIGNING_KEY.to_owned(),
-        ANCHOR_COMPACT.to_owned(),
-        ANCHOR_PRUNE.to_owned(),
+        NOTARY_RECONFIGURE.to_owned(),
+        NOTARY_ROTATE_SIGNING_KEY.to_owned(),
+        SEAL_COMPACT.to_owned(),
+        SEAL_PRUNE.to_owned(),
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];

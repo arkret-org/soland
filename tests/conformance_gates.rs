@@ -200,7 +200,7 @@ fn operation_ids_are_registered_or_namespaced() {
 
 // ── CKP-0007 (P2A.6) conformance gates ─────────────────────────────────
 //
-// These gates anchor the P2A circle-rollout work to the spec's
+// These gates seal the P2A circle-rollout work to the spec's
 // `event-kind-registry.json`, `forbidden-wire-fields.json`, and the
 // `_ref` / `_id` naming alignment introduced in CKP-0007. They are
 // pure file-system / fixture scans — no soland code is linked — so
@@ -234,12 +234,12 @@ fn ckp_0007_circle_event_kinds_are_dispatched() {
         .collect();
     circle_kinds.sort();
 
-    // The 7 spec-active Circle kinds; `ck.circle.anchor_commit` is
-    // reducer-DERIVED (sub-anchor on the Circle's profile cadence) and
+    // The 7 spec-active Circle kinds; `ck.circle.seal_commit` is
+    // reducer-DERIVED (sub-seal on the Circle's profile cadence) and
     // therefore MUST NOT appear as a reducer-INPUT dispatch entry. See
     // SDK `events::kinds::NON_REDUCER_EVENT_KINDS`.
     let expected: Vec<&str> = vec![
-        "ck.circle.anchor_commit",
+        "ck.circle.seal_commit",
         "ck.circle.archive",
         "ck.circle.create",
         "ck.circle.member.state",
@@ -256,7 +256,7 @@ fn ckp_0007_circle_event_kinds_are_dispatched() {
     let reducer_src =
         fs::read_to_string(soland_src_root().join("reducer.rs")).expect("read src/reducer.rs");
 
-    // Constants the dispatch must reference. Anchor-commit is excluded
+    // Constants the dispatch must reference. Seal-commit is excluded
     // (reducer-derived, no dispatch entry).
     let required_consts = [
         "CK_CIRCLE_CREATE",

@@ -32,7 +32,7 @@ pub(crate) async fn emit_server_event(
 ```
 
 要点:
-- envelope `actor_id = state.config.service_did`,`actor_kind="service"`,`event_id = ids::generate("event")`,`created_at = now()`,proof 为 service 签名(复用 anchorer/signer 已有 service key)。
+- envelope `actor_id = state.config.service_did`,`actor_kind="service"`,`event_id = ids::generate("event")`,`created_at = now()`,proof 为 service 签名(复用 notary/signer 已有 service key)。
 - 写入走 `state.persistence.events().put(CanonicalEventRecord{..})`,再 `projection::project_accepted_operations_from_device(state, service_did, service_device, &[operation])`。
 - 幂等:server-emit 的 event_id 由内容确定性派生(对 grant:`hash(subject, scope_key, actions)`)以避免重复编排产生孤儿。
 - 该 helper 是 S1/S2 唯一被允许绕过 client 提交校验的入口;其它路径不得直接 `store.put`。

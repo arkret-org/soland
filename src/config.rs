@@ -60,7 +60,7 @@ pub struct AppConfig {
     /// first configured external provider.
     pub default_webvh_provider_id: Option<String>,
     /// JWS replay protection window in seconds.
-    /// Move and Anchor signatures whose signed `hlc` is older than
+    /// Move and Seal signatures whose signed `hlc` is older than
     /// `now - replay_window_seconds` OR newer than `now +
     /// replay_window_seconds` are rejected.
     ///
@@ -71,7 +71,7 @@ pub struct AppConfig {
     pub jws_replay_window_seconds: u64,
     /// Per-cell-family replay-window overrides.
     /// Some cell families have different freshness requirements than the
-    /// global default — e.g. `ck.component.anchorer.v1` (Realm-wide
+    /// global default — e.g. `ck.component.notary.v1` (Realm-wide
     /// authority cell) needs a much tighter window than chat messages.
     /// When a Move's `effects[]` touch any cell whose family appears in
     /// this map, the **minimum** override across touched families wins
@@ -79,24 +79,24 @@ pub struct AppConfig {
     /// families without an override.
     ///
     /// Production default (built by [`AppConfig::default_replay_overrides`]):
-    /// - `ck.component.anchorer.v1` → 60s (very fresh — Realm-wide pause risk)
+    /// - `ck.component.notary.v1` → 60s (very fresh — Realm-wide pause risk)
     /// - `ck.component.mls.epoch.v1` → 60s (E2EE fork risk)
     /// - `ck.component.consent.grant.v1` → 120s (capability-equivalent)
     /// - `ck.component.capability.grant.v1` → 120s
     /// - `ck.component.capability.delegate.v1` → 120s
     /// - `ck.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
-    /// Base64-encoded 32-byte ed25519 seed for the AnchorerWorker
-    /// signing identity (env `SOLAND_ANCHORER_SIGNING_KEY`). When `Some(_)`
+    /// Base64-encoded 32-byte ed25519 seed for the NotaryWorker
+    /// signing identity (env `SOLAND_NOTARY_SIGNING_KEY`). When `Some(_)`
     /// the worker uses a deterministic ed25519-dalek signing key derived
     /// from this seed; when `None` the worker boots with an in-process
     /// random ephemeral key and a sticky-warn log line on every signing
-    /// pass, matching the [`AnchorerSigningKeyOrigin::Ephemeral`] branch.
+    /// pass, matching the [`NotarySigningKeyOrigin::Ephemeral`] branch.
     ///
     /// Loading is identical to coauth's session-grant signing-key pattern
     /// — the env var holds the raw seed, base64-standard-padded; bad shape
     /// fails fast at startup with a clear error.
-    pub anchorer_signing_key_seed: Option<[u8; 32]>,
+    pub notary_signing_key_seed: Option<[u8; 32]>,
     /// Per-deployment Ed25519 seed used by the reference agent runtime
     /// to sign `audit_binding` blocks on `ck.agent.interop_session.result`
     /// events. When `None` (default), the bridge falls back to
@@ -109,15 +109,15 @@ pub struct AppConfig {
     /// startup. Production deployments SHOULD set this so the agent
     /// service's verifying key is uniquely bound to the runtime.
     pub agent_audit_binding_signing_seed: Option<[u8; 32]>,
-    /// When true, the AnchorerWorker loads its signing seed
+    /// When true, the NotaryWorker loads its signing seed
     /// from the SDK platform `KeyStore` (`platform_default_keystore("soland.<service_did>")`)
     /// at boot and stores rotated keys back into the same KeyStore. When
-    /// false (default), only `anchorer_signing_key_seed` (env-loaded) is
-    /// honored. The KeyStore key id is `cokret:signer:soland-anchorer:<service_did>`.
+    /// false (default), only `notary_signing_key_seed` (env-loaded) is
+    /// honored. The KeyStore key id is `cokret:signer:soland-notary:<service_did>`.
     ///
     /// Behavior when `use_keystore=true`:
     /// - First boot: try `KeyStore::load(...)`; on `not_found` fall back to
-    ///   `anchorer_signing_key_seed`; if that's also absent, mint a fresh seed and persist it via
+    ///   `notary_signing_key_seed`; if that's also absent, mint a fresh seed and persist it via
     ///   `KeyStore::store(...)` (one-shot init).
     /// - `rotate-signing-key` endpoint: mint, persist via KeyStore, hot-swap.
     ///
@@ -181,20 +181,20 @@ pub struct AppConfig {
     /// `describe.limits.resumable_upload_incomplete_ttl_seconds`.
     /// Env: `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` (default 86_400 = 24h).
     pub resumable_upload_incomplete_ttl_seconds: u64,
-    /// MAL-11 compaction: minimum age (seconds) before an Anchor is
-    /// prune-eligible. Younger Anchors must not be pruned even when a
-    /// compaction Anchor has witnessed them — gives slow federation peers
+    /// MAL-11 compaction: minimum age (seconds) before a Seal is
+    /// prune-eligible. Younger Seals must not be pruned even when a
+    /// compaction Seal has witnessed them — gives slow federation peers
     /// time to backfill before history is dropped.
-    /// Env: `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` (default 604_800 = 7 days).
-    pub compaction_min_anchor_age_seconds: u64,
-    /// MAL-11 compaction: minimum number of compaction Anchors between
+    /// Env: `SOLAND_COMPACTION_MIN_SEAL_AGE_SECS` (default 604_800 = 7 days).
+    pub seal_compaction_min_age_seconds: u64,
+    /// MAL-11 compaction: minimum number of compaction Seals between
     /// the prune candidate and the current leaf set.
     /// Env: `SOLAND_COMPACTION_MIN_WITNESSES` (default 1).
     pub compaction_min_witnesses: u32,
-    /// MAL-11 compaction: refuse to prune the genesis Anchor when true.
+    /// MAL-11 compaction: refuse to prune the genesis Seal when true.
     /// Env: `SOLAND_COMPACTION_PRESERVE_GENESIS` (default true).
     pub compaction_preserve_genesis: bool,
-    /// MAL-11 compaction: refuse to prune fork-point Anchors (more than
+    /// MAL-11 compaction: refuse to prune fork-point Seals (more than
     /// one direct successor) when true. Keeps the prune walk
     /// conservative by default.
     /// Env: `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` (default true).
@@ -202,10 +202,10 @@ pub struct AppConfig {
     /// MAL-11 compaction prune walk: interval between background prune
     /// passes, in seconds. Zero (or unset) disables the worker entirely —
     /// MAL-11 prune then runs only via the explicit
-    /// `POST /_soland/admin/realms/{realm_id}/anchor-dag/prune?anchor_id=...`
+    /// `POST /_soland/admin/realms/{realm_id}/seal-dag/prune?seal_id=...`
     /// endpoint. When enabled, the worker walks every live Realm's
-    /// anchor DAG, evaluates each candidate against
-    /// [`compaction_policy`], and prunes eligible Anchors up to
+    /// seal DAG, evaluates each candidate against
+    /// [`compaction_policy`], and prunes eligible Seals up to
     /// `compaction_prune_walk_per_realm_limit` per Realm per pass.
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS` (default 0 = disabled).
     pub compaction_prune_walk_interval_seconds: u64,
@@ -376,15 +376,15 @@ impl FederationPolicy {
     }
 }
 
-/// Provenance tag for the AnchorerWorker's signing key. Surfaced
+/// Provenance tag for the NotaryWorker's signing key. Surfaced
 /// on each signing pass so logs flag the dev-only ephemeral path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnchorerSigningKeyOrigin {
-    /// Loaded from `SOLAND_ANCHORER_SIGNING_KEY` (production-grade
+pub enum NotarySigningKeyOrigin {
+    /// Loaded from `SOLAND_NOTARY_SIGNING_KEY` (production-grade
     /// persistent identity).
     Configured,
     /// In-process random seed — fine for tests, **never** for production:
-    /// every restart issues Anchors under a brand-new DID, breaking
+    /// every restart issues Seals under a brand-new DID, breaking
     /// signature-chain trust.
     Ephemeral,
 }
@@ -395,7 +395,7 @@ impl AppConfig {
     /// default still applies to everything else.
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
         let mut m = std::collections::BTreeMap::new();
-        m.insert("ck.component.anchorer.v1", 60);
+        m.insert("ck.component.notary.v1", 60);
         m.insert("ck.component.mls.epoch.v1", 60);
         m.insert("ck.component.consent.grant.v1", 120);
         m.insert("ck.component.capability.grant.v1", 120);
@@ -469,7 +469,7 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
-        let anchorer_signing_key_seed = load_anchorer_signing_key_seed()?;
+        let notary_signing_key_seed = load_notary_signing_key_seed()?;
         let agent_audit_binding_signing_seed = load_agent_audit_binding_signing_seed()?;
         let use_keystore = std::env::var("SOLAND_USE_KEYSTORE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
@@ -537,11 +537,10 @@ impl AppConfig {
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .unwrap_or(86_400)
                 .max(60);
-        let compaction_min_anchor_age_seconds =
-            std::env::var("SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .unwrap_or(604_800);
+        let seal_compaction_min_age_seconds = std::env::var("SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(604_800);
         let compaction_min_witnesses = std::env::var("SOLAND_COMPACTION_MIN_WITNESSES")
             .ok()
             .and_then(|value| value.trim().parse::<u32>().ok())
@@ -608,7 +607,7 @@ impl AppConfig {
             default_webvh_provider_id,
             jws_replay_window_seconds,
             jws_replay_window_per_family: Self::default_replay_overrides(),
-            anchorer_signing_key_seed,
+            notary_signing_key_seed,
             agent_audit_binding_signing_seed,
             use_keystore,
             federation_policy,
@@ -621,7 +620,7 @@ impl AppConfig {
             push_bridge_trusted_service_dids,
             resumable_upload_dir,
             resumable_upload_incomplete_ttl_seconds,
-            compaction_min_anchor_age_seconds,
+            seal_compaction_min_age_seconds,
             compaction_min_witnesses,
             compaction_preserve_genesis,
             compaction_prune_only_singleton_successors,
@@ -696,7 +695,7 @@ impl AppConfig {
     /// [`cokret_sdk::CompactionPolicy::is_eligible`].
     pub fn compaction_policy(&self) -> cokret_sdk::CompactionPolicy {
         cokret_sdk::CompactionPolicy {
-            min_anchor_age_seconds: self.compaction_min_anchor_age_seconds,
+            min_seal_age_seconds: self.seal_compaction_min_age_seconds,
             min_compaction_witnesses: self.compaction_min_witnesses,
             preserve_genesis: self.compaction_preserve_genesis,
             prune_only_singleton_successors: self.compaction_prune_only_singleton_successors,
@@ -735,7 +734,7 @@ impl AppConfig {
         // signing seeds come from env vars. We treat "env-provided
         // signing seed" as the minimum acceptable production posture
         // and surface a warning when it is missing.
-        let secret_manager_in_use = self.anchorer_signing_key_seed.is_some() || self.use_keystore;
+        let secret_manager_in_use = self.notary_signing_key_seed.is_some() || self.use_keystore;
         // Log redaction is structurally enforced by the tracing layer
         // (no PII fields are logged at INFO); we report true unless dev
         // mode flips us into the chatty path.
@@ -744,11 +743,11 @@ impl AppConfig {
         // Rate limiter is unconditionally installed by `router()`.
         let rate_limit_enabled = true;
         // Provider credential rotation: soland's only signing identity
-        // is the anchorer key; rotation is manual today. The KeyStore
+        // is the notary key; rotation is manual today. The KeyStore
         // path is the closest thing to "scheduled" we ship.
         let provider_credential_rotation = if self.use_keystore {
             "scheduled".to_owned()
-        } else if self.anchorer_signing_key_seed.is_some() {
+        } else if self.notary_signing_key_seed.is_some() {
             "manual".to_owned()
         } else {
             "none".to_owned()
@@ -861,14 +860,14 @@ fn normalized_storage_prefix(prefix: Option<String>) -> String {
         .unwrap_or_default()
 }
 
-/// Load the AnchorerWorker signing seed from
-/// `SOLAND_ANCHORER_SIGNING_KEY` (base64-standard encoded 32 bytes).
+/// Load the NotaryWorker signing seed from
+/// `SOLAND_NOTARY_SIGNING_KEY` (base64-standard encoded 32 bytes).
 /// Returns `Ok(None)` when the env var is absent or empty (the
-/// AnchorerWorker then mints an ephemeral key with a sticky-warn).
+/// NotaryWorker then mints an ephemeral key with a sticky-warn).
 /// Returns `Err(_)` when the env var is set but malformed — fail-fast at
 /// startup rather than silently downgrading to ephemeral.
-fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
-    let raw = match std::env::var("SOLAND_ANCHORER_SIGNING_KEY") {
+fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
+    let raw = match std::env::var("SOLAND_NOTARY_SIGNING_KEY") {
         Ok(value) => value.trim().to_owned(),
         Err(_) => return Ok(None),
     };
@@ -881,12 +880,12 @@ fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
         .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.as_bytes()))
         .map_err(|e| {
             anyhow::anyhow!(
-                "SOLAND_ANCHORER_SIGNING_KEY must be base64 (standard or url-safe-no-pad): {e}"
+                "SOLAND_NOTARY_SIGNING_KEY must be base64 (standard or url-safe-no-pad): {e}"
             )
         })?;
     if bytes.len() != 32 {
         anyhow::bail!(
-            "SOLAND_ANCHORER_SIGNING_KEY must decode to exactly 32 bytes (got {})",
+            "SOLAND_NOTARY_SIGNING_KEY must decode to exactly 32 bytes (got {})",
             bytes.len()
         );
     }
@@ -897,7 +896,7 @@ fn load_anchorer_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 
 /// Env-loaded Ed25519 seed for the reference agent runtime's
 /// `audit_binding` signer. Same shape rules as
-/// [`load_anchorer_signing_key_seed`] — base64-standard or
+/// [`load_notary_signing_key_seed`] — base64-standard or
 /// url-safe-no-pad, MUST decode to exactly 32 bytes.
 fn load_agent_audit_binding_signing_seed() -> anyhow::Result<Option<[u8; 32]>> {
     let raw = match std::env::var("SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED") {

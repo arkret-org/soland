@@ -295,7 +295,7 @@ fn ice_config_signature(state: &AppState, payload: &Value) -> String {
     signing_input.extend_from_slice(state.config.service_did.as_bytes());
     signing_input.push(0);
     signing_input.extend_from_slice(&payload);
-    let signature = state.anchorer_signing_key().sign(&signing_input);
+    let signature = state.notary_signing_key().sign(&signing_input);
     format!(
         "eddsa-ed25519:{}",
         URL_SAFE_NO_PAD.encode(signature.to_bytes())
@@ -906,7 +906,7 @@ async fn handle_rtc_token(
         || !issuer_kid_belongs_to_service(&focus.issuer_kid, &media_epoch.service_id)
     {
         return Err(token_issuer_unauthorised(format!(
-            "issuer_kid `{}` is not anchored to media_service service_id `{}`",
+            "issuer_kid `{}` is not sealed to media_service service_id `{}`",
             focus.issuer_kid, media_epoch.service_id
         )));
     }
@@ -941,7 +941,7 @@ async fn handle_rtc_token(
             .as_bytes()
         )[..32]
     );
-    let signing_key = state.anchorer_signing_key();
+    let signing_key = state.notary_signing_key();
     let issue_request = MediaTokenIssueRequestBody {
         focus,
         realm_id: &body.realm_id,

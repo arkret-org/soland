@@ -297,7 +297,7 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
         Some(&realm_id),
         observed_at,
         &frontier_root,
-        state.anchorer_signing_key().as_ref(),
+        state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
     let mut response = json!({

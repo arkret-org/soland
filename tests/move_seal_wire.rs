@@ -1,16 +1,16 @@
 //! End-to-end HTTP integration tests for `POST /_soland/peer/moves` and
-//! `POST /_soland/peer/anchors`.
+//! `POST /_soland/peer/seals`.
 //!
 //! These tests exercise the full wire path: a client signs a Move,
 //! posts it to soland, the server stashes it in the in-memory MoveStore,
-//! the client (acting as the anchorer) signs an Anchor referencing the
-//! Move id and posts it; soland delegates to the SDK's `apply_anchor`,
+//! the client (acting as the notary) signs a Seal referencing the
+//! Move id and posts it; soland delegates to the SDK's `apply_seal`,
 //! which verifies the Move, runs the per-cell Lattice join, recomputes
-//! the canonical Merkle `state_root`, and returns the post-Anchor
+//! the canonical Merkle `state_root`, and returns the post-Seal
 //! state root.
 //!
-//! The Move/Anchor builders mirror those in
-//! `cokret-rust-sdk/crates/state-res/src/anchor.rs#tests` and
+//! The Move/Seal builders mirror those in
+//! `cokret-rust-sdk/crates/state-res/src/seal.rs#tests` and
 //! `crates/testing/src/lib.rs#build_membership_move`. They're inlined
 //! here because those helpers are private to the SDK test modules.
 //!
@@ -21,16 +21,15 @@
 //! transition, so the Move passes verify and the post-state is
 //! `Value("join")`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::lattice::CellState;
-use cokret_sdk::state_res::compute_state_root;
 use cokret_sdk::state_res::state_root::EMPTY_STATE_ROOT;
+use cokret_sdk::state_res::{compute_state_root, control_event_set_root};
 use cokret_sdk::{
-    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, RealmId,
-    canonical,
+    CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId, canonical,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use salvo::http::StatusCode;
@@ -52,7 +51,7 @@ fn test_config() -> AppConfig {
         tls_key_path: None,
         database_url: None,
         object_storage: ObjectStorageConfig::local(
-            std::env::temp_dir().join("soland-test-blobs-move-anchor"),
+            std::env::temp_dir().join("soland-test-blobs-move-seal"),
         ),
         cors_allow_origin: None,
         auth_server_url: None,
@@ -72,7 +71,7 @@ fn test_config() -> AppConfig {
         // protection tests build a custom config with a non-zero window.
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        anchorer_signing_key_seed: None,
+        notary_signing_key_seed: None,
         agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
@@ -85,7 +84,7 @@ fn test_config() -> AppConfig {
         push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
         resumable_upload_incomplete_ttl_seconds: 86_400,
-        compaction_min_anchor_age_seconds: 604_800,
+        seal_compaction_min_age_seconds: 604_800,
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
@@ -110,6 +109,20 @@ fn member_cell() -> CellRef {
     CellRef::new("ck:cell:ck.component.member.state.v1:did.web.alice.example".to_owned()).unwrap()
 }
 
+fn zero_seal_id_value() -> String {
+    format!("ck:seal:sha256:{}", "00".repeat(32))
+}
+
+fn empty_seal_basis_value() -> Value {
+    let empty = BTreeSet::new();
+    let control_event_set_root = control_event_set_root(&empty).unwrap();
+    json!({
+        "leaves": [zero_seal_id_value()],
+        "control_event_set_root": control_event_set_root.as_str(),
+        "state_root": EMPTY_STATE_ROOT,
+    })
+}
+
 fn build_invited_to_join_move() -> Move {
     let body = json!({
         "issuer": "did:web:admin.example",
@@ -119,7 +132,7 @@ fn build_invited_to_join_move() -> Move {
             "cell": member_cell().as_str(),
             "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
-        "anchor_ref": format!("ck:anchor:sha256:{}", "aa".repeat(32)),
+        "seal_basis": empty_seal_basis_value(),
         "refs": [],
         "hlc": "0189c4d2af00-0000-aabbccdd"
     });
@@ -146,14 +159,10 @@ fn build_invited_to_join_move() -> Move {
     serde_json::from_value(Value::Object(full)).unwrap()
 }
 
-fn build_anchor(
-    predecessor_refs: Vec<AnchorId>,
-    frontier: Vec<MoveId>,
-    state_root: Hash,
-) -> Anchor {
+fn build_seal(mut predecessor_refs: Vec<SealId>, mut delta: Vec<MoveId>, state_root: Hash) -> Seal {
     let sig = MoveSignature {
         alg: "EdDSA".to_owned(),
-        verification_method: "did:web:anchorer.example#k1".to_owned(),
+        verification_method: "did:web:notary.example#k1".to_owned(),
         payload_digest: Hash::new(format!("sha256:{}", "ff".repeat(32))).unwrap(),
         created_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
             .unwrap()
@@ -165,20 +174,34 @@ fn build_anchor(
         // only needs valid detached-JWS shape.
         jws: "eyJhbGciOiJFZERTQSJ9..ZmFrZS1zaWctZm9yLXRlc3Rz".to_owned(),
     };
-    let mut a = Anchor {
-        id: AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32))).unwrap(),
+    predecessor_refs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    predecessor_refs.dedup_by(|a, b| a.as_str() == b.as_str());
+    delta.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    delta.dedup_by(|a, b| a.as_str() == b.as_str());
+    let covered: BTreeSet<MoveId> = delta.iter().cloned().collect();
+    let control_event_set_root = control_event_set_root(&covered).unwrap();
+    let mut a = Seal {
+        id: SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32))).unwrap(),
         realm_id: realm_id(),
         predecessor_refs,
-        frontier,
+        delta,
+        control_event_set_root: control_event_set_root.clone(),
         state_root,
+        completeness_root: control_event_set_root,
+        notary_seq: 0,
+        data_view_root: None,
+        data_event_set_root: None,
+        availability_root: None,
+        coverage_scope: None,
+        covered_event_digests: Vec::new(),
         previous_state_root: None,
         previous_digest_algorithm: None,
-        anchorer_signature: AnchorerSig::Single(sig),
-        anchored_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
+        notary_signature: NotarySig::Single(sig),
+        sealed_at: chrono::DateTime::parse_from_rfc3339("2026-05-08T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
         hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
-        kind: cokret_sdk::AnchorKind::Normal,
+        kind: cokret_sdk::SealKind::Normal,
     };
     a.id = a.derive_id().unwrap();
     a
@@ -218,7 +241,7 @@ async fn dev_token(state: AppState) -> String {
 }
 
 #[tokio::test]
-async fn move_then_anchor_apply_returns_recomputed_state_root() {
+async fn move_then_seal_apply_returns_recomputed_state_root() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -246,15 +269,15 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
 
-    // 3. Submit Anchor — soland delegates to apply_anchor, which: structural OK → no predecessors
-    //    (Genesis Anchor) → successor frontier monotonic → deterministic_order → verify_move →
+    // 3. Submit Seal — soland delegates to apply_seal, which: structural OK → no predecessors
+    //    (Genesis Seal) → delta/predecessor consistency → deterministic_order → verify_move →
     //    atomic apply effect → recompute state_root → match A.state_root.
-    let genesis = build_anchor(
+    let genesis = build_seal(
         vec![],
         vec![],
         Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
     );
-    let genesis_resp: Value = TestClient::post("http://server/_soland/peer/anchors")
+    let genesis_resp: Value = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&genesis)
         .send(&app)
@@ -263,31 +286,31 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
         .await
         .unwrap();
     assert_eq!(
-        genesis_resp["anchor_id"].as_str().unwrap(),
+        genesis_resp["seal_id"].as_str().unwrap(),
         genesis.id.as_str()
     );
 
-    let anchor = build_anchor(
+    let seal = build_seal(
         vec![genesis.id.clone()],
         vec![move_obj.id.clone()],
         expected_root.clone(),
     );
-    let resp: Value = TestClient::post("http://server/_soland/peer/anchors")
+    let resp: Value = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&anchor)
+        .json(&seal)
         .send(&app)
         .await
         .take_json()
         .await
         .unwrap();
 
-    assert_eq!(resp["anchor_id"].as_str().unwrap(), anchor.id.as_str());
+    assert_eq!(resp["seal_id"].as_str().unwrap(), seal.id.as_str());
     assert_eq!(
         resp["accepted_move_ids"]
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
         Some(vec![move_obj.id.as_str()]),
-        "Move should be accepted into the Anchor"
+        "Move should be accepted into the Seal"
     );
     assert_eq!(
         resp["rejected_moves"].as_array().map(|a| a.len()),
@@ -302,12 +325,12 @@ async fn move_then_anchor_apply_returns_recomputed_state_root() {
 }
 
 #[tokio::test]
-async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
+async fn seal_with_unknown_predecessor_is_rejected_with_conflict() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Submit a Move first so the anchor has a frontier candidate.
+    // Submit a Move first so the seal has a delta candidate.
     let move_obj = build_invited_to_join_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -318,17 +341,17 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
         .await
         .unwrap();
 
-    // Anchor declares a predecessor that has never been persisted.
+    // Seal declares a predecessor that has never been persisted.
     let mut expected = BTreeMap::new();
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
 
-    let bad_pred = AnchorId::new(format!("ck:anchor:sha256:{}", "ee".repeat(32))).unwrap();
-    let anchor = build_anchor(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
+    let bad_pred = SealId::new(format!("ck:seal:sha256:{}", "ee".repeat(32))).unwrap();
+    let seal = build_seal(vec![bad_pred], vec![move_obj.id.clone()], expected_root);
 
-    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&anchor)
+        .json(&seal)
         .send(&app)
         .await;
     assert_eq!(
@@ -345,7 +368,7 @@ async fn anchor_with_unknown_predecessor_is_rejected_with_conflict() {
 }
 
 #[tokio::test]
-async fn anchor_with_non_empty_frontier_without_genesis_predecessor_is_rejected() {
+async fn seal_with_non_empty_delta_without_genesis_predecessor_is_rejected() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -363,24 +386,24 @@ async fn anchor_with_non_empty_frontier_without_genesis_predecessor_is_rejected(
     let mut expected = BTreeMap::new();
     expected.insert(member_cell(), CellState::Value(json!("join")));
     let expected_root = compute_state_root(&expected).unwrap();
-    let anchor = build_anchor(vec![], vec![move_obj.id], expected_root);
+    let seal = build_seal(vec![], vec![move_obj.id], expected_root);
 
-    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&anchor)
+        .json(&seal)
         .send(&app)
         .await;
     assert_eq!(resp.status_code, Some(StatusCode::CONFLICT));
     let body: Value = resp.take_json().await.unwrap();
     let stringified = body.to_string().to_ascii_lowercase();
     assert!(
-        stringified.contains("genesis") || stringified.contains("frontier"),
-        "rejection reason should mention Genesis frontier shape (got {body})"
+        stringified.contains("genesis") || stringified.contains("delta"),
+        "rejection reason should mention Genesis delta shape (got {body})"
     );
 }
 
 #[tokio::test]
-async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
+async fn seal_with_wrong_state_root_rolls_back_with_conflict() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -395,12 +418,12 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
         .await
         .unwrap();
 
-    let genesis = build_anchor(
+    let genesis = build_seal(
         vec![],
         vec![],
         Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap(),
     );
-    let _: Value = TestClient::post("http://server/_soland/peer/anchors")
+    let _: Value = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&genesis)
         .send(&app)
@@ -412,11 +435,11 @@ async fn anchor_with_wrong_state_root_rolls_back_with_conflict() {
     // Wrong state_root: claim the Move had no effect (empty state),
     // even though it transitions the member cell.
     let wrong_root = Hash::new(EMPTY_STATE_ROOT.to_owned()).unwrap();
-    let anchor = build_anchor(vec![genesis.id], vec![move_obj.id], wrong_root);
+    let seal = build_seal(vec![genesis.id], vec![move_obj.id], wrong_root);
 
-    let mut resp = TestClient::post("http://server/_soland/peer/anchors")
+    let mut resp = TestClient::post("http://server/_soland/peer/seals")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&anchor)
+        .json(&seal)
         .send(&app)
         .await;
     assert_eq!(
@@ -459,7 +482,7 @@ fn build_consent_grant_add_move() -> Move {
             "cell": consent_cell,
             "op": { "kind": "add", "tag": "consent_granted" }
         }],
-        "anchor_ref": format!("ck:anchor:sha256:{}", "bb".repeat(32)),
+        "seal_basis": empty_seal_basis_value(),
         "refs": [],
         "hlc": "0189c4d2af00-0000-aabbccee"
     });
@@ -510,14 +533,14 @@ async fn move_on_soland_registered_cell_family_passes_verify() {
     );
 }
 
-/// The anchorer worker takes one or more
-/// pending Moves and produces a signed Anchor. This is the END-TO-END
-/// proof of the Move → Anchor flow without requiring the client to
-/// hand-craft an Anchor: the client submits a Move, then triggers the
-/// admin signing endpoint, and an Anchor pops out with the correct
+/// The notary worker takes one or more
+/// pending Moves and produces a signed Seal. This is the END-TO-END
+/// proof of the Move → Seal flow without requiring the client to
+/// hand-craft a Seal: the client submits a Move, then triggers the
+/// admin signing endpoint, and a Seal pops out with the correct
 /// state_root.
 #[tokio::test]
-async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
+async fn notary_worker_signs_pending_move_and_publishes_seal() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -537,10 +560,10 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
         "Move should be queued pending after submit_move (got {submit:?})"
     );
 
-    // 2. Trigger the anchorer worker via the admin endpoint. This runs one signing pass: collect
-    //    pending Moves → deterministic_order → verify each → predict state_root → build & sign
-    //    Anchor → apply_anchor (which re-verifies).
-    let sign_resp: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    // 2. Trigger the notary worker via the admin endpoint. This runs one signing pass: collect
+    //    pending Moves → deterministic_order → verify each → predict state_root → build & sign Seal
+    //    → apply_seal (which re-verifies).
+    let sign_resp: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "realm_id": realm_id().as_str(),
@@ -552,26 +575,26 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
         .await
         .unwrap();
 
-    // 3. Assert: anchor was published.
+    // 3. Assert: seal was published.
     assert_eq!(
         sign_resp["published"], true,
-        "anchorer should publish an Anchor (got {sign_resp:?})"
+        "notary should publish a Seal (got {sign_resp:?})"
     );
-    let anchor_id = sign_resp["anchor_id"]
+    let seal_id = sign_resp["seal_id"]
         .as_str()
-        .expect("anchor_id should be present when published=true");
+        .expect("seal_id should be present when published=true");
     assert!(
-        anchor_id.starts_with("ck:anchor:sha256:"),
-        "anchor_id should be a content-addressed sha256 ref, got {anchor_id}"
+        seal_id.starts_with("ck:seal:sha256:"),
+        "seal_id should be a content-addressed sha256 ref, got {seal_id}"
     );
     let accepted = sign_resp["accepted_move_ids"]
         .as_array()
         .expect("accepted_move_ids should be an array");
-    assert_eq!(accepted.len(), 1, "exactly one Move should be anchored");
+    assert_eq!(accepted.len(), 1, "exactly one Move should be sealed");
     assert_eq!(
         accepted[0].as_str(),
         Some(move_obj.id.as_str()),
-        "the anchored Move id should match the one we submitted"
+        "the sealed Move id should match the one we submitted"
     );
 
     // 4. Assert: post_state_root corresponds to member_cell holding "join".
@@ -581,14 +604,14 @@ async fn anchorer_worker_signs_pending_move_and_publishes_anchor() {
     assert_eq!(
         sign_resp["post_state_root"].as_str(),
         Some(expected_root.as_str()),
-        "post_state_root should match the anchorer's predicted recompute"
+        "post_state_root should match the notary's predicted recompute"
     );
 }
 
 /// Demo realm pre-seeded by AppState::new. Public/discoverable so the
 /// test's dev-login session can subscribe without explicit membership
 /// registration. Other tests in this file use a different realm id
-/// (Move/Anchor tests don't go through realm_id_accessible).
+/// (Move/Seal tests don't go through realm_id_accessible).
 fn demo_realm_id() -> &'static str {
     "ck:realm:0196419b-0000-7000-8000-000000000000"
 }
@@ -757,7 +780,7 @@ fn build_member_state_move_with_hlc(physical_ms: u64) -> Move {
             "cell": member_cell().as_str(),
             "op": { "kind": "transition", "from": "invite", "to": "join" }
         }],
-        "anchor_ref": format!("ck:anchor:sha256:{}", "aa".repeat(32)),
+        "seal_basis": empty_seal_basis_value(),
         "refs": [],
         "hlc": hlc_str,
     });
@@ -1023,22 +1046,22 @@ async fn production_verifier_rejects_unknown_verification_method() {
     );
 }
 
-/// Post-anchor `kind=frontier` mid-stream control frame.
+/// Post-seal `kind=frontier` mid-stream control frame.
 ///
-/// Subscribe to the demo Realm → trigger an Anchor sign for that Realm →
+/// Subscribe to the demo Realm → trigger a Seal sign for that Realm →
 /// verify the streaming subscriber sees a `kind=frontier` frame whose
-/// `state_root` matches the anchor's post_state_root and `anchor_id`
-/// starts with `ck:anchor:sha256:`.
+/// `state_root` matches the seal's post_state_root and `seal_id`
+/// starts with `ck:seal:sha256:`.
 ///
-/// **Note**: this test uses a different Realm (the Move/Anchor pipeline
-/// Realm, not the demo Realm) for the anchor, so we subscribe to that
+/// **Note**: this test uses a different Realm (the Move/Seal pipeline
+/// Realm, not the demo Realm) for the seal, so we subscribe to that
 /// Realm too. We bypass the access check by using the dev-mode public
-/// Realm test fixture. We can't easily subscribe to the same anchor
-/// Realm the existing anchorer tests use because that Realm isn't
+/// Realm test fixture. We can't easily subscribe to the same seal
+/// Realm the existing notary tests use because that Realm isn't
 /// registered in RealmSearchIndex; so we subscribe to the demo Realm and
 /// post the Move's effects there instead.
 #[tokio::test]
-async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
+async fn notary_pass_broadcasts_frontier_frame_to_subscribers() {
     use std::time::Duration as StdDuration;
 
     use tokio::time::sleep;
@@ -1047,7 +1070,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
     let token = dev_token(state.clone()).await;
     let _app = service(state.clone());
 
-    // The anchor pipeline writes to realm_id() (test-only Realm). We
+    // The seal pipeline writes to realm_id() (test-only Realm). We
     // subscribe to that Realm — the broadcast filter accepts any
     // realm the broadcast notification's realm_id matches.
     let writer_state = state.clone();
@@ -1056,8 +1079,8 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
         let app_writer = service(writer_state);
         // Wait so the subscriber's broadcast receiver is registered.
         sleep(StdDuration::from_millis(150)).await;
-        // Submit a Move + trigger the anchorer; both happen on the
-        // anchor-pipeline Realm (`realm_id()`), and the broadcast goes
+        // Submit a Move + trigger the notary; both happen on the
+        // seal-pipeline Realm (`realm_id()`), and the broadcast goes
         // out tagged with that realm_id.
         let move_obj = build_invited_to_join_move();
         let _: Value = TestClient::post("http://server/_soland/peer/moves")
@@ -1068,7 +1091,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             .take_json()
             .await
             .unwrap_or_default();
-        let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+        let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
             .add_header("Authorization", format!("Bearer {token_writer}"), true)
             .json(&json!({"realm_id": realm_id().as_str()}))
             .send(&app_writer)
@@ -1078,7 +1101,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
             .unwrap_or_default();
     });
 
-    // Subscribe to the same Realm the anchor will be published on. We
+    // Subscribe to the same Realm the seal will be published on. We
     // need that Realm to pass realm_id_accessible — for tests, the
     // simplest path is to use a Realm that's already registered as
     // public. But realm_id() isn't registered so this would 404. So we
@@ -1101,11 +1124,11 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
                 match notification.kind {
                     EventNotificationKind::Frontier {
                         state_root,
-                        anchor_id,
+                        seal_id,
                     } => {
                         assert!(
-                            anchor_id.starts_with("ck:anchor:sha256:"),
-                            "frontier anchor_id should be content-addressed (got `{anchor_id}`)"
+                            seal_id.starts_with("ck:seal:sha256:"),
+                            "frontier seal_id should be content-addressed (got `{seal_id}`)"
                         );
                         assert!(
                             state_root.starts_with("sha256:"),
@@ -1124,7 +1147,7 @@ async fn anchorer_pass_broadcasts_frontier_frame_to_subscribers() {
     }
     assert!(
         saw_frontier,
-        "anchorer signing pass MUST broadcast a Frontier notification (saw event = {saw_event})"
+        "notary signing pass MUST broadcast a Frontier notification (saw event = {saw_event})"
     );
 }
 
@@ -1176,13 +1199,13 @@ async fn events_subscribe_emits_close_heartbeat_at_deadline() {
     );
 }
 
-/// After the anchorer publishes an Anchor,
+/// After the notary publishes a Seal,
 /// `ProjectionState::cells` MUST contain the resolved CellState for the
 /// member.state cell. Proves the write-back hook in
-/// `AnchorerWorker::sign_pending_for_space` actually refreshes the
+/// `NotaryWorker::sign_pending_for_space` actually refreshes the
 /// projection cache so cell-keyed read paths see the new state.
 #[tokio::test]
-async fn anchorer_pass_populates_projection_cells_map() {
+async fn notary_pass_populates_projection_cells_map() {
     use cokret_sdk::lattice::CellState;
 
     let state = AppState::new(test_config(), Db { pool: None });
@@ -1199,7 +1222,7 @@ async fn anchorer_pass_populates_projection_cells_map() {
         .await
         .unwrap();
 
-    let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
@@ -1209,11 +1232,11 @@ async fn anchorer_pass_populates_projection_cells_map() {
         .unwrap();
 
     // Inspect ProjectionState directly. The member_cell should now be in
-    // the cells map with Value("join") (the FSM transition we anchored).
+    // the cells map with Value("join") (the FSM transition we sealed).
     let proj = state.projection.lock().expect("projection lock");
     let resolved = proj
         .cell(&member_cell())
-        .expect("member.state cell should be in ProjectionState::cells after apply_anchor");
+        .expect("member.state cell should be in ProjectionState::cells after apply_seal");
     match resolved {
         CellState::Value(v) => {
             assert_eq!(
@@ -1228,13 +1251,13 @@ async fn anchorer_pass_populates_projection_cells_map() {
     }
 }
 
-/// `admin_reconfigure_anchorer` builds a real Move signed
+/// `admin_reconfigure_notary` builds a real Move signed
 /// with the service admin signer, submits it through the move_store,
-/// and triggers one anchorer signing pass. Endpoint should return
+/// and triggers one notary signing pass. Endpoint should return
 /// `status="accepted"` with a real `move_id` and (since this node is
-/// the genesis anchorer) a non-null `anchor_id`.
+/// the genesis notary) a non-null `seal_id`.
 #[tokio::test]
-async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
+async fn admin_reconfigure_notary_builds_real_move_and_seals_it() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -1244,7 +1267,7 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
     // escalation primitive and should be rejected by the endpoint —
     // but we want a successful reconfigure here, so pick external DIDs).
     let url = format!(
-        "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
+        "http://server/_soland/admin/realms/{}/notary/reconfigure",
         realm_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
@@ -1260,33 +1283,33 @@ async fn admin_reconfigure_anchorer_builds_real_move_and_anchors_it() {
         .unwrap();
     assert_eq!(
         resp["status"], "accepted",
-        "admin_reconfigure_anchorer should produce a real signed Move (got {resp:?})"
+        "admin_reconfigure_notary should produce a real signed Move (got {resp:?})"
     );
     let move_id = resp["move_id"].as_str().expect("move_id should be set");
     assert!(
         move_id.starts_with("sha256:"),
         "move_id should be content-addressed sha256, got {move_id}"
     );
-    let anchor_id = resp["anchor_id"]
+    let seal_id = resp["seal_id"]
         .as_str()
-        .expect("anchor_id should be set when this node is the round leader");
+        .expect("seal_id should be set when this node is the round leader");
     assert!(
-        anchor_id.starts_with("ck:anchor:sha256:"),
-        "anchor_id should be content-addressed sha256, got {anchor_id}"
+        seal_id.starts_with("ck:seal:sha256:"),
+        "seal_id should be content-addressed sha256, got {seal_id}"
     );
 }
 
-/// `admin_reconfigure_anchorer` rejects requests where the
-/// admin DID (= service DID for now) appears in the proposed anchorer
+/// `admin_reconfigure_notary` rejects requests where the
+/// admin DID (= service DID for now) appears in the proposed notary
 /// member set, because that's a privilege-escalation primitive.
 #[tokio::test]
-async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
+async fn admin_reconfigure_notary_rejects_self_in_proposed_member_set() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
     let url = format!(
-        "http://server/_soland/admin/realms/{}/anchorer/reconfigure",
+        "http://server/_soland/admin/realms/{}/notary/reconfigure",
         realm_id().as_str()
     );
     let response = TestClient::post(&url)
@@ -1306,10 +1329,10 @@ async fn admin_reconfigure_anchorer_rejects_self_in_proposed_member_set() {
 }
 
 /// Idempotency: signing twice in a row publishes once. The second pass
-/// finds no pending Moves (all anchored by the first pass) and reports
+/// finds no pending Moves (all sealed by the first pass) and reports
 /// `published: false`.
 #[tokio::test]
-async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
+async fn notary_worker_is_idempotent_when_no_pending_moves() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
@@ -1325,7 +1348,7 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
         .unwrap();
 
     // First pass: publishes.
-    let first: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    let first: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
@@ -1335,8 +1358,8 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
         .unwrap();
     assert_eq!(first["published"], true);
 
-    // Second pass: no pending Moves, no Anchor.
-    let second: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    // Second pass: no pending Moves, no Seal.
+    let second: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str()}))
         .send(&app)
@@ -1357,11 +1380,11 @@ async fn anchorer_worker_is_idempotent_when_no_pending_moves() {
 // inspection) can introspect canonical cell state. Tests below exercise:
 //
 // - GET /_soland/admin/cells/{cell_id} on an unknown cell → 404 envelope
-// - Same on a cell after a Move → Anchor → cells reload → state="value"
+// - Same on a cell after a Move → Seal → cells reload → state="value"
 // - GET /_soland/admin/cells with prefix filter → only matching cells
 // - Auth-required: omit Bearer token → 401 / canonical envelope
 
-/// Submit a Move + trigger anchorer signing pass so the member cell
+/// Submit a Move + trigger notary signing pass so the member cell
 /// transitions invite->join AND lands in `ProjectionState::cells`. Returns
 /// the URL-encoded path-segment form of the cell id (which for our
 /// cell ids — only `:`s and `.`s, both URL-path-safe — is the raw
@@ -1377,7 +1400,7 @@ async fn seed_member_cell_join(state: AppState, token: &str) -> String {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1423,12 +1446,12 @@ async fn admin_get_cell_on_unknown_cell_returns_404_envelope() {
 }
 
 #[tokio::test]
-async fn admin_get_cell_returns_value_after_anchored_move() {
+async fn admin_get_cell_returns_value_after_sealed_move() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
 
-    // Drive a Move + Anchor so the member cell transitions invite->join
+    // Drive a Move + Seal so the member cell transitions invite->join
     // and lands in ProjectionState::cells.
     let cell_id = seed_member_cell_join(state.clone(), &token).await;
 
@@ -1442,7 +1465,7 @@ async fn admin_get_cell_returns_value_after_anchored_move() {
     assert_eq!(
         resp.status_code,
         Some(StatusCode::OK),
-        "anchored cell should return 200"
+        "sealed cell should return 200"
     );
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["state"], "value", "got {body}");
@@ -1462,8 +1485,8 @@ async fn admin_list_cells_filters_by_prefix() {
     let app = service(state.clone());
 
     // Seed two distinct cell families:
-    //   1. ck.component.member.state.v1 (member_cell, anchored → join)
-    //   2. ck.component.consent.grant.v1 (or-set, anchored via consent move)
+    //   1. ck.component.member.state.v1 (member_cell, sealed → join)
+    //   2. ck.component.consent.grant.v1 (or-set, sealed via consent move)
     let _ = seed_member_cell_join(state.clone(), &token).await;
     let consent_move = build_consent_grant_add_move();
     let _: Value = TestClient::post("http://server/_soland/peer/moves")
@@ -1474,7 +1497,7 @@ async fn admin_list_cells_filters_by_prefix() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1581,7 +1604,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
         .take_json()
         .await
         .unwrap();
-    let _: Value = TestClient::post("http://server/_soland/admin/anchors/sign")
+    let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
         .send(&app)
@@ -1612,7 +1635,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
 }
 
 /// `admin_rotate_signing_key` mints a fresh ed25519 seed,
-/// hot-swaps the AnchorerWorker key via `AppState::rotate_anchorer_signing_key`,
+/// hot-swaps the NotaryWorker key via `AppState::rotate_notary_signing_key`,
 /// and returns `{kid, did, rotated_at, origin, keystore_persisted, keystore_warning}`.
 /// The pre-rotation key MUST differ byte-for-byte from the post-rotation key
 /// (proves the swap actually published a new key into the ArcSwap).
@@ -1621,10 +1644,10 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
-    let pre = state.anchorer_signing_key().to_bytes();
+    let pre = state.notary_signing_key().to_bytes();
 
     let url = format!(
-        "http://server/_soland/admin/realms/{}/anchorer/rotate-signing-key",
+        "http://server/_soland/admin/realms/{}/notary/rotate-signing-key",
         realm_id().as_str()
     );
     let resp: Value = TestClient::post(&url)
@@ -1641,8 +1664,8 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
         "rotate response did mirrors service_did (got {resp:?})"
     );
     assert_eq!(
-        resp["kid"], "did:web:soland.local#anchorer-key",
-        "rotate response kid is `<did>#anchorer-key` (got {resp:?})"
+        resp["kid"], "did:web:soland.local#notary-key",
+        "rotate response kid is `<did>#notary-key` (got {resp:?})"
     );
     assert!(resp.get("rotated_at").is_some(), "rotated_at present");
     assert_eq!(
@@ -1654,7 +1677,7 @@ async fn admin_rotate_signing_key_publishes_a_fresh_key() {
     assert_eq!(resp["keystore_persisted"], false);
     assert!(resp["keystore_warning"].is_string(), "warning surfaced");
 
-    let post = state.anchorer_signing_key().to_bytes();
+    let post = state.notary_signing_key().to_bytes();
     assert_ne!(
         pre, post,
         "rotate-signing-key MUST publish a fresh key (pre and post seeds matched)"

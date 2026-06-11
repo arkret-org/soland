@@ -1246,7 +1246,7 @@ fn profile_limitations() -> Vec<Value> {
                 "RFC 9421 HTTP Message Signatures header emission",
                 "automatic retry worker"
             ],
-            "reason": "outbound Move/Anchor fanout persists a signed intent and retry boundary per peer; actual RFC 9421 HTTP delivery is still not claimed"
+            "reason": "outbound Move/Seal fanout persists a signed intent and retry boundary per peer; actual RFC 9421 HTTP delivery is still not claimed"
         }),
         json!({
             "area": "authz.describe",
@@ -1330,9 +1330,9 @@ fn profile_limitations() -> Vec<Value> {
             "private_paths": [
                 "/_soland/peer/federation/*",
                 "/_soland/peer/moves",
-                "/_soland/peer/anchors"
+                "/_soland/peer/seals"
             ],
-            "reason": "the /_soland/peer/* inbound federation surface (transactions, operations push/pull/backfill/frontier, moves/anchors direct ingest, realm-members, verify-actor) is a deployment-local test/ops rail only; it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop — the protocol S2S entry point is the /_cokret/peer/* surface group"
+            "reason": "the /_soland/peer/* inbound federation surface (transactions, operations push/pull/backfill/frontier, moves/seals direct ingest, realm-members, verify-actor) is a deployment-local test/ops rail only; it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop — the protocol S2S entry point is the /_cokret/peer/* surface group"
         }),
     ]
 }
@@ -1344,7 +1344,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
             "artifact drift tests for lattice family/kind/bottom mappings",
-            "outbound Move/Anchor fanout signed intent evidence",
+            "outbound Move/Seal fanout signed intent evidence",
             "per-peer retry/durability transcript metadata"
         ],
         "remaining_gaps": [

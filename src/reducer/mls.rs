@@ -49,7 +49,7 @@ pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for commits whose governance binding does not name an
 /// attested frontier to add into the covered-frontier accumulator.
-pub const REASON_COMMIT_COVERED_FRONTIER_MISSING: &str = "mls_covered_frontier_missing";
+pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
 /// Reject code for a second genesis against an already initialized group.
 pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 
@@ -303,14 +303,14 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if state.mls_commit_epochs.contains_key(group_id) {
         return reject(REASON_GENESIS_ALREADY_EXISTS);
     }
-    let covered_frontier = extract_covered_frontier(payload).unwrap_or_default();
+    let covered_seals = extract_covered_seals(payload).unwrap_or_default();
     state.mls_commit_epochs.insert(
         group_id.to_owned(),
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             epoch: 0,
             leader_actor_id: creator_actor_id.to_owned(),
-            covered_frontier: covered_frontier.clone(),
+            covered_seals: covered_seals.clone(),
             committed_at: op.created_at.timestamp(),
         },
     );
@@ -319,7 +319,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         group_id: group_id.to_owned(),
         epoch: 0,
         creator_actor_id: creator_actor_id.to_owned(),
-        covered_frontier,
+        covered_seals,
     })
 }
 
@@ -380,9 +380,9 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     if let Err(reason) = crate::kinds::validate_mls_governance_binding(payload) {
         return reject(reason);
     }
-    let covered_delta = match extract_covered_frontier(payload) {
+    let covered_delta = match extract_covered_seals(payload) {
         Some(frontier) => frontier,
-        None => return reject(REASON_COMMIT_COVERED_FRONTIER_MISSING),
+        None => return reject(REASON_COMMIT_COVERED_SEALS_MISSING),
     };
 
     let current = state
@@ -395,19 +395,19 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     }
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
-    let mut covered_frontier = state
+    let mut covered_seals = state
         .mls_commit_epochs
         .get(group_id)
-        .map(|e| e.covered_frontier.clone())
+        .map(|e| e.covered_seals.clone())
         .unwrap_or_default();
-    merge_frontier(&mut covered_frontier, &covered_delta);
+    merge_frontier(&mut covered_seals, &covered_delta);
     state.mls_commit_epochs.insert(
         group_id.to_owned(),
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
             epoch: new_epoch,
             leader_actor_id: leader_actor_id.to_owned(),
-            covered_frontier: covered_frontier.clone(),
+            covered_seals: covered_seals.clone(),
             committed_at,
         },
     );
@@ -417,7 +417,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         previous_epoch: current,
         new_epoch,
         leader_actor_id: leader_actor_id.to_owned(),
-        covered_frontier,
+        covered_seals,
     })
 }
 
@@ -494,23 +494,23 @@ fn metadata_object_contains_forbidden_key(object: &Map<String, Value>) -> bool {
         .any(|key| WELCOME_FORBIDDEN_METADATA_KEYS.contains(&key.as_str()))
 }
 
-fn extract_covered_frontier(payload: &Value) -> Option<Vec<String>> {
+fn extract_covered_seals(payload: &Value) -> Option<Vec<String>> {
     let binding = payload
         .get("governance_binding")
         .or_else(|| payload.get("mls_governance_binding"))?;
 
     let mut frontier = Vec::new();
     push_frontier_values(binding.get("membership_frontier"), &mut frontier);
-    push_frontier_values(binding.get("covered_frontier"), &mut frontier);
+    push_frontier_values(binding.get("covered_seals"), &mut frontier);
     push_frontier_values(
-        binding.get("covered_frontier_cell").and_then(|cell| {
+        binding.get("covered_seals_cell").and_then(|cell| {
             cell.get("values")
                 .or_else(|| cell.get("members"))
-                .or_else(|| cell.get("anchors"))
+                .or_else(|| cell.get("seals"))
         }),
         &mut frontier,
     );
-    push_frontier_values(payload.get("covered_frontier"), &mut frontier);
+    push_frontier_values(payload.get("covered_seals"), &mut frontier);
     frontier.sort();
     frontier.dedup();
     (!frontier.is_empty()).then_some(frontier)
@@ -825,13 +825,13 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced {
                 previous_epoch,
                 new_epoch,
-                ref covered_frontier,
+                ref covered_seals,
                 ..
             }) => {
                 assert_eq!(previous_epoch, 0);
                 assert_eq!(new_epoch, 1);
                 assert_eq!(
-                    covered_frontier,
+                    covered_seals,
                     &vec!["ck:event:0196419b-0000-7000-8000-000000000000".to_owned()]
                 );
             }
@@ -862,7 +862,7 @@ mod tests {
                 group_id: "ck:mls_group:abc".to_owned(),
                 epoch: 2,
                 leader_actor_id: "did:web:alice.example".to_owned(),
-                covered_frontier: vec![
+                covered_seals: vec![
                     "ck:event:0196419b-0000-7000-8000-000000000000".to_owned(),
                     "ck:event:0196419b-0000-7000-8000-000000000001".to_owned()
                 ],
@@ -872,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_epoch_requires_covered_frontier() {
+    fn commit_epoch_requires_covered_seals() {
         let mut state = ProjectionState::default();
         let effect = apply_commit_epoch(
             &mut state,

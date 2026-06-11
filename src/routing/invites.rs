@@ -291,7 +291,7 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
             AppError::internal(format!("principal locator digest invalid: {error}"))
         })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.anchorer_signing_key().as_ref())
+        cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
     locator.proofs = vec![PrincipalLocatorProof {
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,

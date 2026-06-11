@@ -41,7 +41,7 @@ pub struct MlsCommitEpochRecord {
     pub group_id: String,
     pub epoch: u64,
     pub leader_actor_id: String,
-    pub covered_frontier: Vec<String>,
+    pub covered_seals: Vec<String>,
     pub governance_binding: Value,
     pub committed_at: i64,
 }
@@ -99,7 +99,7 @@ pub trait MlsCommitStore: Send + Sync {
         &self,
         group_id: &str,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
@@ -112,7 +112,7 @@ pub trait MlsCommitStore: Send + Sync {
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
@@ -263,7 +263,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         &self,
         group_id: &str,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
@@ -271,14 +271,14 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         if rows.contains_key(group_id) {
             return Ok(None);
         }
-        let mut covered_frontier = covered_frontier.to_vec();
-        covered_frontier.sort();
-        covered_frontier.dedup();
+        let mut covered_seals = covered_seals.to_vec();
+        covered_seals.sort();
+        covered_seals.dedup();
         let record = MlsCommitEpochRecord {
             group_id: group_id.to_owned(),
             epoch: 0,
             leader_actor_id: leader_actor_id.to_owned(),
-            covered_frontier,
+            covered_seals,
             governance_binding: governance_binding.clone(),
             committed_at,
         };
@@ -291,7 +291,7 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
@@ -302,16 +302,16 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         }
         let mut merged_frontier = rows
             .get(group_id)
-            .map(|row| row.covered_frontier.clone())
+            .map(|row| row.covered_seals.clone())
             .unwrap_or_default();
-        merged_frontier.extend(covered_frontier.iter().cloned());
+        merged_frontier.extend(covered_seals.iter().cloned());
         merged_frontier.sort();
         merged_frontier.dedup();
         let new_record = MlsCommitEpochRecord {
             group_id: group_id.to_owned(),
             epoch: current.saturating_add(1),
             leader_actor_id: leader_actor_id.to_owned(),
-            covered_frontier: merged_frontier,
+            covered_seals: merged_frontier,
             governance_binding: governance_binding.clone(),
             committed_at,
         };
@@ -499,7 +499,7 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at \
+            "SELECT group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
              FROM mls_commits WHERE group_id = $1",
         )
         .bind::<Text, _>(group_id)
@@ -513,20 +513,20 @@ impl MlsCommitStore for PgMlsCommitStore {
         &self,
         group_id: &str,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let mut frontier = covered_frontier.to_vec();
+        let mut frontier = covered_seals.to_vec();
         frontier.sort();
         frontier.dedup();
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits \
-             (group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at) \
+             (group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
              VALUES ($1, 0, $2, $3, $4, $5) \
              ON CONFLICT (group_id) DO NOTHING \
-             RETURNING group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at",
+             RETURNING group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
         )
         .bind::<Text, _>(group_id)
         .bind::<Text, _>(leader_actor_id)
@@ -544,7 +544,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
-        covered_frontier: &[String],
+        covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
@@ -556,25 +556,25 @@ impl MlsCommitStore for PgMlsCommitStore {
             .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO mls_commits (group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at) \
+            "INSERT INTO mls_commits (group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
              SELECT $1, $3, $4, $5, $6, $7 WHERE $2 = 0 \
              ON CONFLICT (group_id) DO UPDATE SET \
                epoch = EXCLUDED.epoch, \
                leader_actor_id = EXCLUDED.leader_actor_id, \
-               covered_frontier = ( \
+               covered_seals = ( \
                  SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) \
-                 FROM jsonb_array_elements_text(mls_commits.covered_frontier || EXCLUDED.covered_frontier) AS merged(value) \
+                 FROM jsonb_array_elements_text(mls_commits.covered_seals || EXCLUDED.covered_seals) AS merged(value) \
                ), \
                governance_binding = EXCLUDED.governance_binding, \
                committed_at = EXCLUDED.committed_at \
              WHERE mls_commits.epoch = $2 \
-             RETURNING group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at",
+             RETURNING group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
         )
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(expected_epoch)
         .bind::<BigInt, _>(next_epoch)
         .bind::<Text, _>(leader_actor_id)
-        .bind::<Jsonb, _>(serde_json::json!(covered_frontier))
+        .bind::<Jsonb, _>(serde_json::json!(covered_seals))
         .bind::<Jsonb, _>(governance_binding)
         .bind::<BigInt, _>(committed_at)
         .get_result::<MlsCommitEpochRow>(&mut *conn).await
@@ -586,7 +586,7 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_id, covered_frontier, governance_binding, committed_at \
+            "SELECT group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
              FROM mls_commits ORDER BY group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
@@ -677,7 +677,7 @@ struct MlsCommitEpochRow {
     #[diesel(sql_type = Text)]
     leader_actor_id: String,
     #[diesel(sql_type = Jsonb)]
-    covered_frontier: Value,
+    covered_seals: Value,
     #[diesel(sql_type = Jsonb)]
     governance_binding: Value,
     #[diesel(sql_type = BigInt)]
@@ -690,7 +690,7 @@ impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
             group_id: row.group_id,
             epoch: row.epoch.max(0) as u64,
             leader_actor_id: row.leader_actor_id,
-            covered_frontier: json_string_array(row.covered_frontier),
+            covered_seals: json_string_array(row.covered_seals),
             governance_binding: row.governance_binding,
             committed_at: row.committed_at,
         }

@@ -71,7 +71,7 @@ with the projection rewrite worker):
    Downstream consumers honour this marker when rendering the actor's
    audit trail.
 9. Mint a `ck.schema.erasure_receipt.v1` proof, sign it with the
-   anchorer signing key, and append `ck.audit.erasure_receipt`.
+   notary signing key, and append `ck.audit.erasure_receipt`.
 10. Mint a per-realm `ck.schema.erasure_receipt.realm.v1` proof for
     every realm the actor was active in (`affected_erasure_realms_for_actor`)
     and emit each as a realm-scoped operation (best-effort fanout —

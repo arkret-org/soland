@@ -6,8 +6,8 @@
 //!   supplied via the `Idempotency-Key` request header.
 //! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound
 //!   session/device. A `from` cursor is read-only pagination state; it never prunes the queue.
-//! - `POST /_cokret/self/device_messages/ack` — consume a bearer ack token and prune the
-//!   messages covered by that delivery batch.
+//! - `POST /_cokret/self/device_messages/ack` — consume a bearer ack token and prune the messages
+//!   covered by that delivery batch.
 
 use std::collections::BTreeMap;
 

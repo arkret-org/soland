@@ -18,7 +18,7 @@
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
 //! are `pub` because sibling routing modules reuse them. They
-//! live here because the cursor lifecycle is anchored to account subscribe.
+//! live here because the cursor lifecycle is sealed to account subscribe.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -759,7 +759,7 @@ async fn build_sync_snapshot(
             }
         }
         let bottom_cells = bottom_cells_for_realm(&projection, &realm_id);
-        let anchor_view = anchor_view_for_realm(&bottom_cells);
+        let seal_view = seal_view_for_realm(&bottom_cells);
         let ephemeral = typing_ephemeral_for_realm(state, &realm_id, session).await;
         sync_realms.insert(
             realm_id.clone(),
@@ -790,7 +790,7 @@ async fn build_sync_snapshot(
                 "state": [],
                 "state_after": {"events": [flow_state_after]},
                 "bottom_cells": bottom_cells,
-                "anchor_view": anchor_view,
+                "seal_view": seal_view,
                 "ephemeral": ephemeral,
                 "unread": {"notification_count": 0, "highlight_count": 0}
             }),
@@ -1340,7 +1340,7 @@ fn bottom_cells_for_realm(projection: &ProjectionState, realm_id: &str) -> Vec<V
         .collect()
 }
 
-fn anchor_view_for_realm(bottom_cells: &[Value]) -> Value {
+fn seal_view_for_realm(bottom_cells: &[Value]) -> Value {
     let cells = bottom_cells
         .iter()
         .filter_map(|entry| {
@@ -1958,7 +1958,7 @@ fn has_stateless_cursor_marker(value: &Value) -> bool {
 }
 
 fn stateless_cursor_issuer_kid(state: &AppState) -> String {
-    format!("{}#anchorer-key", state.config.service_did)
+    format!("{}#notary-key", state.config.service_did)
 }
 
 fn stateless_cursor_canonical_body(cursor: &Value) -> Result<Vec<u8>, SyncCursorError> {
@@ -1990,7 +1990,7 @@ fn sign_stateless_sync_cursor(
         object.remove("_mac");
     }
     let canonical_body = stateless_cursor_canonical_body(&cursor)?;
-    let signature = state.anchorer_signing_key().sign(&canonical_body);
+    let signature = state.notary_signing_key().sign(&canonical_body);
     let Some(object) = cursor.as_object_mut() else {
         return Err(SyncCursorError::Invalid(
             "stateless cursor body must be a JSON object",
@@ -2072,7 +2072,7 @@ fn verify_stateless_sync_cursor_signature(
         crate::metrics::record_digest_mismatch("cursor_canonical_digest");
     })?;
     state
-        .anchorer_signing_key()
+        .notary_signing_key()
         .verifying_key()
         .verify(&canonical_body, &signature)
         .map_err(|_| {
@@ -2834,12 +2834,12 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         "new_epoch": new_epoch,
                                     })
                                 }
-                                EventNotificationKind::Frontier { state_root, anchor_id } => {
+                                EventNotificationKind::Frontier { state_root, seal_id } => {
                                     json!({
                                         "kind": "frontier",
                                         "realm_id": notification.realm_id,
                                         "state_root": state_root,
-                                        "anchor_id": anchor_id,
+                                        "seal_id": seal_id,
                                     })
                                 }
                                 EventNotificationKind::ResyncRequired { reason, reconnect_after_ms } => {
@@ -3755,7 +3755,7 @@ mod tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: BTreeMap::new(),
-            anchorer_signing_key_seed: Some([9u8; 32]),
+            notary_signing_key_seed: Some([9u8; 32]),
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
@@ -3768,7 +3768,7 @@ mod tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
@@ -4159,7 +4159,7 @@ mod tests {
         let state = test_state();
         let cursor = issued_stateless_cursor(&state).await;
 
-        assert_eq!(cursor["issuer_kid"], "did:web:soland.local#anchorer-key");
+        assert_eq!(cursor["issuer_kid"], "did:web:soland.local#notary-key");
         assert!(cursor.get("_sig").is_some());
         assert!(cursor.get("h").is_none());
 
@@ -4208,7 +4208,7 @@ mod tests {
         let _profile = stateless_cursor_profile_guard();
         let state = test_state();
         let mut cursor = issued_stateless_cursor(&state).await;
-        cursor["issuer_kid"] = json!("did:web:other.example#anchorer-key");
+        cursor["issuer_kid"] = json!("did:web:other.example#notary-key");
 
         let token = encode_sync_cursor_value(cursor);
         let error = parse_and_validate_sync_cursor(

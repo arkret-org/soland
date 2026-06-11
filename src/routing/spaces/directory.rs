@@ -818,7 +818,7 @@ fn verify_detached_jws_with_service_key(
         URL_SAFE_NO_PAD.encode(canonical_bytes)
     );
     state
-        .anchorer_signing_key()
+        .notary_signing_key()
         .verifying_key()
         .verify(signing_input.as_bytes(), &signature)
         .is_ok()
@@ -1457,7 +1457,7 @@ fn signed_handle_claim(
         AppError::internal(format!("invalid service DID for handle claim: {err}"))
     })?;
     let signer = Ed25519MoveSigner::new(
-        (*state.anchorer_signing_key()).clone(),
+        (*state.notary_signing_key()).clone(),
         signer_did,
         format!("{service_did}#directory-handle-claim"),
     );

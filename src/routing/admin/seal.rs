@@ -1,35 +1,35 @@
-//! Stream H' admin surface — anchorer cell, Bottom diagnostics, Anchor DAG.
+//! Stream H' admin surface — notary cell, Bottom diagnostics, Seal DAG.
 //!
 //! Endpoints:
-//! - `GET  /_soland/admin/realms/{realm_id}/anchorer` — typed anchorer cell value (`{kind,
-//!   single_did?|threshold_*?|open_set_members?|mixed_*?, max_anchor_staleness_ms?, paused}`).
-//! - `POST /_soland/admin/realms/{realm_id}/anchorer/reconfigure` — submit a reconfig Move that
-//!   writes the new anchorer cell value (cas-register on
-//!   `ck:cell:ck.component.anchorer.v1:<realm_id>`). Server-side signs with admin's session-grant
+//! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind,
+//!   single_did?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
+//!   paused}`).
+//! - `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` — submit a reconfig Move that
+//!   writes the new notary cell value (cas-register on
+//!   `ck:cell:ck.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
 //!   key.
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-Realm list.
 //! - `POST /_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair` — submit a `head_in` (or
 //!   manual) repair Move.
-//! - `GET  /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier + state_root snapshot.
-//! - `POST /_soland/admin/realms/{realm_id}/anchor-dag/compact` — trigger a signed compaction
-//!   Anchor.
+//! - `GET  /_soland/admin/realms/{realm_id}/seal-dag` — leaves + covered events + state_root
+//!   snapshot.
+//! - `POST /_soland/admin/realms/{realm_id}/seal-dag/compact` — trigger a signed compaction Seal.
 //!
-//! DTO shapes mirror `sodmin/src/types/anchor.rs` (`AnchorerValue`,
-//! `BottomEntry`, `WinnerHead`, `BottomRepairStrategy`, `AnchorDagSnapshot`,
-//! `AnchorLeaf`, `SignAnchorOutcome`, `SubmitMoveOutcome`,
+//! DTO shapes mirror `sodmin/src/types/seal.rs` (`NotaryValue`,
+//! `BottomEntry`, `WinnerHead`, `BottomRepairStrategy`, `SealDagSnapshot`,
+//! `SealLeaf`, `SignSealOutcome`, `SubmitMoveOutcome`,
 //! `CompactionRequest`).
 //!
 //! v1 scope:
 //! - `single_did` reconfigure / `head_in_winner` repair / compaction each invoke the existing
-//!   in-process anchorer worker (`crate::anchorer::run_one_signing_pass`) so the new admin Move /
-//!   Anchor flows through the same `apply_anchor` pipeline as everything else. Where Move
-//!   construction / signing for a brand-new admin DID needs threading through the admin signer
-//!   flow, we land a structurally correct placeholder response **and** an inline `FUTURE:` anchor
-//!   so sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
-//!   work.
-//! - `threshold` / `open_set` / `mixed` anchorer profiles, `Manual` repair (free-form effects), and
+//!   in-process notary worker (`crate::notary::run_one_signing_pass`) so the new admin Move / Seal
+//!   flows through the same `apply_seal` pipeline as everything else. Where Move construction /
+//!   signing for a brand-new admin DID needs threading through the admin signer flow, we land a
+//!   structurally correct placeholder response **and** an inline `FUTURE:` seal so sodmin's UI can
+//!   smoke-test wire shapes without blocking on the multi-signer / DID-resolver work.
+//! - `threshold` / `open_set` / `mixed` notary profiles, `Manual` repair (free-form effects), and
 //!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
 //!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
@@ -37,9 +37,9 @@ use std::collections::BTreeSet;
 
 use cokret_sdk::lattice::CellState;
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
-use cokret_sdk::state_res::{AnchorStore, CellStore, MoveStore};
+use cokret_sdk::state_res::{CellStore, MoveStore, SealStore};
 use cokret_sdk::{
-    AnchorId, CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, RealmId,
+    CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, RealmId, SealId,
     ThresholdAggregator, UnsignedMove,
 };
 use salvo::http::StatusCode;
@@ -53,15 +53,15 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
-// ── DTOs (mirroring sodmin/src/types/anchor.rs exactly) ──────────────────
+// ── DTOs (mirroring sodmin/src/types/seal.rs exactly) ──────────────────
 
-/// `GET /_soland/admin/realms/{realm_id}/anchorer` response.
+/// `GET /_soland/admin/realms/{realm_id}/notary` response.
 ///
-/// Shape mirrors sodmin's `AnchorerValue`. `kind_raw` is one of
+/// Shape mirrors sodmin's `NotaryValue`. `kind_raw` is one of
 /// `single_did|threshold|open_set|mixed`; only the fields relevant to
 /// `kind_raw` are populated.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorerValueOutcome {
+pub struct NotaryValueOutcome {
     pub kind_raw: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_did: Option<String>,
@@ -78,15 +78,15 @@ pub struct AnchorerValueOutcome {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mixed_recovery: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_anchor_staleness_ms: Option<u64>,
+    pub revocation_freshness_window_ms: Option<u64>,
     #[serde(default)]
     pub paused: bool,
 }
 
-/// `POST .../anchorer/reconfigure` request body — matches
-/// `AnchorerReconfigRequest::to_reconfigure_body()` on sodmin.
+/// `POST .../notary/reconfigure` request body — matches
+/// `NotaryReconfigRequest::to_reconfigure_body()` on sodmin.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorerReconfigBody {
+pub struct NotaryReconfigBody {
     /// One of `single_did|threshold|open_set|mixed`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,11 +113,11 @@ pub struct AdminSubmitMoveOutcome {
     pub accepted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Optional anchor id when the admin Move was already folded into a
-    /// fresh Anchor by the in-process anchorer worker. Absent in pure
+    /// Optional seal id when the admin Move was already folded into a
+    /// fresh Seal by the in-process notary worker. Absent in pure
     /// placeholder responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_id: Option<String>,
+    pub seal_id: Option<String>,
     /// `pending|accepted|rejected|placeholder` — `placeholder` indicates
     /// the wire-shape is correct but the underlying Move construction
     /// flow is still a FUTURE server-side admin-signer task (sodmin
@@ -139,7 +139,7 @@ pub struct WinnerHeadOutcome {
 
 /// One bottom entry. Mirrors sodmin `BottomEntry`. `kind` is wire-format
 /// snake_case (`conflict|invalid_transition|missing_dependency|unauthorized
-/// |anchorer_split|schema_error`).
+/// |notary_split|schema_error`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct BottomEntryOutcome {
     pub realm_id: String,
@@ -172,8 +172,8 @@ pub enum BottomRepairStrategyBody {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorLeafOutcome {
-    pub anchor_id: String,
+pub struct SealLeafOutcome {
+    pub seal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
     #[serde(default)]
@@ -187,10 +187,10 @@ pub struct AnchorLeafOutcome {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorDagSnapshotOutcome {
+pub struct SealDagSnapshotOutcome {
     pub realm_id: String,
-    pub leaves: Vec<AnchorLeafOutcome>,
-    pub frontier: Vec<String>,
+    pub leaves: Vec<SealLeafOutcome>,
+    pub covered_event_digests: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,32 +205,32 @@ pub struct CompactionRequestBody {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct CompactionOutcome {
-    pub anchor_id: String,
+    pub seal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_root: Option<String>,
     #[serde(default)]
     pub move_count: u64,
 }
 
-/// `POST .../anchor-dag/prune` request body — names one Anchor candidate
+/// `POST .../seal-dag/prune` request body — names one Seal candidate
 /// to evaluate + (optionally) prune. The server walks the DAG, computes
 /// the `PruneCandidate` inputs, consults `CompactionPolicy::is_eligible`,
 /// and either rewires the candidate's successors + removes it, or returns
 /// a diagnostic describing the rejection.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorPruneRequestBody {
-    /// The Anchor id to evaluate for pruning. Must already exist in the
-    /// Realm's Anchor DAG.
-    pub anchor_id: String,
+pub struct SealPruneRequestBody {
+    /// The Seal id to evaluate for pruning. Must already exist in the
+    /// Realm's Seal DAG.
+    pub seal_id: String,
 }
 
-/// `POST .../anchor-dag/prune` response. `pruned` is `true` only when the
+/// `POST .../seal-dag/prune` response. `pruned` is `true` only when the
 /// store actually removed the candidate; otherwise the candidate failed
 /// policy or the store rejected the prune.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorPruneOutcome {
+pub struct SealPruneOutcome {
     /// Echo the candidate id so clients don't need to remember it.
-    pub anchor_id: String,
+    pub seal_id: String,
     /// `true` when the candidate was removed and its successors rewired.
     /// `false` when policy rejected the candidate (see `eligibility`).
     pub pruned: bool,
@@ -238,7 +238,7 @@ pub struct AnchorPruneOutcome {
     /// insufficient_witnesses|preserved_genesis|fork_point|
     /// compaction_itself`.
     pub eligibility: String,
-    /// Successor anchor ids whose `predecessor_refs` were rewired from
+    /// Successor seal ids whose `predecessor_refs` were rewired from
     /// the pruned candidate to the candidate's parents. Empty when
     /// `pruned=false`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -246,12 +246,12 @@ pub struct AnchorPruneOutcome {
     /// Diagnostic payload mirroring `PruneCandidate` fields. Useful for
     /// auditing why a prune was rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diagnostics: Option<AnchorPruneDiagnostics>,
+    pub diagnostics: Option<SealPruneDiagnostics>,
 }
 
 /// Diagnostic payload echoed back when prune eligibility is rejected.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AnchorPruneDiagnostics {
+pub struct SealPruneDiagnostics {
     pub age_seconds: u64,
     pub compaction_witnesses: u32,
     pub successor_count: usize,
@@ -263,26 +263,26 @@ pub struct AnchorPruneDiagnostics {
 
 /// Build the canonical [`MoveSigner`] for admin-issued Moves.
 ///
-/// The admin endpoints (`admin_reconfigure_anchorer`,
-/// `admin_repair_bottom`) and the in-process `AnchorerWorker` bind to the
-/// **same** Ed25519 key — held on `AppState::anchorer_signing_key`. That
-/// key is sourced from `SOLAND_ANCHORER_SIGNING_KEY` (production) or
+/// The admin endpoints (`admin_reconfigure_notary`,
+/// `admin_repair_bottom`) and the in-process `NotaryWorker` bind to the
+/// **same** Ed25519 key — held on `AppState::notary_signing_key`. That
+/// key is sourced from `SOLAND_NOTARY_SIGNING_KEY` (production) or
 /// minted ephemerally at boot (dev/test). Wrapping it in an
 /// `Ed25519MoveSigner` here gives the admin path a SDK-canonical signer
 /// with no key duplication.
 ///
-/// The verification_method id is `<service_did>#anchorer-key`, matching
-/// the JWS the AnchorerWorker emits — so a single DID-document publication
+/// The verification_method id is `<service_did>#notary-key`, matching
+/// the JWS the NotaryWorker emits — so a single DID-document publication
 /// covers both the worker and the admin endpoints.
 fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
     let service_did = state.config.service_did.as_str();
     let did = Did::new(service_did.to_owned())
         .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
-    let kid = format!("{service_did}#anchorer-key");
-    // `state.anchorer_signing_key()` returns `Arc<SigningKey>` (lock-free
+    let kid = format!("{service_did}#notary-key");
+    // `state.notary_signing_key()` returns `Arc<SigningKey>` (lock-free
     // `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a `SigningKey`
     // by value, so dereference + clone.
-    let signing_key = (*state.anchorer_signing_key()).clone();
+    let signing_key = (*state.notary_signing_key()).clone();
     Ok(Ed25519MoveSigner::new(signing_key, did, kid))
 }
 
@@ -291,7 +291,7 @@ fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError>
 /// [`AppState::admin_keystore`]; falls back to [`service_admin_signer`]
 /// when no per-admin key is provisioned (logging a sticky-warn so the
 /// operator notices). The resulting signer's `verification_method` is
-/// `<admin_did>#admin-key`, giving Anchors / Moves admin attribution.
+/// `<admin_did>#admin-key`, giving Seals / Moves admin attribution.
 fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519MoveSigner, AppError> {
     let admin_did = Did::new(admin_did_str.to_owned())
         .map_err(|e| app_error!(InvalidParam, "invalid admin DID `{admin_did_str}`: {e}"))?;
@@ -322,12 +322,12 @@ fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519Move
     }
 }
 
-/// Convert an `AnchorerReconfigBody` into the canonical anchorer
-/// cell value object (per spec `cell-anchorer-v1.schema.json`). Returns
-/// `Err` for shape violations the SDK's `AnchorerValue::validate()` would
-/// reject — we don't actually round-trip through `AnchorerValue` here so
-/// extra envelope fields (`max_anchor_staleness_ms`, `paused`) survive.
-fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value, AppError> {
+/// Convert an `NotaryReconfigBody` into the canonical notary
+/// cell value object (per spec `cell-notary-v1.schema.json`). Returns
+/// `Err` for shape violations the SDK's `NotaryValue::validate()` would
+/// reject — we don't actually round-trip through `NotaryValue` here so
+/// extra envelope fields (`revocation_freshness_window_ms`, `paused`) survive.
+fn notary_value_object_from_body(body: &NotaryReconfigBody) -> Result<Value, AppError> {
     let invalid =
         |reason: &str| app_error!(InvalidParam, "{}", reason).with_status(StatusCode::BAD_REQUEST);
     let mut v = serde_json::Map::new();
@@ -405,22 +405,61 @@ fn anchorer_value_object_from_body(body: &AnchorerReconfigBody) -> Result<Value,
             );
         }
         other => {
-            return Err(invalid(&format!("unknown anchorer kind `{other}`")));
+            return Err(invalid(&format!("unknown notary kind `{other}`")));
         }
     }
     Ok(Value::Object(v))
 }
 
-/// Choose a fresh `anchor_ref` for a brand-new admin Move. If
-/// the Space has at least one Anchor leaf, that's the issuer's view; if
-/// it's a true genesis Space, we use the spec-canonical zero AnchorId
-/// (matching SDK fixtures and `state-res::apply_anchor` genesis path).
-fn pick_admin_anchor_ref(state: &AppState, realm_id: &RealmId) -> AnchorId {
-    let leaves = state.anchor_store.list_leaves(realm_id).unwrap_or_default();
+/// Choose a fresh `seal_ref` for a brand-new admin Move. If
+/// the Space has at least one Seal leaf, that's the issuer's view; if
+/// it's a true genesis Space, we use the spec-canonical zero SealId
+/// (matching SDK fixtures and `state-res::apply_seal` genesis path).
+fn pick_admin_seal_ref(state: &AppState, realm_id: &RealmId) -> SealId {
+    let leaves = state.seal_store.list_leaves(realm_id).unwrap_or_default();
     if let Some(first) = leaves.into_iter().next() {
         return first;
     }
-    AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32))).expect("valid genesis anchor id")
+    SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32))).expect("valid genesis seal id")
+}
+
+fn pick_admin_seal_basis(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<cokret_sdk::SealBasis, AppError> {
+    let leaves = state.seal_store.list_leaves(realm_id).map_err(|e| {
+        app_error!(
+            InternalError,
+            "seal_store.list_leaves failed while building seal_basis: {e}"
+        )
+    })?;
+    if leaves.is_empty() {
+        let empty = std::collections::BTreeSet::new();
+        let control_event_set_root = cokret_sdk::state_res::control_event_set_root(&empty)
+            .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
+        return Ok(cokret_sdk::SealBasis {
+            leaves: vec![
+                SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+                    .expect("valid genesis seal id"),
+            ],
+            control_event_set_root,
+            state_root: cokret_sdk::Hash::new(cokret_sdk::EMPTY_STATE_ROOT.to_owned())
+                .map_err(|e| app_error!(InternalError, "empty state_root invalid: {e}"))?,
+        });
+    }
+    let view = cokret_sdk::effective_seal_view(
+        &leaves,
+        realm_id,
+        state.seal_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+    )
+    .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
+    Ok(cokret_sdk::SealBasis {
+        leaves: view.predecessor_refs,
+        control_event_set_root: view.control_event_set_root,
+        state_root: view.state_root,
+    })
 }
 
 /// Build a fresh Hlc for an admin-issued Move using the server's
@@ -430,26 +469,26 @@ fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
         .map_err(|e| app_error!(InternalError, "failed to mint HLC for admin Move: {e}"))
 }
 
-/// Build the canonical anchorer cell ref for a Space.
-fn anchorer_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("ck:cell:ck.component.anchorer.v1:{realm_id}")).map_err(|e| {
+/// Build the canonical notary cell ref for a Space.
+fn notary_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
+    CellRef::new(format!("ck:cell:ck.component.notary.v1:{realm_id}")).map_err(|e| {
         app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
             .with_status(StatusCode::BAD_REQUEST)
     })
 }
 
 /// Best-effort projection of a JSON cell value into the typed
-/// `AnchorerValueOutcome` shape. The on-wire anchorer cell value is
+/// `NotaryValueOutcome` shape. The on-wire notary cell value is
 /// expected to look like `{shape: single_did|threshold|open_set|mixed,
-/// did|dids[]|members[]|..., max_anchor_staleness_ms?, paused?}`.
+/// did|dids[]|members[]|..., revocation_freshness_window_ms?, paused?}`.
 ///
 /// When the value is `None` we return a default `single_did` placeholder
 /// pointed at the service DID — that matches the genesis-Space
-/// "implicit anchorer is service_did" rule the in-process anchorer
-/// worker already implements (see `crate::anchorer::is_authorized_for`).
-fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> AnchorerValueOutcome {
+/// "implicit notary is service_did" rule the in-process notary
+/// worker already implements (see `crate::notary::is_authorized_for`).
+fn notary_value_from_cell(value: Option<&Value>, service_did: &str) -> NotaryValueOutcome {
     let Some(value) = value else {
-        return AnchorerValueOutcome {
+        return NotaryValueOutcome {
             kind_raw: "single_did".to_owned(),
             single_did: Some(service_did.to_owned()),
             ..Default::default()
@@ -457,7 +496,7 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
     };
     // Two on-wire shapes are accepted — either the spec-aligned
     // `{shape, did|dids|members|...}` form (used by the in-process
-    // anchorer worker) or the sodmin DTO form (`{kind_raw, ...}`).
+    // notary worker) or the sodmin DTO form (`{kind_raw, ...}`).
     // Either way we end up returning the sodmin DTO form.
     let kind_raw = value
         .get("shape")
@@ -516,12 +555,14 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
                 .collect()
         })
         .unwrap_or_default();
-    let max_anchor_staleness_ms = value.get("max_anchor_staleness_ms").and_then(Value::as_u64);
+    let revocation_freshness_window_ms = value
+        .get("revocation_freshness_window_ms")
+        .and_then(Value::as_u64);
     let paused = value
         .get("paused")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    AnchorerValueOutcome {
+    NotaryValueOutcome {
         kind_raw,
         single_did,
         threshold_k,
@@ -530,7 +571,7 @@ fn anchorer_value_from_cell(value: Option<&Value>, service_did: &str) -> Anchore
         open_set_members,
         mixed_primary,
         mixed_recovery,
-        max_anchor_staleness_ms,
+        revocation_freshness_window_ms,
         paused,
     }
 }
@@ -551,7 +592,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
         "InvalidTransition" => "invalid_transition",
         "MissingDependency" => "missing_dependency",
         "Unauthorized" => "unauthorized",
-        "AnchorerSplit" => "anchorer_split",
+        "NotarySplit" => "notary_split",
         "SchemaError" => "schema_error",
         other => other,
     }
@@ -638,44 +679,44 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 
 // ── Endpoints ────────────────────────────────────────────────────────────
 
-/// `GET /_soland/admin/realms/{realm_id}/anchorer` — read current
-/// anchorer cell value.
+/// `GET /_soland/admin/realms/{realm_id}/notary` — read current
+/// notary cell value.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.anchorer.get",
-    tags("admin", "anchorer"),
-    summary = "Get current anchorer cell value"
+    operation_id = "org.cokret.soland.admin.realms.notary.get",
+    tags("admin", "notary"),
+    summary = "Get current notary cell value"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.anchorer.get"))]
-pub(super) async fn admin_get_anchorer(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.realms.notary.get"))]
+pub(super) async fn admin_get_notary(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<AnchorerValueOutcome> {
+) -> JsonResult<NotaryValueOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let cell = anchorer_cell_for(&realm_id)?;
+    let cell = notary_cell_for(&realm_id)?;
     let value = state
         .projection
         .lock()
         .ok()
         .and_then(|proj| proj.cell_value(&cell).cloned());
-    json_ok(anchorer_value_from_cell(
+    json_ok(notary_value_from_cell(
         value.as_ref(),
         &state.config.service_did,
     ))
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/anchorer/reconfigure` —
-/// submit a reconfig Move that writes the new anchorer cell value.
+/// `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` —
+/// submit a reconfig Move that writes the new notary cell value.
 ///
 /// Builds a Move signed by the service admin signer
 /// (`service_admin_signer`), submits via `state.move_store.put_pending`,
-/// and triggers one signing pass via `crate::anchorer::run_one_signing_pass`
-/// so the Move folds into a fresh Anchor immediately when the server is
+/// and triggers one signing pass via `crate::notary::run_one_signing_pass`
+/// so the Move folds into a fresh Seal immediately when the server is
 /// the round leader. Returns `status="accepted"` (Move stashed +
-/// anchored), `status="pending"` (stashed but not anchored — another node
+/// sealed), `status="pending"` (stashed but not sealed — another node
 /// owns the round), or 400/500 on construction error.
 ///
 /// FUTURE: replace `service_admin_signer` with a per-admin signer keyed off
@@ -683,22 +724,22 @@ pub(super) async fn admin_get_anchorer(
 /// + session-grant introspection lands. Today the gate is the
 /// `admin_principal_dids` allowlist (see `super::require_admin_principal`);
 /// the signing identity is still the service signer so Moves chain off the
-/// AnchorerWorker key.
+/// NotaryWorker key.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.realms.anchorer.reconfigure",
-    tags("admin", "anchorer"),
-    summary = "Submit anchorer reconfiguration Move"
+    operation_id = "org.cokret.soland.admin.realms.notary.reconfigure",
+    tags("admin", "notary"),
+    summary = "Submit notary reconfiguration Move"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.realms.anchorer.reconfigure")
+    fields(op = "org.cokret.soland.admin.realms.notary.reconfigure")
 )]
-pub(super) async fn admin_reconfigure_anchorer(
+pub(super) async fn admin_reconfigure_notary(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<AnchorerReconfigBody>,
+    body: JsonBody<NotaryReconfigBody>,
 ) -> JsonResult<AdminSubmitMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -707,7 +748,7 @@ pub(super) async fn admin_reconfigure_anchorer(
         state,
         req,
         &admin_session,
-        cokret_sdk::admin_scopes::ANCHORER_RECONFIGURE,
+        cokret_sdk::admin_scopes::NOTARY_RECONFIGURE,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -716,14 +757,14 @@ pub(super) async fn admin_reconfigure_anchorer(
     })?;
     let body = body.into_inner();
 
-    // Build the new anchorer cell value object first; this validates the
+    // Build the new notary cell value object first; this validates the
     // request shape per spec before we burn signing cycles.
-    let new_value = anchorer_value_object_from_body(&body)?;
+    let new_value = notary_value_object_from_body(&body)?;
 
-    // Privilege-escalation guard: the proposed anchorer set MUST NOT include
+    // Privilege-escalation guard: the proposed notary set MUST NOT include
     // either the service signing DID (the key that signs Moves) OR the admin
     // operator's session DID. Both belong to the trust boundary above the
-    // anchorer set; landing either inside the set is a self-authentication
+    // notary set; landing either inside the set is a self-authentication
     // primitive. Once per-admin signing keys land (KeyStore-backed) the
     // signer DID and operator DID converge for that admin.
     let service_signer_did = state.config.service_did.clone();
@@ -748,12 +789,12 @@ pub(super) async fn admin_reconfigure_anchorer(
     {
         return Err(app_error!(
             CapabilityDenied,
-            "service signer DID and admin operator DID must not appear in the proposed anchorer set"
+            "service signer DID and admin operator DID must not appear in the proposed notary set"
         )
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    let cell_ref = anchorer_cell_for(&realm_id)?;
+    let cell_ref = notary_cell_for(&realm_id)?;
 
     // Build the cas-register `set` Effect.
     let effect = Effect {
@@ -764,7 +805,7 @@ pub(super) async fn admin_reconfigure_anchorer(
             value: Some(new_value),
             from: None,
             to: None,
-            reason: Some(format!("admin_reconfigure_anchorer:{}", body.kind)),
+            reason: Some(format!("admin_reconfigure_notary:{}", body.kind)),
             issuer_seq: None,
         },
     };
@@ -780,7 +821,7 @@ pub(super) async fn admin_reconfigure_anchorer(
     let unsigned = UnsignedMove::new(
         signer.signer_did().clone(),
         realm.clone(),
-        pick_admin_anchor_ref(state, &realm),
+        pick_admin_seal_basis(state, &realm)?,
         vec![effect],
         fresh_hlc(state)?,
     );
@@ -795,36 +836,36 @@ pub(super) async fn admin_reconfigure_anchorer(
         .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
     // Best-effort: trigger one signing pass on this admin's Space — if
-    // we're the round leader, this folds the Move into a fresh Anchor
-    // immediately and the response carries an anchor_id. Otherwise the
+    // we're the round leader, this folds the Move into a fresh Seal
+    // immediately and the response carries an seal_id. Otherwise the
     // Move sits pending until the round leader signs.
-    let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
+    let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
     match outcome {
         Ok(Some(o)) => json_ok(AdminSubmitMoveOutcome {
             move_id,
             accepted: true,
             reason: None,
-            anchor_id: Some(o.anchor_id.as_str().to_owned()),
+            seal_id: Some(o.seal_id.as_str().to_owned()),
             status: "accepted".to_owned(),
         }),
-        Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
+        Ok(None) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {
             json_ok(AdminSubmitMoveOutcome {
                 move_id,
                 accepted: true,
                 reason: Some("Move stashed pending; another node owns the round".to_owned()),
-                anchor_id: None,
+                seal_id: None,
                 status: "pending".to_owned(),
             })
         }
         Err(e) => {
-            // The Move IS pending — the anchorer pass failed downstream.
+            // The Move IS pending — the notary pass failed downstream.
             // Surface the failure but keep the Move in the queue.
-            tracing::warn!(error = %e, %move_id, "admin_reconfigure_anchorer: anchorer pass failed");
+            tracing::warn!(error = %e, %move_id, "admin_reconfigure_notary: notary pass failed");
             json_ok(AdminSubmitMoveOutcome {
                 move_id,
                 accepted: true,
-                reason: Some(format!("Move stashed pending; anchorer pass error: {e}")),
-                anchor_id: None,
+                reason: Some(format!("Move stashed pending; notary pass error: {e}")),
+                seal_id: None,
                 status: "pending".to_owned(),
             })
         }
@@ -960,9 +1001,14 @@ pub(super) async fn admin_repair_bottom(
                 role: "recovery_capability".to_owned(),
                 critical: true,
             };
-            let anchor_ref = pick_admin_anchor_ref(state, &realm);
+            let seal_basis = pick_admin_seal_basis(state, &realm)?;
+            let seal_ref = seal_basis
+                .leaves
+                .first()
+                .cloned()
+                .unwrap_or_else(|| pick_admin_seal_ref(state, &realm));
             let state_witness_ref = cokret_sdk::move_event::SemanticRef {
-                id: anchor_ref.as_str().to_owned(),
+                id: seal_ref.as_str().to_owned(),
                 role: "state_witness".to_owned(),
                 critical: true,
             };
@@ -978,7 +1024,7 @@ pub(super) async fn admin_repair_bottom(
             let unsigned = UnsignedMove::new(
                 signer.signer_did().clone(),
                 realm.clone(),
-                anchor_ref,
+                seal_basis,
                 vec![effect],
                 fresh_hlc(state)?,
             )
@@ -992,23 +1038,23 @@ pub(super) async fn admin_repair_bottom(
                 .put_pending(&signed_move)
                 .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 
-            let outcome = crate::anchorer::run_one_signing_pass(state, &realm, 1024);
+            let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
             match outcome {
                 Ok(Some(o)) => json_ok(AdminSubmitMoveOutcome {
                     move_id,
                     accepted: true,
                     reason: None,
-                    anchor_id: Some(o.anchor_id.as_str().to_owned()),
+                    seal_id: Some(o.seal_id.as_str().to_owned()),
                     status: "accepted".to_owned(),
                 }),
-                Ok(None) | Err(crate::anchorer::AnchorerError::NotAuthorized(_)) => {
+                Ok(None) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {
                     json_ok(AdminSubmitMoveOutcome {
                         move_id,
                         accepted: true,
                         reason: Some(
                             "Move stashed pending; another node owns the round".to_owned(),
                         ),
-                        anchor_id: None,
+                        seal_id: None,
                         status: "pending".to_owned(),
                     })
                 }
@@ -1017,13 +1063,13 @@ pub(super) async fn admin_repair_bottom(
                         error = %e,
                         %move_id,
                         cell_id = %cell_id_str,
-                        "admin_repair_bottom: anchorer pass failed"
+                        "admin_repair_bottom: notary pass failed"
                     );
                     json_ok(AdminSubmitMoveOutcome {
                         move_id,
                         accepted: true,
-                        reason: Some(format!("Move stashed pending; anchorer pass error: {e}")),
-                        anchor_id: None,
+                        reason: Some(format!("Move stashed pending; notary pass error: {e}")),
+                        seal_id: None,
                         status: "pending".to_owned(),
                     })
                 }
@@ -1093,27 +1139,27 @@ pub(super) async fn admin_repair_bottom(
                 reason: Some(
                     "manual repair effects validated against admin scope; signing path lands in MAL-15".to_owned(),
                 ),
-                anchor_id: None,
+                seal_id: None,
                 status: "scope_validated".to_owned(),
             })
         }
     }
 }
 
-/// `GET /_soland/admin/realms/{realm_id}/anchor-dag` — leaves + frontier
-/// + state_root snapshot built from the live `AnchorStore`.
+/// `GET /_soland/admin/realms/{realm_id}/seal-dag` — leaves + covered events
+/// + state_root snapshot built from the live `SealStore`.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.get",
-    tags("admin", "anchor-dag"),
-    summary = "Get Anchor DAG snapshot for a Space"
+    operation_id = "org.cokret.soland.admin.spaces.seal_dag.get",
+    tags("admin", "seal-dag"),
+    summary = "Get Seal DAG snapshot for a Space"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.anchor_dag.get"))]
-pub(super) async fn admin_get_anchor_dag(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.get"))]
+pub(super) async fn admin_get_seal_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<AnchorDagSnapshotOutcome> {
+) -> JsonResult<SealDagSnapshotOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -1121,84 +1167,82 @@ pub(super) async fn admin_get_anchor_dag(
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let anchor_store = state.anchor_store.as_ref();
-    let leaf_ids = anchor_store.list_leaves(&realm).map_err(|e| {
+    let seal_store = state.seal_store.as_ref();
+    let leaf_ids = seal_store.list_leaves(&realm).map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
-            format!("anchor_store.list_leaves failed: {e}"),
+            format!("seal_store.list_leaves failed: {e}"),
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
-    // Materialise each leaf into the wire `AnchorLeafOutcome`. Move
-    // count is `frontier.len()` — anchors carry their full per-Anchor
-    // frontier, not a delta. `is_compaction` heuristic: an Anchor whose
-    // frontier subset is exactly its predecessors' union (no new
-    // accepted moves) is treated as a compaction. Real compaction marker
-    // wiring is MAL-11.
+    // Materialise each leaf into the wire `SealLeafOutcome`.
+    // Normal Seals carry only delta; compaction Seals may materialize
+    // covered_event_digests for bootstrap and pruning diagnostics.
     let mut leaves = Vec::with_capacity(leaf_ids.len());
-    let mut frontier_union: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut covered_event_digests: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut latest_state_root: Option<String> = None;
     for leaf_id in &leaf_ids {
-        let Ok(Some(anchor)) = anchor_store.get(leaf_id) else {
+        let Ok(Some(seal)) = seal_store.get(leaf_id) else {
             continue;
         };
-        let signers: Vec<String> = match &anchor.anchorer_signature {
-            cokret_sdk::AnchorerSig::Single(sig) => vec![sig.verification_method.clone()],
-            cokret_sdk::AnchorerSig::Multi(multi) => multi
+        let signers: Vec<String> = match &seal.notary_signature {
+            cokret_sdk::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
+            cokret_sdk::NotarySig::Multi(multi) => multi
                 .signatures
                 .iter()
                 .map(|s| s.verification_method.clone())
                 .collect(),
-            cokret_sdk::AnchorerSig::Threshold(threshold) => threshold
+            cokret_sdk::NotarySig::Threshold(threshold) => threshold
                 .signers
                 .iter()
                 .map(|d| d.as_str().to_owned())
                 .collect(),
         };
-        for f in &anchor.frontier {
-            frontier_union.insert(f.as_str().to_owned());
+        for f in seal.covered_event_digests.iter().chain(seal.delta.iter()) {
+            covered_event_digests.insert(f.as_str().to_owned());
         }
-        latest_state_root = Some(anchor.state_root.as_str().to_owned());
+        latest_state_root = Some(seal.state_root.as_str().to_owned());
         // `is_compaction` reads the explicit
-        // `Anchor.kind == AnchorKind::Compaction` field directly.
-        let is_compaction = anchor.kind.is_compaction();
-        leaves.push(AnchorLeafOutcome {
-            anchor_id: anchor.id.as_str().to_owned(),
-            state_root: Some(anchor.state_root.as_str().to_owned()),
-            move_count: anchor.frontier.len() as u64,
-            created_at: Some(anchor.hlc.as_str().to_owned()),
+        // `Seal.kind == SealKind::Compaction` field directly.
+        let is_compaction = seal.kind.is_compaction();
+        leaves.push(SealLeafOutcome {
+            seal_id: seal.id.as_str().to_owned(),
+            state_root: Some(seal.state_root.as_str().to_owned()),
+            move_count: (seal.covered_event_digests.len() + seal.delta.len()) as u64,
+            created_at: Some(seal.hlc.as_str().to_owned()),
             signers,
             is_compaction,
         });
     }
-    json_ok(AnchorDagSnapshotOutcome {
+    json_ok(SealDagSnapshotOutcome {
         realm_id,
         leaves,
-        frontier: frontier_union.into_iter().collect(),
+        covered_event_digests: covered_event_digests.into_iter().collect(),
         state_root: latest_state_root,
         last_compaction_at: None,
     })
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/anchor-dag/compact` — trigger
-/// a signed compaction Anchor.
+/// `POST /_soland/admin/realms/{realm_id}/seal-dag/compact` — trigger
+/// a signed compaction Seal.
 ///
-/// v1 implementation: reuse the in-process anchorer worker to fold any
-/// pending Moves into a fresh Anchor; this isn't a *true* compaction
-/// (which would prune historical Anchors per MAL-11) but it produces a
+/// v1 implementation: reuse the in-process notary worker to fold any
+/// pending Moves into a fresh Seal; this isn't a *true* compaction
+/// (which would prune historical Seals per MAL-11) but it produces a
 /// structurally-correct response so sodmin's UI flow is unblocked.
 /// `max_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.compact",
-    tags("admin", "anchor-dag"),
-    summary = "Trigger signed compaction Anchor"
+    operation_id = "org.cokret.soland.admin.spaces.seal_dag.compact",
+    tags("admin", "seal-dag"),
+    summary = "Trigger signed compaction Seal"
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.compact")
+    fields(op = "org.cokret.soland.admin.spaces.seal_dag.compact")
 )]
-pub(super) async fn admin_compact_anchor_dag(
+pub(super) async fn admin_compact_seal_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -1212,7 +1256,7 @@ pub(super) async fn admin_compact_anchor_dag(
         state,
         req,
         &admin_session,
-        cokret_sdk::admin_scopes::ANCHOR_COMPACT,
+        cokret_sdk::admin_scopes::SEAL_COMPACT,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -1223,122 +1267,118 @@ pub(super) async fn admin_compact_anchor_dag(
     let max_pending = body.into_inner().max_moves.unwrap_or(1000).min(10_000) as usize;
 
     // MAL-11 compaction: first drain any pending Moves via the regular
-    // anchorer pass so the compaction Anchor witnesses an up-to-date
-    // frontier, then mint a `kind=Compaction` Anchor over the current
-    // leaves with the same `frontier` (no new moves — that's what makes
-    // it a compaction). The compaction Anchor is signed and applied
-    // just like a normal Anchor; downstream pruning walks consult
+    // notary pass so the compaction Seal witnesses the current covered
+    // event set, then mint a `kind=Compaction` Seal over the current
+    // leaves with no new delta. The compaction Seal is signed and applied
+    // just like a normal Seal; downstream pruning walks consult
     // `CompactionPolicy` per-candidate and call
-    // `AnchorStore::prune_predecessor`.
-    if let Err(crate::anchorer::AnchorerError::NotAuthorized(_)) =
-        crate::anchorer::run_one_signing_pass(state, &realm, max_pending)
+    // `SealStore::prune_predecessor`.
+    if let Err(crate::notary::NotaryError::NotAuthorized(_)) =
+        crate::notary::run_one_signing_pass(state, &realm, max_pending)
     {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "not authorized to compact anchors for this Realm".to_owned(),
+            "not authorized to compact seals for this Realm".to_owned(),
         )
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    // Step 1: snapshot the leaf set + recompute the effective anchor view
-    // at those leaves. The compaction Anchor's `predecessor_refs` are the
-    // current leaves; `frontier` is the union of their frontiers (no new
-    // moves); `state_root` is taken from the view.
+    // Step 1: snapshot the leaf set + recompute the effective seal view
+    // at those leaves. The compaction Seal's `predecessor_refs` are the
+    // current leaves, it accepts no new delta, and `state_root` is taken
+    // from the view.
     let leaves = state
-        .anchor_store
+        .seal_store
         .list_leaves(&realm)
         .map_err(|e| AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}")))?;
     if leaves.is_empty() {
         return Err(AppError::new(
             ErrorCode::Conflict,
-            "compaction requires at least one existing anchor".to_owned(),
+            "compaction requires at least one existing seal".to_owned(),
         )
         .with_status(StatusCode::CONFLICT));
     }
-    let view = cokret_sdk::effective_anchor_view(
+    let view = cokret_sdk::effective_seal_view(
         &leaves,
         &realm,
-        state.anchor_store.as_ref(),
+        state.seal_store.as_ref(),
         state.cell_store.as_ref(),
         state.cell_registry.as_ref(),
     )
     .map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
-            format!("effective_anchor_view failed: {e}"),
+            format!("effective_seal_view failed: {e}"),
         )
     })?;
 
-    // Step 2: sign + apply the compaction Anchor with the operator's
-    // per-admin key so the Anchor's `verification_method` carries
+    // Step 2: sign + apply the compaction Seal with the operator's
+    // per-admin key so the Seal's `verification_method` carries
     // operator attribution (falls back to the service signer when no
     // per-admin key is provisioned).
     let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = cokret_sdk::Anchor::sign_single_kind(
+    let compaction = cokret_sdk::Seal::sign_single_kind(
         realm.clone(),
         view.predecessor_refs.clone(),
-        view.frontier.clone(),
+        Vec::new(),
         view.state_root.clone(),
         fresh_hlc(state)?,
-        cokret_sdk::AnchorKind::Compaction,
+        cokret_sdk::SealKind::Compaction,
         &signer,
     )
     .map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
-            format!("sign compaction anchor: {e}"),
+            format!("sign compaction seal: {e}"),
         )
     })?;
 
-    let verifier = crate::routing::federation::move_anchor::select_jws_verifier(state);
-    let effect = cokret_sdk::apply_anchor(
+    let verifier = crate::routing::federation::move_seal::select_jws_verifier(state);
+    let effect = cokret_sdk::apply_seal(
         &compaction,
         state.move_store.as_ref(),
-        state.anchor_store.as_ref(),
+        state.seal_store.as_ref(),
         state.cell_store.as_ref(),
         state.cell_registry.as_ref(),
         verifier,
     )
     .map_err(|e| {
-        AppError::new(ErrorCode::Conflict, format!("apply compaction anchor: {e}"))
+        AppError::new(ErrorCode::Conflict, format!("apply compaction seal: {e}"))
             .with_status(StatusCode::CONFLICT)
     })?;
 
-    // Compaction Anchors accept zero new moves by definition; surface
+    // Compaction Seals accept zero new moves by definition; surface
     // `move_count: 0`.
     let _ = effect;
     json_ok(CompactionOutcome {
-        anchor_id: compaction.id.as_str().to_owned(),
+        seal_id: compaction.id.as_str().to_owned(),
         state_root: Some(compaction.state_root.as_str().to_owned()),
         move_count: 0,
     })
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/anchor-dag/prune` — evaluate a
-/// historical Anchor for prune-eligibility against
+/// `POST /_soland/admin/realms/{realm_id}/seal-dag/prune` — evaluate a
+/// historical Seal for prune-eligibility against
 /// [`cokret_sdk::CompactionPolicy`] and, when eligible, remove it via
-/// [`AnchorStore::prune_predecessor`].
+/// [`SealStore::prune_predecessor`].
 ///
 /// Gates the structural prune walk on the operator's configured policy
-/// (env-driven `SOLAND_COMPACTION_*`). Successor anchors have their
+/// (env-driven `SOLAND_COMPACTION_*`). Successor seals have their
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
 #[endpoint(
-    operation_id = "org.cokret.soland.admin.spaces.anchor_dag.prune",
-    tags("admin", "anchor-dag"),
-    summary = "Evaluate + prune a historical Anchor"
+    operation_id = "org.cokret.soland.admin.spaces.seal_dag.prune",
+    tags("admin", "seal-dag"),
+    summary = "Evaluate + prune a historical Seal"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.admin.spaces.anchor_dag.prune")
-)]
-pub(super) async fn admin_prune_anchor_dag(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.spaces.seal_dag.prune"))]
+pub(super) async fn admin_prune_seal_dag(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<AnchorPruneRequestBody>,
-) -> JsonResult<AnchorPruneOutcome> {
+    body: JsonBody<SealPruneRequestBody>,
+) -> JsonResult<SealPruneOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -1346,7 +1386,7 @@ pub(super) async fn admin_prune_anchor_dag(
         state,
         req,
         &admin_session,
-        cokret_sdk::admin_scopes::ANCHOR_PRUNE,
+        cokret_sdk::admin_scopes::SEAL_PRUNE,
     )
     .await?;
     let realm_id_str = realm_id.into_inner();
@@ -1355,30 +1395,30 @@ pub(super) async fn admin_prune_anchor_dag(
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
-    let candidate_id = AnchorId::new(body.anchor_id.clone()).map_err(|e| {
+    let candidate_id = SealId::new(body.seal_id.clone()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
-            format!("invalid anchor_id `{}`: {e}", body.anchor_id),
+            format!("invalid seal_id `{}`: {e}", body.seal_id),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
 
-    let anchor_store = state.anchor_store.as_ref();
+    let seal_store = state.seal_store.as_ref();
 
-    // Load the candidate Anchor.
-    let candidate = anchor_store
+    // Load the candidate Seal.
+    let candidate = seal_store
         .get(&candidate_id)
         .map_err(|e| {
             AppError::new(
                 ErrorCode::InternalError,
-                format!("anchor_store.get failed: {e}"),
+                format!("seal_store.get failed: {e}"),
             )
         })?
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::NotFound,
                 format!(
-                    "anchor `{}` not found in realm `{}`",
+                    "seal `{}` not found in realm `{}`",
                     candidate_id, realm_id_str
                 ),
             )
@@ -1388,7 +1428,7 @@ pub(super) async fn admin_prune_anchor_dag(
         return Err(AppError::new(
             ErrorCode::InvalidParam,
             format!(
-                "anchor `{}` belongs to realm `{}`, not `{}`",
+                "seal `{}` belongs to realm `{}`, not `{}`",
                 candidate_id,
                 candidate.realm_id.as_str(),
                 realm_id_str
@@ -1398,47 +1438,45 @@ pub(super) async fn admin_prune_anchor_dag(
     }
 
     // Successor count — direct successors in the DAG.
-    let successors = anchor_store
-        .successors(&realm, &candidate_id)
-        .map_err(|e| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("anchor_store.successors failed: {e}"),
-            )
-        })?;
+    let successors = seal_store.successors(&realm, &candidate_id).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("seal_store.successors failed: {e}"),
+        )
+    })?;
     let successor_count = successors.len();
 
     // Compaction-witness count: starting at each direct successor, count
-    // distinct [`AnchorKind::Compaction`] anchors reachable via forward DAG
+    // distinct [`SealKind::Compaction`] seals reachable via forward DAG
     // traversal (successor-of-successor ...). The candidate is witnessed
-    // when ≥ `min_compaction_witnesses` such compaction anchors exist on
+    // when ≥ `min_compaction_witnesses` such compaction seals exist on
     // every forward path to the leaf set; we approximate that with a
-    // visited-set traversal which counts how many compaction anchors are
+    // visited-set traversal which counts how many compaction seals are
     // reachable forward from the candidate. This matches the spec wording
-    // ("witnessed by ≥ N compaction Anchors") for the common singleton
+    // ("witnessed by ≥ N compaction Seals") for the common singleton
     // chain case A4 covers; richer DAG shapes can be refined later.
     let mut compaction_witnesses: u32 = 0;
     let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut stack: Vec<AnchorId> = successors.clone();
+    let mut stack: Vec<SealId> = successors.clone();
     while let Some(next_id) = stack.pop() {
         if !visited.insert(next_id.as_str().to_owned()) {
             continue;
         }
-        if let Ok(Some(succ_anchor)) = anchor_store.get(&next_id) {
-            if succ_anchor.kind.is_compaction() {
+        if let Ok(Some(succ_seal)) = seal_store.get(&next_id) {
+            if succ_seal.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = anchor_store.successors(&realm, &next_id) {
+            if let Ok(next_succs) = seal_store.successors(&realm, &next_id) {
                 stack.extend(next_succs);
             }
         }
     }
 
-    // Genesis check — soland's `MemoryAnchorStore` tracks genesis via
-    // `set_genesis_if_absent`; the spec-canonical zero-anchor placeholder
-    // (`ck:anchor:sha256:000...`) used at `apply_anchor` genesis is also
+    // Genesis check — soland's `MemorySealStore` tracks genesis via
+    // `set_genesis_if_absent`; the spec-canonical zero-seal placeholder
+    // (`ck:seal:sha256:000...`) used at `apply_seal` genesis is also
     // treated as genesis when present.
-    let is_genesis = match anchor_store.genesis(&realm) {
+    let is_genesis = match seal_store.genesis(&realm) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };
@@ -1475,7 +1513,7 @@ pub(super) async fn admin_prune_anchor_dag(
     } else {
         "normal"
     };
-    let diagnostics = AnchorPruneDiagnostics {
+    let diagnostics = SealPruneDiagnostics {
         age_seconds,
         compaction_witnesses,
         successor_count,
@@ -1489,8 +1527,8 @@ pub(super) async fn admin_prune_anchor_dag(
         // we did. Surface the verdict with `pruned: false` + the
         // diagnostics so callers can decide whether to relax the policy
         // and retry.
-        return json_ok(AnchorPruneOutcome {
-            anchor_id: candidate_id.as_str().to_owned(),
+        return json_ok(SealPruneOutcome {
+            seal_id: candidate_id.as_str().to_owned(),
             pruned: false,
             eligibility: eligibility_wire.to_owned(),
             rewired: Vec::new(),
@@ -1502,7 +1540,7 @@ pub(super) async fn admin_prune_anchor_dag(
     // returns the candidate's parents (so callers can audit the new DAG
     // shape if desired); we surface the *successor* ids that were
     // rewired, which is what the prune actually touched.
-    let _parents = anchor_store
+    let _parents = seal_store
         .prune_predecessor(&realm, &candidate_id)
         .map_err(|e| {
             AppError::new(
@@ -1512,8 +1550,8 @@ pub(super) async fn admin_prune_anchor_dag(
             .with_status(StatusCode::CONFLICT)
         })?;
 
-    json_ok(AnchorPruneOutcome {
-        anchor_id: candidate_id.as_str().to_owned(),
+    json_ok(SealPruneOutcome {
+        seal_id: candidate_id.as_str().to_owned(),
         pruned: true,
         eligibility: eligibility_wire.to_owned(),
         rewired: successors.iter().map(|s| s.as_str().to_owned()).collect(),
@@ -1523,12 +1561,12 @@ pub(super) async fn admin_prune_anchor_dag(
 
 // ── Multi-sig coordinator ────────────────────────────────────────────────
 //
-// `POST /_soland/admin/realms/{realm_id}/multisig/{anchor_id}/partial` accepts
-// partial Anchor signatures from peer anchorers; once the threshold is
-// reached, the aggregated `Anchor` is published.
+// `POST /_soland/admin/realms/{realm_id}/multisig/{seal_id}/partial` accepts
+// partial Seal signatures from peer notaries; once the threshold is
+// reached, the aggregated `Seal` is published.
 //
 // `GET /_soland/admin/realms/{realm_id}/multisig/pending` lists the in-flight
-// anchors awaiting threshold so the admin UI can render them.
+// seals awaiting threshold so the admin UI can render them.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct PartialSignatureBody {
@@ -1539,17 +1577,17 @@ pub struct PartialSignatureBody {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct PartialSubmitOutcome {
-    pub anchor_id: String,
+    pub seal_id: String,
     pub collected: u32,
     pub threshold: u32,
     pub status: String, // "collecting" | "aggregated" | "rejected"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aggregated_anchor_id: Option<String>,
+    pub aggregated_seal_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct MultisigPendingEntry {
-    pub anchor_id: String,
+    pub seal_id: String,
     pub threshold_k: u32,
     pub threshold_n: u32,
     pub collected_partials: u32,
@@ -1561,13 +1599,13 @@ pub struct MultisigPendingOutcome {
     pub entries: Vec<MultisigPendingEntry>,
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/multisig/{anchor_id}/partial`.
+/// `POST /_soland/admin/realms/{realm_id}/multisig/{seal_id}/partial`.
 ///
 /// MAL-11: persistent multisig buffer wire-in. Stores each partial in the
 /// `multisig_pending` Postgres table (or in-memory equivalent). When the
 /// threshold is met, the row stays around for the leader watchdog to
 /// aggregate via SDK `ThresholdAggregator` and publish the threshold-signed
-/// Anchor; the watchdog itself is a follow-up (in the meantime an admin can
+/// Seal; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
 #[salvo::oapi::endpoint(
     operation_id = "org.cokret.soland.admin.multisig.partial",
@@ -1578,7 +1616,7 @@ pub(super) async fn admin_submit_multisig_partial(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    anchor_id: PathParam<String>,
+    seal_id: PathParam<String>,
     body: JsonBody<PartialSignatureBody>,
 ) -> JsonResult<PartialSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
@@ -1589,9 +1627,9 @@ pub(super) async fn admin_submit_multisig_partial(
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let anchor_id_str = anchor_id.into_inner();
-    let _anchor_id = AnchorId::new(anchor_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid anchor_id: {e}"))
+    let seal_id_str = seal_id.into_inner();
+    let _seal_id = SealId::new(seal_id_str.clone()).map_err(|e| {
+        AppError::new(ErrorCode::InvalidParam, format!("invalid seal_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
@@ -1606,18 +1644,18 @@ pub(super) async fn admin_submit_multisig_partial(
 
     // Load (or initialize) the pending row. New rows default to a 1-of-1
     // membership of just the submitter; real flows should pre-create the
-    // row via the anchorer worker when threshold signing kicks off, but a
+    // row via the notary worker when threshold signing kicks off, but a
     // defaulted row lets the H'9 UI exercise the full path against a fresh
-    // anchor_id in dev/test without an explicit pre-create dance.
+    // seal_id in dev/test without an explicit pre-create dance.
     let store = state.persistence.multisig_pending();
     let mut record = match store
-        .get(&anchor_id_str)
+        .get(&seal_id_str)
         .await
         .map_err(persistence_to_app_err)?
     {
         Some(r) => r,
         None => crate::state::MultisigPendingRecord {
-            anchor_id: anchor_id_str.clone(),
+            seal_id: seal_id_str.clone(),
             realm_id: realm_id_str.clone(),
             threshold_k: 1,
             threshold_n: 1,
@@ -1637,8 +1675,8 @@ pub(super) async fn admin_submit_multisig_partial(
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             format!(
-                "signer_did {} is not in the multisig members set for anchor {}",
-                body.signer_did, anchor_id_str
+                "signer_did {} is not in the multisig members set for seal {}",
+                body.signer_did, seal_id_str
             ),
         )
         .with_status(StatusCode::FORBIDDEN));
@@ -1670,21 +1708,21 @@ pub(super) async fn admin_submit_multisig_partial(
 
     // Best-effort eager aggregation: when threshold is met AND we have the
     // canonical bytes recorded, build a ThresholdAggregator and run
-    // `Anchor::sign_threshold_partial(...)`. This is a no-op when the
+    // `Seal::sign_threshold_partial(...)`. This is a no-op when the
     // canonical body is empty (caller fed the row via partials only); the
     // leader-election watchdog will retry later with full state.
-    let aggregated_anchor_id = if collected >= threshold && !record.canonical_b64.is_empty() {
+    let aggregated_seal_id = if collected >= threshold && !record.canonical_b64.is_empty() {
         try_aggregate_partials(&record).ok()
     } else {
         None
     };
 
     json_ok(PartialSubmitOutcome {
-        anchor_id: anchor_id_str,
+        seal_id: seal_id_str,
         collected,
         threshold,
         status,
-        aggregated_anchor_id,
+        aggregated_seal_id,
     })
 }
 
@@ -1727,7 +1765,7 @@ pub(super) async fn admin_list_multisig_pending(
                 .cloned()
                 .collect();
             MultisigPendingEntry {
-                anchor_id: r.anchor_id,
+                seal_id: r.seal_id,
                 threshold_k: r.threshold_k,
                 threshold_n: r.threshold_n,
                 collected_partials: collected,
@@ -1739,25 +1777,25 @@ pub(super) async fn admin_list_multisig_pending(
     json_ok(MultisigPendingOutcome { entries })
 }
 
-/// `POST /_soland/admin/realms/{realm_id}/anchorer/rotate-signing-key` —
+/// `POST /_soland/admin/realms/{realm_id}/notary/rotate-signing-key` —
 /// mint a fresh ed25519 seed, persist via the platform `KeyStore` (when
-/// `state.config.use_keystore` is true), hot-swap the AnchorerWorker key
-/// via `AppState::rotate_anchorer_signing_key`, return `{kid, did, rotated_at}`.
+/// `state.config.use_keystore` is true), hot-swap the NotaryWorker key
+/// via `AppState::rotate_notary_signing_key`, return `{kid, did, rotated_at}`.
 ///
 /// Response shape (locked for sodmin H'8):
 /// ```json
-/// { "kid": "did:web:soland.local#anchorer-key",
+/// { "kid": "did:web:soland.local#notary-key",
 ///   "did": "did:web:soland.local",
 ///   "rotated_at": "2026-05-09T12:00:00Z" }
 /// ```
 ///
 /// When `use_keystore=true`, the new seed is also stored under
-/// `cokret:signer:soland-anchorer:<service_did>` so it survives
+/// `cokret:signer:soland-notary:<service_did>` so it survives
 /// process restart. When `use_keystore=false`, the rotation lives only
 /// in the running process's `ArcSwap` (suitable for dev/test, not
 /// production — the next restart re-loads the env-supplied seed). The
 /// realm_id path param is required for symmetry with the other
-/// per-Realm anchorer endpoints; the signing key itself is process-wide,
+/// per-Realm notary endpoints; the signing key itself is process-wide,
 /// not Realm-scoped.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RotateSigningKeyOutcome {
@@ -1778,9 +1816,9 @@ pub struct RotateSigningKeyOutcome {
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "org.cokret.soland.admin.realms.anchorer.rotate_signing_key",
-    tags("admin", "anchorer"),
-    summary = "Rotate the AnchorerWorker signing key"
+    operation_id = "org.cokret.soland.admin.realms.notary.rotate_signing_key",
+    tags("admin", "notary"),
+    summary = "Rotate the NotaryWorker signing key"
 )]
 pub(super) async fn admin_rotate_signing_key(
     aa: AuthArgs,
@@ -1796,7 +1834,7 @@ pub(super) async fn admin_rotate_signing_key(
         state,
         req,
         &admin_session,
-        cokret_sdk::admin_scopes::ANCHORER_ROTATE_SIGNING_KEY,
+        cokret_sdk::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
     )
     .await?;
     // Validate realm_id shape so the endpoint surfaces a clean 400 on a
@@ -1817,12 +1855,12 @@ pub(super) async fn admin_rotate_signing_key(
     let mut keystore_warning: Option<String> = None;
     if state.config.use_keystore {
         let app_id = format!("soland.{}", state.config.service_did);
-        let key_id = format!("cokret:signer:soland-anchorer:{}", state.config.service_did);
+        let key_id = format!("cokret:signer:soland-notary:{}", state.config.service_did);
         let store = cokret_sdk::platform_default_keystore(&app_id);
         match store.store(&key_id, &seed) {
             Ok(()) => {
                 keystore_persisted = true;
-                tracing::info!(%key_id, "rotated anchorer signing key persisted to platform KeyStore");
+                tracing::info!(%key_id, "rotated notary signing key persisted to platform KeyStore");
             }
             Err(error) => {
                 let msg = format!(
@@ -1839,16 +1877,16 @@ pub(super) async fn admin_rotate_signing_key(
         );
     }
 
-    let _new_key = state
-        .rotate_anchorer_signing_key(&seed, crate::config::AnchorerSigningKeyOrigin::Configured);
+    let _new_key =
+        state.rotate_notary_signing_key(&seed, crate::config::NotarySigningKeyOrigin::Configured);
 
     let did = state.config.service_did.clone();
-    let kid = format!("{did}#anchorer-key");
+    let kid = format!("{did}#notary-key");
     let rotated_at = chrono::Utc::now();
     crate::routing::append_audit_log(
         state,
         Some(did.as_str()),
-        "admin.anchorer.rotate_signing_key",
+        "admin.notary.rotate_signing_key",
         json!({"realm_id": realm_id_str, "kid": kid, "keystore_persisted": keystore_persisted}),
         "accepted",
     )
@@ -1873,7 +1911,7 @@ fn persistence_to_app_err(e: crate::persistence::PersistenceError) -> AppError {
 }
 
 /// Attempt to aggregate the partial signatures stored on `record` into a
-/// threshold-signed Anchor. Returns the aggregated anchor_id on success.
+/// threshold-signed Seal. Returns the aggregated seal_id on success.
 /// Errors are intentionally swallowed by the caller (best-effort); the
 /// row stays in the store so a watchdog can retry.
 fn try_aggregate_partials(record: &crate::state::MultisigPendingRecord) -> Result<String, String> {
@@ -1916,7 +1954,7 @@ fn try_aggregate_partials(record: &crate::state::MultisigPendingRecord) -> Resul
         .aggregate(&canonical_bytes, |_partial, _bytes| Ok(()))
         .map_err(|e| format!("aggregate: {e}"))?;
 
-    Ok(record.anchor_id.clone())
+    Ok(record.seal_id.clone())
 }
 
 // ── MAL-13 GC candidates admin endpoint ──────────────────────────────────
@@ -1965,36 +2003,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anchorer_value_from_cell_defaults_to_service_did_when_absent() {
-        let resp = anchorer_value_from_cell(None, "did:web:soland.local");
+    fn notary_value_from_cell_defaults_to_service_did_when_absent() {
+        let resp = notary_value_from_cell(None, "did:web:soland.local");
         assert_eq!(resp.kind_raw, "single_did");
         assert_eq!(resp.single_did.as_deref(), Some("did:web:soland.local"));
     }
 
     #[test]
-    fn anchorer_value_from_cell_reads_spec_shape_form() {
+    fn notary_value_from_cell_reads_spec_shape_form() {
         let v = json!({
             "shape": "single_did",
             "did": "did:web:alice.example",
-            "max_anchor_staleness_ms": 60000,
+            "revocation_freshness_window_ms": 60000,
             "paused": false,
         });
-        let resp = anchorer_value_from_cell(Some(&v), "did:web:server");
+        let resp = notary_value_from_cell(Some(&v), "did:web:server");
         assert_eq!(resp.kind_raw, "single_did");
         assert_eq!(resp.single_did.as_deref(), Some("did:web:alice.example"));
-        assert_eq!(resp.max_anchor_staleness_ms, Some(60000));
+        assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
         assert!(!resp.paused);
     }
 
     #[test]
-    fn anchorer_value_from_cell_reads_threshold_shape() {
+    fn notary_value_from_cell_reads_threshold_shape() {
         let v = json!({
             "shape": "threshold",
             "k": 2,
             "n": 3,
             "dids": ["did:ck:a", "did:ck:b", "did:ck:c"],
         });
-        let resp = anchorer_value_from_cell(Some(&v), "did:web:s");
+        let resp = notary_value_from_cell(Some(&v), "did:web:s");
         assert_eq!(resp.kind_raw, "threshold");
         assert_eq!(resp.threshold_k, Some(2));
         assert_eq!(resp.threshold_n, Some(3));
@@ -2003,7 +2041,7 @@ mod tests {
     }
 
     #[test]
-    fn anchorer_value_from_cell_reads_dto_form_too() {
+    fn notary_value_from_cell_reads_dto_form_too() {
         // Sodmin DTO form on the cell value — accepted as a fallback so
         // round-tripping through soland's own typed admin write is also
         // shape-stable.
@@ -2011,7 +2049,7 @@ mod tests {
             "kind_raw": "open_set",
             "open_set_members": ["did:1", "did:2"],
         });
-        let resp = anchorer_value_from_cell(Some(&v), "did:web:s");
+        let resp = notary_value_from_cell(Some(&v), "did:web:s");
         assert_eq!(resp.kind_raw, "open_set");
         assert_eq!(
             resp.open_set_members,
@@ -2089,12 +2127,12 @@ mod tests {
     }
 
     #[test]
-    fn anchorer_reconfig_body_round_trip_via_to_value_matches_sodmin_shape() {
+    fn notary_reconfig_body_round_trip_via_to_value_matches_sodmin_shape() {
         // Lock the wire shape against accidental rename-on-serialize. The
         // sodmin client constructs this body via
-        // `AnchorerReconfigRequest::to_reconfigure_body()`; round-tripping
+        // `NotaryReconfigRequest::to_reconfigure_body()`; round-tripping
         // through serde here confirms the field names line up.
-        let body = AnchorerReconfigBody {
+        let body = NotaryReconfigBody {
             kind: "threshold".to_owned(),
             threshold_k: Some(2),
             threshold_n: Some(3),
@@ -2112,11 +2150,11 @@ mod tests {
     }
 
     #[test]
-    fn anchorer_cell_for_builds_canonical_cell_ref() {
-        let cell = anchorer_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
+    fn notary_cell_for_builds_canonical_cell_ref() {
+        let cell = notary_cell_for("ck:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
         assert_eq!(
             cell.as_str(),
-            "ck:cell:ck.component.anchorer.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
+            "ck:cell:ck.component.notary.v1:ck:space:01904100-0000-7000-8000-2dd3431bd65a"
         );
     }
 
@@ -2126,12 +2164,12 @@ mod tests {
             move_id: "sha256:00".to_owned(),
             accepted: false,
             reason: Some("placeholder".to_owned()),
-            anchor_id: None,
+            seal_id: None,
             status: "placeholder".to_owned(),
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"status\":\"placeholder\""));
         assert!(s.contains("\"reason\":\"placeholder\""));
-        assert!(!s.contains("anchor_id"));
+        assert!(!s.contains("seal_id"));
     }
 }

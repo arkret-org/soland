@@ -1,7 +1,7 @@
 //! Surfaces a public-ish HTTP read interface over `ProjectionState::cells`
 //! so coauth (consent grants on holder principal servers) and sodmin
 //! (admin UI bottom-state inspection) can introspect the canonical cell
-//! state without re-implementing the Move/Anchor pipeline.
+//! state without re-implementing the Move/Seal pipeline.
 //!
 //! Endpoints:
 //! - `GET /_soland/admin/cells/{cell_id}` — return one cell's resolved state.
@@ -196,7 +196,7 @@ async fn admin_get_cell(
         // → 404 with canonical error envelope").
         return Err(AppError::new(
             ErrorCode::NotFound,
-            format!("cell `{}` has no anchored state", cell_ref.as_str()),
+            format!("cell `{}` has no sealed state", cell_ref.as_str()),
         )
         .with_status(StatusCode::NOT_FOUND));
     }

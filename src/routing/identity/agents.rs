@@ -385,7 +385,7 @@ async fn agent_key_pair(
     }
     // ERR-1 — PROOF_INVALID +
     // VERIFICATION_METHOD_PRINCIPAL_MISMATCH +
-    // APPROVAL_ALREADY_CONSUMED reason codes anchor here. The pairing
+    // APPROVAL_ALREADY_CONSUMED reason codes seal here. The pairing
     // pipeline (CKP-0008 §4.2) emits PROOF_INVALID when the
     // runtime_attestation signature fails crypto verification,
     // VERIFICATION_METHOD_PRINCIPAL_MISMATCH when the DID resolved from

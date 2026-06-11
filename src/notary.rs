@@ -1,15 +1,15 @@
-//! Anchorer signing worker.
+//! Notary signing worker.
 //!
 //! Per spec `event-auth-state-resolution.md` §3-§4: when this node is the
-//! authoritative anchorer for a Realm, it periodically takes pending Move
-//! batches, verifies each against the current effective Anchor view's
+//! authoritative notary for a Realm, it periodically takes pending Move
+//! batches, verifies each against the current effective Seal view's
 //! pre-state, accepts those that pass, computes the post-state's
-//! `state_root` (canonical Merkle, §4.2), signs an Anchor over the result,
-//! and submits it through `apply_anchor` (§4.3).
+//! `state_root` (canonical Merkle, §4.2), signs a Seal over the result,
+//! and submits it through `apply_seal` (§4.3).
 //!
 //! # v1 scope
 //!
-//! - **All four anchorer profiles supported**:
+//! - **All four notary profiles supported**:
 //!   - `single_did` — straightforward DID match against `service_did`.
 //!   - `threshold(k, members[])` — simple deterministic leader election: among the `members` set,
 //!     the lex-smallest DID that *includes* this node's `service_did` is the candidate to sign
@@ -18,75 +18,75 @@
 //!     lives on the multi-signer coordinator.
 //!   - `open_set(members[])` — any member may sign; if `service_did ∈ members` this node signs.
 //!   - `mixed(primary, recovery_members[])` — primary signs by default; recovery members may sign
-//!     only after the leaf-Anchor frontier has gone stale beyond `max_anchor_staleness_ms` (default
+//!     only after the leaf-Seal set has gone stale beyond `revocation_freshness_window_ms` (default
 //!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
 //!     (same election as threshold).
 //! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
 //!   detached-JWS construction to `cokret_sdk::jws::sign_jws_ed25519` (symmetric counterpart of
 //!   `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker emits).
-//!   The signing key is sourced from `AppState::anchorer_signing_key()`, which loads from
-//!   `SOLAND_ANCHORER_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
+//!   The signing key is sourced from `AppState::notary_signing_key()`, which loads from
+//!   `SOLAND_NOTARY_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
-//!   `routing/move_anchor.rs`) still accepts both real and shape-only JWSes for local fixtures.
-//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST
-//!   /_soland/admin/anchors/sign`. A periodic ticker / push-loop is left to future production work
-//!   (needs lease coordination + shutdown handling under tokio).
+//!   `routing/move_seal.rs`) still accepts both real and shape-only JWSes for local fixtures.
+//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /_soland/admin/seals/sign`.
+//!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
+//!   shutdown handling under tokio).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::lattice::{AnchoredOp, CellState};
+use cokret_sdk::lattice::{CellState, SealedOp};
 use cokret_sdk::state_res::{
-    AnchorStore, CellRegistry, CellStore, MoveStore, StoreError, apply_anchor, compute_state_root,
-    effective_anchor_view, verify_move,
+    CellRegistry, CellStore, MoveStore, SealStore, StoreError, apply_seal, compute_state_root,
+    control_event_set_root, effective_seal_view, verify_move,
 };
 use cokret_sdk::{
-    Anchor, AnchorId, AnchorerSig, CellRef, Hash, Hlc, Move, MoveId, MoveSignature, RealmId,
+    CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
 use ed25519_dalek::SigningKey;
 
-use crate::config::AnchorerSigningKeyOrigin;
-use crate::routing::federation::move_anchor::select_jws_verifier;
+use crate::config::NotarySigningKeyOrigin;
+use crate::routing::federation::move_seal::select_jws_verifier;
 use crate::state::AppState;
 
-/// Outcome of a single anchorer signing pass.
+/// Outcome of a single notary signing pass.
 #[derive(Clone, Debug)]
-pub struct AnchorerOutcome {
-    pub anchor_id: AnchorId,
+pub struct NotaryOutcome {
+    pub seal_id: SealId,
     pub accepted_move_ids: Vec<MoveId>,
     pub rejected_moves: Vec<(MoveId, String)>,
     pub post_state_root: Hash,
 }
 
-/// All the ways the anchorer can fail to make progress.
+/// All the ways the notary can fail to make progress.
 #[derive(Debug, thiserror::Error)]
-pub enum AnchorerError {
-    #[error("not authorized to sign anchors for realm {0}")]
+pub enum NotaryError {
+    #[error("not authorized to sign seals for realm {0}")]
     NotAuthorized(String),
     #[error("store error: {0}")]
     Store(String),
-    #[error("apply_anchor rejected: {0}")]
-    ApplyAnchor(String),
-    #[error("anchor construction failed: {0}")]
+    #[error("apply_seal rejected: {0}")]
+    ApplySeal(String),
+    #[error("seal construction failed: {0}")]
     Construction(String),
 }
 
-impl From<StoreError> for AnchorerError {
+impl From<StoreError> for NotaryError {
     fn from(value: StoreError) -> Self {
         Self::Store(value.to_string())
     }
 }
 
-/// Stateless anchorer worker. Holds only the service DID; everything else
+/// Stateless notary worker. Holds only the service DID; everything else
 /// reads from `AppState` per call.
-pub struct AnchorerWorker {
+pub struct NotaryWorker {
     service_did: String,
 }
 
-impl AnchorerWorker {
+impl NotaryWorker {
     pub fn for_service(service_did: impl Into<String>) -> Self {
         Self {
             service_did: service_did.into(),
@@ -95,79 +95,79 @@ impl AnchorerWorker {
 
     /// Run one signing pass for the given Realm. Returns:
     ///
-    /// - `Ok(Some(outcome))` when an Anchor was published
-    /// - `Ok(None)` when there were no pending Moves to anchor (or none that passed verify)
-    /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_anchor rejection that
+    /// - `Ok(Some(outcome))` when a Seal was published
+    /// - `Ok(None)` when there were no pending Moves to seal (or none that passed verify)
+    /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_seal rejection that
     ///   wasn't `StateRootMismatch`)
     pub fn sign_pending_for_realm(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         max_moves: usize,
-    ) -> Result<Option<AnchorerOutcome>, AnchorerError> {
-        // Step 1: authorization. v1 single-DID mode — accept if anchorer
+    ) -> Result<Option<NotaryOutcome>, NotaryError> {
+        // Step 1: authorization. v1 single-DID mode — accept if notary
         // cell is unset (genesis Realm) OR set to our service DID. Anything
         // else is "not our turn to sign".
         if !self.is_authorized_for(state, realm_id)? {
-            return Err(AnchorerError::NotAuthorized(realm_id.to_string()));
+            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
 
         // Step 2: list pending Moves (oldest first).
         let pending = state
             .move_store
-            .list_pending_for_anchorer(realm_id, None, max_moves)?;
+            .list_pending_for_notary(realm_id, None, max_moves)?;
         if pending.is_empty() {
             return Ok(None);
         }
 
-        // Step 3: current frontier (Anchor leaves) for predecessor refs.
-        // The v1 Genesis Anchor is an empty-frontier DAG root. If this is the
+        // Step 3: current Seal leaves for predecessor refs.
+        // The v1 Genesis Seal is an empty-delta DAG root. If this is the
         // first signed batch for the Realm, materialize that root before
-        // anchoring any Move so the successor never uses predecessor_refs=[].
-        let mut leaves = state.anchor_store.list_leaves(realm_id)?;
+        // sealing any Move so the successor never uses predecessor_refs=[].
+        let mut leaves = state.seal_store.list_leaves(realm_id)?;
         if leaves.is_empty() {
-            let genesis = self.build_genesis_anchor(state, realm_id)?;
+            let genesis = self.build_genesis_seal(state, realm_id)?;
             let verifier = select_jws_verifier(state);
-            let effect = apply_anchor(
+            let effect = apply_seal(
                 &genesis,
                 state.move_store.as_ref(),
-                state.anchor_store.as_ref(),
+                state.seal_store.as_ref(),
                 state.cell_store.as_ref(),
                 state.cell_registry.as_ref(),
                 verifier,
             )
-            .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
+            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
             tracing::info!(
                 realm_id = %realm_id,
-                anchor_id = %effect.anchor,
-                "materialized empty Genesis Anchor before signing pending Moves"
+                seal_id = %effect.seal,
+                "materialized empty Genesis Seal before signing pending Moves"
             );
             leaves = vec![genesis.id];
         }
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
-        let view = effective_anchor_view(
+        let view = effective_seal_view(
             &leaves,
             realm_id,
-            state.anchor_store.as_ref(),
+            state.seal_store.as_ref(),
             state.cell_store.as_ref(),
             state.cell_registry.as_ref(),
         )
-        .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
+        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
-        // Recompute pre_state map (effective_anchor_view returns state_root
+        // Recompute pre_state map (effective_seal_view returns state_root
         // but we need the per-cell map for verify_move).
         let pre_state = self.read_effective_state(state, realm_id)?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
-        // Ed25519 vs dev shape-only) — anchorer must use the same one
-        // submit_anchor / submit_move use, otherwise pending Moves that
-        // passed admission could still be rejected at anchor time.
+        // Ed25519 vs dev shape-only) — notary must use the same one
+        // submit_seal / submit_move use, otherwise pending Moves that
+        // passed admission could still be rejected at seal time.
         // Replay-window check (`Move.hlc`) is also enforced per Move so
         // long-pending Moves whose hlc has aged out get dropped instead
-        // of resurrected into a fresh Anchor.
+        // of resurrected into a fresh Seal.
         let verifier = select_jws_verifier(state);
         let replay_default = state.config.jws_replay_window_seconds;
         let replay_overrides = &state.config.jws_replay_window_per_family;
@@ -189,7 +189,7 @@ impl AnchorerWorker {
             }
         }
         if accepted.is_empty() {
-            // Everyone rejected — nothing to anchor, but record diagnostics.
+            // Everyone rejected — nothing to seal, but record diagnostics.
             return Ok(None);
         }
 
@@ -198,66 +198,78 @@ impl AnchorerWorker {
         let predicted_state_root =
             self.predict_post_state_root(state, realm_id, &pre_state, &accepted)?;
 
-        // Step 7: compose Anchor (predecessor_refs = current leaves, frontier
-        // = predecessor frontier ∪ new accepted moves), then derive id, then
-        // sign canonical_bytes_for_id.
-        let frontier: Vec<MoveId> = view
-            .frontier
-            .iter()
-            .cloned()
-            .chain(accepted.iter().map(|m| m.id.clone()))
-            .collect();
+        // Step 7: compose Seal (predecessor_refs = current leaves,
+        // delta = newly accepted moves), then derive id, then sign
+        // canonical_bytes_for_id. Cumulative coverage is derived from
+        // predecessor_refs plus delta; it is not carried as a required
+        // wire field.
+        let mut delta: Vec<MoveId> = accepted.iter().map(|m| m.id.clone()).collect();
+        delta.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        delta.dedup_by(|a, b| a.as_str() == b.as_str());
+        let mut covered: BTreeSet<MoveId> = view.covered_event_digests.iter().cloned().collect();
+        covered.extend(delta.iter().cloned());
+        let control_event_set_root = control_event_set_root(&covered)
+            .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
+        let predecessor_refs = view.predecessor_refs.clone();
+        let notary_seq = self.next_notary_seq(state, &predecessor_refs)?;
         let hlc = Hlc::new(state.hlc.now())
-            .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?;
+            .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?;
 
-        // canonical_bytes_for_id excludes `id` + `anchorer_signature` (see
-        // `Anchor::canonical_bytes_for_id` in cokret-core/src/anchor.rs).
-        // We therefore compute canonical bytes from an Anchor whose `id`
-        // is the well-known zero sentinel and whose `anchorer_signature` is a
+        // canonical_bytes_for_id excludes `id` + `notary_signature` (see
+        // `Seal::canonical_bytes_for_id` in cokret-core/src/seal.rs).
+        // We therefore compute canonical bytes from a Seal whose `id`
+        // is the well-known zero sentinel and whose `notary_signature` is a
         // zero-byte-signature placeholder — both fields are EXCLUDED from
         // the canonical body so the sentinels never influence the signing
         // target. Then we derive the real id and sign over those same
         // canonical bytes, keeping the signature byte-stable.
-        let zero_anchor_id = AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32)))
-            .expect("zero AnchorId is well-formed");
-        let zero_sig = zero_anchorer_sig_placeholder()?;
-        let mut anchor = Anchor {
-            id: zero_anchor_id,
+        let zero_seal_id = SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+            .expect("zero SealId is well-formed");
+        let zero_sig = zero_notary_sig_placeholder()?;
+        let mut seal = Seal {
+            id: zero_seal_id,
             realm_id: realm_id.clone(),
-            predecessor_refs: leaves,
-            frontier,
+            predecessor_refs,
+            delta,
+            control_event_set_root: control_event_set_root.clone(),
             state_root: predicted_state_root.clone(),
+            completeness_root: control_event_set_root,
+            notary_seq,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_root: None,
+            coverage_scope: None,
+            covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            anchorer_signature: AnchorerSig::Single(zero_sig),
-            anchored_at: chrono::Utc::now(),
+            notary_signature: NotarySig::Single(zero_sig),
+            sealed_at: chrono::Utc::now(),
             hlc,
-            // Normal frontier-advance anchor. Compaction anchors come
-            // through `admin_compact_anchor_dag`, not the regular
-            // anchorer pipeline.
-            kind: cokret_sdk::AnchorKind::Normal,
+            // Normal delta-accepting Seal. Compaction Seals come
+            // through `admin_compact_seal_dag`, not the regular
+            // notary pipeline.
+            kind: cokret_sdk::SealKind::Normal,
         };
-        let canonical_bytes = anchor
+        let canonical_bytes = seal
             .canonical_bytes_for_id()
-            .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
-        anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
-            .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
-        anchor.anchorer_signature =
-            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
+            .map_err(|e| NotaryError::Construction(format!("canonical bytes: {e}")))?;
+        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
+            .map_err(|e| NotaryError::Construction(format!("derive id: {e}")))?;
+        seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
 
-        // Step 8: submit through apply_anchor — this re-runs steps 1-8 of
-        // the SDK pipeline and writes Anchor + marks Moves anchored.
+        // Step 8: submit through apply_seal — this re-runs steps 1-8 of
+        // the SDK pipeline and writes Seal + marks Moves sealed.
         // Reuse `verifier` from step 5; same closure satisfies the
-        // `Copy` bound apply_anchor's `F: Copy` requires.
-        let effect = apply_anchor(
-            &anchor,
+        // `Copy` bound apply_seal's `F: Copy` requires.
+        let effect = apply_seal(
+            &seal,
             state.move_store.as_ref(),
-            state.anchor_store.as_ref(),
+            state.seal_store.as_ref(),
             state.cell_store.as_ref(),
             state.cell_registry.as_ref(),
             verifier,
         )
-        .map_err(|reject| AnchorerError::ApplyAnchor(reject.to_string()))?;
+        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Refresh ProjectionState::cells
         // from the now-updated CellStore so cell-keyed reads see the new
@@ -285,7 +297,7 @@ impl AnchorerWorker {
             ) {
                 tracing::warn!(
                     error = %error,
-                    "anchorer worker failed to refresh ProjectionState::cells after apply_anchor"
+                    "notary worker failed to refresh ProjectionState::cells after apply_seal"
                 );
             }
         }
@@ -294,7 +306,7 @@ impl AnchorerWorker {
             .event_broadcast
             .send(crate::state::EventNotification::frontier(
                 realm_id.as_str().to_owned(),
-                effect.anchor.as_str().to_owned(),
+                effect.seal.as_str().to_owned(),
                 effect.post_state_root.as_str().to_owned(),
             ));
         if let Some(cell_id) = mls_epoch_cell {
@@ -317,38 +329,34 @@ impl AnchorerWorker {
             }
         }
 
-        Ok(Some(AnchorerOutcome {
-            anchor_id: effect.anchor,
+        Ok(Some(NotaryOutcome {
+            seal_id: effect.seal,
             accepted_move_ids: effect.accepted_move_ids,
             rejected_moves: rejected.into_iter().chain(effect.rejected_moves).collect(),
             post_state_root: effect.post_state_root,
         }))
     }
 
-    /// R21 authorization check: read the anchorer cell value via the SDK
-    /// effective-state read (this is the cell that holds `AnchorerValue`)
+    /// R21 authorization check: read the notary cell value via the SDK
+    /// effective-state read (this is the cell that holds `NotaryValue`)
     /// and decide whether this node is the leader for *this* signing pass.
     /// Returns `true` if this node should sign now, `false` if either it
     /// isn't part of the authoritative set or another node owns the round.
     ///
     /// Profile dispatch:
     ///
-    /// - **Genesis** (no anchorer cell yet) — implicit `service_did` is the anchorer.
-    /// - **Bottom** on the anchorer cell — Realm-wide pause; not authorized.
+    /// - **Genesis** (no notary cell yet) — implicit `service_did` is the notary.
+    /// - **Bottom** on the notary cell — Realm-wide pause; not authorized.
     /// - **single_did** — DID match against `service_did`.
     /// - **threshold(k, members)** / **open_set(members)** — leader election: among `members`, the
     ///   lex-smallest DID is the round leader; if it matches `service_did`, this node signs;
     ///   otherwise no-op.
-    /// - **mixed(primary, recovery_members, max_anchor_staleness_ms?)** — primary signs by default.
-    ///   If the latest leaf is older than `max_anchor_staleness_ms` (default 60_000ms), the
-    ///   recovery set takes over with the same lex-smallest leader election.
-    fn is_authorized_for(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-    ) -> Result<bool, AnchorerError> {
-        let anchorer_cell = match CellRef::new(format!(
-            "ck:cell:ck.component.anchorer.v1:{}",
+    /// - **mixed(primary, recovery_members, revocation_freshness_window_ms?)** — primary signs by
+    ///   default. If the latest leaf is older than `revocation_freshness_window_ms` (default
+    ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
+    fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
+        let notary_cell = match CellRef::new(format!(
+            "ck:cell:ck.component.notary.v1:{}",
             realm_id.as_str()
         )) {
             Ok(c) => c,
@@ -356,20 +364,20 @@ impl AnchorerWorker {
         };
         let ops = state
             .cell_store
-            .anchored_ops_for_cell(realm_id, &anchorer_cell)?;
+            .sealed_ops_for_cell(realm_id, &notary_cell)?;
         if ops.is_empty() {
-            // Genesis Realm — no anchorer cell yet. Implicit "service_did is
-            // anchorer" applies until the first Move sets the cell.
+            // Genesis Realm — no notary cell yet. Implicit "service_did is
+            // notary" applies until the first Move sets the cell.
             return Ok(true);
         }
         // Resolve via cell registry to get the lattice, then join.
         let binding = state
             .cell_registry
-            .resolve(realm_id, &anchorer_cell)
-            .map_err(|e| AnchorerError::Store(format!("anchorer cell resolve: {e}")))?;
-        let resolved = binding.lattice.join(&anchorer_cell, &ops);
+            .resolve(realm_id, &notary_cell)
+            .map_err(|e| NotaryError::Store(format!("notary cell resolve: {e}")))?;
+        let resolved = binding.lattice.join(&notary_cell, &ops);
         let CellState::Value(value) = resolved else {
-            // Bottom on anchorer cell = Realm-wide pause; the anchorer is
+            // Bottom on notary cell = Realm-wide pause; the notary is
             // not authorized to advance until recovery.
             return Ok(false);
         };
@@ -413,7 +421,7 @@ impl AnchorerWorker {
                     .unwrap_or("");
                 let recovery = read_did_list(&value, &["recovery_members", "mixed_recovery"]);
                 let staleness_ms = value
-                    .get("max_anchor_staleness_ms")
+                    .get("revocation_freshness_window_ms")
                     .and_then(|n| n.as_u64())
                     .unwrap_or(60_000);
                 if primary == self.service_did {
@@ -446,24 +454,24 @@ impl AnchorerWorker {
 
     /// Mixed-profile recovery gate: did the latest leaf go stale beyond
     /// `staleness_ms`? When there is no leaf at all (genesis), recovery
-    /// is NOT eligible (primary should sign the genesis Anchor).
+    /// is NOT eligible (primary should sign the genesis Seal).
     fn frontier_is_stale(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         staleness_ms: u64,
-    ) -> Result<bool, AnchorerError> {
-        let leaves = state.anchor_store.list_leaves(realm_id)?;
+    ) -> Result<bool, NotaryError> {
+        let leaves = state.seal_store.list_leaves(realm_id)?;
         let Some(leaf_id) = leaves.first() else {
             return Ok(false);
         };
-        let Some(anchor) = state.anchor_store.get(leaf_id)? else {
+        let Some(seal) = state.seal_store.get(leaf_id)? else {
             return Ok(false);
         };
-        // The Anchor.hlc carries a 12-hex physical-millis prefix per the
+        // The Seal.hlc carries a 12-hex physical-millis prefix per the
         // HLC encoding. Reuse the same parser the replay-window checker
         // uses to compare against now.
-        let signed_at = match crate::jws_verify::physical_millis_from_hlc(anchor.hlc.as_str()) {
+        let signed_at = match crate::jws_verify::physical_millis_from_hlc(seal.hlc.as_str()) {
             Some(ms) => ms,
             None => return Ok(false),
         };
@@ -479,15 +487,15 @@ impl AnchorerWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
-    ) -> Result<BTreeMap<CellRef, CellState>, AnchorerError> {
+    ) -> Result<BTreeMap<CellRef, CellState>, NotaryError> {
         let mut out = BTreeMap::new();
         let cells = state.cell_store.list_cells(realm_id)?;
         for cell in cells {
-            let ops = state.cell_store.anchored_ops_for_cell(realm_id, &cell)?;
+            let ops = state.cell_store.sealed_ops_for_cell(realm_id, &cell)?;
             let binding = state
                 .cell_registry
                 .resolve(realm_id, &cell)
-                .map_err(|e| AnchorerError::Store(format!("cell registry resolve: {e}")))?;
+                .map_err(|e| NotaryError::Store(format!("cell registry resolve: {e}")))?;
             let resolved = binding.lattice.join(&cell, &ops);
             out.insert(cell, resolved);
         }
@@ -496,25 +504,25 @@ impl AnchorerWorker {
 
     /// Predict the state_root after the accepted Moves' effects are
     /// appended on top of the current per-cell op log. Replicates the
-    /// SDK's apply_anchor steps 6-7 in memory without persisting.
+    /// SDK's apply_seal steps 6-7 in memory without persisting.
     fn predict_post_state_root(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         _pre_state: &BTreeMap<CellRef, CellState>,
         accepted: &[Move],
-    ) -> Result<Hash, AnchorerError> {
+    ) -> Result<Hash, NotaryError> {
         // Build per-cell list of (current ops ++ new ops).
-        let mut ops_by_cell: BTreeMap<CellRef, Vec<AnchoredOp>> = BTreeMap::new();
+        let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
         // Seed with all currently-known cells.
         for cell in state.cell_store.list_cells(realm_id)? {
-            let ops = state.cell_store.anchored_ops_for_cell(realm_id, &cell)?;
+            let ops = state.cell_store.sealed_ops_for_cell(realm_id, &cell)?;
             ops_by_cell.insert(cell, ops);
         }
         // Layer on the new accepted Moves' effects.
         for m in accepted {
             for effect in &m.effects {
-                let aop = AnchoredOp::new(m.id.clone(), effect.op.clone());
+                let aop = SealedOp::new(m.id.clone(), effect.op.clone());
                 ops_by_cell
                     .entry(effect.cell.clone())
                     .or_default()
@@ -527,18 +535,32 @@ impl AnchorerWorker {
             let binding = state
                 .cell_registry
                 .resolve(realm_id, &cell)
-                .map_err(|e| AnchorerError::Store(format!("predict cell resolve: {e}")))?;
+                .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
             let resolved = binding.lattice.join(&cell, &ops);
             post_state.insert(cell, resolved);
         }
         // canonical Merkle state_root.
         compute_state_root(&post_state)
-            .map_err(|e| AnchorerError::Construction(format!("compute_state_root: {e}")))
+            .map_err(|e| NotaryError::Construction(format!("compute_state_root: {e}")))
+    }
+
+    fn next_notary_seq(
+        &self,
+        state: &AppState,
+        predecessor_refs: &[SealId],
+    ) -> Result<u64, NotaryError> {
+        let mut max_seq = 0u64;
+        for id in predecessor_refs {
+            if let Some(seal) = state.seal_store.get(id)? {
+                max_seq = max_seq.max(seal.notary_seq);
+            }
+        }
+        Ok(max_seq.saturating_add(1))
     }
 
     /// Build a **real** Ed25519 signature over the canonical
-    /// Anchor bytes. Production deployments configure
-    /// `SOLAND_ANCHORER_SIGNING_KEY` (base64 32-byte seed); dev/test
+    /// Seal bytes. Production deployments configure
+    /// `SOLAND_NOTARY_SIGNING_KEY` (base64 32-byte seed); dev/test
     /// deployments fall back to an in-process random ephemeral key with a
     /// sticky-warn log line on every signing pass.
     ///
@@ -548,7 +570,7 @@ impl AnchorerWorker {
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
     /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
     ///
-    /// The verification_method id is `<service_did>#anchorer-key`; the
+    /// The verification_method id is `<service_did>#notary-key`; the
     /// matching DID Document MUST publish that key for the production
     /// JWS verifier to round-trip the signature. Until the DID document
     /// publishing pipeline lands, production deployments rely on
@@ -558,73 +580,83 @@ impl AnchorerWorker {
         &self,
         state: &AppState,
         canonical_bytes: &[u8],
-    ) -> Result<MoveSignature, AnchorerError> {
+    ) -> Result<MoveSignature, NotaryError> {
         // payload_digest = sha256(canonical_bytes), prefix-encoded via the
         // shared SDK digest helper.
         let payload_digest = Hash::new(cokret_sdk::canonical::sha256_digest(canonical_bytes))
-            .map_err(|e| AnchorerError::Construction(format!("payload hash: {e}")))?;
+            .map_err(|e| NotaryError::Construction(format!("payload hash: {e}")))?;
 
-        let signing_key = state.anchorer_signing_key();
-        let origin = state.anchorer_signing_key_origin();
-        if origin == AnchorerSigningKeyOrigin::Ephemeral {
-            warn_once_about_ephemeral_anchorer_key();
+        let signing_key = state.notary_signing_key();
+        let origin = state.notary_signing_key_origin();
+        if origin == NotarySigningKeyOrigin::Ephemeral {
+            warn_once_about_ephemeral_notary_key();
         }
 
         let jws = cokret_sdk::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
-            .map_err(|e| AnchorerError::Construction(format!("sign_jws_ed25519: {e}")))?;
+            .map_err(|e| NotaryError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
         Ok(MoveSignature {
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#anchorer-key", self.service_did),
+            verification_method: format!("{}#notary-key", self.service_did),
             payload_digest,
             created_at: chrono::Utc::now(),
             jws,
         })
     }
 
-    fn build_genesis_anchor(
+    fn build_genesis_seal(
         &self,
         state: &AppState,
         realm_id: &RealmId,
-    ) -> Result<Anchor, AnchorerError> {
-        let zero_anchor_id = AnchorId::new(format!("ck:anchor:sha256:{}", "00".repeat(32)))
-            .expect("zero AnchorId is well-formed");
-        let zero_sig = zero_anchorer_sig_placeholder()?;
-        let mut anchor = Anchor {
-            id: zero_anchor_id,
+    ) -> Result<Seal, NotaryError> {
+        let zero_seal_id = SealId::new(format!("ck:seal:sha256:{}", "00".repeat(32)))
+            .expect("zero SealId is well-formed");
+        let zero_sig = zero_notary_sig_placeholder()?;
+        let empty_covered = BTreeSet::new();
+        let control_event_set_root = control_event_set_root(&empty_covered)
+            .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
+        let mut seal = Seal {
+            id: zero_seal_id,
             realm_id: realm_id.clone(),
             predecessor_refs: Vec::new(),
-            frontier: Vec::new(),
+            delta: Vec::new(),
+            control_event_set_root: control_event_set_root.clone(),
             state_root: Hash::new(cokret_sdk::EMPTY_STATE_ROOT.to_owned())
-                .map_err(|e| AnchorerError::Construction(format!("empty state_root: {e}")))?,
+                .map_err(|e| NotaryError::Construction(format!("empty state_root: {e}")))?,
+            completeness_root: control_event_set_root,
+            notary_seq: 0,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_root: None,
+            coverage_scope: None,
+            covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            anchorer_signature: AnchorerSig::Single(zero_sig),
-            anchored_at: chrono::Utc::now(),
+            notary_signature: NotarySig::Single(zero_sig),
+            sealed_at: chrono::Utc::now(),
             hlc: Hlc::new(state.hlc.now())
-                .map_err(|e| AnchorerError::Construction(format!("invalid HLC: {e}")))?,
-            kind: cokret_sdk::AnchorKind::Normal,
+                .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?,
+            kind: cokret_sdk::SealKind::Normal,
         };
-        let canonical_bytes = anchor
+        let canonical_bytes = seal
             .canonical_bytes_for_id()
-            .map_err(|e| AnchorerError::Construction(format!("canonical bytes: {e}")))?;
-        anchor.id = Anchor::id_from_canonical_bytes(&canonical_bytes)
-            .map_err(|e| AnchorerError::Construction(format!("derive id: {e}")))?;
-        anchor.anchorer_signature =
-            AnchorerSig::Single(self.signature_for(state, &canonical_bytes)?);
-        Ok(anchor)
+            .map_err(|e| NotaryError::Construction(format!("canonical bytes: {e}")))?;
+        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
+            .map_err(|e| NotaryError::Construction(format!("derive id: {e}")))?;
+        seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
+        Ok(seal)
     }
 }
 
 /// Build a 64-zero-byte signature placeholder used purely as a typed
-/// stand-in for `Anchor.anchorer_signature` while we compute
-/// `canonical_bytes_for_id` (which excludes `anchorer_signature` entirely).
+/// stand-in for `Seal.notary_signature` while we compute
+/// `canonical_bytes_for_id` (which excludes `notary_signature` entirely).
 /// The value never reaches the wire — `sign_pending_for_realm` overwrites
-/// `anchor.anchorer_signature` with the real signature after deriving the
+/// `seal.notary_signature` with the real signature after deriving the
 /// canonical bytes and the id.
-fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
+fn zero_notary_sig_placeholder() -> Result<MoveSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
-        .map_err(|e| AnchorerError::Construction(format!("zero payload hash: {e}")))?;
+        .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
     // JWS shape is `header..signature`, with the SDK-canonical EdDSA
     // header so the placeholder is at least well-typed for the
@@ -646,27 +678,27 @@ fn zero_anchorer_sig_placeholder() -> Result<MoveSignature, AnchorerError> {
 /// key. The `OnceLock` keeps the warn at exactly one log line per process
 /// (vs once-per-pass spam) — operators see it on cold-start, then it goes
 /// quiet so it doesn't drown other signals.
-fn warn_once_about_ephemeral_anchorer_key() {
+fn warn_once_about_ephemeral_notary_key() {
     static WARNED: OnceLock<()> = OnceLock::new();
     WARNED.get_or_init(|| {
         tracing::warn!(
-            "anchorer signing identity is **ephemeral** — set \
-             `SOLAND_ANCHORER_SIGNING_KEY` (base64 32-byte seed) before \
-             production. Each restart issues Anchors under a fresh DID, \
+            "notary signing identity is **ephemeral** — set \
+             `SOLAND_NOTARY_SIGNING_KEY` (base64 32-byte seed) before \
+             production. Each restart issues Seals under a fresh DID, \
              which breaks signature-chain trust for downstream verifiers."
         );
     });
 }
 
-/// Helper exposed for `AppState::anchorer_signing_key` so the
-/// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`)
+/// Helper exposed for `AppState::notary_signing_key` so the
+/// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`)
 /// can build a `Ed25519MoveSigner` keyed off the same SigningKey the
-/// AnchorerWorker uses, keeping all signing paths consistent.
+/// NotaryWorker uses, keeping all signing paths consistent.
 pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
     SigningKey::from_bytes(seed)
 }
 
-/// Read a DID list from an anchorer cell value, accepting any of the
+/// Read a DID list from an notary cell value, accepting any of the
 /// alternate field names emitted by sodmin / spec / soland's own
 /// admin DTO. Returns an empty vec when no candidate field exists.
 fn read_did_list(value: &serde_json::Value, candidates: &[&str]) -> Vec<String> {
@@ -687,8 +719,8 @@ pub fn run_one_signing_pass(
     state: &AppState,
     realm_id: &RealmId,
     max_moves: usize,
-) -> Result<Option<AnchorerOutcome>, AnchorerError> {
-    let worker = AnchorerWorker::for_service(state.config.service_did.clone());
+) -> Result<Option<NotaryOutcome>, NotaryError> {
+    let worker = NotaryWorker::for_service(state.config.service_did.clone());
     worker.sign_pending_for_realm(state, realm_id, max_moves)
 }
 
@@ -725,13 +757,13 @@ mod tests {
 
     #[test]
     fn is_round_leader_picks_lex_smallest_did() {
-        let worker = AnchorerWorker::for_service("did:ck:b");
+        let worker = NotaryWorker::for_service("did:ck:b");
         assert!(!worker.is_round_leader(&[
             "did:ck:a".to_owned(),
             "did:ck:b".to_owned(),
             "did:ck:c".to_owned(),
         ]));
-        let worker = AnchorerWorker::for_service("did:ck:a");
+        let worker = NotaryWorker::for_service("did:ck:a");
         assert!(worker.is_round_leader(&[
             "did:ck:a".to_owned(),
             "did:ck:b".to_owned(),
@@ -741,13 +773,13 @@ mod tests {
 
     #[test]
     fn is_round_leader_rejects_when_not_a_member() {
-        let worker = AnchorerWorker::for_service("did:ck:other");
+        let worker = NotaryWorker::for_service("did:ck:other");
         assert!(!worker.is_round_leader(&["did:ck:a".to_owned(), "did:ck:b".to_owned(),]));
     }
 
     #[test]
     fn is_round_leader_returns_false_for_empty_member_set() {
-        let worker = AnchorerWorker::for_service("did:ck:a");
+        let worker = NotaryWorker::for_service("did:ck:a");
         assert!(!worker.is_round_leader(&[]));
     }
 }

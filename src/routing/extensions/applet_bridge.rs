@@ -1115,7 +1115,7 @@ fn event_proof(
         AppError::internal(format!("proof binding canonicalization failed: {error}"))
     })?;
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.anchorer_signing_key().as_ref())
+        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| AppError::internal(format!("event proof signing failed: {error}")))?;
     Ok(Proof {
         kind: "detached_jws".to_owned(),
@@ -1149,7 +1149,7 @@ fn production_payload_proof(
     })?;
     let digest = canonical::sha256_digest(&binding_bytes);
     let jws =
-        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.anchorer_signing_key().as_ref())
+        cokret_sdk::jws::sign_jws_ed25519(&binding_bytes, state.notary_signing_key().as_ref())
             .map_err(|error| {
                 AppError::internal(format!("accountability proof signing failed: {error}"))
             })?;

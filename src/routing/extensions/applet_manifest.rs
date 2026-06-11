@@ -16,7 +16,7 @@
 //! 4. **Capabilities** - every entry in `requested_capabilities` MUST be in the known registry
 //!    below (`KNOWN_APPLET_CAPABILITIES`).
 //!
-//! Spec anchor: `cokret-spec/spec/v1/zh/extensions/applet-integration.md`
+//! Spec seal: `cokret-spec/spec/v1/zh/extensions/applet-integration.md`
 //! Section 3 (manifest shape) + `extensions/applet-schema.md` (JSON schema).
 //!
 //! TODO(G3.S9-followup): resolve `signer_did` through the live

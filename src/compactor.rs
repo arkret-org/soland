@@ -2,9 +2,9 @@
 //!
 //! A tokio background task that wakes every
 //! [`AppConfig::compaction_prune_walk_interval_seconds`] seconds, walks
-//! every live Realm's anchor DAG, evaluates each candidate Anchor against
+//! every live Realm's seal DAG, evaluates each candidate Seal against
 //! [`cokret_sdk::CompactionPolicy::is_eligible`], and prunes the eligible
-//! ones via [`AnchorStore::prune_predecessor`]. Bounded per-Realm by
+//! ones via [`SealStore::prune_predecessor`]. Bounded per-Realm by
 //! [`AppConfig::compaction_prune_walk_per_realm_limit`] so a single tick
 //! never tries to prune a huge backlog at once — further candidates land
 //! on the next pass.
@@ -12,9 +12,9 @@
 //! ## When to enable
 //!
 //! Disabled by default (`SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS=0`).
-//! Enable when the deployment observes anchor-DAG growth or Pg dead-tuple
-//! pressure on the `anchors` table; the explicit `POST
-//! /_soland/admin/realms/{realm_id}/anchor-dag/prune?anchor_id=...`
+//! Enable when the deployment observes seal-DAG growth or Pg dead-tuple
+//! pressure on the `seals` table; the explicit `POST
+//! /_soland/admin/realms/{realm_id}/seal-dag/prune?seal_id=...`
 //! endpoint remains the operator-driven path either way and continues to
 //! work whether or not the worker is running.
 //!
@@ -22,7 +22,7 @@
 //!
 //! - **No lease coordination**. Single-process worker today; multi-node deployments running the
 //!   worker simultaneously will all try to prune the same candidates. `prune_predecessor` is
-//!   structurally idempotent (a second call on an already-pruned anchor returns
+//!   structurally idempotent (a second call on an already-pruned seal returns
 //!   [`StoreError::NotFound`]) so duplicates fail soft rather than corrupt the DAG, but a real
 //!   multi-node cluster wants a lease layer on top of this (see [`multisig_watchdog`] for the
 //!   pattern).
@@ -36,8 +36,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cokret_sdk::state_res::AnchorStore;
-use cokret_sdk::{Anchor, AnchorId, PruneCandidate, PruneEligibility, RealmId};
+use cokret_sdk::state_res::SealStore;
+use cokret_sdk::{PruneCandidate, PruneEligibility, RealmId, Seal, SealId};
 
 use crate::state::AppState;
 
@@ -47,11 +47,11 @@ use crate::state::AppState;
 pub struct CompactorPassReport {
     /// Number of Realms inspected this pass.
     pub realms_scanned: usize,
-    /// Number of candidate Anchors evaluated (across all Realms).
+    /// Number of candidate Seals evaluated (across all Realms).
     pub candidates_evaluated: usize,
-    /// Anchor ids that were successfully pruned this pass.
+    /// Seal ids that were successfully pruned this pass.
     pub pruned: Vec<String>,
-    /// Anchor ids that the store rejected (e.g. not-found because another
+    /// Seal ids that the store rejected (e.g. not-found because another
     /// pass already pruned them).
     pub prune_errors: Vec<(String, String)>,
     /// Per-Realm candidates that the policy rejected (kept for tests; not
@@ -112,18 +112,18 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
     };
     report.realms_scanned = realms.len();
     let policy = state.config.compaction_policy();
-    let anchor_store = state.anchor_store.as_ref();
+    let seal_store = state.seal_store.as_ref();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for realm_id in &realms {
-        let candidates = match collect_candidate_anchors(anchor_store, realm_id, per_realm_limit) {
+        let candidates = match collect_candidate_seals(seal_store, realm_id, per_realm_limit) {
             Ok(c) => c,
             Err(error) => {
                 tracing::warn!(
                     %error,
                     worker = "compactor",
                     realm_id = %realm_id,
-                    "compactor: failed to enumerate candidate anchors",
+                    "compactor: failed to enumerate candidate seals",
                 );
                 continue;
             }
@@ -133,11 +133,11 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
             if pruned_this_realm >= per_realm_limit {
                 break;
             }
-            let Ok(Some(candidate)) = anchor_store.get(&candidate_id) else {
+            let Ok(Some(candidate)) = seal_store.get(&candidate_id) else {
                 continue;
             };
             report.candidates_evaluated += 1;
-            let diagnostics = evaluate_candidate(anchor_store, realm_id, &candidate, now_ms);
+            let diagnostics = evaluate_candidate(seal_store, realm_id, &candidate, now_ms);
             let prune_candidate = PruneCandidate {
                 candidate: &candidate,
                 age_seconds: diagnostics.age_seconds,
@@ -147,7 +147,7 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
             };
             match policy.is_eligible(&prune_candidate) {
                 PruneEligibility::Eligible => {
-                    match anchor_store.prune_predecessor(realm_id, &candidate_id) {
+                    match seal_store.prune_predecessor(realm_id, &candidate_id) {
                         Ok(_) => {
                             report.pruned.push(candidate_id.as_str().to_owned());
                             pruned_this_realm += 1;
@@ -170,21 +170,21 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
     report
 }
 
-/// Collect candidate anchor ids by walking backward from each leaf via
+/// Collect candidate seal ids by walking backward from each leaf via
 /// `predecessor_refs`. Leaves are excluded (we never prune a leaf — there
 /// would be nothing to rewire its successor pointer through), and we
 /// short-circuit once we have ~ `per_realm_limit * 3` candidates so very
 /// deep DAGs don't allocate unboundedly per pass. Excess candidates land
 /// on the next tick.
 ///
-/// Returns anchor ids in BFS order from the leaves; that's a stable
+/// Returns seal ids in BFS order from the leaves; that's a stable
 /// traversal that doesn't favor any particular fork.
-fn collect_candidate_anchors(
-    anchor_store: &dyn AnchorStore,
+fn collect_candidate_seals(
+    seal_store: &dyn SealStore,
     realm_id: &RealmId,
     per_realm_limit: usize,
-) -> Result<Vec<AnchorId>, String> {
-    let leaves = anchor_store
+) -> Result<Vec<SealId>, String> {
+    let leaves = seal_store
         .list_leaves(realm_id)
         .map_err(|e| e.to_string())?;
     let mut visited: BTreeSet<String> = BTreeSet::new();
@@ -195,8 +195,8 @@ fn collect_candidate_anchors(
     for leaf in &leaves {
         visited.insert(leaf.as_str().to_owned());
     }
-    let mut queue: VecDeque<AnchorId> = leaves.into_iter().collect();
-    let mut candidates: Vec<AnchorId> = Vec::new();
+    let mut queue: VecDeque<SealId> = leaves.into_iter().collect();
+    let mut candidates: Vec<SealId> = Vec::new();
     // Soft cap so a deep DAG doesn't allocate unboundedly. Excess
     // candidates are picked up on the next pass.
     let soft_cap = per_realm_limit.saturating_mul(3).max(64);
@@ -204,12 +204,12 @@ fn collect_candidate_anchors(
         if candidates.len() >= soft_cap {
             break;
         }
-        // Inspect this anchor's parents — they become candidates.
-        let anchor: Anchor = match anchor_store.get(&next).map_err(|e| e.to_string())? {
+        // Inspect this seal's parents — they become candidates.
+        let seal: Seal = match seal_store.get(&next).map_err(|e| e.to_string())? {
             Some(a) => a,
             None => continue,
         };
-        for parent in &anchor.predecessor_refs {
+        for parent in &seal.predecessor_refs {
             if !visited.insert(parent.as_str().to_owned()) {
                 continue;
             }
@@ -232,33 +232,33 @@ struct CandidateDiagnostics {
 }
 
 fn evaluate_candidate(
-    anchor_store: &dyn AnchorStore,
+    seal_store: &dyn SealStore,
     realm_id: &RealmId,
-    candidate: &Anchor,
+    candidate: &Seal,
     now_ms: i64,
 ) -> CandidateDiagnostics {
     let candidate_id = candidate.id.clone();
-    let successors = anchor_store
+    let successors = seal_store
         .successors(realm_id, &candidate_id)
         .unwrap_or_default();
     let successor_count = successors.len();
     let mut compaction_witnesses: u32 = 0;
     let mut visited: BTreeSet<String> = BTreeSet::new();
-    let mut stack: Vec<AnchorId> = successors.clone();
+    let mut stack: Vec<SealId> = successors.clone();
     while let Some(next_id) = stack.pop() {
         if !visited.insert(next_id.as_str().to_owned()) {
             continue;
         }
-        if let Ok(Some(succ_anchor)) = anchor_store.get(&next_id) {
-            if succ_anchor.kind.is_compaction() {
+        if let Ok(Some(succ_seal)) = seal_store.get(&next_id) {
+            if succ_seal.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = anchor_store.successors(realm_id, &next_id) {
+            if let Ok(next_succs) = seal_store.successors(realm_id, &next_id) {
                 stack.extend(next_succs);
             }
         }
     }
-    let is_genesis = match anchor_store.genesis(realm_id) {
+    let is_genesis = match seal_store.genesis(realm_id) {
         Ok(Some(g)) => g.as_str() == candidate_id.as_str(),
         _ => false,
     };
@@ -320,7 +320,7 @@ mod tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: BTreeMap::new(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
@@ -336,7 +336,7 @@ mod tests {
             // any non-leaf becomes prunable.
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 0,
+            seal_compaction_min_age_seconds: 0,
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,
             compaction_prune_only_singleton_successors: false,
@@ -354,8 +354,8 @@ mod tests {
     #[test]
     fn fresh_state_produces_zero_prunes() {
         // `AppState::new` seeds a demo Realm (so `realms_scanned` may be
-        // 1 here, not 0), but a freshly-built state has zero Anchors in
-        // the in-memory anchor_store, so the walk produces no candidates
+        // 1 here, not 0), but a freshly-built state has zero Seals in
+        // the in-memory seal_store, so the walk produces no candidates
         // and no prunes.
         let state = AppState::new(test_config(), Db { pool: None });
         let report = run_compactor_pass(&state, 50);

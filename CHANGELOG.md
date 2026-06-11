@@ -217,8 +217,8 @@ below. Producers on the old wire MUST upgrade.
   (policy_components ∧ plaintext_visible_services ∧ MLS governance
   policy_root) or surfaces `media_plaintext_service_not_authorised` /
   `mls_governance_binding_stale` (T09 + T12).
-- **`POST /api/v1/anchors` frontier validation** — every entry in
-  `Anchor.frontier[]` MUST match `sha256:<64 lowercase hex>`; the legacy
+- **`POST /api/v1/seals` frontier validation** — every entry in
+  `Seal.frontier[]` MUST match `sha256:<64 lowercase hex>`; the legacy
   `ck:event:<uuid>` form hard-rejects (T04).
 - **`GET /api/v1/blob/get` fail-closed gates** — E2EE, legal-hold,
   redacted, and actor_private blobs return the registered error code

@@ -1384,7 +1384,7 @@ fn erasure_receipt_proof_signature(state: &AppState, payload: &Value) -> String 
     signing_input.extend_from_slice(state.config.service_did.as_bytes());
     signing_input.push(0);
     signing_input.extend_from_slice(&payload);
-    let signature = state.anchorer_signing_key().sign(&signing_input);
+    let signature = state.notary_signing_key().sign(&signing_input);
     format!(
         "eddsa-ed25519:{}",
         URL_SAFE_NO_PAD.encode(signature.to_bytes())
@@ -3095,9 +3095,9 @@ fn direct_realm_create_operation(
             "encryption_profile": "mls_rfc9420",
             "security_class": "standard",
             "federation_policy": "restricted",
-            "anchor_profile": "single_did",
+            "notary_profile": "single_did",
             "digest_algorithm": "sha256",
-            "anchorer": {
+            "notary": {
                 "type": "single_did",
                 "did": creator,
             },

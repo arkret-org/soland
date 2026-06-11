@@ -3,7 +3,7 @@ use salvo::prelude::*;
 pub mod erasure_fanout;
 #[allow(clippy::module_inception)]
 pub(crate) mod federation;
-pub(crate) mod move_anchor;
+pub(crate) mod move_seal;
 pub mod outbox;
 pub(crate) mod stubs;
 
@@ -14,11 +14,11 @@ use super::{
     redaction_targets_from_operations, sha256_hex, sync_token, validate_did,
 };
 
-/// Operator anchor-signing endpoint (`POST /_soland/admin/anchors/sign`). Mounted
+/// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted
 /// at the bare deployment-local `/admin/*` namespace on the root router
 /// (NOT under `/_cokret/...`), alongside the rest of the admin surface.
-pub fn admin_anchor_sign_router() -> Router {
-    move_anchor::api_admin_router()
+pub fn admin_seal_sign_router() -> Router {
+    move_seal::api_admin_router()
 }
 
 /// Deployment-local inbound federation rail, mounted at `/_soland/peer/*`.
@@ -27,14 +27,14 @@ pub fn admin_anchor_sign_router() -> Router {
 /// point is the `peer_federation` surface group at `/_cokret/peer/*`
 /// (outbound dispatch in this repo only ever targets `/_cokret/peer/events`).
 /// The routes below (Matrix-style transactions, operations push/pull/
-/// backfill/frontier, Move/Anchor direct ingest, realm-members,
+/// backfill/frontier, Move/Seal direct ingest, realm-members,
 /// verify-actor) exist for local testing and operations; describe advertises
 /// them under `profile_limitations` as `federation.private_inbound_rail` so
 /// remote peers cannot mistake them for an interop contract. Long-term plan:
-/// converge Move/Anchor ingest into the `/_cokret/peer/events` envelope
+/// converge Move/Seal ingest into the `/_cokret/peer/events` envelope
 /// channel and downgrade or delete this rail.
 pub fn router() -> Router {
-    Router::new().push(move_anchor::router()).push(
+    Router::new().push(move_seal::router()).push(
         Router::with_path("federation")
             .push(
                 Router::with_path("transactions/{txn_id}").post(federation::federation_transaction),
@@ -59,9 +59,9 @@ pub fn router() -> Router {
             )
             .push(Router::with_path("verify-actor").post(federation::federation_verify_actor))
             .push(
-                Router::with_path("anchors")
-                    .get(federation::federation_anchors_pull)
-                    .post(federation::federation_anchors_push),
+                Router::with_path("seals")
+                    .get(federation::federation_seals_pull)
+                    .post(federation::federation_seals_push),
             ),
     )
 }

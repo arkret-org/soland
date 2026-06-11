@@ -33,7 +33,7 @@ otel = [
 # Production Ed25519 JWS verification. ed25519-dalek
 # does the verify; bs58 decodes the multibase (base58btc-prefixed-z) public key
 # segment of did:key DID URLs and didDocument verificationMethod entries.
-# Lock-free pointer swap for the AnchorerWorker signing key. Used
+# Lock-free pointer swap for the NotaryWorker signing key. Used
 # by `rotate-signing-key` admin endpoint so concurrent signing passes never
 # observe a torn read across the rotation.
 # `rand` for fresh ed25519 seed generation in rotate-signing-key.

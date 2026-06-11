@@ -104,7 +104,7 @@ fn outbox_test_config() -> AppConfig {
         default_webvh_provider_id: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
-        anchorer_signing_key_seed: None,
+        notary_signing_key_seed: None,
         agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: FederationPolicy::Mesh,
@@ -119,7 +119,7 @@ fn outbox_test_config() -> AppConfig {
         push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
         resumable_upload_incomplete_ttl_seconds: 86_400,
-        compaction_min_anchor_age_seconds: 604_800,
+        seal_compaction_min_age_seconds: 604_800,
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
@@ -240,7 +240,7 @@ async fn outbound_signature_rejects_body_digest_tamper() {
     );
     headers.insert("content-digest".to_owned(), tampered_digest);
 
-    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    let verifying_key = captured.state.notary_signing_key().verifying_key();
     assert!(
         !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
         "changing the body digest after signing must invalidate the RFC 9421 transcript"
@@ -307,7 +307,7 @@ async fn outbound_signature_rejects_missing_trust_domain_component() {
     let mut headers = parse_headers(&captured.captured);
     headers.remove("destination-trust-domain");
 
-    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    let verifying_key = captured.state.notary_signing_key().verifying_key();
     assert!(
         !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
         "missing destination trust-domain must fail verification"
@@ -323,7 +323,7 @@ async fn outbound_signature_rejects_trust_domain_mismatch() {
         "ck:trust_domain:evil.example".to_owned(),
     );
 
-    let verifying_key = captured.state.anchorer_signing_key().verifying_key();
+    let verifying_key = captured.state.notary_signing_key().verifying_key();
     assert!(
         !http_signature_verifies_with_headers(&headers, &captured.target_uri, &verifying_key),
         "trust-domain mismatch must fail verification"
@@ -376,7 +376,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
 async fn outbound_signature_fails_after_service_key_rotation() {
     let captured = capture_signed_request().await;
     let headers = parse_headers(&captured.captured);
-    let original_key = captured.state.anchorer_signing_key().verifying_key();
+    let original_key = captured.state.notary_signing_key().verifying_key();
     assert!(
         http_signature_verifies_with_headers(&headers, &captured.target_uri, &original_key),
         "sanity: original service key should verify the signed request"
@@ -435,7 +435,7 @@ async fn capture_signed_request() -> CapturedSignedRequestBody {
 
 fn assert_http_signature_verifies(captured: &str, target_uri: &str, state: &AppState) {
     let headers = parse_headers(captured);
-    let verifying_key = state.anchorer_signing_key().verifying_key();
+    let verifying_key = state.notary_signing_key().verifying_key();
     assert!(
         http_signature_verifies_with_headers(&headers, target_uri, &verifying_key),
         "RFC 9421 signature should verify against service key"

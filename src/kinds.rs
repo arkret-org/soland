@@ -5,7 +5,7 @@ use cokret_sdk::Operation;
 // dispatch is wired in `src/reducer.rs`; the wire-layer admission check
 // runs through the generic local-operation event registry.
 //
-// `ck.circle.anchor_commit` is reducer-DERIVED (sub-anchor emitted on
+// `ck.circle.seal_commit` is reducer-DERIVED (sub-seal emitted on
 // the Circle's profile cadence) and MUST NOT be submitted directly via
 // `ck.self.events.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
@@ -20,7 +20,7 @@ pub use cokret_sdk::events::kinds::FLOW_CREATE as CK_FLOW_CREATE;
 // write to the `ck.component.flow.position.v1` cell family keyed by
 // (board_space_id, flow_id). The Event-Envelope path only validates
 // payload shape and bumps the Flow's updated_at/by; the cell write
-// happens on the Move/Anchor pipeline (out of scope for the reducer's
+// happens on the Move/Seal pipeline (out of scope for the reducer's
 // structured cache).
 pub use cokret_sdk::events::kinds::FLOW_MOVE as CK_FLOW_MOVE;
 // Unified Flow tracks update event. `payload.patch` uses `ck.patch.v1`
@@ -35,7 +35,7 @@ pub use cokret_sdk::events::kinds::FLOW_TRACKS_UPDATE as CK_FLOW_TRACKS_UPDATE;
 // (flow_id, watcher_actor_id). Spec:
 // cokret-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
 // flow position events the Event-Envelope path only validates payload
-// shape; cell write happens on the Move/Anchor pipeline. The Flow
+// shape; cell write happens on the Move/Seal pipeline. The Flow
 // projection's updated_at is NOT bumped — watch is a per-(flow, actor)
 // subscription that does not represent a Flow state mutation.
 pub use cokret_sdk::events::kinds::FLOW_WATCH_SET as CK_FLOW_WATCH_SET;
@@ -126,7 +126,7 @@ pub use cokret_sdk::events::kinds::{
 };
 pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start";
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
-// NOT advance the anchor frontier / actor_seq). Wire-accepted only.
+// NOT advance the seal frontier / actor_seq). Wire-accepted only.
 // R3 spec-sync (2026-05-27, cokret-spec b47ff6ec) — agent lifecycle FSM
 // event kinds. `lattice` is `fsm` with `bottom=reject`; deactivate is
 // terminal. Reducer enforcement of the (active → paused → active →
@@ -165,7 +165,7 @@ pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start
 // recipient silently drops them.
 // MLS commits now require a governance binding with an attested
 // membership/covered frontier; the soland reducer accumulates that
-// frontier in `MlsCommitEpoch.covered_frontier`. Welcome envelopes are
+// frontier in `MlsCommitEpoch.covered_seals`. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
 // Audit model migration (spec @ 2026-06-04): the standing-audit-member
@@ -497,7 +497,7 @@ pub fn is_agent_lifecycle_kind(kind: &str) -> bool {
 }
 
 /// R3 spec-sync — `actor_private_event` kinds (reducer_input=false).
-/// These MUST NOT advance the anchor frontier / actor_seq; the reducer
+/// These MUST NOT advance the seal frontier / actor_seq; the reducer
 /// dispatches them through the audit-log projection only.
 pub fn is_actor_private_event_kind(kind: &str) -> bool {
     matches!(
@@ -602,7 +602,7 @@ pub fn is_flow_tracks_kind(kind: &str) -> bool {
 // land with the protocol implementations themselves; the constants are
 // here so the reducer registry can dispatch.
 //
-// Spec anchors:
+// Spec seals:
 //   - `extensions/applet-integration.md` §3–§5 (bot / ghost actor accountability model)
 //   - `identity/tsp-integration.md` §3–§5 (transport declaration, route, audit chain)
 pub const CK_EXTENSIONS_BOT_REGISTER: &str = "ck.extensions.bot_actor.register";

@@ -1158,7 +1158,7 @@ pub(in crate::routing) async fn submit_event_value(
     // (`identity/key-management.md` §5.0.1 step 5). When an inception-bootstrap
     // self-authorization (`ck.device.authorize` / `ck.session.grant` carrying a
     // `refs[role=did_inception]` evidence ref) is signed by the inception key,
-    // the receiver MUST anchor on the verifiable bootstrap timestamp
+    // the receiver MUST seal on the verifiable bootstrap timestamp
     // (`did:webvh` entry-0 `versionTime`) and reject the event when the
     // inception key age exceeds the 24h protocol hard cap — regardless of any
     // longer window the deployment self-reports. Runs against the full envelope
@@ -1728,11 +1728,11 @@ async fn validate_event_envelope(
             ));
         }
     }
-    // Round R2/R3 (T04) — Anchor frontier entries MUST be sha256:<hex>.
+    // Round R2/R3 (T04) — Seal frontier entries MUST be sha256:<hex>.
     // We tighten the validator on the events ingest side for the
-    // `ck.realm.anchor.submit` payload shape used by federation push;
-    // the deeper canonical-bytes path uses SDK `anchor_canonical_bytes`
-    // which already excludes id + anchorer_sig (anchorer.rs:217).
+    // `ck.realm.seal.submit` payload shape used by federation push;
+    // the deeper canonical-bytes path uses SDK `seal_canonical_bytes`
+    // which already excludes id + notary_sig (notary.rs:217).
     if let Some(frontier) = object
         .get("payload")
         .and_then(|p| p.get("frontier"))
@@ -1743,7 +1743,7 @@ async fn validate_event_envelope(
             .filter_map(|v| v.as_str().map(ToOwned::to_owned))
             .collect();
         if let Err((code, reason)) =
-            crate::routing::federation::move_anchor::validate_anchor_frontier_entries(&entries)
+            crate::routing::federation::move_seal::validate_seal_delta_entries(&entries)
         {
             return Err(event_validation_error(
                 error_http_status(code),
@@ -1830,7 +1830,7 @@ fn projected_mls_governance_binding_covers_policy_root(
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
             || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.mls.covered_frontier.v1");
+            || cell_id.contains("ck.component.mls.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }
@@ -1865,7 +1865,7 @@ fn projected_mls_governance_binding_metadata_digest(
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
             || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.mls.covered_frontier.v1");
+            || cell_id.contains("ck.component.mls.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }
@@ -3533,7 +3533,7 @@ fn event_ref_list(
 /// `did:webvh` entry-0 versionId. Its presence is what distinguishes an
 /// inception-key-signed control event from the post-bootstrap §5.1 path (step 7
 /// / §5.0.3: subsequent `ck.device.authorize` MUST be `authorized_by` an
-/// already-anchored device and therefore carry no `did_inception` ref).
+/// already-sealed device and therefore carry no `did_inception` ref).
 const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 
 /// SEC-04 — receiver-side independent enforcement of the 24h inception-key
@@ -3542,7 +3542,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 ///
 /// Only inception-key-signed control events are gated: a
 /// `ck.device.authorize` / `ck.session.grant` whose envelope `refs[]` carries a
-/// `role="did_inception"` evidence ref. For those, the receiver anchors on the
+/// `role="did_inception"` evidence ref. For those, the receiver seals on the
 /// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
 /// computes the inception-key age against its own local clock via the SDK
 /// [`cokret_sdk::model::inception_key_age_exceeded`]; an age past the 24h hard
@@ -3550,15 +3550,15 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// any longer deployment-self-reported window.
 ///
 /// **Conservative fail-closed (mirrors `webvh_validation` `versionTime`
-/// handling):** when the gate applies but the entry-0 `versionTime` anchor is
+/// handling):** when the gate applies but the entry-0 `versionTime` seal is
 /// missing / unparseable / the local webvh log is absent, the event is rejected
 /// rather than admitted. We never substitute `now` to "pass" the check.
 ///
-/// **Honest scope boundary:** the anchor is read from this server's *locally
+/// **Honest scope boundary:** the seal is read from this server's *locally
 /// hosted / cached* `did:webvh` log (`persistence.webvh().list_log_events`).
 /// When this soland is the principal's webvh host (the v1-core
 /// inception-bootstrap topology, since the genesis `ck.device.authorize` is
-/// submitted to the same principal server that wrote entry-0) the anchor is
+/// submitted to the same principal server that wrote entry-0) the seal is
 /// available and the gate runs at submit time. When the principal's webvh log
 /// is hosted elsewhere and not cached here, the gate fails closed (rejects the
 /// inception-key-signed event), which is the conservative SEC-04 default — it
@@ -3576,12 +3576,12 @@ async fn enforce_inception_key_online_window(
         return Ok(());
     };
     // Post-bootstrap §5.1 device authorizations carry no `did_inception` ref
-    // (they are `authorized_by` an anchored device), so they are not gated.
+    // (they are `authorized_by` an sealed device), so they are not gated.
     if !envelope_has_did_inception_ref(object) {
         return Ok(());
     }
 
-    // Resolve the principal DID whose entry-0 anchors the inception key. For an
+    // Resolve the principal DID whose entry-0 seals the inception key. For an
     // inception-bootstrap self-authorization the `actor_id` IS the principal;
     // we also accept an explicit `payload.principal_id` / `payload.subject` for
     // session grants. Fail closed when no `did:webvh` principal can be derived.
@@ -3591,19 +3591,19 @@ async fn enforce_inception_key_online_window(
             StatusCode::FORBIDDEN,
             crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
             "inception-key-signed control event lacks a resolvable did:webvh principal for the \
-             entry-0 online-window anchor",
+             entry-0 online-window seal",
         ));
     };
 
-    // Anchor on the locally hosted/cached entry-0 `versionTime`. Missing log,
+    // Seal on the locally hosted/cached entry-0 `versionTime`. Missing log,
     // missing entry-0, or an unparseable timestamp all fail closed.
-    let anchor = inception_bootstrap_anchor(state, &principal_did).await;
-    let Some(bootstrap_ts) = anchor else {
+    let seal = inception_bootstrap_seal(state, &principal_did).await;
+    let Some(bootstrap_ts) = seal else {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
-            "inception-bootstrap entry-0 versionTime anchor is missing or unparseable; refusing to \
-             admit an inception-key-signed control event without a verifiable online-window anchor",
+            "inception-bootstrap entry-0 versionTime seal is missing or unparseable; refusing to \
+             admit an inception-key-signed control event without a verifiable online-window seal",
         ));
     };
 
@@ -3633,10 +3633,10 @@ fn envelope_has_did_inception_ref(object: &serde_json::Map<String, Value>) -> bo
         })
 }
 
-/// SEC-04 — derive the principal DID whose `did:webvh` entry-0 anchors the
+/// SEC-04 — derive the principal DID whose `did:webvh` entry-0 seals the
 /// inception key, preferring an explicit `payload.principal_id` / `subject`,
 /// falling back to the envelope `actor_id` (the self-authorization case). Only
-/// `did:webvh` principals carry an entry-0 anchor in this gate; other methods
+/// `did:webvh` principals carry an entry-0 seal in this gate; other methods
 /// return `None` (handled as fail-closed by the caller).
 fn inception_principal_did(
     object: &serde_json::Map<String, Value>,
@@ -3661,7 +3661,7 @@ fn inception_principal_did(
 /// hosted/cached `did:webvh` log for `did`. Returns `None` (fail-closed for the
 /// caller) when the log is absent, has no genesis entry, or the genesis
 /// `versionTime` is missing / not RFC3339.
-async fn inception_bootstrap_anchor(
+async fn inception_bootstrap_seal(
     state: &AppState,
     did: &str,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -3874,10 +3874,10 @@ fn projection_operation_from_event(
             .entry("capability_action".to_owned())
             .or_insert_with(|| Value::String("ck.morph.schema.migrate".to_owned()));
     }
-    if let Some(anchor_ref) = envelope.get("anchor_ref").and_then(Value::as_str) {
+    if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
         payload_object
-            .entry("anchor_ref".to_owned())
-            .or_insert_with(|| Value::String(anchor_ref.to_owned()));
+            .entry("seal_ref".to_owned())
+            .or_insert_with(|| Value::String(seal_ref.to_owned()));
     }
 
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
@@ -4075,7 +4075,7 @@ fn sdk_event_from_record(
         );
         unsigned.insert(
             "retention_anchor_preserved".to_owned(),
-            json!(tombstone.anchored),
+            json!(tombstone.sealed),
         );
         unsigned.insert("physical_delete".to_owned(), json!(false));
     }
@@ -4092,10 +4092,18 @@ fn sdk_event_from_record(
         refs: event_refs(object.get("refs")),
         preconditions: json_array_field(object, "preconditions"),
         effects: json_array_field(object, "effects"),
-        anchor_ref: object
-            .get("anchor_ref")
+        seal_ref: object
+            .get("seal_ref")
             .and_then(Value::as_str)
-            .and_then(|value| cokret_sdk::AnchorId::new(value.to_owned()).ok()),
+            .and_then(|value| cokret_sdk::SealId::new(value.to_owned()).ok()),
+        auth_context: object
+            .get("auth_context")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        seal_basis: object
+            .get("seal_basis")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
         requirements: object
             .get("requirements")
             .cloned()
@@ -4142,7 +4150,7 @@ fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) ->
         metadata["retention_reason"] = json!(tombstone.reason.as_str());
         metadata["retention_expired_at"] = json!(tombstone.expired_at.to_rfc3339());
         metadata["retention_tombstoned_at"] = json!(tombstone.tombstoned_at.to_rfc3339());
-        metadata["retention_anchor_preserved"] = json!(tombstone.anchored);
+        metadata["retention_anchor_preserved"] = json!(tombstone.sealed);
         metadata["physical_delete"] = json!(false);
     }
     metadata
@@ -4370,9 +4378,9 @@ pub async fn effective_read_receipt_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<(String, String, bool)> {
-    // Cell-keyed fast path. The Move/Anchor pipeline writes the
+    // Cell-keyed fast path. The Move/Seal pipeline writes the
     // `ck.component.realm.read_receipt_policy.v1` resolved CasRegister
-    // value into `ProjectionState::cells` after every apply_anchor; we
+    // value into `ProjectionState::cells` after every apply_seal; we
     // read directly from there. (R1.2 renamed the cell family from
     // `ck.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
@@ -5074,7 +5082,7 @@ mod proof_strictness_tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: FederationPolicy::Mesh,
@@ -5087,7 +5095,7 @@ mod proof_strictness_tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
@@ -5802,9 +5810,9 @@ mod proof_strictness_tests {
                     "encryption_profile": "mls_rfc9420",
                     "security_class": "standard",
                     "federation_policy": "restricted",
-                    "anchor_profile": "single_did",
+                    "notary_profile": "single_did",
                     "digest_algorithm": "sha256",
-                    "anchorer": {
+                    "notary": {
                         "type": "single_did",
                         "did": "did:web:alice.example",
                         "recovery_members": ["did:web:recovery.example"],
@@ -6027,7 +6035,7 @@ mod inception_key_window_tests {
     //! SEC-04 — receiver-side independent 24h inception-key online-window cap
     //! (`identity/key-management.md` §5.0.1 step 5). These tests exercise the
     //! gate directly against the locally hosted `did:webvh` entry-0
-    //! `versionTime` anchor.
+    //! `versionTime` seal.
     use super::proof_strictness_tests::make_state;
     use super::*;
     use crate::state::WebvhLogRecord;
@@ -6065,7 +6073,7 @@ mod inception_key_window_tests {
         })
     }
 
-    /// Post-bootstrap §5.1 device authorization: `authorized_by` an anchored
+    /// Post-bootstrap §5.1 device authorization: `authorized_by` an sealed
     /// device, with NO `did_inception` ref.
     fn anchored_device_envelope() -> Value {
         json!({
@@ -6087,7 +6095,7 @@ mod inception_key_window_tests {
                 event_digest: format!("sha256:{}", "1".repeat(64)),
                 did: PRINCIPAL_DID.to_owned(),
                 // did.rs writes the genesis entry with seq=1 (versionId "1-..");
-                // the gate anchors on the lowest-seq record regardless.
+                // the gate seals on the lowest-seq record regardless.
                 seq: 1,
                 operation: json!({
                     "versionId": "1-zEntryZeroVersionId",
@@ -6103,7 +6111,7 @@ mod inception_key_window_tests {
 
     #[tokio::test]
     async fn rejects_when_self_reported_window_is_long_but_age_exceeds_24h() {
-        // Anchor entry-0 ~48h before "now"; the deployment may self-report a
+        // Seal entry-0 ~48h before "now"; the deployment may self-report a
         // longer window, but the receiver's independent 24h cap MUST reject.
         let state = make_state(true);
         let bootstrap = now() - chrono::Duration::hours(48);
@@ -6138,7 +6146,7 @@ mod inception_key_window_tests {
 
     #[tokio::test]
     async fn fails_closed_when_entry_zero_version_time_missing() {
-        // Inception-bootstrap event but NO local entry-0 anchor → conservative
+        // Inception-bootstrap event but NO local entry-0 seal → conservative
         // reject, never silently admit.
         let state = make_state(true);
         let err = enforce_inception_key_online_window(
@@ -6147,7 +6155,7 @@ mod inception_key_window_tests {
             &inception_bootstrap_envelope(),
         )
         .await
-        .expect_err("missing entry-0 anchor must fail closed");
+        .expect_err("missing entry-0 seal must fail closed");
         assert_eq!(
             err.code,
             crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED
@@ -6184,7 +6192,7 @@ mod inception_key_window_tests {
             &anchored_device_envelope(),
         )
         .await
-        .expect("anchored-device authorize must not be gated by the inception window");
+        .expect("sealed-device authorize must not be gated by the inception window");
     }
 
     #[tokio::test]

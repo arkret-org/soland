@@ -510,7 +510,7 @@ fn preview_token_for_address(
     });
     let canonical_bytes = cokret_sdk::canonical::canonical_json_bytes(&claim).unwrap();
     let payload_digest = cokret_sdk::canonical::sha256_digest(&canonical_bytes);
-    let signing_key = state.anchorer_signing_key();
+    let signing_key = state.notary_signing_key();
     let jws = cokret_sdk::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",

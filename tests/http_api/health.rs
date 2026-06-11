@@ -410,7 +410,7 @@ async fn healthz_exposes_hardening_status() {
     );
 
     // Production posture: flip dev mode off, configure an admin
-    // allowlist + TLS + a CORS origin + an anchorer key. The score
+    // allowlist + TLS + a CORS origin + an notary key. The score
     // should rise materially.
     let prod_config = AppConfig {
         development_mode: false,
@@ -418,7 +418,7 @@ async fn healthz_exposes_hardening_status() {
         tls_cert_path: Some(std::path::PathBuf::from("/etc/soland/tls.crt")),
         tls_key_path: Some(std::path::PathBuf::from("/etc/soland/tls.key")),
         cors_allow_origin: Some("https://app.example.com".to_owned()),
-        anchorer_signing_key_seed: Some([7u8; 32]),
+        notary_signing_key_seed: Some([7u8; 32]),
         seed_demo_data: false,
         ..test_config()
     };

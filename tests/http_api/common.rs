@@ -57,7 +57,7 @@ pub(crate) fn test_config() -> AppConfig {
         // enforcement so they keep passing.
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        anchorer_signing_key_seed: None,
+        notary_signing_key_seed: None,
         agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
@@ -70,7 +70,7 @@ pub(crate) fn test_config() -> AppConfig {
         push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::env::temp_dir().join("soland-test-resumable-uploads"),
         resumable_upload_incomplete_ttl_seconds: 86_400,
-        compaction_min_anchor_age_seconds: 604_800,
+        seal_compaction_min_age_seconds: 604_800,
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
@@ -216,7 +216,7 @@ pub(crate) fn authority_from_target_uri(target_uri: &str) -> String {
 
 pub(crate) fn development_service_signing_key(service_did: &str) -> SigningKey {
     let mut hasher = Sha256::new();
-    hasher.update(b"soland:anchorer-ephemeral:");
+    hasher.update(b"soland:notary-ephemeral:");
     hasher.update(service_did.as_bytes());
     let seed: [u8; 32] = hasher.finalize().into();
     SigningKey::from_bytes(&seed)

@@ -645,7 +645,7 @@ fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpo
 
 fn presign_token(state: &AppState, blob_ref: &str, purpose: &str, expires_at: i64) -> String {
     let signing_input = presign_signing_input(state, blob_ref, purpose, expires_at);
-    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
     URL_SAFE_NO_PAD.encode(signature.to_bytes())
 }
 

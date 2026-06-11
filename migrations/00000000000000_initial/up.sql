@@ -313,7 +313,7 @@ CREATE TABLE public.mls_commits (
     id text NOT NULL,
     epoch bigint NOT NULL,
     leader_actor_id text NOT NULL,
-    covered_frontier jsonb DEFAULT '[]'::jsonb NOT NULL,
+    covered_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
     committed_at bigint NOT NULL
 );

@@ -425,7 +425,7 @@ The same list is computed at runtime and surfaced on
 - [ ] TLS enabled (`SOLAND_TLS_CERT_PATH` / `SOLAND_TLS_KEY_PATH`, or terminated at the reverse proxy)
 - [ ] CSP header configured at the reverse proxy
 - [ ] CORS limited to the configured allowed origins (`SOLAND_CORS_ALLOW_ORIGIN`)
-- [ ] Secrets in a secret manager (`SOLAND_ANCHORER_SIGNING_KEY`, OAuth introspection bearer)
+- [ ] Secrets in a secret manager (`SOLAND_NOTARY_SIGNING_KEY`, OAuth introspection bearer)
 - [ ] Log redaction enabled (default outside dev mode)
 - [ ] Admin auth in production mode (`SOLAND_ADMIN_PRINCIPAL_DIDS` and/or `SOLAND_OAUTH_INTROSPECTION_URL`)
 - [ ] Rate limit enabled (default; do not disable in production)

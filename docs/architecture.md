@@ -55,8 +55,8 @@ A successful `POST /_cokret/self/events` walks the following stages:
    the projection write commits. Three background workers then drain
    downstream side effects:
    - `routing::federation::outbox` — outbound peer dispatch.
-   - `anchorer.rs` — periodic Anchor signing using the
-     `SOLAND_ANCHORER_SIGNING_KEY` seed (see DEPLOYMENT.md §11 for the
+   - `notary.rs` — periodic Seal signing using the
+     `SOLAND_NOTARY_SIGNING_KEY` seed (see DEPLOYMENT.md §11 for the
      rotation cadence).
    - `compactor.rs` — MAL-11 prune walk when
      `SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS > 0`.
@@ -160,15 +160,15 @@ of the following sharing boundaries:
   collapses the duplicates safely, but it is not free; consider running
   the dispatcher on a single replica
   (`SOLAND_FEDERATION_OUTBOUND=0` on the others) for large fleets.
-- **Anchorer worker.** Same shape as the federation dispatcher — multiple
-  replicas with the same signing seed each anchor independently; the
-  reducer treats the result as a sub-anchor on the Circle's profile
-  cadence, so duplicate anchors are merged at the cell level rather
+- **Notary worker.** Same shape as the federation dispatcher — multiple
+  replicas with the same signing seed each seal independently; the
+  reducer treats the result as a sub-seal on the Circle's profile
+  cadence, so duplicate seals are merged at the cell level rather
   than the wire level.
 - **MLS broadcast.** The `AppState::event_broadcast` channel is
   in-process; NDJSON subscribers see notifications only from the replica
   serving their request. Load-balancers should use sticky sessions on
-  `/_cokret/self/events/subscribe` so a single subscriber stays anchored to one
+  `/_cokret/self/events/subscribe` so a single subscriber stays sealed to one
   replica for the lifetime of the stream.
 - **In-process projection mirrors.** Pieces of soland (handle release
   ledger, account lifecycle, erased actors, failed-login counters)

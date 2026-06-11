@@ -4,7 +4,7 @@
 //! The full HTTP integration round-trip
 //! (create → add member → emit Flow with scope_circle_id → archive)
 //! is exercised by the cotest joint-test suite (P5). This smoke test
-//! anchors the reducer's invariants in soland-local CI so a regression
+//! seals the reducer's invariants in soland-local CI so a regression
 //! on the projection-side state machine surfaces immediately:
 //!
 //! 1. `ck.circle.create` writes a live Circle into the projection;

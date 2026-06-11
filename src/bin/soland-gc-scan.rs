@@ -1,6 +1,6 @@
 //! `cargo run --bin soland-gc-scan -- --realm-id <id> [--dry-run]`
 //!
-//! Walks the durable Move + Anchor stores and emits the list of
+//! Walks the durable Move + Seal stores and emits the list of
 //! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
 //! only mode currently supported (deletion is a follow-up).
 

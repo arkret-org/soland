@@ -5,15 +5,15 @@
 //!
 //! Production gaps: `validation_class` instead of bool, reducer-profile
 //! digest enforcement, revocation fanout, and a long-running retry daemon.
-//! Outbound Move/Anchor broadcast helpers persist a per-peer signed request
+//! Outbound Move/Seal broadcast helpers persist a per-peer signed request
 //! transcript plus retry/durability metadata before returning targets so cotest
 //! can observe the durable boundary instead of a purely opaque log.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::state_res::AnchorStore;
-use cokret_sdk::{Anchor, Did, Operation, RealmId};
+use cokret_sdk::state_res::SealStore;
+use cokret_sdk::{Did, Operation, RealmId, Seal};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -1416,7 +1416,7 @@ fn verifying_key_for_service_did(
     service_did: &str,
 ) -> Result<VerifyingKey, AppError> {
     if service_did == state.config.service_did {
-        return Ok(state.anchorer_signing_key().verifying_key());
+        return Ok(state.notary_signing_key().verifying_key());
     }
     if let Some(key) = configured_peer_verifying_key(service_did)? {
         return Ok(key);
@@ -1482,7 +1482,7 @@ fn decode_peer_verifying_key(material: &str) -> Result<VerifyingKey, String> {
 
 fn development_service_signing_key(service_did: &str) -> SigningKey {
     let mut hasher = Sha256::new();
-    hasher.update(b"soland:anchorer-ephemeral:");
+    hasher.update(b"soland:notary-ephemeral:");
     hasher.update(service_did.as_bytes());
     let seed: [u8; 32] = hasher.finalize().into();
     SigningKey::from_bytes(&seed)
@@ -1872,11 +1872,11 @@ fn federation_request_digest(
         .map_err(|_| "federation transaction must be canonical JSON")
 }
 
-// ── Anchor pull/push (federation/anchors) ──────────────
+// ── Seal pull/push (federation/seals) ──────────────
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsOutcome {
-    pub anchors: Vec<Anchor>,
+pub struct FederationSealsOutcome {
+    pub seals: Vec<Seal>,
     /// Echo of [`crate::config::FederationPolicy::as_str`] so the calling
     /// peer can reason about whether to fan out to other nodes.
     pub policy: String,
@@ -1884,57 +1884,57 @@ pub struct FederationAnchorsOutcome {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsPushRequestBody {
+pub struct FederationSealsPushRequestBody {
     pub origin: String,
-    pub anchors: Vec<Anchor>,
+    pub seals: Vec<Seal>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct FederationAnchorsPushOutcome {
+pub struct FederationSealsPushOutcome {
     pub accepted: Vec<String>,
     pub rejected: Vec<serde_json::Value>,
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.anchors.pull",
+    operation_id = "org.cokret.soland.federation.seals.pull",
     tags("federation"),
-    summary = "Pull locally-held Anchors for a Realm (federation peer-pull)"
+    summary = "Pull locally-held Seals for a Realm (federation peer-pull)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.anchors.pull"))]
-pub(super) async fn federation_anchors_pull(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.seals.pull"))]
+pub(super) async fn federation_seals_pull(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
-) -> JsonResult<FederationAnchorsOutcome> {
+) -> JsonResult<FederationSealsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
     let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    let leaves = state.anchor_store.list_leaves(&realm).unwrap_or_default();
-    let mut anchors: Vec<Anchor> = Vec::with_capacity(leaves.len());
+    let leaves = state.seal_store.list_leaves(&realm).unwrap_or_default();
+    let mut seals: Vec<Seal> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
-        if let Ok(Some(a)) = state.anchor_store.get(leaf) {
-            anchors.push(a);
+        if let Ok(Some(a)) = state.seal_store.get(leaf) {
+            seals.push(a);
         }
     }
-    json_ok(FederationAnchorsOutcome {
-        anchors,
+    json_ok(FederationSealsOutcome {
+        seals,
         policy: state.config.federation_policy.as_str().to_owned(),
         next_cursor: None,
     })
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.federation.anchors.push",
+    operation_id = "org.cokret.soland.federation.seals.push",
     tags("federation"),
-    summary = "Accept Anchor envelopes from a federation peer (peer-push)"
+    summary = "Accept Seal envelopes from a federation peer (peer-push)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.anchors.push"))]
-pub(super) async fn federation_anchors_push(
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.federation.seals.push"))]
+pub(super) async fn federation_seals_push(
     depot: &mut Depot,
-    body: JsonBody<FederationAnchorsPushRequestBody>,
-) -> JsonResult<FederationAnchorsPushOutcome> {
+    body: JsonBody<FederationSealsPushRequestBody>,
+) -> JsonResult<FederationSealsPushOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {
@@ -1946,18 +1946,18 @@ pub(super) async fn federation_anchors_push(
     }
     let mut accepted: Vec<String> = Vec::new();
     let mut rejected: Vec<serde_json::Value> = Vec::new();
-    for anchor in body.anchors {
-        let id_str = anchor.id.to_string();
-        // Only accept Anchors whose declared id matches the canonical hash
+    for seal in body.seals {
+        let id_str = seal.id.to_string();
+        // Only accept Seals whose declared id matches the canonical hash
         // — otherwise a peer could overwrite our DAG with junk.
-        match anchor.derive_id() {
-            Ok(derived) if derived == anchor.id => {}
+        match seal.derive_id() {
+            Ok(derived) if derived == seal.id => {}
             _ => {
                 rejected.push(json!({"id": id_str, "reason": "id_mismatch"}));
                 continue;
             }
         }
-        if let Err(error) = state.anchor_store.put(&anchor) {
+        if let Err(error) = state.seal_store.put(&seal) {
             rejected.push(
                 json!({"id": id_str, "reason": "persistence_error", "message": error.to_string()}),
             );
@@ -1965,7 +1965,7 @@ pub(super) async fn federation_anchors_push(
         }
         accepted.push(id_str);
     }
-    json_ok(FederationAnchorsPushOutcome { accepted, rejected })
+    json_ok(FederationSealsPushOutcome { accepted, rejected })
 }
 
 /// Outbound Move broadcast helper. Each accepted Move
@@ -1998,21 +1998,21 @@ pub async fn broadcast_move_to_peers(state: &AppState, move_id: &str) -> Vec<Str
     peers.into_iter().map(|peer| peer.url).collect()
 }
 
-/// Symmetric helper for Anchor replication. The hub policy still pushes
+/// Symmetric helper for Seal replication. The hub policy still pushes
 /// to a single upstream so the broadcast list is `[hub]`; mesh fans out
 /// to every peer.
-pub async fn broadcast_anchor_to_peers(state: &AppState, anchor_id: &str) -> Vec<String> {
+pub async fn broadcast_seal_to_peers(state: &AppState, seal_id: &str) -> Vec<String> {
     let peers = configured_peer_targets(state);
     for peer in &peers {
         let peer_url = peer.url.clone();
-        record_outbound_fanout_attempt(state, "anchor", anchor_id, peer.url.as_str()).await;
+        record_outbound_fanout_attempt(state, "seal", seal_id, peer.url.as_str()).await;
         // G3.S0 — durable enqueue (see broadcast_move_to_peers).
-        enqueue_outbound_for(state, "anchor", anchor_id, peer).await;
+        enqueue_outbound_for(state, "seal", seal_id, peer).await;
         tracing::debug!(
             worker = "federation_outbox_enqueue",
             peer = %peer_url,
-            anchor_id = %anchor_id,
-            "federation broadcast anchor signed request transcript persisted for retry worker"
+            seal_id = %seal_id,
+            "federation broadcast seal signed request transcript persisted for retry worker"
         );
     }
     peers.into_iter().map(|peer| peer.url).collect()
@@ -2097,7 +2097,7 @@ async fn enqueue_outbound_for(
     peer: &FederationPeerTarget,
 ) {
     let endpoint = match resource_kind {
-        "anchor" => "/_cokret/peer/events",
+        "seal" => "/_cokret/peer/events",
         _ => "/_cokret/peer/events",
     };
     let payload = json!({
@@ -2174,7 +2174,7 @@ async fn record_outbound_fanout_attempt(
     });
     let next_retry_at = attempted_at + Duration::seconds(30);
     let target_path = match resource_kind {
-        "anchor" => "/_cokret/peer/events",
+        "seal" => "/_cokret/peer/events",
         _ => "/_cokret/peer/events",
     };
     let intent = json!({
@@ -2294,12 +2294,12 @@ fn signed_fanout_intent_evidence(
     let protected_b64u = URL_SAFE_NO_PAD.encode(protected_header);
     let payload_b64u = URL_SAFE_NO_PAD.encode(&canonical_bytes);
     let signing_input = format!("{protected_b64u}.{payload_b64u}");
-    let signature = state.anchorer_signing_key().sign(signing_input.as_bytes());
+    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
     let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     let jws = format!("{protected_b64u}..{signature_b64u}");
-    let key_origin = match state.anchorer_signing_key_origin() {
-        crate::config::AnchorerSigningKeyOrigin::Configured => "configured",
-        crate::config::AnchorerSigningKeyOrigin::Ephemeral => "ephemeral",
+    let key_origin = match state.notary_signing_key_origin() {
+        crate::config::NotarySigningKeyOrigin::Configured => "configured",
+        crate::config::NotarySigningKeyOrigin::Ephemeral => "ephemeral",
     };
     json!({
         "status": "intent_signed",
@@ -2339,7 +2339,7 @@ fn http_message_signature_evidence(
     let signature_base = format!(
         "\"@method\": POST\n\"@path\": {target_path}\n\"content-digest\": {content_digest}\n\"x-cokret-fanout-digest\": {payload_digest}\n\"@signature-params\": {signature_params}"
     );
-    let signature = state.anchorer_signing_key().sign(signature_base.as_bytes());
+    let signature = state.notary_signing_key().sign(signature_base.as_bytes());
     let signature_header = format!("sig1=:{}:", STANDARD.encode(signature.to_bytes()));
     json!({
         "status": "emitted",
@@ -2593,7 +2593,7 @@ pub(crate) fn test_app_state_with_peers(
         default_webvh_provider_id: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: AppConfig::default_replay_overrides(),
-        anchorer_signing_key_seed: None,
+        notary_signing_key_seed: None,
         agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: FederationPolicy::Mesh,
@@ -2606,7 +2606,7 @@ pub(crate) fn test_app_state_with_peers(
         push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
         resumable_upload_incomplete_ttl_seconds: 86_400,
-        compaction_min_anchor_age_seconds: 604_800,
+        seal_compaction_min_age_seconds: 604_800,
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
@@ -2657,7 +2657,7 @@ mod tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: AppConfig::default_replay_overrides(),
-            anchorer_signing_key_seed: None,
+            notary_signing_key_seed: None,
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: policy,
@@ -2670,7 +2670,7 @@ mod tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,
@@ -2867,7 +2867,7 @@ mod tests {
     async fn empty_peers_list_is_a_no_op() {
         let cfg = config_with_policy(FederationPolicy::Mesh, Vec::new());
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "ck:anchor:sha256:01").await;
+        let targets = broadcast_seal_to_peers(&state, "ck:seal:sha256:01").await;
         assert!(targets.is_empty());
     }
 
@@ -3077,14 +3077,14 @@ mod tests {
     async fn anchor_fanout_records_anchor_target_and_retry_metadata() {
         let cfg = config_with_policy(
             FederationPolicy::Mesh,
-            vec!["https://peer-anchor.example".to_owned()],
+            vec!["https://peer-seal.example".to_owned()],
         );
         let state = AppState::new(cfg, Db { pool: None });
-        let targets = broadcast_anchor_to_peers(&state, "ck:anchor:sha256:02").await;
-        assert_eq!(targets, vec!["https://peer-anchor.example".to_owned()]);
+        let targets = broadcast_seal_to_peers(&state, "ck:seal:sha256:02").await;
+        assert_eq!(targets, vec!["https://peer-seal.example".to_owned()]);
 
-        let peer_hash = sha256_hex("https://peer-anchor.example".as_bytes());
-        let anchor_hash = sha256_hex("ck:anchor:sha256:02".as_bytes());
+        let peer_hash = sha256_hex("https://peer-seal.example".as_bytes());
+        let anchor_hash = sha256_hex("ck:seal:sha256:02".as_bytes());
         let txn_id = format!(
             "outbound_anchor:{}:{}",
             &peer_hash[..16],
@@ -3096,9 +3096,9 @@ mod tests {
             .get("did:web:test.local", &txn_id)
             .await
             .unwrap()
-            .expect("outbound anchor transcript persisted");
+            .expect("outbound seal transcript persisted");
         assert_eq!(transcript.response["target_path"], "/_cokret/peer/events");
-        assert_eq!(transcript.response["intent"]["resource_kind"], "anchor");
+        assert_eq!(transcript.response["intent"]["resource_kind"], "seal");
         assert_eq!(
             transcript.response["retry"]["policy"]["initial_backoff_ms"],
             serde_json::json!(30_000)

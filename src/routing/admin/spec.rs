@@ -3,8 +3,8 @@
 //! Per cokret-spec `service-http-binding.md` §2.1 the admin surface is a
 //! deployment-local namespace served at the bare `/admin/*` path (NOT under
 //! the `/_cokret/...` protocol prefix). These canonical operations share that
-//! `/admin/*` namespace with the soland operator infrastructure (anchor DAG,
-//! bottom-cell repair, multisig — see [`super::anchor`]) and the admin
+//! `/admin/*` namespace with the soland operator infrastructure (seal DAG,
+//! bottom-cell repair, multisig — see [`super::seal`]) and the admin
 //! collection snapshot (see [`super::collection`]); salvo router fallthrough
 //! keeps the three sub-trees from colliding.
 

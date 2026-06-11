@@ -4,7 +4,7 @@
 # Captures three artifacts into a single tarball with a manifest that
 # pins per-artifact checksums:
 #   1. `pg_dump` of the soland database (custom `Fc` format).
-#   2. Snapshot of the keystore-persisted anchorer signing seed (when
+#   2. Snapshot of the keystore-persisted notary signing seed (when
 #      `SOLAND_USE_KEYSTORE=true`). Implemented via `soland-rotate-drill
 #      --export-only` so we can use the same KeyStore trait the running
 #      server uses (no out-of-band keychain probing).
@@ -78,8 +78,8 @@ MULTISIG_PATH="${WORKDIR}/multisig_pending.jsonl"
 echo "[backup-drill] step 3/3: multisig_pending JSONL export"
 psql --quiet --tuples-only --no-align "$DATABASE_URL" >"$MULTISIG_PATH" <<'SQL'
 SELECT json_build_object(
-    'anchor_id',          anchor_id,
-    'space_id',           space_id,
+    'seal_id',            id,
+    'realm_id',           realm_id,
     'threshold_k',        threshold_k,
     'threshold_n',        threshold_n,
     'members',            members,
@@ -98,7 +98,7 @@ SELECT json_build_object(
     'claim_seq',          claim_seq
 )::text
 FROM multisig_pending
-ORDER BY anchor_id;
+ORDER BY id;
 SQL
 MULTISIG_ROW_COUNT="$(wc -l <"$MULTISIG_PATH" | awk '{print $1}')"
 MULTISIG_SHA="$(sha256sum "$MULTISIG_PATH" | awk '{print $1}')"

@@ -77,10 +77,10 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
 | `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` | ephemeral seed | Optional base64 ed25519 seed for agent audit-binding signatures; store and rotate like other signing keys. |
-| `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` | `604800` | Minimum anchor age before compaction pruning may consider it. |
+| `SOLAND_COMPACTION_MIN_ANCHOR_AGE_SECS` | `604800` | Minimum seal age before compaction pruning may consider it. |
 | `SOLAND_COMPACTION_MIN_WITNESSES` | `1` | Minimum compaction witnesses required before pruning. |
-| `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis anchors during compaction pruning. |
-| `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor anchor chains. |
+| `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis seals during compaction pruning. |
+| `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor seal chains. |
 | `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
 | `SOLAND_ENABLE_CONFORMANCE_ENDPOINTS` | unset | Enables local conformance helper endpoints; keep unset in production. |
@@ -432,10 +432,10 @@ pre-upgrade backup if you need to roll back.
 - Rate-limit configuration matches your anticipated traffic and is enforced
   at the shared gateway when more than one soland replica is running.
 
-## 11. Anchorer signing-key rotation
+## 11. Notary signing-key rotation
 
-The AnchorerWorker signs background sub-anchors with the seed loaded
-from `SOLAND_ANCHORER_SIGNING_KEY` (a 32-byte ed25519 seed,
+The NotaryWorker signs background sub-seals with the seed loaded
+from `SOLAND_NOTARY_SIGNING_KEY` (a 32-byte ed25519 seed,
 base64-standard-padded). Recommended cadence and ceremony:
 
 - **Rotation cadence**: every **90 days** in steady-state. Same cadence
@@ -446,7 +446,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   `cargo run --bin soland-rotate-drill --release` (see
   `src/bin/soland-rotate-drill.rs`) against a staging replica. The
   drill mints a fresh seed, posts it through the live
-  `/_soland/admin/anchorer/rotate-signing-key` path, and verifies the
+  `/_soland/admin/notary/rotate-signing-key` path, and verifies the
   hot-swap completed without dropping concurrent signing passes.
 - **Production rotation**: stage the new seed in the secret manager,
   call the rotate-signing-key admin endpoint on each replica in turn,
@@ -454,10 +454,10 @@ base64-standard-padded). Recommended cadence and ceremony:
   endpoint also persists the rotated key back into the SDK KeyStore so
   a future restart picks up the new seed automatically.
 - **Audit**: every rotation emits a sticky-info tracing event on the
-  `anchorer` target with `rotation_id`, `previous_key_origin`, and the
+  `notary` target with `rotation_id`, `previous_key_origin`, and the
   new public key's multibase encoding. Capture both the
   pre-rotation and post-rotation public keys in your operations log
-  so external verifiers can resolve historical anchors.
+  so external verifiers can resolve historical seals.
 - **Cross-link**: the runbook (`docs/runbook.md` "Fault-injection
   examples" §4) documents the drill from an on-call perspective.
 

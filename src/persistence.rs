@@ -1431,7 +1431,7 @@ mod tests {
         let store = MemoryMultisigPendingStore::new();
         let now = Utc::now();
         let record = MultisigPendingRecord {
-            anchor_id: "ck:anchor:sha256:lease".to_owned(),
+            seal_id: "ck:seal:sha256:lease".to_owned(),
             realm_id: "ck:realm:0196419b-0000-7000-8000-00000000abcd".to_owned(),
             threshold_k: 2,
             threshold_n: 3,
@@ -1453,14 +1453,14 @@ mod tests {
         let lease_until = now + chrono::Duration::seconds(60);
         // First node successfully claims.
         let (won_a, seq_a) = store
-            .try_claim("ck:anchor:sha256:lease", "node-A", now, lease_until)
+            .try_claim("ck:seal:sha256:lease", "node-A", now, lease_until)
             .await
             .unwrap();
         assert!(won_a);
         assert_eq!(seq_a, 1);
         // Second node bounces while lease is live.
         let (won_b, seq_b) = store
-            .try_claim("ck:anchor:sha256:lease", "node-B", now, lease_until)
+            .try_claim("ck:seal:sha256:lease", "node-B", now, lease_until)
             .await
             .unwrap();
         assert!(!won_b);
@@ -1469,7 +1469,7 @@ mod tests {
         let later = lease_until + chrono::Duration::seconds(1);
         let (won_b2, seq_b2) = store
             .try_claim(
-                "ck:anchor:sha256:lease",
+                "ck:seal:sha256:lease",
                 "node-B",
                 later,
                 later + chrono::Duration::seconds(60),
@@ -1480,10 +1480,10 @@ mod tests {
         assert_eq!(seq_b2, 2, "claim_seq must bump on every successful claim");
         // Release by node-B clears the lease so anyone can re-claim.
         store
-            .release_claim("ck:anchor:sha256:lease", "node-B")
+            .release_claim("ck:seal:sha256:lease", "node-B")
             .await
             .unwrap();
-        let row = store.get("ck:anchor:sha256:lease").await.unwrap().unwrap();
+        let row = store.get("ck:seal:sha256:lease").await.unwrap().unwrap();
         assert!(row.claimed_by_node_id.is_none());
         assert_eq!(
             row.claim_seq, 2,

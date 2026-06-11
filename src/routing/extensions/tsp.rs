@@ -15,7 +15,7 @@
 //!
 //! TODO(G3.S9-followup): real TSP envelope verify/decrypt, nested
 //! metadata-privacy enforcement, signing of audit entries with the
-//! deployment's anchorer key (today the `signature` field carries a
+//! deployment's notary key (today the `signature` field carries a
 //! deterministic stub digest), persistence through `state.persistence`.
 
 use std::sync::Mutex;
@@ -67,7 +67,7 @@ pub struct TspAuditEntry {
     pub occurred_at: chrono::DateTime<chrono::Utc>,
     /// Stub deterministic digest binding the entry to its parent
     /// (sha256(route_id || event_kind || occurred_at)). The real
-    /// implementation will sign with the deployment's anchorer key —
+    /// implementation will sign with the deployment's notary key —
     /// see TODO at module top.
     pub signature: String,
 }
@@ -162,7 +162,7 @@ pub fn audit_for_route(route_id: &str) -> Vec<TspAuditEntry> {
 }
 
 /// Deterministic stub signature. Real implementation signs with the
-/// deployment's anchorer key — see TODO at module top.
+/// deployment's notary key — see TODO at module top.
 fn audit_signature(
     route_id: &str,
     event_kind: &str,

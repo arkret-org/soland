@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 
 use crate::authz::SolandAuthzEngine;
-use crate::config::{AnchorerSigningKeyOrigin, AppConfig};
+use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::db::Db;
 use crate::hlc::ServerHlc;
 use crate::object_storage::{ObjectStorage, build_object_storage};
@@ -79,8 +79,8 @@ pub mod did_resolver_chain;
 /// (mid-stream control frames per spec):
 ///   - `EpochRotation` — emitted when `ck.component.mls.epoch.v1` cell changes (E2EE epoch shift;
 ///     clients MUST re-fetch keys)
-///   - `Frontier` — anchor frontier advanced (Snapshot of cursor / state_root after
-///     `apply_anchor`); clients use this as a resync waypoint
+///   - `Frontier` — seal frontier advanced (Snapshot of cursor / state_root after `apply_seal`);
+///     clients use this as a resync waypoint
 ///   - `ResyncRequired` — server detected per-subscriber drift; client MUST drop local cache and
 ///     re-subscribe with `from=null`
 ///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
@@ -106,16 +106,16 @@ pub enum EventNotificationKind {
         /// Old epoch value (the previous CellState::Value if known).
         previous_epoch: Option<Value>,
         /// New epoch value (current CellState::Value after the
-        /// triggering apply_anchor).
+        /// triggering apply_seal).
         new_epoch: Value,
     },
-    /// Anchor frontier advanced. Emitted post-`apply_anchor` so clients
+    /// Seal frontier advanced. Emitted post-`apply_seal` so clients
     /// can update their resume cursor without waiting for the next event.
     Frontier {
-        /// `apply_anchor`'s `post_state_root` (canonical Merkle).
+        /// `apply_seal`'s `post_state_root` (canonical Merkle).
         state_root: String,
-        /// The Anchor's id, useful for clients tracking Anchor DAG.
-        anchor_id: String,
+        /// The Seal's id, useful for clients tracking Seal DAG.
+        seal_id: String,
     },
     /// Per-subscriber drift / corrupted-cursor signal. Clients SHOULD
     /// drop local cache + restart subscription with no `from`.
@@ -152,12 +152,12 @@ impl EventNotification {
         }
     }
 
-    pub fn frontier(realm_id: String, anchor_id: String, state_root: String) -> Self {
+    pub fn frontier(realm_id: String, seal_id: String, state_root: String) -> Self {
         Self {
             realm_id,
             kind: EventNotificationKind::Frontier {
                 state_root,
-                anchor_id,
+                seal_id,
             },
         }
     }
@@ -954,7 +954,7 @@ pub struct AppState {
     /// Holder-private consent cell projection keyed by
     /// `(holder_did, peer_did, scope)`. This is the minimal G3.S4
     /// reducer cache that backs `/_soland/self/consent/cells/*` and the contact
-    /// gate; durable Move/Anchor cell hydration can replace the backing map
+    /// gate; durable Move/Seal cell hydration can replace the backing map
     /// without changing the routing contract.
     pub consent_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
     /// Per-subject private `invite_receive_policy` overrides keyed by the
@@ -1000,19 +1000,19 @@ pub struct AppState {
     /// Accepted Realm-level moderation-policy overrides keyed by Realm id.
     pub realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     pub did_resolver: Arc<Mutex<CompositeDidResolver>>,
-    /// Move/Anchor/Lattice runtime stores.
+    /// Move/Seal/Lattice runtime stores.
     /// In-memory backends from the SDK; production deployments will
     /// swap these for Pg-backed implementations behind the same trait
-    /// surface (`MoveStore` / `AnchorStore` / `CellStore` / `CellRegistry`).
+    /// surface (`MoveStore` / `SealStore` / `CellStore` / `CellRegistry`).
     pub move_store: Arc<cokret_sdk::state_res::MemoryMoveStore>,
-    pub anchor_store: Arc<cokret_sdk::state_res::MemoryAnchorStore>,
+    pub seal_store: Arc<cokret_sdk::state_res::MemorySealStore>,
     pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
     /// Live event notification channel for `ck.self.events.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
-    /// `routing::federation::move_anchor::submit_anchor`,
-    /// `crate::anchorer::AnchorerWorker`) broadcast each accepted
+    /// `routing::federation::move_seal::submit_seal`,
+    /// `crate::notary::NotaryWorker`) broadcast each accepted
     /// projection event; subscribers in `routing::events::sync::events_subscribe`
     /// `recv()` on a fresh receiver and write live frames to the NDJSON
     /// streaming response. Capacity 1024 — enough for a multi-Space
@@ -1025,26 +1025,26 @@ pub struct AppState {
     /// re-opening the same subscribe scope after `dropped` /
     /// `resync_required`.
     pub subscribe_reconnect_gate: Arc<Mutex<SubscribeReconnectGate>>,
-    /// Persistent Ed25519 signing key for AnchorerWorker +
-    /// admin endpoints (`admin_reconfigure_anchorer`, `admin_repair_bottom`).
-    /// Loaded from `AppConfig::anchorer_signing_key_seed` at boot when set;
+    /// Persistent Ed25519 signing key for NotaryWorker +
+    /// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`).
+    /// Loaded from `AppConfig::notary_signing_key_seed` at boot when set;
     /// otherwise minted from `sha256(service_did || nanos_since_epoch)` and
-    /// flagged as `AnchorerSigningKeyOrigin::Ephemeral` so a sticky-warn
+    /// flagged as `NotarySigningKeyOrigin::Ephemeral` so a sticky-warn
     /// fires on first use.
     ///
-    /// Shared across all signing paths so the AnchorerWorker, the
+    /// Shared across all signing paths so the NotaryWorker, the
     /// `service_admin_signer` admin shortcut, and the threshold partial-
     /// signature coordinator all bind to the **same** key/DID identity.
     /// Swapped lock-free via [`ArcSwap`] so
-    /// the `POST /_soland/admin/realms/{realm_id}/anchorer/rotate-signing-key`
+    /// the `POST /_soland/admin/realms/{realm_id}/notary/rotate-signing-key`
     /// endpoint can publish a fresh ed25519 seed without tearing concurrent
     /// signing passes. Readers acquire the current key via `load_full()`
     /// (returns `Arc<SigningKey>`); writers `store(...)` a new `Arc`.
-    pub anchorer_signing_key: Arc<ArcSwap<SigningKey>>,
+    pub notary_signing_key: Arc<ArcSwap<SigningKey>>,
     /// The origin tag rotates with the key. Stored alongside it
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
-    pub anchorer_signing_key_origin: Arc<Mutex<AnchorerSigningKeyOrigin>>,
+    pub notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
     /// [`cokret_sdk::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_did>`. Each admin DID in
@@ -1738,15 +1738,15 @@ pub struct WebrtcSignalRecord {
 
 /// One row of the persistent multisig coordinator buffer.
 ///
-/// Holds an in-flight pending Anchor that is awaiting threshold partial
+/// Holds an in-flight pending Seal that is awaiting threshold partial
 /// signatures. The `partials` map is keyed by signer DID → submitted partial
 /// payload (`{signature_b64, kid, submitted_at}`). When the number of
 /// partials reaches `threshold_k`, the leader aggregates them via SDK
-/// `ThresholdAggregator` and publishes the final threshold-signed Anchor,
+/// `ThresholdAggregator` and publishes the final threshold-signed Seal,
 /// then deletes the row.
 #[derive(Clone, Debug)]
 pub struct MultisigPendingRecord {
-    pub anchor_id: String,
+    pub seal_id: String,
     pub realm_id: String,
     pub threshold_k: u32,
     pub threshold_n: u32,
@@ -1914,39 +1914,39 @@ pub struct RetentionTombstoneRecord {
     pub policy_ttl_seconds: i64,
     pub expired_at: chrono::DateTime<chrono::Utc>,
     pub tombstoned_at: chrono::DateTime<chrono::Utc>,
-    pub anchored: bool,
+    pub sealed: bool,
 }
 
 impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
-    /// the AnchorerWorker and all admin signing paths. Returns a fresh
+    /// the NotaryWorker and all admin signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
     /// hold the snapshot for the duration of a signing pass even if the
     /// rotate-signing-key endpoint races with them.
-    pub fn anchorer_signing_key(&self) -> Arc<SigningKey> {
-        self.anchorer_signing_key.load_full()
+    pub fn notary_signing_key(&self) -> Arc<SigningKey> {
+        self.notary_signing_key.load_full()
     }
 
     /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
-    pub fn anchorer_signing_key_origin(&self) -> AnchorerSigningKeyOrigin {
+    pub fn notary_signing_key_origin(&self) -> NotarySigningKeyOrigin {
         *self
-            .anchorer_signing_key_origin
+            .notary_signing_key_origin
             .lock()
-            .expect("anchorer signing key origin lock")
+            .expect("notary signing key origin lock")
     }
 
-    /// Hot-rotate the AnchorerWorker signing key. Writers swap
+    /// Hot-rotate the NotaryWorker signing key. Writers swap
     /// the `ArcSwap` and update the origin tag in lockstep. Returns the
     /// newly-published `Arc<SigningKey>` for callers (the rotate-signing-key
     /// endpoint uses it to compute the resulting did:key kid).
-    pub fn rotate_anchorer_signing_key(
+    pub fn rotate_notary_signing_key(
         &self,
         seed: &[u8; 32],
-        origin: AnchorerSigningKeyOrigin,
+        origin: NotarySigningKeyOrigin,
     ) -> Arc<SigningKey> {
         let new_key = Arc::new(SigningKey::from_bytes(seed));
-        self.anchorer_signing_key.store(new_key.clone());
-        if let Ok(mut guard) = self.anchorer_signing_key_origin.lock() {
+        self.notary_signing_key.store(new_key.clone());
+        if let Ok(mut guard) = self.notary_signing_key_origin.lock() {
             *guard = origin;
         }
         new_key
@@ -2013,54 +2013,54 @@ impl AppState {
             ),
         ));
 
-        // Derive the AnchorerWorker's Ed25519 signing key.
+        // Derive the NotaryWorker's Ed25519 signing key.
         // Resolution order:
         //   1. KeyStore (when `use_keystore=true` and the platform store has a previously-persisted
         //      seed under our id) → Configured.
-        //   2. `config.anchorer_signing_key_seed` (env-loaded) → Configured. When
-        //      `use_keystore=true` we *also* persist this seed back to the KeyStore on first boot
-        //      so subsequent restarts skip the env path.
+        //   2. `config.notary_signing_key_seed` (env-loaded) → Configured. When `use_keystore=true`
+        //      we *also* persist this seed back to the KeyStore on first boot so subsequent
+        //      restarts skip the env path.
         //   3. SHA-256(service_did || boot_nanos) → Ephemeral.
-        let (signing_seed, anchorer_signing_key_origin) =
-            (|| -> ([u8; 32], AnchorerSigningKeyOrigin) {
+        let (signing_seed, notary_signing_key_origin) =
+            (|| -> ([u8; 32], NotarySigningKeyOrigin) {
                 if config.use_keystore {
                     let app_id = format!("soland.{service_did}");
-                    let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
+                    let key_id = format!("cokret:signer:soland-notary:{service_did}");
                     let store = cokret_sdk::platform_default_keystore(&app_id);
                     if let Ok(bytes) = store.load(&key_id) {
                         if bytes.len() == 32 {
                             let mut seed = [0u8; 32];
                             seed.copy_from_slice(&bytes);
-                            tracing::info!(%key_id, "loaded anchorer signing seed from platform KeyStore");
-                            return (seed, AnchorerSigningKeyOrigin::Configured);
+                            tracing::info!(%key_id, "loaded notary signing seed from platform KeyStore");
+                            return (seed, NotarySigningKeyOrigin::Configured);
                         }
                         tracing::warn!(%key_id, len = bytes.len(),
                         "platform KeyStore returned non-32-byte payload; falling back");
                     }
-                    if let Some(seed) = config.anchorer_signing_key_seed {
+                    if let Some(seed) = config.notary_signing_key_seed {
                         if let Err(error) = store.store(&key_id, &seed) {
                             tracing::warn!(%error, %key_id,
                             "failed to seed platform KeyStore from env-supplied seed");
                         } else {
                             tracing::info!(%key_id,
-                            "persisted env-supplied anchorer seed into platform KeyStore");
+                            "persisted env-supplied notary seed into platform KeyStore");
                         }
-                        return (seed, AnchorerSigningKeyOrigin::Configured);
+                        return (seed, NotarySigningKeyOrigin::Configured);
                     }
                     // Mint + persist a one-shot seed.
                     let mut seed = [0u8; 32];
                     getrandom_seed(&mut seed);
                     if let Err(error) = store.store(&key_id, &seed) {
                         tracing::warn!(%error, %key_id,
-                        "failed to persist freshly-minted anchorer seed to KeyStore");
+                        "failed to persist freshly-minted notary seed to KeyStore");
                     } else {
                         tracing::info!(%key_id,
-                        "minted + persisted fresh anchorer seed via platform KeyStore");
+                        "minted + persisted fresh notary seed via platform KeyStore");
                     }
-                    return (seed, AnchorerSigningKeyOrigin::Configured);
+                    return (seed, NotarySigningKeyOrigin::Configured);
                 }
-                if let Some(seed) = config.anchorer_signing_key_seed {
-                    return (seed, AnchorerSigningKeyOrigin::Configured);
+                if let Some(seed) = config.notary_signing_key_seed {
+                    return (seed, NotarySigningKeyOrigin::Configured);
                 }
                 // Ephemeral fallback. In production we mix in `boot_nanos`
                 // so a soland that boots without a configured seed never
@@ -2075,7 +2075,7 @@ impl AppState {
                 // key couldn't reproduce yesterday's signature. Stable in
                 // dev = `cargo run` doesn't break a connected yougen.
                 let mut hasher = Sha256::new();
-                hasher.update(b"soland:anchorer-ephemeral:");
+                hasher.update(b"soland:notary-ephemeral:");
                 hasher.update(service_did.as_bytes());
                 if !config.development_mode {
                     let boot_nanos = SystemTime::now()
@@ -2085,16 +2085,16 @@ impl AppState {
                     hasher.update(boot_nanos.to_le_bytes());
                 }
                 let seed: [u8; 32] = hasher.finalize().into();
-                (seed, AnchorerSigningKeyOrigin::Ephemeral)
+                (seed, NotarySigningKeyOrigin::Ephemeral)
             })();
 
-        let anchorer_signing_key =
+        let notary_signing_key =
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
-        let anchorer_signing_key_origin = Arc::new(Mutex::new(anchorer_signing_key_origin));
+        let notary_signing_key_origin = Arc::new(Mutex::new(notary_signing_key_origin));
 
         // Domain-separated key for the deterministic sync-cursor handle HMAC
         // (routing/events/sync.rs `derive_cursor_handle`). Derived from the
-        // anchorer seed so it inherits the seed's stability story: stable in
+        // notary seed so it inherits the seed's stability story: stable in
         // development_mode / with a configured seed, per-boot otherwise. A
         // changed key only changes which handle an unchanged frontier maps
         // to — persisted rows still resolve by handle, so old cursors stay
@@ -2108,7 +2108,7 @@ impl AppState {
 
         // Per-admin signing keys: build a single
         // [`AdminKeyStore`] for this principal. The application_id
-        // mirrors the AnchorerWorker pattern (`soland.<service_did>`) so
+        // mirrors the NotaryWorker pattern (`soland.<service_did>`) so
         // operators only manage one secret-storage namespace.
         //
         // In `development_mode` we proactively mint an ephemeral seed
@@ -2192,11 +2192,11 @@ impl AppState {
             realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             did_resolver,
             move_store: Arc::new(cokret_sdk::state_res::MemoryMoveStore::default()),
-            anchor_store: Arc::new(cokret_sdk::state_res::MemoryAnchorStore::default()),
+            seal_store: Arc::new(cokret_sdk::state_res::MemorySealStore::default()),
             cell_store: Arc::new(cokret_sdk::state_res::MemoryCellStore::default()),
             // Register all soland LatticeKind impls into the SDK cell
             // registry so the
-            // Move/Anchor receive pipeline resolves every spec-declared
+            // Move/Seal receive pipeline resolves every spec-declared
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
@@ -2205,8 +2205,8 @@ impl AppState {
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,
             subscribe_reconnect_gate: Arc::new(Mutex::new(SubscribeReconnectGate::default())),
-            anchorer_signing_key,
-            anchorer_signing_key_origin,
+            notary_signing_key,
+            notary_signing_key_origin,
             admin_keystore,
             // G4.T3 — load verified-profile descriptors at startup. The env
             // var IS the feature flag; absence keeps the dev-mode

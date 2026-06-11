@@ -11,7 +11,7 @@
 //! implementing the full TSP envelope cryptography, MIMI provider
 //! bridging, or bot capability inheritance chains.
 //!
-//! Spec anchors:
+//! Spec seals:
 //!   - `cokret-spec/spec/v1/zh/extensions/applet-integration.md` §3–§5 (manifest signing, bot /
 //!     ghost actor accountability)
 //!   - `cokret-spec/spec/v1/zh/extensions/applet-schema.md` (manifest schema)

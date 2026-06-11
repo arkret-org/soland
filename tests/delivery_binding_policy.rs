@@ -4,7 +4,7 @@
 //!
 //! These tests drive `ProjectionState` directly so they stay tight on
 //! the reducer's policy enforcement and don't depend on the full HTTP /
-//! Move/Anchor pipeline. The HTTP wire path that feeds these reducer
+//! Move/Seal pipeline. The HTTP wire path that feeds these reducer
 //! calls is exercised separately in `tests/http_api.rs`.
 
 use cokret_sdk::Operation;

@@ -519,7 +519,7 @@ const AGENT_DEACTIVATE_REQUIREMENTS: &[PayloadRequirement] = &[
 ];
 
 // R3 spec-sync — `actor_private_event` payloads. These do NOT advance
-// the anchor frontier / actor_seq (reducer_input=false).
+// the seal frontier / actor_seq (reducer_input=false).
 const AGENT_DRAFT_PROPOSE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required(
         "agent_principal_id",
@@ -2923,7 +2923,7 @@ mod direct_conversation_policy_tests {
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 0,
             jws_replay_window_per_family: std::collections::BTreeMap::new(),
-            anchorer_signing_key_seed: Some([9u8; 32]),
+            notary_signing_key_seed: Some([9u8; 32]),
             agent_audit_binding_signing_seed: None,
             use_keystore: false,
             federation_policy: crate::config::FederationPolicy::Mesh,
@@ -2936,7 +2936,7 @@ mod direct_conversation_policy_tests {
             push_bridge_trusted_service_dids: Vec::new(),
             resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
             resumable_upload_incomplete_ttl_seconds: 86_400,
-            compaction_min_anchor_age_seconds: 604_800,
+            seal_compaction_min_age_seconds: 604_800,
             compaction_min_witnesses: 1,
             compaction_preserve_genesis: true,
             compaction_prune_only_singleton_successors: true,

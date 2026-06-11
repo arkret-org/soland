@@ -424,7 +424,7 @@ async fn service_did_is_config_driven_across_public_metadata() {
     signing_input.push(0);
     signing_input.extend_from_slice(&payload_bytes);
     state
-        .anchorer_signing_key()
+        .notary_signing_key()
         .verifying_key()
         .verify(&signing_input, &signature)
         .unwrap();

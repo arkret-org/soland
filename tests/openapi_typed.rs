@@ -38,7 +38,7 @@ fn test_config() -> AppConfig {
         default_webvh_provider_id: None,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        anchorer_signing_key_seed: None,
+        notary_signing_key_seed: None,
         agent_audit_binding_signing_seed: None,
         use_keystore: false,
         federation_policy: soland::config::FederationPolicy::Mesh,
@@ -51,7 +51,7 @@ fn test_config() -> AppConfig {
         push_bridge_trusted_service_dids: Vec::new(),
         resumable_upload_dir: std::path::PathBuf::from("./soland-resumable-uploads"),
         resumable_upload_incomplete_ttl_seconds: 86_400,
-        compaction_min_anchor_age_seconds: 604_800,
+        seal_compaction_min_age_seconds: 604_800,
         compaction_min_witnesses: 1,
         compaction_preserve_genesis: true,
         compaction_prune_only_singleton_successors: true,
@@ -150,16 +150,16 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 14c ToSchema audit — federation anchors pull/push and the
+    // Round 14c ToSchema audit — federation seals pull/push and the
     // embedded did:webvh register handler now use typed `#[endpoint]`
     // signatures (`JsonResult<T>` / `body: JsonBody<T>`), so their wire
     // types must appear in the generated YAML. The new
     // `EmbeddedWebvhRegisterOutcome` is asserted alongside the originally
     // forward-compat-only set.
     for typed_now in [
-        "FederationAnchorsOutcome",
-        "FederationAnchorsPushRequestBody",
-        "FederationAnchorsPushOutcome",
+        "FederationSealsOutcome",
+        "FederationSealsPushRequestBody",
+        "FederationSealsPushOutcome",
         "EmbeddedWebvhRegisterRequestBody",
         "EmbeddedWebvhRegisterOutcome",
     ] {

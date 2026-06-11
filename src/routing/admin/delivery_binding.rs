@@ -121,7 +121,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
         )
         .with_status(StatusCode::BAD_REQUEST));
     }
-    // Locking the projection mirrors how the anchor admin reads anchorer
+    // Locking the projection mirrors how the seal admin reads notary
     // cells in the same module.
     let value = state.projection.lock().ok().and_then(|proj| {
         proj.realm_delivery_binding_policy_cell_value(&realm_id)

@@ -13,9 +13,9 @@
 //! # Two-tier verifier model (unchanged)
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use
-//!   `routing::federation::move_anchor::verify_jws_shape` — RFC 7515 §3.2 detached shape,
-//!   alg=EdDSA, no zero-sentinel signature, no actual crypto. Lets test fixtures and local dev
-//!   iterate without managing real keys.
+//!   `routing::federation::move_seal::verify_jws_shape` — RFC 7515 §3.2 detached shape, alg=EdDSA,
+//!   no zero-sentinel signature, no actual crypto. Lets test fixtures and local dev iterate without
+//!   managing real keys.
 //! - Production mode (default): handlers use [`verify_jws_ed25519`] via
 //!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
 //!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
@@ -47,8 +47,8 @@ pub struct ResolvedVerificationKey {
 }
 
 // Re-exports of pure helpers from the SDK. Identical signatures so call
-// sites in `anchorer.rs`, `compactor.rs`, `routing::admin::anchor.rs`,
-// `routing::federation::move_anchor.rs` and `routing::events::event_log.rs`
+// sites in `notary.rs`, `compactor.rs`, `routing::admin::seal.rs`,
+// `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
 // keep working unchanged.
 pub use cokret_sdk::jws::{
     effective_window_for_move, physical_millis_from_hlc, verify_replay_window,

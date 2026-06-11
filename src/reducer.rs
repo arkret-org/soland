@@ -12,15 +12,15 @@
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
 //! dispatcher to inline projection helpers.
 //!
-//! The Move/Anchor receive pipeline (`POST /_soland/peer/moves` /
-//! `POST /_soland/peer/anchors`) routes through [`registry::LatticeKind`] /
+//! The Move/Seal receive pipeline (`POST /_soland/peer/moves` /
+//! `POST /_soland/peer/seals`) routes through [`registry::LatticeKind`] /
 //! [`registry::LatticeRegistry`]. Concrete impls live in
 //! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
-//! the SDK's `verify_move` / `apply_anchor` pipeline. This is the
+//! the SDK's `verify_move` / `apply_seal` pipeline. This is the
 //! protocol-canonical path; [`ProjectionState`]'s structured fields
 //! (`messages`, `reactions`, `read_cursors`, etc.) are an in-memory
 //! convenience cache populated from the durable Event-Envelope ingestion
-//! path that pre-dates the Move/Anchor model. As Anchor projection lands,
+//! path that pre-dates the Move/Seal model. As Seal projection lands,
 //! the structured fields migrate to a single `cells` map.
 
 pub mod lattice_kinds;
@@ -113,19 +113,19 @@ pub struct ProjectionState {
     /// the payload with the tombstone.
     pub redaction_cells: BTreeMap<String, Option<RedactionCellValue>>,
     /// Per-cell effective state
-    /// populated from the Move/Anchor pipeline's `apply_anchor` write-back.
+    /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
     /// Keyed by canonical `CellRef` (e.g.
     /// `ck:cell:ck.component.realm.read_receipt_policy.v1:<realm_id>`).
-    /// Each successful apply_anchor (`routing::federation::move_anchor::submit_anchor` or
-    /// `crate::anchorer::AnchorerWorker`) calls
+    /// Each successful apply_seal (`routing::federation::move_seal::submit_seal` or
+    /// `crate::notary::NotaryWorker`) calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
     /// the affected Realm. Read handlers query via [`ProjectionState::cell`]
     /// / [`ProjectionState::cell_value`] for cell-keyed state lookups
     /// instead of scanning the durable Event store.
     ///
     /// This map is the canonical source for all cell-driven state in the
-    /// Move/Anchor pipeline.
+    /// Move/Seal pipeline.
     /// Completed migrations:
     ///   - `read_receipt_policies` (CasRegister) — old BTreeMap deleted; read path uses
     ///     `cell_value`.
@@ -229,7 +229,7 @@ pub struct ProjectionState {
     /// monotonic epoch counter in lockstep with `apply_commit_epoch`
     /// CAS rules: each accepted commit bumps the value by exactly +1
     /// from the previous epoch. The same row accumulates the governance
-    /// Anchor frontier covered by accepted MLS commits so E2EE message
+    /// Seal frontier covered by accepted MLS commits so E2EE message
     /// paths can gate plaintext fallback against stale epochs.
     pub mls_commit_epochs: BTreeMap<String, MlsCommitEpoch>,
     /// G3.S2 — per-Realm `ck.realm.policy_server` projection. Cas-
@@ -480,8 +480,8 @@ pub struct MlsWelcome {
 /// Each successful `apply_commit_epoch` bumps `epoch` by exactly +1
 /// from `expected_prev_epoch`; out-of-order or stale commits leave the
 /// row untouched and the reducer returns `Rejected { reason:
-/// "mls_epoch_skew" }`. `covered_frontier` is the or-set style
-/// accumulator for governance Anchor ids / tags attested by accepted
+/// "mls_epoch_skew" }`. `covered_seals` is the or-set style
+/// accumulator for governance Seal ids / tags attested by accepted
 /// commits for this group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
@@ -493,7 +493,7 @@ pub struct MlsCommitEpoch {
     /// DID of the committer (the `leader` per MLS terminology — the
     /// member whose Commit was accepted).
     pub leader_actor_id: String,
-    pub covered_frontier: Vec<String>,
+    pub covered_seals: Vec<String>,
     pub committed_at: i64,
 }
 
@@ -1239,7 +1239,7 @@ pub enum ProjectionEffect {
         target_state: String,
     },
     /// Flow watch cell touched. Cell write itself is owned by the
-    /// Move/Anchor pipeline (cas-register at SDK layer); the projection
+    /// Move/Seal pipeline (cas-register at SDK layer); the projection
     /// only records that a watch change happened for `(flow_id, actor_id)`
     /// so downstream listeners (notification dispatcher, watcher list
     /// projection) can react. `level` is `None` when the effect clears
@@ -1309,7 +1309,7 @@ pub enum ProjectionEffect {
     },
     /// REDU-2 — `actor_private_event` accepted (reducer_input=false).
     /// Wire-accepted and surfaced to audit-log consumers, but does NOT
-    /// advance the anchor frontier / actor_seq.
+    /// advance the seal frontier / actor_seq.
     AgentPrivateEventAccepted {
         kind: &'static str,
         event_id: String,
@@ -1385,7 +1385,7 @@ pub enum MlsEffect {
         group_id: String,
         epoch: u64,
         creator_actor_id: String,
-        covered_frontier: Vec<String>,
+        covered_seals: Vec<String>,
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from
     /// `previous_epoch` to `new_epoch` and the attested governance
@@ -1395,7 +1395,7 @@ pub enum MlsEffect {
         previous_epoch: u64,
         new_epoch: u64,
         leader_actor_id: String,
-        covered_frontier: Vec<String>,
+        covered_seals: Vec<String>,
     },
 }
 
@@ -1820,7 +1820,7 @@ fn apply_agent_deactivate_dispatch(
 }
 
 // REDU-2 — actor_private_event dispatchers. `reducer_input=false`: do
-// NOT advance the anchor frontier / actor_seq. Wire-accepted only;
+// NOT advance the seal frontier / actor_seq. Wire-accepted only;
 // projection consumers (sodmin draft inbox, action approval queue) read
 // them through the audit log. TODO(R3.1): persist into per-actor
 // private projections and surface to the controller.
@@ -2895,8 +2895,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_MORPH_ARCHIVE, apply_morph_archive_dispatch);
     m.insert(CK_MORPH_RESTORE, apply_morph_restore_dispatch);
     // CKP-0007 — Circle lifecycle / membership dispatch. The seventh
-    // active kind, `ck.circle.anchor_commit`, is reducer-derived (sub-
-    // anchor on the Circle's profile cadence) and listed in the SDK's
+    // active kind, `ck.circle.seal_commit`, is reducer-derived (sub-
+    // seal on the Circle's profile cadence) and listed in the SDK's
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
     m.insert(CK_CIRCLE_CREATE, apply_circle_create_dispatch);
@@ -2914,7 +2914,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_AGENT_RESUME, apply_agent_resume_dispatch);
     m.insert(CK_AGENT_DEACTIVATE, apply_agent_deactivate_dispatch);
     // REDU-2 — actor_private_event kinds (reducer_input=false). These
-    // accept but do NOT advance the anchor frontier / actor_seq;
+    // accept but do NOT advance the seal frontier / actor_seq;
     // downstream consumers read them from the audit log.
     m.insert(CK_AGENT_DRAFT_PROPOSE, apply_agent_draft_propose_dispatch);
     m.insert(CK_AGENT_ACTION_REQUEST, apply_agent_action_request_dispatch);
@@ -3787,7 +3787,7 @@ impl ProjectionState {
     }
 
     /// Look up a cell's resolved state by its canonical [`CellRef`]. Returns
-    /// `None` if the cell hasn't been observed (no anchored Move ever wrote
+    /// `None` if the cell hasn't been observed (no sealed Move ever wrote
     /// to it). The returned `CellState` is either `Value(_)` (lattice
     /// resolved successfully) or `Bottom(_)` (concurrent conflict requires
     /// recovery).
@@ -3892,15 +3892,15 @@ impl ProjectionState {
     }
 
     /// Reload the cells map for one Realm from the SDK CellStore + apply
-    /// each cell's lattice. Called after every successful `apply_anchor`
-    /// in the Move/Anchor pipeline
-    /// (`routing::federation::move_anchor::submit_anchor` plus
-    /// `crate::anchorer::AnchorerWorker`) to keep this projection cache
-    /// in sync with anchored cell state.
+    /// each cell's lattice. Called after every successful `apply_seal`
+    /// in the Move/Seal pipeline
+    /// (`routing::federation::move_seal::submit_seal` plus
+    /// `crate::notary::NotaryWorker`) to keep this projection cache
+    /// in sync with sealed cell state.
     ///
     /// This is the only write path into [`ProjectionState::cells`]; the
     /// durable-Event projection path (`apply()`) does NOT touch cells —
-    /// state cells are exclusively a Move/Anchor surface per spec.
+    /// state cells are exclusively a Move/Seal surface per spec.
     pub fn reload_cells_from_store(
         &mut self,
         realm_id: &RealmId,
@@ -3908,7 +3908,7 @@ impl ProjectionState {
         cell_registry: &dyn CellRegistry,
     ) -> Result<(), StoreError> {
         for cell in cell_store.list_cells(realm_id)? {
-            let ops = cell_store.anchored_ops_for_cell(realm_id, &cell)?;
+            let ops = cell_store.sealed_ops_for_cell(realm_id, &cell)?;
             let binding = cell_registry
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
@@ -3937,7 +3937,7 @@ impl ProjectionState {
     ///
     /// All cell-state events (ck.realm.policy / ck.realm.read_receipt_policy /
     /// ck.consent.* / ck.member.state / ck.realm.* facets) are routed via
-    /// the Move/Anchor pipeline through `LatticeKind` impls in
+    /// the Move/Seal pipeline through `LatticeKind` impls in
     /// `lattice_kinds.rs`; the structured ProjectionState fields don't
     /// mirror them. `routing/projection.rs::project_read_receipt_policy`
     /// handles the read-receipt cache fast path explicitly.
@@ -5497,7 +5497,7 @@ impl ProjectionState {
     fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
         operation
             .payload
-            .get("anchor_ref")
+            .get("seal_ref")
             .or_else(|| operation.payload.get("conflict_basis"))
             .or_else(|| operation.payload.get("state_witness"))
             .and_then(Value::as_str)
@@ -5583,7 +5583,7 @@ impl ProjectionState {
                     kind: cokret_sdk::BottomKind::Conflict,
                     cells: vec![cell_id.clone()],
                     move_ids: Vec::new(),
-                    anchor_view: None,
+                    seal_view: None,
                     heads: vec![
                         serde_json::json!({
                             "move_id": current_operation,
@@ -5654,7 +5654,7 @@ impl ProjectionState {
             .payload
             .get("state_witness")
             .and_then(Value::as_str)
-            && !witness.starts_with("ck:anchor:sha256:")
+            && !witness.starts_with("ck:seal:sha256:")
         {
             return Err("repair_state_witness_invalid");
         }
@@ -5728,7 +5728,7 @@ impl ProjectionState {
     /// in this same impl block — they were already separate methods
     /// before this rename, so no extraction was needed.
     ///
-    /// Spec anchors:
+    /// Spec seals:
     ///   - `realm-and-space.md` §2.5 (terminal state distinction: tombstone vs destroy)
     ///   - `realm-and-space.md` §2.5.1 (destroy cascade rules)
     ///   - `realm-and-space.md` §2.5.2 (erasure receipt fanout — reducer leg only; the actual
@@ -7229,7 +7229,7 @@ impl ProjectionState {
 
     /// Apply `ck.flow.move` / `ck.flow.reorder`. These events
     /// don't affect Flow lifecycle state — they write to the
-    /// `ck.component.flow.position.v1` cell family on the Move/Anchor
+    /// `ck.component.flow.position.v1` cell family on the Move/Seal
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
     /// `updated_by` on the Flow projection so read-after-write sees the
     /// touch. Unknown Flow is tolerated (causal / backfill).
@@ -7323,7 +7323,7 @@ impl ProjectionState {
     }
 
     /// Apply `ck.flow.watch.set`. Writes the watch cell on the
-    /// Move/Anchor pipeline (cas-register `ck.component.flow.watch.v1`);
+    /// Move/Seal pipeline (cas-register `ck.component.flow.watch.v1`);
     /// the soland projection records the materialised value into
     /// `projection_flow_watches` via `ProjectionEffect::FlowWatchUpdated`.
     /// The Flow's `updated_at` is NOT bumped — watch is a per-(flow, actor)
@@ -7579,8 +7579,8 @@ impl ProjectionState {
     // Spec source: `cokret-spec/spec/v1/zh/models/circle.md` +
     // `spec/v1/artifacts/schemas/circle.schema.json`. The six on-wire
     // reducer-input kinds are dispatched here (the seventh,
-    // `ck.circle.anchor_commit`, is reducer-derived and emitted by the
-    // anchorer cadence, not accepted as a submitted event).
+    // `ck.circle.seal_commit`, is reducer-derived and emitted by the
+    // notary cadence, not accepted as a submitted event).
 
     fn apply_circle_create(
         &mut self,
@@ -9548,7 +9548,7 @@ mod tests {
             kind: cokret_sdk::BottomKind::Conflict,
             cells: vec![cell_id.clone()],
             move_ids: vec![],
-            anchor_view: None,
+            seal_view: None,
             heads: vec![],
             details: Some(serde_json::json!({"reason": "concurrent set"})),
             escalated_at: None,
@@ -9758,13 +9758,13 @@ mod tests {
         let hlc = ServerHlc::new("test");
         let realm = "ck:realm:01904100-0000-7000-8000-cfc039892036";
         let basis =
-            "ck:anchor:sha256:0000000000000000000000000000000000000000000000000000000000000000";
+            "ck:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
         let first = make_operation(
             crate::kinds::CK_REALM_UPDATE,
             realm,
             serde_json::json!({
                 "patch": {"title": {"$op": "set", "value": "renamed by alice"}},
-                "anchor_ref": basis,
+                "seal_ref": basis,
             }),
         );
         let first_id = first.operation_id.as_str().to_owned();
@@ -9775,7 +9775,7 @@ mod tests {
             realm,
             serde_json::json!({
                 "patch": {"title": {"$op": "set", "value": "renamed by bob"}},
-                "anchor_ref": basis,
+                "seal_ref": basis,
             }),
         );
         let second_id = second.operation_id.as_str().to_owned();
@@ -10988,7 +10988,7 @@ mod tests {
 
     /// `ck.flow.move` / `ck.flow.reorder` touch the Flow projection's
     /// `updated_at` / `updated_by` but do NOT change state. Cell-write
-    /// happens on the Move/Anchor pipeline (out of scope here).
+    /// happens on the Move/Seal pipeline (out of scope here).
     #[test]
     fn flow_position_events_touch_projection_without_changing_state() {
         let mut state = ProjectionState::new();

@@ -1,16 +1,16 @@
 //! Snapshot/GC scanner.
 //!
-//! Walks the durable Move + Anchor stores and lists Moves that are NOT
-//! referenced by any Anchor frontier AND that have no active pending Move
-//! ref. Such Moves are MAY-GC candidates per the spec; the scanner does
-//! NOT actually delete (yet) — it only enumerates.
+//! Walks the durable Move + Seal stores and lists Moves that are NOT
+//! referenced by any live Seal coverage set AND that have no active
+//! pending Move ref. Such Moves are MAY-GC candidates per the spec; the
+//! scanner does NOT actually delete (yet) — it only enumerates.
 //!
 //! Two entry points:
 //!   - [`scan_gc_candidates`] — pure function over an [`AppState`], used by both the admin endpoint
 //!     and the cargo-runnable bin.
 //!   - `bin/soland-gc-scan.rs` — `cargo run --bin soland-gc-scan -- --realm-id <id> --dry-run`.
 
-use cokret_sdk::state_res::{AnchorStore, MoveStore};
+use cokret_sdk::state_res::{MoveStore, SealStore, union_predecessor_covered_events};
 use cokret_sdk::{Move, MoveId, RealmId};
 
 use crate::state::AppState;
@@ -23,47 +23,41 @@ pub struct GcCandidate {
     pub realm_id: String,
     pub issuer: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Reason this Move is GC-eligible, e.g. "not_in_any_anchor_frontier".
+    /// Reason this Move is GC-eligible, e.g. "not_in_live_seal_coverage".
     pub reason: String,
 }
 
-/// Scan one Realm's Move + Anchor stores and emit GC candidates.
+/// Scan one Realm's Move + Seal stores and emit GC candidates.
 ///
 /// A Move is a candidate when ALL hold:
-///   - It is in the anchored-Move log (`list_anchored`) — i.e. it was part of some Anchor's
-///     frontier at some point.
-///   - That referencing Anchor is NOT a current leaf — i.e. its frontier has been superseded.
-///   - The Move is NOT in any current leaf's frontier (transitively, we compute the union of
-///     leaf-Anchor frontiers).
-///   - The Move is NOT in the pending pool (`list_pending_for_anchorer`).
+///   - It is in the sealed-Move log (`list_sealed`) — i.e. it was part of some Seal coverage set.
+///   - That referencing Seal is NOT a current leaf — i.e. its coverage has been superseded.
+///   - The Move is NOT in any current leaf coverage set.
+///   - The Move is NOT in the pending pool (`list_pending_for_notary`).
 pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
     let move_store = state.move_store.as_ref();
-    let anchor_store = state.anchor_store.as_ref();
+    let seal_store = state.seal_store.as_ref();
 
     // 1) Pending Move IDs — never GC.
     let pending: Vec<Move> = move_store
-        .list_pending_for_anchorer(realm_id, None, 4096)
+        .list_pending_for_notary(realm_id, None, 4096)
         .unwrap_or_default();
     let pending_ids: std::collections::HashSet<String> =
         pending.iter().map(|m| m.id.to_string()).collect();
 
-    // 2) Union of current leaf-Anchor frontiers. Moves still on the live frontier are also out of
+    // 2) Union of current leaf-Seal coverage. Moves still covered by live leaves are also out of
     //    scope for GC.
-    let leaves = anchor_store.list_leaves(realm_id).unwrap_or_default();
-    let mut live_frontier: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for leaf_id in &leaves {
-        if let Ok(Some(anchor)) = anchor_store.get(leaf_id) {
-            for move_id in &anchor.frontier {
-                live_frontier.insert(move_id.to_string());
-            }
-        }
+    let leaves = seal_store.list_leaves(realm_id).unwrap_or_default();
+    let mut live_coverage: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(covered) = union_predecessor_covered_events(&leaves, seal_store) {
+        live_coverage.extend(covered.into_iter().map(|move_id| move_id.to_string()));
     }
 
-    // 3) Walk the anchored-Move log; emit those that are neither pending nor on the live frontier.
+    // 3) Walk the sealed-Move log; emit those that are neither pending nor live-covered.
     let mut candidates: Vec<GcCandidate> = Vec::new();
     let mut cursor: Option<MoveId> = None;
     loop {
-        let page = match move_store.list_anchored(realm_id, cursor.as_ref(), 256) {
+        let page = match move_store.list_sealed(realm_id, cursor.as_ref(), 256) {
             Ok(page) if !page.is_empty() => page,
             _ => break,
         };
@@ -73,7 +67,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
             if pending_ids.contains(&id) {
                 continue;
             }
-            if live_frontier.contains(&id) {
+            if live_coverage.contains(&id) {
                 continue;
             }
             candidates.push(GcCandidate {
@@ -81,7 +75,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
                 realm_id: realm_id.to_string(),
                 issuer: record.move_value.issuer.to_string(),
                 created_at: record.move_value.sig.created_at,
-                reason: "not_in_any_anchor_frontier".to_owned(),
+                reason: "not_in_live_seal_coverage".to_owned(),
             });
         }
         cursor = next_cursor;

@@ -1,13 +1,13 @@
 //! `cargo run --bin soland-rotate-drill -- ...`
 //!
-//! Anchorer signing-key rotation drill.
+//! Notary signing-key rotation drill.
 //!
 //! Three modes — selected by exactly one of the mode flags:
 //!
 //! 1. `--rotate-drill` (default when no mode flag is set) — exercises the full `rotate-signing-key`
 //!    flow end-to-end against a running soland instance:
 //!      - mints a fresh ed25519 seed,
-//!      - calls `POST /admin/realms/{realm_id}/anchorer/rotate-signing-key` on the live server (via
+//!      - calls `POST /admin/realms/{realm_id}/notary/rotate-signing-key` on the live server (via
 //!        `--target` URL),
 //!      - verifies the keystore-persisted seed (when `SERVERX_USE_KEYSTORE=true`),
 //!      - signs a probe Move with the new key,
@@ -16,8 +16,8 @@
 //!
 //!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
 //!
-//! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted anchorer
-//!    seed (`cokret:signer:soland-anchorer:<service_did>`) and writes a single-key JSON snapshot to
+//! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
+//!    (`cokret:signer:soland-notary:<service_did>`) and writes a single-key JSON snapshot to
 //!    `--output`.
 //!
 //! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
@@ -216,7 +216,7 @@ enum DrillError {
 
 fn keystore_id(service_did: &str) -> (String, String) {
     let app_id = format!("soland.{service_did}");
-    let key_id = format!("cokret:signer:soland-anchorer:{service_did}");
+    let key_id = format!("cokret:signer:soland-notary:{service_did}");
     (app_id, key_id)
 }
 
@@ -309,7 +309,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
     })?;
     let realm_id = args.realm_id.as_deref().ok_or_else(|| {
         DrillError::Io(
-            "rotate-drill requires --realm-id (the Realm whose anchorer key is being rotated)"
+            "rotate-drill requires --realm-id (the Realm whose notary key is being rotated)"
                 .to_owned(),
         )
     })?;
@@ -339,7 +339,7 @@ async fn run_rotate_drill(args: &Args) -> Result<(), DrillError> {
 
     // ── 2. POST the rotate-signing-key endpoint ────────────────────────
     let url = format!(
-        "{}/_soland/admin/realms/{}/anchorer/rotate-signing-key",
+        "{}/_soland/admin/realms/{}/notary/rotate-signing-key",
         target.trim_end_matches('/'),
         realm_id
     );
