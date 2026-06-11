@@ -1268,7 +1268,7 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: default_did_document(state, did),
+            did_document: default_did_document(Some(state), did),
             key_log_head: None,
             seq: 0,
             method_evidence: json!({"mode": "development_local"}),
@@ -1280,11 +1280,13 @@ async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentR
         })
 }
 
-fn default_did_document(state: &AppState, did: &str) -> Value {
+fn default_did_document(state: Option<&AppState>, did: &str) -> Value {
     let mut verification_methods = Vec::new();
     let mut authentication = Vec::new();
     let mut assertion_method = Vec::new();
-    if did == state.config.service_did {
+    if let Some(state) = state
+        && did == state.config.service_did
+    {
         let public_key = cokret_sdk::ed25519_pubkey_to_did_key_multibase(
             state.anchorer_signing_key().verifying_key().as_bytes(),
         );
@@ -1361,7 +1363,7 @@ fn did_document_from_operation(
     }
     let mut document = existing
         .map(|record| record.did_document.clone())
-        .unwrap_or_else(|| default_did_document(did));
+        .unwrap_or_else(|| default_did_document(None, did));
     if let Some(patch) = operation
         .get("patch")
         .or_else(|| body.get("patch"))
