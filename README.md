@@ -394,7 +394,7 @@ cokret/
 ```
 
 ```bash
-just fmt-check     # respects rustfmt.toml
+just fmt-check     # respects .rustfmt.toml
 just check
 just test
 ```

@@ -66,7 +66,7 @@ editing `Cargo.toml`.
 
 ## Coding conventions
 
-- Match the `rustfmt.toml` style — `cargo fmt` enforces it.
+- Match the `.rustfmt.toml` style — `cargo fmt` enforces it.
 - Avoid `unsafe` outside `src/main.rs` (the env propagation is the only
   approved exception today; see the comment).
 - Prefer typed errors via `crate::error::ErrorCode` over hand-typed strings;
