@@ -29,7 +29,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use cokret_sdk::http::EventsQueryOutcome;
 use cokret_sdk::lattice::CellState;
-use cokret_sdk::{EphemeralSubmitOutcome, RealmId};
+use cokret_sdk::{EphemeralSubmitOutcome, PresenceStatus, RealmId};
 use ed25519_dalek::{Signature, Signer as _, Verifier as _};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
@@ -42,10 +42,10 @@ use super::projection::{
     tombstone_timeline_event_value,
 };
 use super::{
-    augment_timeline_message_json, authenticated_session, backfill_gap_events,
-    default_discussion_track, device_message_events_after, flow_id_from_realm_id,
-    flow_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref, projected_event_page,
-    projection_event_json, prune_acked_device_messages, prune_expired_typing, query_param,
+    TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
+    backfill_gap_events, default_discussion_track, device_message_events_after,
+    flow_id_from_realm_id, flow_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref,
+    projected_event_page, projection_event_json, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
     snapshot_bundle_for_realm, snapshot_manifest_for_realm,
@@ -172,6 +172,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
     let session = authenticated_session(&state, req).await.ok();
+    let filter_value = sync_filter_value(body.filter.as_ref());
     let subscribe_scope_key = account_subscribe_scope_key(req, session.as_ref(), &body);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
@@ -181,7 +182,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             after,
             &state,
             session.as_ref(),
-            body.filter.as_ref(),
+            filter_value.as_ref(),
             chrono::Utc::now().timestamp_millis(),
         )
         .await
@@ -236,23 +237,12 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             .prune_stream_superseded(
                 &session.actor,
                 &session.device_id,
-                &sync_filter_digest(body.filter.as_ref()),
+                &sync_filter_digest(filter_value.as_ref()),
                 presented_issued_at_ms,
             )
             .await;
     }
-    if let Some(presence) = body.set_presence.as_deref()
-        && !matches!(presence, "online" | "offline" | "unavailable")
-    {
-        crate::error::render_error_code(
-            crate::error::ErrorCode::InvalidParam,
-            res,
-            "set_presence must be online, offline, or unavailable",
-        );
-        return;
-    }
-
-    if let Some(presence) = body.set_presence.as_deref() {
+    if let Some(presence) = body.set_presence.as_ref() {
         let Some(session) = session.as_ref() else {
             crate::error::render_error_code(
                 crate::error::ErrorCode::Unauthenticated,
@@ -266,7 +256,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
             .presence()
             .put(PresenceRecord {
                 actor: session.actor.clone(),
-                status: presence.to_owned(),
+                status: presence_status_wire(presence).to_owned(),
                 updated_at: chrono::Utc::now(),
             })
             .await
@@ -490,6 +480,7 @@ fn delta_is_empty(response: &cokret_sdk::model::SyncOutcome) -> bool {
     response.realms.is_empty()
         && response.left_realms.is_empty()
         && response.to_device.is_empty()
+        && response.to_device_lost != Some(true)
         && response.presence.is_empty()
 }
 
@@ -498,16 +489,50 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
         after: query_param(req, "after"),
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
-        set_presence: query_param(req, "set_presence"),
+        set_presence: query_param(req, "set_presence").and_then(|value| match value.as_str() {
+            "online" => Some(PresenceStatus::Online),
+            "offline" => Some(PresenceStatus::Offline),
+            "unavailable" => Some(PresenceStatus::Unavailable),
+            _ => None,
+        }),
+        subscriptions: None,
+        wait_for: None,
+    }
+}
+
+fn sync_filter_value(filter: Option<&cokret_sdk::SyncFilter>) -> Option<Value> {
+    filter.and_then(|filter| serde_json::to_value(filter).ok())
+}
+
+fn presence_status_wire(status: &PresenceStatus) -> &'static str {
+    match status {
+        PresenceStatus::Online => "online",
+        PresenceStatus::Offline => "offline",
+        PresenceStatus::Unavailable => "unavailable",
     }
 }
 
 fn account_delta_frame(response: cokret_sdk::model::SyncOutcome) -> Value {
+    let mut to_device = json!({"messages": response.to_device});
+    if let Some(object) = to_device.as_object_mut() {
+        if let Some(ack_token) = response.to_device_ack_token {
+            object.insert("ack_token".to_owned(), json!(ack_token));
+        }
+        if response.to_device_limited {
+            object.insert("limited".to_owned(), json!(true));
+        }
+        if let Some(next_cursor) = response.to_device_next_cursor {
+            object.insert("next_cursor".to_owned(), json!(next_cursor));
+        }
+        if let Some(lost) = response.to_device_lost {
+            object.insert("lost".to_owned(), json!(lost));
+        }
+    }
     json!({
         "kind": "delta",
         "cursor": response.cursor,
         "realms": response.realms,
-        "to_device": {"messages": response.to_device},
+        "to_device": to_device,
         "device_lists": response.device_lists,
         "account_data": {"events": response.account_data},
         "presence": {"events": response.presence},
@@ -542,10 +567,11 @@ fn account_subscribe_scope_key(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
 ) -> String {
+    let filter_value = sync_filter_value(body.filter.as_ref());
     format!(
         "ck.self.account.subscribe|{}|filter={}",
         subscribe_subject(req, session),
-        sync_filter_digest(body.filter.as_ref())
+        sync_filter_digest(filter_value.as_ref())
     )
 }
 
@@ -600,6 +626,7 @@ async fn build_sync_snapshot(
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
 ) -> cokret_sdk::model::SyncOutcome {
+    let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
     // `account-subscribe-frame.schema.json#/$defs/member_roster_entry`. Each
@@ -772,25 +799,47 @@ async fn build_sync_snapshot(
     drop(projection);
 
     let mut to_device_position = after_cursor.to_device_position;
+    let mut to_device_ack_token = None;
+    let mut to_device_limited = false;
+    let mut to_device_next_cursor = None;
     let to_device = if let Some(session) = session {
-        prune_acked_device_messages(state, session, after_cursor.to_device_position).await;
         let queued = state
             .persistence
             .device_messages()
-            .list_after(
-                &session.actor,
-                &session.device_id,
-                after_cursor.to_device_position,
-            )
+            .list_after(&session.actor, &session.device_id, 0)
             .await
             .unwrap_or_default();
-        let events = device_message_events_after(&queued);
+        to_device_limited = queued.len() > TO_DEVICE_PAGE_LIMIT;
+        let page = queued
+            .into_iter()
+            .take(TO_DEVICE_PAGE_LIMIT)
+            .collect::<Vec<_>>();
+        let events = device_message_events_after(&page);
         if let Some(max_position) = events
             .iter()
             .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
             .max()
         {
             to_device_position = max_position;
+            to_device_ack_token = state
+                .persistence
+                .device_messages()
+                .issue_ack_token(&session.actor, &session.device_id, to_device_position)
+                .await
+                .ok()
+                .flatten();
+            if to_device_limited {
+                to_device_next_cursor = Some(
+                    sync_token_for_client_sync(
+                        state,
+                        Some(session),
+                        filter_value.as_ref(),
+                        BTreeMap::new(),
+                        to_device_position,
+                    )
+                    .await,
+                );
+            }
         }
         events
     } else {
@@ -826,7 +875,7 @@ async fn build_sync_snapshot(
         cursor: sync_token_for_client_sync(
             state,
             session,
-            body.filter.as_ref(),
+            filter_value.as_ref(),
             positions,
             to_device_position,
         )
@@ -834,6 +883,10 @@ async fn build_sync_snapshot(
         realms: sync_realms,
         left_realms,
         to_device,
+        to_device_ack_token,
+        to_device_limited,
+        to_device_next_cursor,
+        to_device_lost: None,
         device_lists: json!({"changed": [], "left": []}),
         account_data,
         presence,
@@ -1007,11 +1060,12 @@ fn roster_handle_claim_audience(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
 ) -> String {
-    body.filter
+    let filter_value = sync_filter_value(body.filter.as_ref());
+    filter_value
         .as_ref()
         .and_then(|filter| filter.get("handle_claim_audience"))
         .or_else(|| {
-            body.filter
+            filter_value
                 .as_ref()
                 .and_then(|filter| filter.get("audience"))
         })
@@ -3317,6 +3371,7 @@ async fn durable_events_query_from_parts(
         .collect();
     EventsQueryOutcome {
         events,
+        snapshot_bootstrap: None,
         next_cursor,
         prev_cursor: None,
         has_more,

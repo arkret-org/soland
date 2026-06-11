@@ -53,7 +53,7 @@ use events::projection::{
 };
 use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
-use identity::device_messages::{device_message_events_after, prune_acked_device_messages};
+use identity::device_messages::{TO_DEVICE_PAGE_LIMIT, device_message_events_after};
 #[cfg(test)]
 use identity::did::validate_did_document_services;
 use spaces::directory::demo_actors;

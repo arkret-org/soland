@@ -1,4 +1,6 @@
 use super::*;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 /// Trait for durable device inventory operations.
 #[async_trait]
@@ -19,20 +21,27 @@ pub trait DeviceMessageStore: Send + Sync {
     async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
     /// Insert a fresh `(actor:idempotency_key)` key — returns `false` if it was already there.
     async fn try_register_txn(&self, key: String) -> PersistenceResult<bool>;
-    /// Remove every queued message for the given recipient+device whose
-    /// position is `<= ack_position`. Returns the number removed.
-    async fn ack(
+    /// Issue a bearer ack token for the delivered high-water queue position.
+    async fn issue_ack_token(
         &self,
         recipient: &str,
         device_id: &str,
-        ack_position: i64,
-    ) -> PersistenceResult<usize>;
-    /// List queued messages for a device strictly after `ack_position`.
+        queue_position: i64,
+    ) -> PersistenceResult<Option<String>>;
+    /// Consume a bearer ack token and prune the messages it covers. Returns
+    /// `None` when the token is unknown, expired, or not bound to this device.
+    async fn ack_with_token(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_token: &str,
+    ) -> PersistenceResult<Option<usize>>;
+    /// List queued messages for a device strictly after `queue_position`.
     async fn list_after(
         &self,
         recipient: &str,
         device_id: &str,
-        ack_position: i64,
+        queue_position: i64,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
     /// Drop everything queued for the recipient+device (used on session revoke).
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
@@ -113,12 +122,29 @@ impl DeviceInventoryStore for MemoryDeviceInventoryStore {
 pub(crate) struct MemoryDeviceMessageStore {
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeSet<String>>,
+    ack_tokens: Mutex<BTreeMap<String, DeviceMessageAckTokenRecord>>,
 }
 
 impl MemoryDeviceMessageStore {
     pub(crate) fn new() -> Self {
         Self::default()
     }
+}
+
+#[derive(Clone)]
+struct DeviceMessageAckTokenRecord {
+    recipient: String,
+    device_id: String,
+    queue_position: i64,
+    expires_at: chrono::DateTime<Utc>,
+    consumed_at: Option<chrono::DateTime<Utc>>,
+}
+
+fn fresh_device_message_ack_token() -> String {
+    let mut bytes = Vec::with_capacity(32);
+    bytes.extend_from_slice(Uuid::new_v4().as_bytes());
+    bytes.extend_from_slice(Uuid::new_v4().as_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[async_trait]
@@ -139,15 +165,51 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .insert(key))
     }
 
-    async fn ack(
+    async fn issue_ack_token(
         &self,
         recipient: &str,
         device_id: &str,
-        ack_position: i64,
-    ) -> PersistenceResult<usize> {
-        if ack_position <= 0 {
-            return Ok(0);
+        queue_position: i64,
+    ) -> PersistenceResult<Option<String>> {
+        if queue_position <= 0 {
+            return Ok(None);
         }
+        let now = Utc::now();
+        let token = fresh_device_message_ack_token();
+        let mut tokens = self.ack_tokens.lock().expect("device message ack lock");
+        tokens.retain(|_, record| record.expires_at > now);
+        tokens.insert(
+            token.clone(),
+            DeviceMessageAckTokenRecord {
+                recipient: recipient.to_owned(),
+                device_id: device_id.to_owned(),
+                queue_position,
+                expires_at: now + chrono::Duration::hours(24),
+                consumed_at: None,
+            },
+        );
+        Ok(Some(token))
+    }
+
+    async fn ack_with_token(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_token: &str,
+    ) -> PersistenceResult<Option<usize>> {
+        let now = Utc::now();
+        let mut tokens = self.ack_tokens.lock().expect("device message ack lock");
+        tokens.retain(|_, record| record.expires_at > now);
+        let Some(record) = tokens.get_mut(ack_token) else {
+            return Ok(None);
+        };
+        if record.recipient != recipient || record.device_id != device_id {
+            return Ok(None);
+        }
+        if record.consumed_at.is_some() {
+            return Ok(Some(0));
+        }
+        let ack_position = record.queue_position;
         let mut queue = self.queue.lock().expect("device message lock");
         let before = queue.len();
         queue.retain(|message| {
@@ -155,14 +217,15 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
                 && message.device_id == device_id
                 && message.position <= ack_position)
         });
-        Ok(before - queue.len())
+        record.consumed_at = Some(now);
+        Ok(Some(before - queue.len()))
     }
 
     async fn list_after(
         &self,
         recipient: &str,
         device_id: &str,
-        ack_position: i64,
+        queue_position: i64,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>> {
         Ok(self
             .queue
@@ -172,7 +235,7 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .filter(|message| {
                 message.recipient == recipient
                     && message.device_id == device_id
-                    && message.position > ack_position
+                    && message.position > queue_position
             })
             .cloned()
             .collect())
@@ -182,7 +245,230 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         let mut queue = self.queue.lock().expect("device message lock");
         let before = queue.len();
         queue.retain(|message| !(message.recipient == recipient && message.device_id == device_id));
+        self.ack_tokens
+            .lock()
+            .expect("device message ack lock")
+            .retain(|_, token| !(token.recipient == recipient && token.device_id == device_id));
         Ok(before - queue.len())
+    }
+}
+
+pub(crate) struct PgDeviceMessageStore {
+    pub(crate) pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct DeviceMessageRow {
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Text)]
+    sender: String,
+    #[diesel(sql_type = Text)]
+    recipient: String,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = BigInt)]
+    position: i64,
+    #[diesel(sql_type = Jsonb)]
+    content: Value,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<Utc>,
+}
+
+impl From<DeviceMessageRow> for DeviceMessageRecord {
+    fn from(row: DeviceMessageRow) -> Self {
+        Self {
+            idempotency_key: row.idempotency_key,
+            sender: row.sender,
+            recipient: row.recipient,
+            device_id: row.device_id,
+            position: row.position,
+            content: row.content,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(QueryableByName)]
+struct DeviceMessageAckTokenRow {
+    #[diesel(sql_type = Text)]
+    recipient: String,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = BigInt)]
+    queue_position: i64,
+    #[diesel(sql_type = Timestamptz)]
+    expires_at: chrono::DateTime<Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    consumed_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[async_trait]
+impl DeviceMessageStore for PgDeviceMessageStore {
+    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO device_messages \
+             (id, idempotency_key, sender, recipient, device_id, position, content, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (recipient, device_id, position) DO NOTHING",
+        )
+        .bind::<SqlUuid, _>(Uuid::new_v4())
+        .bind::<Text, _>(&message.idempotency_key)
+        .bind::<Text, _>(&message.sender)
+        .bind::<Text, _>(&message.recipient)
+        .bind::<Text, _>(&message.device_id)
+        .bind::<BigInt, _>(message.position)
+        .bind::<Jsonb, _>(&message.content)
+        .bind::<Timestamptz, _>(message.created_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn try_register_txn(&self, key: String) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO device_message_txns (key, created_at) \
+             VALUES ($1, NOW()) \
+             ON CONFLICT (key) DO NOTHING",
+        )
+        .bind::<Text, _>(&key)
+        .execute(&mut *conn)
+        .await
+        .map(|affected| affected > 0)
+        .map_err(PersistenceError::from)
+    }
+
+    async fn issue_ack_token(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        queue_position: i64,
+    ) -> PersistenceResult<Option<String>> {
+        if queue_position <= 0 {
+            return Ok(None);
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        let token = fresh_device_message_ack_token();
+        let expires_at = Utc::now() + chrono::Duration::hours(24);
+        sql_query(
+            "DELETE FROM device_message_ack_tokens \
+             WHERE expires_at <= NOW()",
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        sql_query(
+            "INSERT INTO device_message_ack_tokens \
+             (ack_token, recipient, device_id, queue_position, issued_at, expires_at, consumed_at) \
+             VALUES ($1, $2, $3, $4, NOW(), $5, NULL)",
+        )
+        .bind::<Text, _>(&token)
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .bind::<BigInt, _>(queue_position)
+        .bind::<Timestamptz, _>(expires_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(Some(token))
+    }
+
+    async fn ack_with_token(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        ack_token: &str,
+    ) -> PersistenceResult<Option<usize>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let token = sql_query(
+            "SELECT recipient, device_id, queue_position, expires_at, consumed_at \
+             FROM device_message_ack_tokens \
+             WHERE ack_token = $1",
+        )
+        .bind::<Text, _>(ack_token)
+        .get_result::<DeviceMessageAckTokenRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::from)?;
+        let Some(token) = token else {
+            return Ok(None);
+        };
+        if token.recipient != recipient
+            || token.device_id != device_id
+            || token.expires_at <= Utc::now()
+        {
+            return Ok(None);
+        }
+        if token.consumed_at.is_some() {
+            return Ok(Some(0));
+        }
+        let pruned = sql_query(
+            "DELETE FROM device_messages \
+             WHERE recipient = $1 AND device_id = $2 AND position <= $3",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .bind::<BigInt, _>(token.queue_position)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        sql_query(
+            "UPDATE device_message_ack_tokens \
+             SET consumed_at = NOW() \
+             WHERE ack_token = $1 AND consumed_at IS NULL",
+        )
+        .bind::<Text, _>(ack_token)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        Ok(Some(pruned))
+    }
+
+    async fn list_after(
+        &self,
+        recipient: &str,
+        device_id: &str,
+        queue_position: i64,
+    ) -> PersistenceResult<Vec<DeviceMessageRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT idempotency_key, sender, recipient, device_id, position, content, created_at \
+             FROM device_messages \
+             WHERE recipient = $1 AND device_id = $2 AND position > $3 \
+             ORDER BY position ASC",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .bind::<BigInt, _>(queue_position)
+        .load::<DeviceMessageRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(DeviceMessageRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "DELETE FROM device_message_ack_tokens \
+             WHERE recipient = $1 AND device_id = $2",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)?;
+        sql_query(
+            "DELETE FROM device_messages \
+             WHERE recipient = $1 AND device_id = $2",
+        )
+        .bind::<Text, _>(recipient)
+        .bind::<Text, _>(device_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::from)
     }
 }
 

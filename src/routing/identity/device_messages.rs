@@ -5,9 +5,9 @@
 //!   idempotency_key)` so duplicate retries return 200 without re-queueing. The idempotency key is
 //!   supplied via the `Idempotency-Key` request header.
 //! - `GET /_cokret/self/device_messages` — pull pending to-device messages for the bound
-//!   session/device. Uses the `ck:cursor:` `to_device_position` from
-//!   `parse_and_validate_sync_cursor` so a duplicate sync cannot prematurely ack a delivery (this
-//!   is what the README calls out as the cursor-acked eviction guarantee).
+//!   session/device. A `from` cursor is read-only pagination state; it never prunes the queue.
+//! - `POST /_cokret/self/device_messages/ack` — consume a bearer ack token and prune the
+//!   messages covered by that delivery batch.
 
 use std::collections::BTreeMap;
 
@@ -23,23 +23,26 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, DeviceMessageRecord, SessionRecord};
+use crate::state::{AppState, DeviceMessageRecord};
 use crate::wire::{
-    DeviceMessageEnvelope, DeviceMessagesGetOutcome, DeviceMessagesPutOutcome,
-    DeviceMessagesPutRequestBody,
+    DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
+    DeviceMessagesGetOutcome, DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody,
 };
 
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
 pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
 pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
 pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "ck.notification.read_cursor.update";
+pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 pub(super) fn protocol_router() -> Router {
-    Router::new().push(
-        Router::with_path("device_messages")
-            .post(send_device_messages)
-            .get(get_device_messages),
-    )
+    Router::new()
+        .push(
+            Router::with_path("device_messages")
+                .post(send_device_messages)
+                .get(get_device_messages),
+        )
+        .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
 pub(super) fn legacy_router() -> Router {
@@ -53,6 +56,7 @@ pub(super) fn legacy_router() -> Router {
                 .post(send_device_messages)
                 .get(get_device_messages),
         )
+        .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
 #[endpoint(
@@ -188,13 +192,14 @@ pub(crate) async fn fanout_actor_private_update(
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,
+    limit: QueryParam<u32, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesGetOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let cursor = from.into_inner();
-    let ack_position = match cursor {
+    let cursor_position = match cursor {
         Some(cursor) => match parse_and_validate_sync_cursor(
             &cursor,
             state,
@@ -246,26 +251,39 @@ async fn get_device_messages(
         },
         None => 0,
     };
-    let _ = state
-        .persistence
-        .device_messages()
-        .ack(&session.actor, &session.device_id, ack_position)
-        .await;
+    let page_limit = match limit.into_inner() {
+        Some(0) => return Err(AppError::invalid_param("limit must be greater than zero")),
+        Some(limit) => (limit as usize).min(TO_DEVICE_PAGE_LIMIT),
+        None => TO_DEVICE_PAGE_LIMIT,
+    };
     let queued = state
         .persistence
         .device_messages()
-        .list_after(&session.actor, &session.device_id, ack_position)
+        .list_after(&session.actor, &session.device_id, cursor_position)
         .await
-        .unwrap_or_default();
-    let messages = device_message_envelopes_after(&queued);
-    let to_device_position = queued
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let has_more = queued.len() > page_limit;
+    let page = queued.into_iter().take(page_limit).collect::<Vec<_>>();
+    let messages = device_message_envelopes_after(&page);
+    let to_device_position = page
         .iter()
         .map(|message| message.position)
         .max()
-        .unwrap_or(ack_position);
-    json_ok(DeviceMessagesGetOutcome {
-        messages,
-        next_cursor: Some(
+        .unwrap_or(cursor_position);
+    let ack_token = if page.is_empty() {
+        None
+    } else {
+        state
+            .persistence
+            .device_messages()
+            .issue_ack_token(&session.actor, &session.device_id, to_device_position)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+    };
+    let next_cursor = if page.is_empty() {
+        None
+    } else {
+        Some(
             sync_token_for_client_sync(
                 state,
                 Some(&session),
@@ -274,22 +292,50 @@ async fn get_device_messages(
                 to_device_position,
             )
             .await,
-        ),
-        has_more: false,
-        limited: false,
+        )
+    };
+    json_ok(DeviceMessagesGetOutcome {
+        messages,
+        ack_token,
+        next_cursor,
+        has_more,
+        limited: has_more,
+        lost: false,
     })
 }
 
-pub async fn prune_acked_device_messages(
-    state: &AppState,
-    session: &SessionRecord,
-    ack_position: i64,
-) {
-    let _ = state
+#[endpoint(
+    operation_id = "ck.self.device_messages.ack",
+    tags("device_messages"),
+    summary = "Acknowledge a delivered to-device batch by bearer token"
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.ack"))]
+async fn ack_device_messages(
+    aa: AuthArgs,
+    body: JsonBody<DeviceMessagesAckRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DeviceMessagesAckOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let ack_token = body.ack_token.trim();
+    if ack_token.is_empty() {
+        return Err(AppError::invalid_param("invalid_ack_token"));
+    }
+    let Some(pruned_count) = state
         .persistence
         .device_messages()
-        .ack(&session.actor, &session.device_id, ack_position)
-        .await;
+        .ack_with_token(&session.actor, &session.device_id, ack_token)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Err(AppError::invalid_param("invalid_ack_token"));
+    };
+    json_ok(DeviceMessagesAckOutcome {
+        ok: true,
+        pruned_count: Some(pruned_count as u64),
+    })
 }
 
 pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {

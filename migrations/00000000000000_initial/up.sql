@@ -188,6 +188,32 @@ CREATE TABLE public.devices (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.device_messages (
+    id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    sender text NOT NULL,
+    recipient text NOT NULL,
+    device_id text NOT NULL,
+    position bigint NOT NULL,
+    content jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.device_message_txns (
+    key text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.device_message_ack_tokens (
+    ack_token text NOT NULL,
+    recipient text NOT NULL,
+    device_id text NOT NULL,
+    queue_position bigint NOT NULL,
+    issued_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone
+);
+
 CREATE TABLE public.direct_conversation_bindings (
     participants_key text NOT NULL,
     participants_unordered text[] NOT NULL,
@@ -783,6 +809,18 @@ ALTER TABLE ONLY public.devices
 ALTER TABLE ONLY public.devices
     ADD CONSTRAINT devices_actor_device_id_key UNIQUE (actor_id, device_id);
 
+ALTER TABLE ONLY public.device_messages
+    ADD CONSTRAINT device_messages_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.device_messages
+    ADD CONSTRAINT device_messages_recipient_device_position_key UNIQUE (recipient, device_id, position);
+
+ALTER TABLE ONLY public.device_message_txns
+    ADD CONSTRAINT device_message_txns_pkey PRIMARY KEY (key);
+
+ALTER TABLE ONLY public.device_message_ack_tokens
+    ADD CONSTRAINT device_message_ack_tokens_pkey PRIMARY KEY (ack_token);
+
 ALTER TABLE ONLY public.direct_conversation_bindings
     ADD CONSTRAINT direct_conversation_bindings_pkey PRIMARY KEY (participants_key);
 
@@ -970,6 +1008,12 @@ CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id, scop
 
 CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, updated_at DESC);
 
+CREATE INDEX device_message_ack_tokens_device_idx ON public.device_message_ack_tokens USING btree (recipient, device_id, expires_at);
+
+CREATE INDEX device_messages_recipient_device_position_idx ON public.device_messages USING btree (recipient, device_id, position);
+
+CREATE INDEX device_messages_sender_idempotency_idx ON public.device_messages USING btree (sender, idempotency_key);
+
 CREATE INDEX events_space_created_idx ON public.events USING btree (realm_id, created_at, id);
 
 CREATE INDEX events_thread_created_idx ON public.events USING btree (thread_id, created_at, id) WHERE (thread_id IS NOT NULL);
@@ -1134,4 +1178,3 @@ ALTER TABLE ONLY public.recovery_policies
 
 ALTER TABLE ONLY public.recovery_receipts
     ADD CONSTRAINT recovery_receipts_policy_id_fkey FOREIGN KEY (policy_id) REFERENCES public.recovery_policies(id);
-

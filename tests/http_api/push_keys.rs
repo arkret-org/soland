@@ -1330,14 +1330,19 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .take_json()
         .await
         .unwrap();
-    let content = &delivered["events"][0]["content"]["content"];
+    let content = &delivered["messages"][0]["content"];
     assert_eq!(content["ciphertext"], ciphertext);
     assert!(content.get("plaintext").is_none());
-    assert!(delivered["events"][0]["position"].as_i64().unwrap() > 0);
+    assert!(
+        delivered["ack_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
+    assert!(delivered["next_cursor"].as_str().is_some());
 }
 
 #[tokio::test]
-async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
+async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
@@ -1359,6 +1364,10 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
 
     let first = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
     assert_eq!(first["to_device"]["messages"].as_array().unwrap().len(), 1);
+    let ack_token = first["to_device"]["ack_token"]
+        .as_str()
+        .expect("to_device ack_token")
+        .to_owned();
     let first_cursor = decode_cursor(first["cursor"].as_str().unwrap());
     assert!(first_cursor["h"].as_str().is_some_and(|h| h.len() >= 22));
     assert!(first_cursor.get("_positions").is_none());
@@ -1369,8 +1378,8 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
         1
     );
 
-    let acked = account_subscribe_frame(
-        state,
+    let cursor_replay = account_subscribe_frame(
+        state.clone(),
         Some(&token),
         &format!(
             "catchup=true&max_wait_ms=0&after={}",
@@ -1379,11 +1388,44 @@ async fn to_device_messages_survive_duplicate_sync_until_cursor_ack() {
     )
     .await;
     assert!(
-        acked["to_device"]["messages"].is_array(),
-        "acked sync response must be a sync body: {acked}"
+        cursor_replay["to_device"]["messages"].is_array(),
+        "cursor replay response must be a sync body: {cursor_replay}"
     );
+    assert_eq!(
+        cursor_replay["to_device"]["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "account cursor must not prune unacked to-device messages"
+    );
+
+    let acked: Value = TestClient::post("http://server/_cokret/self/device_messages/ack")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "ack_token": ack_token.clone() }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(acked["ok"], true);
+    assert_eq!(acked["pruned_count"], 1);
+
+    let ack_replay: Value = TestClient::post("http://server/_cokret/self/device_messages/ack")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({ "ack_token": ack_token }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(ack_replay["ok"], true);
+    assert_eq!(ack_replay["pruned_count"], 0);
+
+    let after_ack =
+        account_subscribe_frame(state, Some(&token), "catchup=true&max_wait_ms=0").await;
     assert!(
-        acked["to_device"]["messages"]
+        after_ack["to_device"]["messages"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -1418,7 +1460,7 @@ async fn device_messages_evicted_after_session_logout() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(pre_logout["events"].as_array().unwrap().len(), 1);
+    assert_eq!(pre_logout["messages"].as_array().unwrap().len(), 1);
 
     let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1444,5 +1486,5 @@ async fn device_messages_evicted_after_session_logout() {
         .take_json()
         .await
         .unwrap();
-    assert!(post_logout["events"].as_array().unwrap().is_empty());
+    assert!(post_logout["messages"].as_array().unwrap().is_empty());
 }

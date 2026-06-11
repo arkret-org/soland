@@ -527,6 +527,7 @@ async fn peer_events_query_response(
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(EventsQueryOutcome {
         events,
+        snapshot_bootstrap: None,
         next_cursor,
         prev_cursor,
         has_more,

@@ -5,12 +5,13 @@ pub use cokret_sdk::api::ops::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 pub use cokret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
-    DeviceMessagesGetOutcome, DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody,
-    DirectConversationBindingState, DirectConversationSummary, EventsQueryPostRequestBody,
-    IdentityResolveRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
-    KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,
-    PushNotifyRequestBody, RealmJoinCandidate, RealmJoinCandidateRole,
-    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
+    DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
+    DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody, DirectConversationBindingState,
+    DirectConversationSummary, EventsQueryPostRequestBody, IdentityResolveRequestBody,
+    KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
+    KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome, PushNotifyRequestBody,
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
+    RealmJoinCandidateSource, RealmJoinMethod,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

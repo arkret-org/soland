@@ -445,17 +445,17 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .take_json()
         .await
         .unwrap();
-    let phone_events = phone_messages["events"].as_array().unwrap();
+    let phone_events = phone_messages["messages"].as_array().unwrap();
     let blocklist_event = phone_events
         .iter()
-        .find(|event| event["content"]["type"] == "ck.account.blocklist.update")
+        .find(|event| event["kind"] == "ck.account.blocklist.update")
         .expect("blocklist update fanout reaches Alice's sibling device");
     assert_eq!(
-        blocklist_event["content"]["content"]["data_type"],
+        blocklist_event["content"]["data_type"],
         "ck.account.blocklist.v1"
     );
     assert_eq!(
-        blocklist_event["content"]["content"]["content"]["entries"][0]["target"]["did"],
+        blocklist_event["content"]["content"]["entries"][0]["target"]["did"],
         "did:web:bob.example"
     );
 
@@ -466,7 +466,7 @@ async fn blocklist_account_data_fans_out_and_filters_notifications() {
         .take_json()
         .await
         .unwrap();
-    assert!(bob_messages["events"].as_array().unwrap().is_empty());
+    assert!(bob_messages["messages"].as_array().unwrap().is_empty());
 
     let blocked_message = send_plaintext_message(
         state.clone(),
@@ -623,20 +623,20 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .take_json()
         .await
         .unwrap();
-    let read_cursor_fanouts = phone_messages["events"]
+    let read_cursor_fanouts = phone_messages["messages"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| event["content"]["type"] == "ck.read_cursor.update")
+        .filter(|event| event["kind"] == "ck.read_cursor.update")
         .collect::<Vec<_>>();
     assert_eq!(read_cursor_fanouts.len(), 2);
     assert!(read_cursor_fanouts.iter().any(|event| {
-        event["content"]["content"]["realm_id"] == realm_a
-            && event["content"]["content"]["position"]["event_id"] == event_a
+        event["content"]["realm_id"] == realm_a
+            && event["content"]["position"]["event_id"] == event_a
     }));
     assert!(read_cursor_fanouts.iter().any(|event| {
-        event["content"]["content"]["realm_id"] == realm_b
-            && event["content"]["content"]["position"]["event_id"] == event_b
+        event["content"]["realm_id"] == realm_b
+            && event["content"]["position"]["event_id"] == event_b
     }));
 
     let bob_markers = projected_read_markers(&state, "did:web:bob.example", None);
@@ -648,7 +648,7 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         .take_json()
         .await
         .unwrap();
-    assert!(bob_messages["events"].as_array().unwrap().is_empty());
+    assert!(bob_messages["messages"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

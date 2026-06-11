@@ -12,7 +12,9 @@
 //! the missing constraint types, the condition.kind types, the
 //! capability lattice, and grant/invite/policy lifecycle integration.
 
-use cokret_sdk::model::{CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteState};
+use cokret_sdk::model::{
+    CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget, InviteState,
+};
 use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -595,6 +597,17 @@ async fn invites(
 }
 
 fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invite, AppError> {
+    let invite_delivery_target = invite
+        .invite_delivery_target
+        .clone()
+        .and_then(|target| serde_json::from_value::<InviteDeliveryTarget>(target).ok());
+    let introduction_evidence_digest = invite
+        .introduction_evidence_digest
+        .clone()
+        .and_then(|digest| Hash::new(digest).ok());
+    let expires_at = invite
+        .expires_at
+        .unwrap_or_else(|| invite.created_at + chrono::Duration::days(7));
     Ok(Invite {
         schema: "ck.schema.invite.v1".to_owned(),
         id: InviteId::new(invite.invite_id.clone())
@@ -608,16 +621,20 @@ fn invite_record_to_sdk(invite: crate::state::RealmInviteRecord) -> Result<Invit
             .map(Did::new)
             .transpose()
             .map_err(|error| AppError::internal(error.to_string()))?,
-        third_party_id: invite.invite_delivery_target.clone(),
+        invite_delivery_target,
+        introduction_evidence_digest,
+        third_party_id: None,
         join_rule_snapshot: json!({
             "join_rule": "invite",
             "invite_token": invite.invite_token,
             "introduction_evidence_digest": invite.introduction_evidence_digest,
         }),
         capability_grant_refs: Vec::new(),
-        expires_at: invite.expires_at,
+        expires_at,
         state: invite_state_from_record(&invite.status),
         created_at: invite.created_at,
+        updated_by: None,
+        updated_at: None,
     })
 }
 

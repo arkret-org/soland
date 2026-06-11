@@ -548,6 +548,7 @@ pub struct PgPersistenceStore {
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
     projection_events: PgProjectionEventStore,
+    device_messages: PgDeviceMessageStore,
     mls_key_packages: PgMlsKeyPackageStore,
     mls_welcomes: PgMlsWelcomeStore,
     mls_commits: PgMlsCommitStore,
@@ -592,6 +593,7 @@ impl PgPersistenceStore {
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             projection_events: PgProjectionEventStore { pool: pool.clone() },
+            device_messages: PgDeviceMessageStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
             mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
             mls_commits: PgMlsCommitStore { pool: pool.clone() },
@@ -726,7 +728,7 @@ impl PersistenceStore for PgPersistenceStore {
     }
 
     fn device_messages(&self) -> &dyn DeviceMessageStore {
-        self.fallback.device_messages()
+        &self.device_messages
     }
 
     fn device_keys(&self) -> &dyn DeviceKeyStore {

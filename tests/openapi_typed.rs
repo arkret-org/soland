@@ -349,10 +349,12 @@ async fn typed_describe_handlers_publish_response_schemas() {
         );
     }
 
-    // Round 15n — identity/device_messages.rs typed batch (2 handlers).
+    // Round 15n — identity/device_messages.rs typed batch (3 handlers).
     // Wire types already had ToSchema; operation_ids follow the v1
-    // registry's put/get naming.
+    // registry's put/get/ack naming.
     for typed_now in [
+        "DeviceMessagesAckOutcome",
+        "DeviceMessagesAckRequestBody",
         "DeviceMessagesPutRequestBody",
         "DeviceMessagesPutOutcome",
         "DeviceMessagesGetOutcome",
@@ -362,7 +364,11 @@ async fn typed_describe_handlers_publish_response_schemas() {
             "{typed_now} missing — round 15n typed signature did not publish its schema"
         );
     }
-    for operation_id in ["ck.self.device_messages.put", "ck.self.device_messages.get"] {
+    for operation_id in [
+        "ck.self.device_messages.put",
+        "ck.self.device_messages.get",
+        "ck.self.device_messages.ack",
+    ] {
         assert!(
             body.contains(&format!("operationId: {operation_id}")),
             "missing operationId {operation_id} from round 15n typed conversion"

@@ -417,6 +417,7 @@ pub(super) async fn events_query_durable_scope_impl(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(EventsQueryOutcome {
         events,
+        snapshot_bootstrap: None,
         next_cursor,
         prev_cursor: None,
         has_more,
