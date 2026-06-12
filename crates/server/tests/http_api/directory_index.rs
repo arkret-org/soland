@@ -21,7 +21,7 @@ async fn sync_directory_and_index_share_demo_realm() {
             "board",
             "chat",
             "topic",
-            "converse",
+            "offline_queue_flush",
             "backfill_gap",
             "bottom_cell_repair"
         ])
