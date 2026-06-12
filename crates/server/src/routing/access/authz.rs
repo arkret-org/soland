@@ -13,7 +13,8 @@
 //! capability lattice, and grant/invite/policy lifecycle integration.
 
 use cokret_sdk::model::{
-    CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget, InviteState,
+    AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
+    InviteState,
 };
 use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -26,8 +27,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    CreateGrantOutcome, CreateGrantRequestBody, RevokeGrantOutcome, SolandAuthzCheckOutcome,
-    SolandAuthzCheckRequestBody,
+    AuthzCheckOutcome, AuthzCheckRequestBody, CreateGrantOutcome, CreateGrantRequestBody,
+    RevokeGrantOutcome,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -55,10 +56,10 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.authz.check"))]
 async fn authz_check(
     aa: AuthArgs,
-    body: JsonBody<SolandAuthzCheckRequestBody>,
+    body: JsonBody<AuthzCheckRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAuthzCheckOutcome> {
+) -> JsonResult<AuthzCheckOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // TODO(authz-scoping): service-http-binding.md §account_auth / §self authorization
     // requires caller-shape scoping (principal session vs service signature).
@@ -134,7 +135,7 @@ async fn authz_check(
         (owner, members)
     };
     let result = state.authz.check(
-        &body.actor_id,
+        body.actor_id.as_str(),
         &body.action,
         &resource_str,
         &realm_id,
@@ -158,12 +159,16 @@ async fn authz_check(
     // the decision as a five-valued enum where `quarantine`/`require_review` are
     // Policy Server-mediated soft outcomes (not produced by the local engine);
     // a local refusal maps to the conservative terminal `hard_deny`.
-    let decision = if result.allowed { "allow" } else { "hard_deny" }.to_owned();
+    let decision = if result.allowed {
+        AuthzDecision::Allow
+    } else {
+        AuthzDecision::HardDeny
+    };
     let reason_code = (!result.allowed).then(|| result.reason.clone());
     // Trace/diagnostic data lives in the spec-allowed `policy_results` array
     // rather than a private `decision_trace` field.
     let policy_results = vec![json!({
-        "actor_id": body.actor_id,
+        "actor_id": body.actor_id.as_str(),
         "action": body.action,
         "resource": resource_str,
         "realm_id": realm_id,
@@ -175,12 +180,20 @@ async fn authz_check(
             "frontier": Value::Null
         }
     })];
-    json_ok(SolandAuthzCheckOutcome {
+    json_ok(AuthzCheckOutcome {
         decision,
         matched_grants,
+        applied_constraints: Vec::new(),
         policy_results,
-        obligations: Vec::new(),
+        missing_proofs: Vec::new(),
+        frontier: None,
+        freshness_state: None,
+        last_known_frontier_age_ms: None,
+        notary_status: None,
+        cache_expires_at: None,
         reason_code,
+        retry_after_ms: None,
+        obligations: Vec::new(),
     })
 }
 

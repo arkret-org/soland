@@ -300,7 +300,7 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     match decision {
         MergedAuthzDecision::RemoteDeny { remote, .. } => {
-            assert!(matches!(remote.decision, AuthzDecision::Deny));
+            assert!(matches!(remote.decision, AuthzDecision::HardDeny));
             let reason = remote.reason_code.as_deref().unwrap_or("");
             assert!(
                 reason == "policy_server_timeout"

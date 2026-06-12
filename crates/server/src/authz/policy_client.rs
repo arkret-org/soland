@@ -378,7 +378,7 @@ impl PolicyClient {
             sig: "proxy".to_owned(),
         };
         PolicyCheckOutcome {
-            decision: AuthzDecision::Deny,
+            decision: AuthzDecision::HardDeny,
             bound_to,
             auth_state_digest: zero_hash.clone(),
             policy_frontier_digest: zero_hash.clone(),
@@ -859,7 +859,7 @@ mod tests {
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(
-            matches!(resp.decision, AuthzDecision::Deny),
+            matches!(resp.decision, AuthzDecision::HardDeny),
             "fail-closed must produce a deny decision"
         );
         // The reason_code distinguishes synthesised vs upstream decisions.

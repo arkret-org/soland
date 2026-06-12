@@ -532,50 +532,12 @@ pub struct SolandEventsFrontierState {
 // removed and hard-rejected in renames.json). soland answers both operations
 // with `not_implemented` until it can produce a real Snapshot detached proof.
 
-// spec `service-operation-dtos.schema.json#/$defs/AuthzCheckRequestBody`
-// (additionalProperties: false). required: actor_id, action; `resource` is
-// optional because identity-scoped actions (e.g. ck.realm.create) have no
-// Realm-bound target.
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAuthzCheckRequestBody {
-    pub actor_id: String,
-    pub action: String,
-    #[serde(default)]
-    pub resource: Option<Value>,
-    #[serde(default)]
-    pub context: Option<Value>,
-}
-
-// AUTHORITATIVE FORM: spec
-// `service-operation-dtos.schema.json#/$defs/AuthzCheckOutcome`
-// (additionalProperties: false; `ck.self.authz.check` already binds it via
-// operation-registry `response_schema_ref`). required: `decision` (five-valued
-// enum: allow / soft_deny / hard_deny / quarantine / require_review).
-// Diagnostic trace data is carried in spec-allowed fields (`matched_grants`,
-// `policy_results`, `obligations`, `reason_code`) rather than private
-// `grants`/`reason`/`decision_trace`.
-//
-// This stays a soland-local DTO (NOT `pub use cokret_sdk::model::AuthzCheckOutcome`)
-// because the SDK type genuinely DIVERGES from the authoritative spec schema:
-// SDK `AuthzDecision` serializes `allow|deny|quarantine|require_review|soft_fail`,
-// while the spec enum is `allow|soft_deny|hard_deny|quarantine|require_review`
-// (`deny`/`soft_fail` are not spec values; `soft_deny`/`hard_deny` are absent
-// from the SDK). `pub use`-ing the SDK type would emit spec-invalid `decision`
-// strings. Reconciling SDK↔spec is an owner/SDK-side decision; soland tracks the
-// spec form here. See cotask `_spec_review/soland-derived-spec-issues.md`
-// SPEC-SOL-002.
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAuthzCheckOutcome {
-    pub decision: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub matched_grants: Vec<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub policy_results: Vec<Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub obligations: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<String>,
-}
+// authz check DTOs are now the spec-authoritative SDK types. The SDK
+// `AuthzDecision` enum was aligned to the spec five-valued form
+// (allow / soft_deny / hard_deny / quarantine / require_review) and
+// `AuthzCheckRequestBody` to `{ actor_id, action, resource?, context? }`,
+// so soland re-uses them directly instead of carrying local copies.
+pub use cokret_sdk::model::{AuthzCheckOutcome, AuthzCheckRequestBody};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct PushRegisterRequestBody {
