@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
-use soland::state::{CanonicalEventRecord, DeviceInventoryRecord, SessionRecord};
+use soland::state::{
+    CanonicalEventRecord, DeviceInventoryRecord, RecoveryPolicyRecord, SessionRecord,
+};
 
 use super::common::*;
 
@@ -305,6 +307,29 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
 const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_policy_get_returns_null_without_active_policy() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[90u8; 32]);
+    let (principal_id, _vm) = did_key_principal(&signing);
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+
+    let body = get_recovery(
+        state,
+        &token,
+        "/_cokret/root/identity/recovery-policy",
+        StatusCode::OK,
+    )
+    .await;
+    assert!(body["active_policy"].is_null(), "body: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_active_and_history() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[91u8; 32]);
@@ -318,11 +343,8 @@ async fn recovery_policy_get_returns_active_and_history() {
     )
     .await;
 
-    let v1 = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
-    let body1 = post_recovery_policy(state.clone(), &token, &v1, StatusCode::CREATED).await;
-    let v1_id = body1["policy_id"].as_str().unwrap().to_owned();
-    let v2 = signed_recovery_policy(&signing, &principal_id, &vm, 2, Some(&v1_id), POLICY_FIELDS);
-    post_recovery_policy(state.clone(), &token, &v2, StatusCode::CREATED).await;
+    let v1_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
+    seed_recovery_policy(&state, &principal_id, &vm, 2, Some(&v1_id)).await;
 
     let active = get_recovery(
         state.clone(),
@@ -337,7 +359,7 @@ async fn recovery_policy_get_returns_active_and_history() {
     let history = get_recovery(
         state,
         &token,
-        "/_cokret/root/identity/recovery-policies",
+        "/_soland/root/identity/recovery-policies",
         StatusCode::OK,
     )
     .await;
@@ -375,7 +397,7 @@ async fn recovery_receipts_get_returns_history() {
     let body = get_recovery(
         state,
         &token,
-        "/_cokret/root/identity/recovery-receipts",
+        "/_soland/root/identity/recovery-receipts",
         StatusCode::OK,
     )
     .await;
@@ -417,12 +439,11 @@ const RECOVERY_TEST_DEVICE_B: &str = "ck:device:01904100-0000-7000-8000-a11ce000
 async fn open_recovery_session(
     state: AppState,
     token: &str,
-    signing: &SigningKey,
+    _signing: &SigningKey,
     principal_id: &str,
     vm: &str,
 ) -> Value {
-    let policy = signed_recovery_policy(signing, principal_id, vm, 1, None, POLICY_FIELDS);
-    post_recovery_policy(state.clone(), token, &policy, StatusCode::CREATED).await;
+    seed_recovery_policy(&state, principal_id, vm, 1, None).await;
     let create_body = serde_json::json!({
         "principal_id": principal_id,
         "trust_domain": "ck:trust_domain:soland.local",
@@ -1265,6 +1286,74 @@ async fn recovery_session_complete_rejects_wrong_ssk_signature() {
 
 // ── C-P5 did_recovery ↔ active policy value binding ─────────────────────────
 
+fn did_recovery_backup_body(principal_id: &str, backup_id: &str, policy_id: &str) -> Value {
+    serde_json::json!({
+        "backup_id": backup_id,
+        "actor_id": principal_id,
+        "backup_class": "did_recovery",
+        "backup_version": "kb_1",
+        "created_at": "2026-05-30T00:00:00Z",
+        "series_id": "ck:backup_series:01964137-0000-7000-8000-0000000000c5",
+        "series_seq": 0,
+        "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
+        "encryption": {
+            "recipient_method": "recovery_public_key",
+            "recipient_key_ref": "did:web:alice.example#recovery",
+            "aead": {
+                "name": "chacha20_poly1305",
+                "aead_profile": "ck.aead.chacha20_poly1305.v1",
+                "enc": "ZW5jYXBzdWxhdGVka2V5"
+            }
+        },
+        "contents": [{ "item_type": "recovery_key_share", "secret_id": "test-secret" }],
+        "ciphertext": "AAAA",
+        "ciphertext_digest":
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "key_commitment":
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "auth_data": {
+            "device_id": RECOVERY_TEST_DEVICE,
+            "verification_method": format!("{principal_id}#device"),
+            "signature_algorithm": "EdDSA",
+            "signature": "c2lnbmF0dXJl",
+            "ssk_generation": 1,
+            "signed_fields": [
+                "backup_id",
+                "actor_id",
+                "backup_class",
+                "backup_version",
+                "series_id",
+                "series_seq",
+                "supersedes",
+                "encryption",
+                "contents",
+                "ciphertext_digest",
+                "recovery_policy_ref"
+            ]
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn did_recovery_backup_rejects_missing_active_recovery_policy() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[120u8; 32]);
+    let (principal_id, _vm) = did_key_principal(&signing);
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+
+    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c4";
+    let policy_id = "ck:policy:01964137-0000-7000-8000-0000000000ee";
+    let backup = did_recovery_backup_body(&principal_id, backup_id, policy_id);
+    let body = put_key_backup(state, &token, backup_id, &backup, StatusCode::CONFLICT).await;
+    assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
     // A did_recovery backup whose recovery_policy_ref does not equal the actor's
@@ -1282,41 +1371,11 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
 
     // Seed an active recovery policy (v1) — its policy_id is random, so the
     // backup's fixed wrong policy_id below cannot match it.
-    let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
-    post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
+    seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
 
     let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c5";
     let wrong_policy = "ck:policy:01964137-0000-7000-8000-0000000000ff";
-    let backup = serde_json::json!({
-        "backup_id": backup_id,
-        "actor_id": principal_id,
-        "backup_class": "did_recovery",
-        "backup_version": "kb_1",
-        "created_at": "2026-05-30T00:00:00Z",
-        "series_id": "ck:backup_series:01964137-0000-7000-8000-0000000000c5",
-        "series_seq": 0,
-        "recovery_policy_ref": { "policy_id": wrong_policy, "policy_version": 1 },
-        "encryption": {
-            "recipient_method": "recovery_public_key",
-            "recipient_key_ref": "did:web:alice.example#recovery",
-            "aead": {
-                "name": "chacha20_poly1305",
-                "aead_profile": "ck.aead.chacha20_poly1305.v1",
-                "enc": "ZW5jYXBzdWxhdGVka2V5"
-            }
-        },
-        "contents": [{ "item_type": "recovery_key_share", "secret_id": "test-secret" }],
-        "ciphertext": "AAAA",
-        "ciphertext_digest":
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "key_commitment":
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "auth_data": { "signed_fields": [
-            "backup_id", "actor_id", "backup_class", "backup_version", "series_id",
-            "series_seq", "supersedes", "encryption", "contents", "ciphertext_digest",
-            "recovery_policy_ref"
-        ] }
-    });
+    let backup = did_recovery_backup_body(&principal_id, backup_id, wrong_policy);
     let body = put_key_backup(state, &token, backup_id, &backup, StatusCode::CONFLICT).await;
     assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
 }
@@ -1384,6 +1443,58 @@ fn shared_recovery_state_with_config(
     config: soland::config::AppConfig,
 ) -> AppState {
     AppState::new_with_persistence(config, Db { pool: None }, persistence)
+}
+
+async fn seed_recovery_policy(
+    state: &AppState,
+    principal_id: &str,
+    verification_method: &str,
+    version: u32,
+    supersedes: Option<&str>,
+) -> String {
+    let policy_id = new_prefixed_uuid7("ck:policy:");
+    let issued_at = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let expires_at = chrono::DateTime::parse_from_rfc3339("2026-06-30T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let raw_payload = serde_json::json!({
+        "schema": "ck.schema.recovery_policy.v1",
+        "policy_id": policy_id,
+        "principal_id": principal_id,
+        "version": version,
+        "trust_domain": "ck:trust_domain:soland.local",
+        "allowed_proof_kinds": ["principal_signing"],
+        "supersedes": supersedes,
+        "issued_at": "2026-05-30T00:00:00Z",
+        "expires_at": "2026-06-30T00:00:00Z",
+        "auth_data": {
+            "verification_method": verification_method,
+            "signature_algorithm": "EdDSA",
+            "signed_fields": POLICY_FIELDS,
+            "signature": "c2lnbmF0dXJl"
+        }
+    });
+    state
+        .persistence
+        .recovery_policies()
+        .insert(RecoveryPolicyRecord {
+            policy_id: policy_id.clone(),
+            principal_id: principal_id.to_owned(),
+            version,
+            trust_domain: "ck:trust_domain:soland.local".to_owned(),
+            allowed_proof_kinds: vec!["principal_signing".to_owned()],
+            supersedes: supersedes.map(ToOwned::to_owned),
+            expires_at: Some(expires_at),
+            issued_at,
+            raw_payload,
+            accepted_at: chrono::Utc::now(),
+            verification_method: verification_method.to_owned(),
+        })
+        .await
+        .unwrap();
+    policy_id
 }
 
 async fn seed_bearer_session(state: &AppState, token: &str) {
@@ -1545,7 +1656,7 @@ async fn post_recovery_policy(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-policy")
+    let mut response = TestClient::post("http://server/_soland/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))
@@ -1562,7 +1673,7 @@ async fn post_recovery_receipt(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-receipt")
+    let mut response = TestClient::post("http://server/_soland/root/identity/recovery-receipt")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))

@@ -1,7 +1,8 @@
 //! CKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
 //!
-//! Mounts the two spec endpoints introduced in cokret-spec b47ff6ec:
+//! Mounts recovery policy / receipt endpoints introduced in cokret-spec b47ff6ec:
 //!
+//! - `GET /_cokret/root/identity/recovery-policy` — read the active recovery policy.
 //! - `POST /_soland/root/identity/recovery-policy`  — persist + advance a recovery policy.
 //! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
 //!   session.
@@ -115,13 +116,13 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
 
 /// Spec-canonical recovery surface mounted under `/_cokret/root/identity`.
 ///
-/// Only the four `recovery_session.*` operations are spec protocol bindings
-/// (operation-registry `identity_registry` surface group, core tier:
-/// `POST /_cokret/root/identity/recovery-sessions`, `GET .../{id}`,
-/// `POST .../{id}/proofs`, `POST .../{id}/complete`). The recovery-policy /
-/// recovery-receipt routes remain product-private on the `/_soland` track.
+/// The standard read surface exposes the active recovery policy. Recovery
+/// session lifecycle operations also live here. Policy publish/history and
+/// recovery receipt write/history remain product-private on the `/_soland`
+/// track.
 pub(super) fn protocol_router() -> Router {
     Router::with_path("identity")
+        .push(Router::with_path("recovery-policy").get(recovery_policy_get))
         .push(
             Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
         )
@@ -205,15 +206,12 @@ fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_policy.get",
+    operation_id = "ck.root.identity.recovery_policy.get",
     tags("identity", "recovery"),
     summary = "Read the currently accepted recovery policy (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_policy.get")
-)]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.get"))]
 async fn recovery_policy_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
