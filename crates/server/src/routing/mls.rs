@@ -43,7 +43,7 @@ use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
 use crate::persistence::MlsKeyPackageRow;
-use crate::reducer::{self, MlsEffect, MlsKeyPackage, ProjectionEffect};
+use crate::reducer::{self, MlsEffect, MlsKeyPackage, MlsWelcomeQueueKey, ProjectionEffect};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -429,7 +429,7 @@ async fn pending_welcomes(
 
     {
         let mut projection = state.projection.lock().unwrap();
-        let key = (session.actor.clone(), session.device_id.clone());
+        let key = MlsWelcomeQueueKey::new(session.actor.clone(), session.device_id.clone());
         if let Some(queue) = projection.mls_welcomes.get_mut(&key) {
             // Mark every undelivered row with the same now_secs the
             // store used so the projection stays consistent. The store
@@ -525,7 +525,7 @@ fn key_package_to_record(kp: &MlsKeyPackage) -> MlsKeyPackageRow {
         lifetime_not_before: kp.lifetime.not_before,
         lifetime_not_after: kp.lifetime.not_after,
         key_package_bytes: kp.key_package_bytes.clone(),
-        claimed_by_group_id: kp.claimed_by.clone(),
+        claimed_by_mls_group_id: kp.claimed_by.clone(),
         consumed_at: kp.consumed_at,
         created_at: kp.created_at,
     }

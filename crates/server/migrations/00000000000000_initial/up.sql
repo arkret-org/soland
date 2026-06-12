@@ -312,12 +312,18 @@ CREATE TABLE public.key_backups (
 );
 
 CREATE TABLE public.mls_commits (
-    id text NOT NULL,
+    id uuid NOT NULL,
+    effective_scope_kind text NOT NULL,
+    realm_id text NOT NULL,
+    circle_id text,
+    effective_scope jsonb NOT NULL,
+    mls_group_id text NOT NULL,
     epoch bigint NOT NULL,
     leader_actor_id text NOT NULL,
     covered_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
-    committed_at bigint NOT NULL
+    committed_at bigint NOT NULL,
+    CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
 );
 
 CREATE TABLE public.mls_key_packages (
@@ -327,14 +333,14 @@ CREATE TABLE public.mls_key_packages (
     lifetime_not_before bigint NOT NULL,
     lifetime_not_after bigint NOT NULL,
     key_package_bytes bytea NOT NULL,
-    claimed_by_group_id text,
+    claimed_by_mls_group_id text,
     consumed_at bigint,
     created_at bigint NOT NULL
 );
 
 CREATE TABLE public.mls_welcomes (
     id text NOT NULL,
-    group_id text NOT NULL,
+    mls_group_id text NOT NULL,
     recipient_actor_id text NOT NULL,
     recipient_device_id text NOT NULL,
     welcome_bytes bytea NOT NULL,
@@ -1041,7 +1047,11 @@ CREATE INDEX key_backups_actor_idx ON public.key_backups USING btree (actor_id);
 
 CREATE INDEX key_backups_device_idx ON public.key_backups USING btree (device_id);
 
-CREATE INDEX mls_key_packages_by_actor_device ON public.mls_key_packages USING btree (actor_id, device_id, claimed_by_group_id);
+CREATE UNIQUE INDEX mls_commits_circle_scope_key ON public.mls_commits USING btree (realm_id, circle_id, mls_group_id) WHERE ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL));
+
+CREATE UNIQUE INDEX mls_commits_realm_scope_key ON public.mls_commits USING btree (realm_id, mls_group_id) WHERE ((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL));
+
+CREATE INDEX mls_key_packages_by_actor_device ON public.mls_key_packages USING btree (actor_id, device_id, claimed_by_mls_group_id);
 
 CREATE INDEX mls_welcomes_recipient_pending ON public.mls_welcomes USING btree (recipient_actor_id, recipient_device_id, delivered_at, enqueued_at);
 

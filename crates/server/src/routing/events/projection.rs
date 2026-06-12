@@ -36,6 +36,7 @@ use super::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
+use crate::reducer::MlsWelcomeQueueKey;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
     fanout_actor_private_update,
@@ -1119,7 +1120,7 @@ async fn mirror_mls_effect_to_persistence(
                     lifetime_not_before: kp.lifetime.not_before,
                     lifetime_not_after: kp.lifetime.not_after,
                     key_package_bytes: kp.key_package_bytes,
-                    claimed_by_group_id: kp.claimed_by,
+                    claimed_by_mls_group_id: kp.claimed_by,
                     consumed_at: kp.consumed_at,
                     created_at: kp.created_at,
                 });
@@ -1156,7 +1157,10 @@ async fn mirror_mls_effect_to_persistence(
                 .and_then(|projection| {
                     projection
                         .mls_welcomes
-                        .get(&(recipient_actor_id.clone(), recipient_device_id.clone()))
+                        .get(&MlsWelcomeQueueKey::new(
+                            recipient_actor_id.clone(),
+                            recipient_device_id.clone(),
+                        ))
                         .and_then(|queue| queue.iter().find(|row| row.id == *welcome_id))
                         .cloned()
                 })
@@ -1178,6 +1182,7 @@ async fn mirror_mls_effect_to_persistence(
         }
         crate::reducer::MlsEffect::GroupGenesis {
             group_id,
+            effective_scope,
             creator_actor_id,
             covered_seals,
             ..
@@ -1192,6 +1197,7 @@ async fn mirror_mls_effect_to_persistence(
                 .persistence
                 .mls_commits()
                 .initialize_genesis(
+                    effective_scope,
                     group_id,
                     creator_actor_id,
                     covered_seals,
@@ -1205,6 +1211,7 @@ async fn mirror_mls_effect_to_persistence(
         }
         crate::reducer::MlsEffect::CommitEpochAdvanced {
             group_id,
+            effective_scope,
             previous_epoch,
             leader_actor_id,
             covered_seals,
@@ -1220,6 +1227,7 @@ async fn mirror_mls_effect_to_persistence(
                 .persistence
                 .mls_commits()
                 .try_bump(
+                    effective_scope,
                     group_id,
                     *previous_epoch,
                     leader_actor_id,

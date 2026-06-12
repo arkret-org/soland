@@ -14,8 +14,8 @@ pub struct MlsKeyPackageRow {
     pub lifetime_not_before: i64,
     pub lifetime_not_after: i64,
     pub key_package_bytes: Vec<u8>,
-    /// Group id that claimed this row. `None` while claimable.
-    pub claimed_by_group_id: Option<String>,
+    /// MLS group id that claimed this row. `None` while claimable.
+    pub claimed_by_mls_group_id: Option<String>,
     pub consumed_at: Option<i64>,
     pub created_at: i64,
 }
@@ -33,12 +33,15 @@ pub struct MlsWelcomeRecord {
     pub delivered_at: Option<i64>,
 }
 
-/// G3.S1 — durable per-group commit epoch row. The composite key is
-/// just `group_id`; the row's `epoch` is bumped monotonically by the
-/// CAS-protected `try_bump` path.
+/// G3.S1 — durable per-group commit epoch row. The protocol identity is
+/// the tagged `effective_scope` plus `mls_group_id`; the row's `epoch`
+/// is bumped monotonically by the CAS-protected `try_bump` path. `id`
+/// is the database row identity, not the protocol identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpochRecord {
+    pub id: Uuid,
     pub group_id: String,
+    pub effective_scope: Value,
     pub epoch: u64,
     pub leader_actor_id: String,
     pub covered_seals: Vec<String>,
@@ -55,15 +58,15 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// idempotent — production fixtures sometimes resubmit on retry).
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool>;
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>>;
-    /// Atomically claim the named KeyPackage for `group_id`. Returns
-    /// `Ok(Some(record))` on success (with `claimed_by_group_id` /
+    /// Atomically claim the named KeyPackage for `mls_group_id`. Returns
+    /// `Ok(Some(record))` on success (with `claimed_by_mls_group_id` /
     /// `consumed_at` filled in), `Ok(None)` if the row is already
     /// claimed or does not exist. The CAS check + update happens
     /// inside the store so two concurrent callers see at-most-one win.
     async fn try_claim(
         &self,
         id: &str,
-        group_id: &str,
+        mls_group_id: &str,
         consumed_at: i64,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
@@ -92,11 +95,16 @@ pub trait MlsWelcomeStore: Send + Sync {
 /// G3.S1 — per-group MLS commit epoch store.
 #[async_trait]
 pub trait MlsCommitStore: Send + Sync {
-    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
+    async fn get(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// Initialize a group at epoch 0. Returns `Ok(None)` when the group
     /// already has an epoch row.
     async fn initialize_genesis(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         leader_actor_id: &str,
         covered_seals: &[String],
@@ -104,11 +112,12 @@ pub trait MlsCommitStore: Send + Sync {
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
     /// Atomically advance the group's epoch IFF `expected_prev_epoch`
-    /// matches the row's current epoch (or 0 for a never-seen group).
+    /// matches the existing row's current epoch.
     /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
-    /// stale `expected_prev_epoch` (the "mls_epoch_skew" path).
+    /// missing genesis row or stale `expected_prev_epoch`.
     async fn try_bump(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
@@ -158,11 +167,11 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         let Some(row) = rows.get_mut(id) else {
             return Ok(None);
         };
-        if row.claimed_by_group_id.is_some() {
+        if row.claimed_by_mls_group_id.is_some() {
             // Already claimed — CAS loser path.
             return Ok(None);
         }
-        row.claimed_by_group_id = Some(group_id.to_owned());
+        row.claimed_by_mls_group_id = Some(group_id.to_owned());
         row.consumed_at = Some(consumed_at);
         Ok(Some(row.clone()))
     }
@@ -239,7 +248,7 @@ impl MlsWelcomeStore for MemoryMlsWelcomeStore {
 
 #[derive(Default)]
 pub(crate) struct MemoryMlsCommitStore {
-    rows: Mutex<BTreeMap<String, MlsCommitEpochRecord>>,
+    rows: Mutex<BTreeMap<MlsCommitEpochStoreKey, MlsCommitEpochRecord>>,
 }
 
 impl MemoryMlsCommitStore {
@@ -248,46 +257,146 @@ impl MemoryMlsCommitStore {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MlsCommitEpochStoreKey {
+    effective_scope_kind: String,
+    realm_id: String,
+    circle_id: Option<String>,
+    mls_group_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MlsEffectiveScopeParts {
+    kind: String,
+    realm_id: String,
+    circle_id: Option<String>,
+}
+
+impl MlsEffectiveScopeParts {
+    fn store_key(&self, group_id: &str) -> MlsCommitEpochStoreKey {
+        MlsCommitEpochStoreKey {
+            effective_scope_kind: self.kind.clone(),
+            realm_id: self.realm_id.clone(),
+            circle_id: self.circle_id.clone(),
+            mls_group_id: group_id.to_owned(),
+        }
+    }
+}
+
+fn mls_epoch_key(
+    effective_scope: &Value,
+    group_id: &str,
+) -> PersistenceResult<MlsCommitEpochStoreKey> {
+    Ok(mls_effective_scope_parts(effective_scope)?.store_key(group_id))
+}
+
+fn mls_effective_scope_parts(effective_scope: &Value) -> PersistenceResult<MlsEffectiveScopeParts> {
+    let object = effective_scope.as_object().ok_or_else(|| {
+        PersistenceError::Internal("MLS effective_scope must be an object".to_owned())
+    })?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| PersistenceError::Internal("MLS effective_scope missing kind".to_owned()))?;
+    let realm_id = object
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            PersistenceError::Internal("MLS effective_scope missing realm_id".to_owned())
+        })?;
+    if realm_id.is_empty() {
+        return Err(PersistenceError::Internal(
+            "MLS effective_scope has empty realm_id".to_owned(),
+        ));
+    }
+    match kind {
+        "realm" => {
+            if object.len() != 2 || object.contains_key("circle_id") {
+                return Err(PersistenceError::Internal(
+                    "MLS realm effective_scope must only contain kind and realm_id".to_owned(),
+                ));
+            }
+            Ok(MlsEffectiveScopeParts {
+                kind: kind.to_owned(),
+                realm_id: realm_id.to_owned(),
+                circle_id: None,
+            })
+        }
+        "circle" => {
+            let circle_id = object
+                .get("circle_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::Internal("MLS effective_scope missing circle_id".to_owned())
+                })?;
+            if circle_id.is_empty() || object.len() != 3 {
+                return Err(PersistenceError::Internal(
+                    "MLS circle effective_scope must only contain kind, realm_id, and circle_id"
+                        .to_owned(),
+                ));
+            }
+            Ok(MlsEffectiveScopeParts {
+                kind: kind.to_owned(),
+                realm_id: realm_id.to_owned(),
+                circle_id: Some(circle_id.to_owned()),
+            })
+        }
+        _ => Err(PersistenceError::Internal(
+            "MLS effective_scope has invalid kind".to_owned(),
+        )),
+    }
+}
+
 #[async_trait]
 impl MlsCommitStore for MemoryMlsCommitStore {
-    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+    async fn get(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let key = mls_epoch_key(effective_scope, group_id)?;
         Ok(self
             .rows
             .lock()
             .expect("mls commit lock")
-            .get(group_id)
+            .get(&key)
             .cloned())
     }
 
     async fn initialize_genesis(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         leader_actor_id: &str,
         covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let key = mls_epoch_key(effective_scope, group_id)?;
         let mut rows = self.rows.lock().expect("mls commit lock");
-        if rows.contains_key(group_id) {
+        if rows.contains_key(&key) {
             return Ok(None);
         }
         let mut covered_seals = covered_seals.to_vec();
         covered_seals.sort();
         covered_seals.dedup();
         let record = MlsCommitEpochRecord {
+            id: Uuid::now_v7(),
             group_id: group_id.to_owned(),
+            effective_scope: effective_scope.clone(),
             epoch: 0,
             leader_actor_id: leader_actor_id.to_owned(),
             covered_seals,
             governance_binding: governance_binding.clone(),
             committed_at,
         };
-        rows.insert(group_id.to_owned(), record.clone());
+        rows.insert(key, record.clone());
         Ok(Some(record))
     }
 
     async fn try_bump(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
@@ -295,27 +404,30 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let key = mls_epoch_key(effective_scope, group_id)?;
         let mut rows = self.rows.lock().expect("mls commit lock");
-        let current = rows.get(group_id).map(|r| r.epoch).unwrap_or(0);
+        let Some(current_record) = rows.get(&key) else {
+            return Ok(None);
+        };
+        let current = current_record.epoch;
         if expected_prev_epoch != current {
             return Ok(None);
         }
-        let mut merged_frontier = rows
-            .get(group_id)
-            .map(|row| row.covered_seals.clone())
-            .unwrap_or_default();
+        let mut merged_frontier = current_record.covered_seals.clone();
         merged_frontier.extend(covered_seals.iter().cloned());
         merged_frontier.sort();
         merged_frontier.dedup();
         let new_record = MlsCommitEpochRecord {
+            id: current_record.id,
             group_id: group_id.to_owned(),
+            effective_scope: effective_scope.clone(),
             epoch: current.saturating_add(1),
             leader_actor_id: leader_actor_id.to_owned(),
             covered_seals: merged_frontier,
             governance_binding: governance_binding.clone(),
             committed_at,
         };
-        rows.insert(group_id.to_owned(), new_record.clone());
+        rows.insert(key, new_record.clone());
         Ok(Some(new_record))
     }
 
@@ -349,7 +461,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-              key_package_bytes, claimed_by_group_id, consumed_at, created_at) \
+              key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (id) DO NOTHING",
         )
@@ -359,7 +471,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<BigInt, _>(record.lifetime_not_before)
         .bind::<BigInt, _>(record.lifetime_not_after)
         .bind::<Binary, _>(&record.key_package_bytes)
-        .bind::<Nullable<Text>, _>(&record.claimed_by_group_id)
+        .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
         .bind::<BigInt, _>(record.created_at)
         .execute(&mut *conn)
@@ -371,7 +483,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_group_id, consumed_at, created_at \
+             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
         .bind::<Text, _>(id)
@@ -391,10 +503,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "UPDATE mls_key_packages \
-             SET claimed_by_group_id = $2, consumed_at = $3 \
-             WHERE id = $1 AND claimed_by_group_id IS NULL \
+             SET claimed_by_mls_group_id = $2, consumed_at = $3 \
+             WHERE id = $1 AND claimed_by_mls_group_id IS NULL \
              RETURNING id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_group_id, consumed_at, created_at",
+             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
@@ -410,7 +522,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT id, actor_id, device_id, lifetime_not_before, lifetime_not_after, \
-             key_package_bytes, claimed_by_group_id, consumed_at, created_at \
+             key_package_bytes, claimed_by_mls_group_id, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
         .load::<MlsKeyPackagePgRow>(&mut *conn)
@@ -426,7 +538,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_welcomes \
-             (id, group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+             (id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
               key_package_id, enqueued_at, delivered_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (id) DO NOTHING",
@@ -467,7 +579,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
              SET delivered_at = $3 \
              FROM picked \
              WHERE w.id = picked.id \
-             RETURNING w.id, w.group_id, w.recipient_actor_id, w.recipient_device_id, \
+             RETURNING w.id, w.mls_group_id, w.recipient_actor_id, w.recipient_device_id, \
              w.welcome_bytes, w.key_package_id, w.enqueued_at, w.delivered_at",
         )
         .bind::<Text, _>(recipient_actor_id)
@@ -483,7 +595,7 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id, group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
+            "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, welcome_bytes, \
              key_package_id, enqueued_at, delivered_at \
              FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
         )
@@ -496,14 +608,28 @@ impl MlsWelcomeStore for PgMlsWelcomeStore {
 
 #[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
-    async fn get(&self, group_id: &str) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+    async fn get(
+        &self,
+        effective_scope: &Value,
+        group_id: &str,
+    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
-             FROM mls_commits WHERE group_id = $1",
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, \
+             governance_binding, committed_at \
+             FROM mls_commits \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4",
         )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
         .bind::<Text, _>(group_id)
-        .get_result::<MlsCommitEpochRow>(&mut *conn).await
+        .get_result::<MlsCommitEpochRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(MlsCommitEpochRecord::from))
         .map_err(PersistenceError::from)
@@ -511,23 +637,30 @@ impl MlsCommitStore for PgMlsCommitStore {
 
     async fn initialize_genesis(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         leader_actor_id: &str,
         covered_seals: &[String],
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
         let mut frontier = covered_seals.to_vec();
         frontier.sort();
         frontier.dedup();
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO mls_commits \
-             (group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
-             VALUES ($1, 0, $2, $3, $4, $5) \
-             ON CONFLICT (group_id) DO NOTHING \
-             RETURNING group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
+             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10) \
+             ON CONFLICT DO NOTHING \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
         )
+        .bind::<SqlUuid, _>(Uuid::now_v7())
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
+        .bind::<Jsonb, _>(effective_scope)
         .bind::<Text, _>(group_id)
         .bind::<Text, _>(leader_actor_id)
         .bind::<Jsonb, _>(serde_json::json!(frontier))
@@ -541,6 +674,7 @@ impl MlsCommitStore for PgMlsCommitStore {
 
     async fn try_bump(
         &self,
+        effective_scope: &Value,
         group_id: &str,
         expected_prev_epoch: u64,
         leader_actor_id: &str,
@@ -548,6 +682,7 @@ impl MlsCommitStore for PgMlsCommitStore {
         governance_binding: &Value,
         committed_at: i64,
     ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
+        let scope = mls_effective_scope_parts(effective_scope)?;
         let expected_epoch = i64::try_from(expected_prev_epoch)
             .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
         let next_epoch = expected_prev_epoch
@@ -556,20 +691,25 @@ impl MlsCommitStore for PgMlsCommitStore {
             .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO mls_commits (group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at) \
-             SELECT $1, $3, $4, $5, $6, $7 WHERE $2 = 0 \
-             ON CONFLICT (group_id) DO UPDATE SET \
-               epoch = EXCLUDED.epoch, \
-               leader_actor_id = EXCLUDED.leader_actor_id, \
+            "UPDATE mls_commits SET \
+               epoch = $6, \
+               leader_actor_id = $7, \
                covered_seals = ( \
                  SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) \
-                 FROM jsonb_array_elements_text(mls_commits.covered_seals || EXCLUDED.covered_seals) AS merged(value) \
+                 FROM jsonb_array_elements_text(mls_commits.covered_seals || $8::jsonb) AS merged(value) \
                ), \
-               governance_binding = EXCLUDED.governance_binding, \
-               committed_at = EXCLUDED.committed_at \
-             WHERE mls_commits.epoch = $2 \
-             RETURNING group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
+               governance_binding = $9, \
+               committed_at = $10 \
+             WHERE effective_scope_kind = $1 \
+               AND realm_id = $2 \
+               AND circle_id IS NOT DISTINCT FROM $3 \
+               AND mls_group_id = $4 \
+               AND epoch = $5 \
+             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at",
         )
+        .bind::<Text, _>(&scope.kind)
+        .bind::<Text, _>(&scope.realm_id)
+        .bind::<Nullable<Text>, _>(&scope.circle_id)
         .bind::<Text, _>(group_id)
         .bind::<BigInt, _>(expected_epoch)
         .bind::<BigInt, _>(next_epoch)
@@ -586,8 +726,8 @@ impl MlsCommitStore for PgMlsCommitStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT group_id, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
-             FROM mls_commits ORDER BY group_id ASC",
+            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, covered_seals, governance_binding, committed_at \
+             FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
         )
         .load::<MlsCommitEpochRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(MlsCommitEpochRecord::from).collect())
@@ -610,7 +750,7 @@ struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Binary)]
     key_package_bytes: Vec<u8>,
     #[diesel(sql_type = Nullable<Text>)]
-    claimed_by_group_id: Option<String>,
+    claimed_by_mls_group_id: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
     consumed_at: Option<i64>,
     #[diesel(sql_type = BigInt)]
@@ -626,7 +766,7 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             lifetime_not_before: row.lifetime_not_before,
             lifetime_not_after: row.lifetime_not_after,
             key_package_bytes: row.key_package_bytes,
-            claimed_by_group_id: row.claimed_by_group_id,
+            claimed_by_mls_group_id: row.claimed_by_mls_group_id,
             consumed_at: row.consumed_at,
             created_at: row.created_at,
         }
@@ -638,7 +778,7 @@ struct MlsWelcomeRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
-    group_id: String,
+    mls_group_id: String,
     #[diesel(sql_type = Text)]
     recipient_actor_id: String,
     #[diesel(sql_type = Text)]
@@ -657,7 +797,7 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
     fn from(row: MlsWelcomeRow) -> Self {
         Self {
             id: row.id,
-            group_id: row.group_id,
+            group_id: row.mls_group_id,
             recipient_actor_id: row.recipient_actor_id,
             recipient_device_id: row.recipient_device_id,
             welcome_bytes: row.welcome_bytes,
@@ -670,8 +810,12 @@ impl From<MlsWelcomeRow> for MlsWelcomeRecord {
 
 #[derive(QueryableByName)]
 struct MlsCommitEpochRow {
+    #[diesel(sql_type = SqlUuid)]
+    id: Uuid,
     #[diesel(sql_type = Text)]
-    group_id: String,
+    mls_group_id: String,
+    #[diesel(sql_type = Jsonb)]
+    effective_scope: Value,
     #[diesel(sql_type = BigInt)]
     epoch: i64,
     #[diesel(sql_type = Text)]
@@ -687,7 +831,9 @@ struct MlsCommitEpochRow {
 impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
     fn from(row: MlsCommitEpochRow) -> Self {
         Self {
-            group_id: row.group_id,
+            id: row.id,
+            group_id: row.mls_group_id,
+            effective_scope: row.effective_scope,
             epoch: row.epoch.max(0) as u64,
             leader_actor_id: row.leader_actor_id,
             covered_seals: json_string_array(row.covered_seals),

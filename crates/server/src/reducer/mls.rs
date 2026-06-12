@@ -28,7 +28,8 @@ use cokret_sdk::Operation;
 use serde_json::{Map, Value};
 
 use super::{
-    KeyPackageLifetime, MlsCommitEpoch, MlsEffect, MlsKeyPackage, MlsWelcome, ProjectionState,
+    KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsEffect, MlsKeyPackage, MlsWelcome,
+    MlsWelcomeQueueKey, ProjectionState,
 };
 
 /// Reason code emitted when a `ck.mls.keypackage` event with
@@ -252,9 +253,9 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
     };
     state
         .mls_welcomes
-        .entry((
-            recipient_actor_id.to_owned(),
-            recipient_device_id.to_owned(),
+        .entry(MlsWelcomeQueueKey::new(
+            recipient_actor_id,
+            recipient_device_id,
         ))
         .or_default()
         .push(row);
@@ -300,14 +301,26 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     {
         return reject("mls_genesis_governance_binding_missing");
     }
-    if state.mls_commit_epochs.contains_key(group_id) {
+    let effective_scope = match genesis_effective_scope(payload) {
+        Ok(scope) => scope,
+        Err(reason) => return reject(reason),
+    };
+    if let Err(reason) = validate_genesis_governance_binding(payload, group_id, &effective_scope) {
+        return reject(reason);
+    }
+    let epoch_key = match mls_epoch_key(&effective_scope, group_id) {
+        Ok(key) => key,
+        Err(reason) => return reject(reason),
+    };
+    if state.mls_commit_epochs.contains_key(&epoch_key) {
         return reject(REASON_GENESIS_ALREADY_EXISTS);
     }
     let covered_seals = extract_covered_seals(payload).unwrap_or_default();
     state.mls_commit_epochs.insert(
-        group_id.to_owned(),
+        epoch_key,
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
+            effective_scope: effective_scope.clone(),
             epoch: 0,
             leader_actor_id: creator_actor_id.to_owned(),
             covered_seals: covered_seals.clone(),
@@ -317,6 +330,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 
     ProjectionEffectOut::Mls(MlsEffect::GroupGenesis {
         group_id: group_id.to_owned(),
+        effective_scope,
         epoch: 0,
         creator_actor_id: creator_actor_id.to_owned(),
         covered_seals,
@@ -380,16 +394,23 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     if let Err(reason) = crate::kinds::validate_mls_governance_binding(payload) {
         return reject(reason);
     }
+    let effective_scope = match commit_effective_scope(payload) {
+        Ok(scope) => scope,
+        Err(reason) => return reject(reason),
+    };
+    let epoch_key = match mls_epoch_key(&effective_scope, group_id) {
+        Ok(key) => key,
+        Err(reason) => return reject(reason),
+    };
     let covered_delta = match extract_covered_seals(payload) {
         Some(frontier) => frontier,
         None => return reject(REASON_COMMIT_COVERED_SEALS_MISSING),
     };
 
-    let current = state
-        .mls_commit_epochs
-        .get(group_id)
-        .map(|e| e.epoch)
-        .unwrap_or(0);
+    let current = state.mls_commit_epochs.get(&epoch_key).map(|e| e.epoch);
+    let Some(current) = current else {
+        return reject("mls_genesis_missing");
+    };
     if expected_prev_epoch != current {
         return reject(REASON_COMMIT_EPOCH_SKEW);
     }
@@ -397,14 +418,15 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     let committed_at = op.created_at.timestamp();
     let mut covered_seals = state
         .mls_commit_epochs
-        .get(group_id)
+        .get(&epoch_key)
         .map(|e| e.covered_seals.clone())
         .unwrap_or_default();
     merge_frontier(&mut covered_seals, &covered_delta);
     state.mls_commit_epochs.insert(
-        group_id.to_owned(),
+        epoch_key,
         MlsCommitEpoch {
             group_id: group_id.to_owned(),
+            effective_scope: effective_scope.clone(),
             epoch: new_epoch,
             leader_actor_id: leader_actor_id.to_owned(),
             covered_seals: covered_seals.clone(),
@@ -414,6 +436,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
 
     ProjectionEffectOut::Mls(MlsEffect::CommitEpochAdvanced {
         group_id: group_id.to_owned(),
+        effective_scope,
         previous_epoch: current,
         new_epoch,
         leader_actor_id: leader_actor_id.to_owned(),
@@ -431,6 +454,178 @@ type ProjectionEffectOut = super::ProjectionEffect;
 fn reject(reason: &str) -> ProjectionEffectOut {
     ProjectionEffectOut::Rejected {
         reason: reason.to_owned(),
+    }
+}
+
+fn mls_epoch_key(
+    effective_scope: &Value,
+    group_id: &str,
+) -> Result<MlsCommitEpochKey, &'static str> {
+    validate_effective_scope(effective_scope)?;
+    Ok(MlsCommitEpochKey::new(
+        effective_scope_key(effective_scope)?,
+        group_id,
+    ))
+}
+
+fn effective_scope_key(scope: &Value) -> Result<String, &'static str> {
+    let object = scope.as_object().ok_or("mls_effective_scope_invalid")?;
+    let realm_id = object
+        .get("realm_id")
+        .and_then(Value::as_str)
+        .ok_or("mls_effective_scope_invalid")?;
+    match object.get("kind").and_then(Value::as_str) {
+        Some("realm") => Ok(format!("realm\0{realm_id}")),
+        Some("circle") => {
+            let circle_id = object
+                .get("circle_id")
+                .and_then(Value::as_str)
+                .ok_or("mls_effective_scope_invalid")?;
+            Ok(format!("circle\0{realm_id}\0{circle_id}"))
+        }
+        _ => Err("mls_effective_scope_invalid"),
+    }
+}
+
+fn genesis_effective_scope(payload: &Value) -> Result<Value, &'static str> {
+    let scope = payload
+        .get("effective_scope")
+        .ok_or("mls_genesis_effective_scope_missing")?;
+    validate_effective_scope(scope)?;
+    let binding_scope = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .and_then(|binding| binding.get("effective_scope"))
+        .ok_or("mls_governance_binding_scope_missing")?;
+    validate_effective_scope(binding_scope)?;
+    if scope != binding_scope {
+        return Err("mls_governance_binding_scope_mismatch");
+    }
+    Ok(scope.clone())
+}
+
+fn validate_genesis_governance_binding(
+    payload: &Value,
+    group_id: &str,
+    effective_scope: &Value,
+) -> Result<(), &'static str> {
+    let binding = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .ok_or("mls_genesis_governance_binding_missing")?;
+    if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
+        return Err("mls_governance_binding_version_invalid");
+    }
+    if binding.get("encoding_profile").and_then(Value::as_str)
+        != Some("cbor-deterministic-rfc8949-v1")
+    {
+        return Err("mls_governance_binding_encoding_profile_invalid");
+    }
+    if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
+        return Err("mls_governance_binding_group_mismatch");
+    }
+    if binding.get("previous_epoch").and_then(Value::as_u64) != Some(0) {
+        return Err("mls_governance_binding_previous_epoch_mismatch");
+    }
+    if binding.get("next_epoch").and_then(Value::as_u64) != Some(0) {
+        return Err("mls_governance_binding_next_epoch_mismatch");
+    }
+    validate_binding_scope(binding, effective_scope)?;
+    validate_binding_frontier_and_policy(binding)
+}
+
+fn commit_effective_scope(payload: &Value) -> Result<Value, &'static str> {
+    let scope = payload
+        .get("governance_binding")
+        .or_else(|| payload.get("mls_governance_binding"))
+        .and_then(|binding| binding.get("effective_scope"))
+        .ok_or("mls_governance_binding_scope_missing")?;
+    validate_effective_scope(scope)?;
+    Ok(scope.clone())
+}
+
+fn validate_binding_scope(binding: &Value, effective_scope: &Value) -> Result<(), &'static str> {
+    let Some(realm_id) = binding.get("realm_id").and_then(Value::as_str) else {
+        return Err("mls_governance_binding_realm_missing");
+    };
+    let Some(scope) = effective_scope.as_object() else {
+        return Err("mls_governance_binding_scope_missing");
+    };
+    if scope.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
+        return Err("mls_governance_binding_scope_mismatch");
+    }
+    match scope.get("kind").and_then(Value::as_str) {
+        Some("realm") => {
+            if binding.get("circle_id").is_some() {
+                return Err("mls_governance_binding_scope_mismatch");
+            }
+        }
+        Some("circle") => {
+            let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str) else {
+                return Err("mls_governance_binding_scope_mismatch");
+            };
+            if binding.get("circle_id").and_then(Value::as_str) != Some(circle_id) {
+                return Err("mls_governance_binding_scope_mismatch");
+            }
+        }
+        _ => return Err("mls_governance_binding_scope_missing"),
+    }
+    Ok(())
+}
+
+fn validate_binding_frontier_and_policy(binding: &Value) -> Result<(), &'static str> {
+    let Some(frontier) = binding.get("membership_frontier").and_then(Value::as_array) else {
+        return Err("mls_governance_binding_membership_frontier_missing");
+    };
+    if frontier.is_empty()
+        || frontier
+            .iter()
+            .any(|value| value.as_str().is_none_or(str::is_empty))
+    {
+        return Err("mls_governance_binding_membership_frontier_missing");
+    }
+    if binding
+        .get("policy_root")
+        .and_then(Value::as_str)
+        .is_none_or(|value| !value.starts_with("sha256:"))
+    {
+        return Err("mls_governance_binding_policy_root_missing");
+    }
+    Ok(())
+}
+
+fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {
+    let Some(object) = scope.as_object() else {
+        return Err("mls_effective_scope_invalid");
+    };
+    let Some(kind) = object.get("kind").and_then(Value::as_str) else {
+        return Err("mls_effective_scope_invalid");
+    };
+    let Some(realm_id) = object.get("realm_id").and_then(Value::as_str) else {
+        return Err("mls_effective_scope_invalid");
+    };
+    if realm_id.is_empty() {
+        return Err("mls_effective_scope_invalid");
+    }
+    match kind {
+        "realm" => {
+            if object.len() == 2 && !object.contains_key("circle_id") {
+                Ok(())
+            } else {
+                Err("mls_effective_scope_invalid")
+            }
+        }
+        "circle" => {
+            let Some(circle_id) = object.get("circle_id").and_then(Value::as_str) else {
+                return Err("mls_effective_scope_invalid");
+            };
+            if !circle_id.is_empty() && object.len() == 3 {
+                Ok(())
+            } else {
+                Err("mls_effective_scope_invalid")
+            }
+        }
+        _ => Err("mls_effective_scope_invalid"),
     }
 }
 
@@ -579,25 +774,106 @@ mod tests {
         URL_SAFE_NO_PAD.encode(bytes)
     }
 
-    fn governance_binding(previous_epoch: u64) -> Value {
+    fn realm_scope() -> Value {
+        json!({
+            "kind": "realm",
+            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000"
+        })
+    }
+
+    fn circle_scope(circle_id: &str) -> Value {
+        json!({
+            "kind": "circle",
+            "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
+            "circle_id": circle_id
+        })
+    }
+
+    fn governance_binding_for_scope(
+        previous_epoch: u64,
+        group_id: &str,
+        effective_scope: Value,
+    ) -> Value {
         let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
         let frontier = format!("ck:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
-        json!({
+        let mut binding = json!({
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
             "realm_id": realm_id,
-            "effective_scope": {
-                "kind": "realm",
-                "realm_id": realm_id
-            },
-            "mls_group_id": "ck:mls_group:abc",
+            "effective_scope": effective_scope,
+            "mls_group_id": group_id,
             "previous_epoch": previous_epoch,
             "next_epoch": previous_epoch + 1,
             "membership_frontier": [
                 frontier
             ],
             "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+        if let Some(circle_id) = binding["effective_scope"]
+            .get("circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        {
+            binding["circle_id"] = Value::String(circle_id);
+        }
+        binding
+    }
+
+    fn governance_binding(previous_epoch: u64) -> Value {
+        governance_binding_for_scope(previous_epoch, "ck:mls_group:abc", realm_scope())
+    }
+
+    fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
+        let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
+        let mut binding = json!({
+            "binding_version": 1,
+            "encoding_profile": "cbor-deterministic-rfc8949-v1",
+            "realm_id": realm_id,
+            "effective_scope": effective_scope,
+            "mls_group_id": group_id,
+            "previous_epoch": 0,
+            "next_epoch": 0,
+            "membership_frontier": [
+                "ck:event:0196419b-0000-7000-8000-000000000000"
+            ],
+            "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+        if let Some(circle_id) = binding["effective_scope"]
+            .get("circle_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        {
+            binding["circle_id"] = Value::String(circle_id);
+        }
+        binding
+    }
+
+    fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
+        json!({
+            "mls_group_id": group_id,
+            "effective_scope": effective_scope.clone(),
+            "epoch": 0,
+            "creator_principal_id": "did:web:alice.example",
+            "creator_device_id": "ck:device:alice-desktop",
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "governance_binding": genesis_binding(group_id, effective_scope),
+            "created_at": "2026-05-25T00:00:00Z"
         })
+    }
+
+    fn initialize_genesis(state: &mut ProjectionState) {
+        let genesis = op_at(
+            499,
+            "ck.mls.genesis",
+            genesis_payload("ck:mls_group:abc", realm_scope()),
+        );
+        let effect = apply_group_genesis(state, &genesis);
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
+        ));
     }
 
     fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
@@ -741,10 +1017,7 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
         ));
 
-        let key = (
-            "did:web:bob.example".to_owned(),
-            "ck:device:bob-phone".to_owned(),
-        );
+        let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ck:device:bob-phone");
         let queue = state.mls_welcomes.get(&key).unwrap();
         assert_eq!(queue.len(), 1);
         assert!(queue[0].delivered_at.is_none());
@@ -807,7 +1080,9 @@ mod tests {
     #[test]
     fn commit_epoch_in_order_succeeds() {
         let mut state = ProjectionState::default();
-        // First commit on a brand-new group — expected_prev_epoch=0 → epoch=1.
+        initialize_genesis(&mut state);
+
+        // First commit after genesis — expected_prev_epoch=0 → epoch=1.
         let c1 = op_at(
             500,
             "ck.mls.commit",
@@ -857,9 +1132,13 @@ mod tests {
             ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 2, .. })
         ));
         assert_eq!(
-            state.mls_commit_epochs.get("ck:mls_group:abc").unwrap(),
+            state
+                .mls_commit_epochs
+                .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
+                .unwrap(),
             &MlsCommitEpoch {
                 group_id: "ck:mls_group:abc".to_owned(),
+                effective_scope: realm_scope(),
                 epoch: 2,
                 leader_actor_id: "did:web:alice.example".to_owned(),
                 covered_seals: vec![
@@ -909,8 +1188,97 @@ mod tests {
     }
 
     #[test]
+    fn commit_epoch_requires_effective_genesis() {
+        let mut state = ProjectionState::default();
+        let effect = apply_commit_epoch(
+            &mut state,
+            &op_at(
+                500,
+                "ck.mls.commit",
+                json!({
+                    "group_id": "ck:mls_group:abc",
+                    "expected_prev_epoch": 0,
+                    "next_epoch": 1,
+                    "leader_actor_id": "did:web:alice.example",
+                    "commit_bytes_b64": b64(b"opaque-commit-1"),
+                    "governance_binding": governance_binding(0),
+                }),
+            ),
+        );
+        assert!(
+            matches!(effect, ProjectionEffect::Rejected { reason } if reason == "mls_genesis_missing")
+        );
+        assert!(state.mls_commit_epochs.is_empty());
+    }
+
+    #[test]
+    fn same_group_id_is_independent_across_effective_scopes() {
+        let mut state = ProjectionState::default();
+        let realm_scope = realm_scope();
+        let circle_scope = circle_scope("ck:circle:0196419b-0000-7000-8000-000000000123");
+        let realm_genesis = op_at(
+            500,
+            "ck.mls.genesis",
+            genesis_payload("ck:mls_group:abc", realm_scope.clone()),
+        );
+        let circle_genesis = op_at(
+            501,
+            "ck.mls.genesis",
+            genesis_payload("ck:mls_group:abc", circle_scope.clone()),
+        );
+        assert!(matches!(
+            apply_group_genesis(&mut state, &realm_genesis),
+            ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
+        ));
+        assert!(matches!(
+            apply_group_genesis(&mut state, &circle_genesis),
+            ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
+        ));
+
+        let realm_commit = op_at(
+            502,
+            "ck.mls.commit",
+            json!({
+                "group_id": "ck:mls_group:abc",
+                "expected_prev_epoch": 0,
+                "next_epoch": 1,
+                "leader_actor_id": "did:web:alice.example",
+                "commit_bytes_b64": b64(b"realm-commit"),
+                "governance_binding": governance_binding_for_scope(
+                    0,
+                    "ck:mls_group:abc",
+                    realm_scope.clone()
+                ),
+            }),
+        );
+        assert!(matches!(
+            apply_commit_epoch(&mut state, &realm_commit),
+            ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
+        ));
+
+        assert_eq!(
+            state
+                .mls_commit_epochs
+                .get(&mls_epoch_key(&realm_scope, "ck:mls_group:abc").unwrap())
+                .unwrap()
+                .epoch,
+            1
+        );
+        assert_eq!(
+            state
+                .mls_commit_epochs
+                .get(&mls_epoch_key(&circle_scope, "ck:mls_group:abc").unwrap())
+                .unwrap()
+                .epoch,
+            0
+        );
+        assert_eq!(state.mls_commit_epochs.len(), 2);
+    }
+
+    #[test]
     fn commit_epoch_stale_rejected() {
         let mut state = ProjectionState::default();
+        initialize_genesis(&mut state);
         // Land epoch 1 first.
         let _ = apply_commit_epoch(
             &mut state,
@@ -954,7 +1322,7 @@ mod tests {
         assert_eq!(
             state
                 .mls_commit_epochs
-                .get("ck:mls_group:abc")
+                .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
                 .unwrap()
                 .epoch,
             1
@@ -982,7 +1350,7 @@ mod tests {
         assert_eq!(
             state
                 .mls_commit_epochs
-                .get("ck:mls_group:abc")
+                .get(&mls_epoch_key(&realm_scope(), "ck:mls_group:abc").unwrap())
                 .unwrap()
                 .epoch,
             1

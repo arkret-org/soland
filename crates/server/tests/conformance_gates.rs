@@ -52,6 +52,19 @@ fn soland_src_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
+fn soland_migration(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations")
+        .join(path)
+}
+
+fn initial_migration_up_sql() -> String {
+    let path = soland_migration("00000000000000_initial/up.sql");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {} failed: {err}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 /// Load every canonical `operation_id` from
 /// `registry/operation-registry.json`. The registry has nested
 /// `surface_groups[*].operations[]` and per-operation
@@ -209,6 +222,116 @@ fn operation_ids_are_registered_or_namespaced() {
         "soland source declares operation_id values that are neither \
          in the canonical registry nor namespaced as org.cokret.soland.*:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+#[test]
+fn mls_commit_migration_matches_protocol_identity_key() {
+    let raw = initial_migration_up_sql();
+    let table_start = raw
+        .find("CREATE TABLE public.mls_commits")
+        .expect("initial migration creates mls_commits");
+    let table_tail = &raw[table_start..];
+    let table_end = table_tail
+        .find("CREATE TABLE public.mls_key_packages")
+        .expect("mls_key_packages follows mls_commits");
+    let table = &table_tail[..table_end];
+
+    assert!(
+        table.contains("    id uuid NOT NULL,\n"),
+        "mls_commits must use a uuidv7 row id primary key"
+    );
+    assert!(
+        table.contains("    effective_scope_kind text NOT NULL,\n"),
+        "mls_commits must persist the effective scope discriminator"
+    );
+    assert!(
+        table.contains("    realm_id text NOT NULL,\n"),
+        "mls_commits must persist the effective scope realm_id"
+    );
+    assert!(
+        table.contains("    circle_id text,\n"),
+        "mls_commits must persist the effective scope circle_id for circle scopes"
+    );
+    assert!(
+        table.contains("    effective_scope jsonb NOT NULL,\n"),
+        "mls_commits must persist the protocol effective_scope"
+    );
+    assert!(
+        table.contains("    mls_group_id text NOT NULL,\n"),
+        "mls_commits must expose the protocol mls_group_id"
+    );
+    assert!(
+        table.contains(
+            "CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))"
+        ),
+        "mls_commits must enforce the realm/circle effective_scope shape"
+    );
+    assert!(
+        raw.contains(
+            "ALTER TABLE ONLY public.mls_commits\n    ADD CONSTRAINT mls_commits_pkey PRIMARY KEY (id);"
+        ),
+        "mls_commits primary key must be its uuid row id"
+    );
+    assert!(
+        raw.contains(
+            "CREATE UNIQUE INDEX mls_commits_realm_scope_key ON public.mls_commits USING btree (realm_id, mls_group_id) WHERE ((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL));"
+        ),
+        "mls_commits realm-scope protocol identity must be unique on (realm_id, mls_group_id)"
+    );
+    assert!(
+        raw.contains(
+            "CREATE UNIQUE INDEX mls_commits_circle_scope_key ON public.mls_commits USING btree (realm_id, circle_id, mls_group_id) WHERE ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL));"
+        ),
+        "mls_commits circle-scope protocol identity must be unique on (realm_id, circle_id, mls_group_id)"
+    );
+    assert!(
+        !raw.contains("UNIQUE (effective_scope, mls_group_id)"),
+        "mls_commits must not use jsonb effective_scope as a unique key"
+    );
+}
+
+#[test]
+fn mls_related_tables_use_protocol_group_id_names() {
+    let raw = initial_migration_up_sql();
+    let keypackages_start = raw
+        .find("CREATE TABLE public.mls_key_packages")
+        .expect("initial migration creates mls_key_packages");
+    let keypackages_tail = &raw[keypackages_start..];
+    let keypackages_end = keypackages_tail
+        .find("CREATE TABLE public.mls_welcomes")
+        .expect("mls_welcomes follows mls_key_packages");
+    let keypackages = &keypackages_tail[..keypackages_end];
+    assert!(
+        keypackages.contains("    claimed_by_mls_group_id text,\n"),
+        "mls_key_packages claim metadata must use the protocol MLS group id name"
+    );
+    assert!(
+        !keypackages.contains("claimed_by_group_id"),
+        "mls_key_packages must not use the generic claimed_by_group_id column"
+    );
+
+    let welcomes_start = raw
+        .find("CREATE TABLE public.mls_welcomes")
+        .expect("initial migration creates mls_welcomes");
+    let welcomes_tail = &raw[welcomes_start..];
+    let welcomes_end = welcomes_tail
+        .find("CREATE TABLE public.moderation_actions")
+        .expect("moderation_actions follows mls_welcomes");
+    let welcomes = &welcomes_tail[..welcomes_end];
+    assert!(
+        welcomes.contains("    mls_group_id text NOT NULL,\n"),
+        "mls_welcomes must use the protocol mls_group_id column"
+    );
+    assert!(
+        !welcomes.contains("    group_id text NOT NULL,\n"),
+        "mls_welcomes must not use a generic group_id column"
+    );
+    assert!(
+        raw.contains(
+            "CREATE INDEX mls_key_packages_by_actor_device ON public.mls_key_packages USING btree (actor_id, device_id, claimed_by_mls_group_id);"
+        ),
+        "mls_key_packages claim index must use claimed_by_mls_group_id"
     );
 }
 

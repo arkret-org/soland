@@ -327,7 +327,7 @@ async fn mls_lifecycle_end_to_end() {
         state
             .persistence
             .mls_commits()
-            .get(group_id)
+            .get(&effective_scope, group_id)
             .await
             .unwrap()
             .expect("genesis persisted")
@@ -421,7 +421,7 @@ async fn mls_lifecycle_end_to_end() {
         state
             .persistence
             .mls_commits()
-            .get(group_id)
+            .get(&effective_scope, group_id)
             .await
             .unwrap()
             .expect("commit persisted")

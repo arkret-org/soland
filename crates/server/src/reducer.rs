@@ -219,19 +219,20 @@ pub struct ProjectionState {
     /// row is per `(actor_id, device_id)`; the `claimed_by` /
     /// `consumed_at` slots flip on a successful CAS claim.
     pub mls_key_packages: BTreeMap<String, MlsKeyPackage>,
-    /// G3.S1 — per-device Welcome queue. Outer key is
-    /// `(recipient_actor_id, recipient_device_id)`; the inner Vec is
-    /// the FIFO of pending Welcomes. Entries gain a non-None
-    /// `delivered_at` when the recipient device drains them via
-    /// `GET /_soland/self/keys/keypackages/welcomes/pending`.
-    pub mls_welcomes: BTreeMap<(String, String), Vec<MlsWelcome>>,
-    /// G3.S1 — per-group MLS commit-epoch state. The reducer keeps the
-    /// monotonic epoch counter in lockstep with `apply_commit_epoch`
-    /// CAS rules: each accepted commit bumps the value by exactly +1
-    /// from the previous epoch. The same row accumulates the governance
-    /// Seal frontier covered by accepted MLS commits so E2EE message
-    /// paths can gate plaintext fallback against stale epochs.
-    pub mls_commit_epochs: BTreeMap<String, MlsCommitEpoch>,
+    /// G3.S1 — per-device Welcome queue. Outer key names the recipient
+    /// actor and device; the inner Vec is the FIFO of pending Welcomes.
+    /// Entries gain a non-None `delivered_at` when the recipient device
+    /// drains them via `GET /_soland/self/keys/keypackages/welcomes/pending`.
+    pub mls_welcomes: BTreeMap<MlsWelcomeQueueKey, Vec<MlsWelcome>>,
+    /// G3.S1 — per-scope MLS commit-epoch state. Keyed by tagged
+    /// effective scope plus `mls_group_id` per the genesis uniqueness
+    /// rule. The reducer keeps the monotonic epoch counter in lockstep
+    /// with `apply_commit_epoch` CAS rules: each accepted commit bumps
+    /// the value by exactly +1 from the previous epoch. The same row
+    /// accumulates the governance Seal frontier covered by accepted MLS
+    /// commits so E2EE message paths can gate plaintext fallback against
+    /// stale epochs.
+    pub mls_commit_epochs: BTreeMap<MlsCommitEpochKey, MlsCommitEpoch>,
     /// G3.S2 — per-Realm `ck.realm.policy_server` projection. Cas-
     /// register semantics — last write wins. Org-level fallback (when
     /// a Realm has no row of its own) is resolved at query time by
@@ -475,6 +476,41 @@ pub struct MlsWelcome {
     pub delivered_at: Option<i64>,
 }
 
+/// Projection key for the pending Welcome queue owned by one device.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MlsWelcomeQueueKey {
+    pub recipient_actor_id: String,
+    pub recipient_device_id: String,
+}
+
+impl MlsWelcomeQueueKey {
+    pub fn new(
+        recipient_actor_id: impl Into<String>,
+        recipient_device_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            recipient_actor_id: recipient_actor_id.into(),
+            recipient_device_id: recipient_device_id.into(),
+        }
+    }
+}
+
+/// Projection key for one MLS epoch row inside one tagged scope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MlsCommitEpochKey {
+    pub effective_scope_key: String,
+    pub mls_group_id: String,
+}
+
+impl MlsCommitEpochKey {
+    pub fn new(effective_scope_key: impl Into<String>, mls_group_id: impl Into<String>) -> Self {
+        Self {
+            effective_scope_key: effective_scope_key.into(),
+            mls_group_id: mls_group_id.into(),
+        }
+    }
+}
+
 /// G3.S1 — per-group MLS commit-epoch projection.
 ///
 /// Each successful `apply_commit_epoch` bumps `epoch` by exactly +1
@@ -487,6 +523,8 @@ pub struct MlsWelcome {
 pub struct MlsCommitEpoch {
     /// MLS group id (`ck:mls_group:<...>`).
     pub group_id: String,
+    /// Tagged Cokret application scope that this MLS group is bound to.
+    pub effective_scope: Value,
     /// Monotonic epoch counter. Starts at 0 before the first commit;
     /// each commit bumps by +1.
     pub epoch: u64,
@@ -1383,6 +1421,7 @@ pub enum MlsEffect {
     /// `apply_group_genesis` — the group was initialized at epoch 0.
     GroupGenesis {
         group_id: String,
+        effective_scope: Value,
         epoch: u64,
         creator_actor_id: String,
         covered_seals: Vec<String>,
@@ -1392,6 +1431,7 @@ pub enum MlsEffect {
     /// Seal set was merged into the group's covered_seals accumulator.
     CommitEpochAdvanced {
         group_id: String,
+        effective_scope: Value,
         previous_epoch: u64,
         new_epoch: u64,
         leader_actor_id: String,
