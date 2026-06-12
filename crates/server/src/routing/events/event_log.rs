@@ -4107,19 +4107,14 @@ fn sdk_event_from_record(
             .get("applet_id")
             .and_then(Value::as_str)
             .and_then(|value| cokret_sdk::AppletId::new(value.to_owned()).ok()),
-        external_ref: object.get("external_ref").cloned(),
-        actor_kind: object
-            .get("actor_kind")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        applet_id: object
-            .get("applet_id")
-            .and_then(Value::as_str)
-            .and_then(|value| cokret_sdk::AppletId::new(value.to_owned()).ok()),
         external_ref: object
             .get("external_ref")
             .filter(|value| !value.is_null())
             .cloned(),
+        actor_kind: object
+            .get("actor_kind")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
         unsigned,
         proofs: sdk_event_proofs(record, object, created_at)?,
     })
