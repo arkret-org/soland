@@ -11,18 +11,33 @@
 //! but NOT yet pushed into the canonical operation stream (durable
 //! persistence + revocation propagation are future work).
 
-use salvo::oapi::extract::JsonBody;
+use cokret_sdk::AccountDevicePairOutcome;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
+use super::auth::{
+    approve_device_pairing_request, list_pending_device_pairing_requests,
+    reject_device_pairing_request,
+};
 use super::{AuthArgs, append_audit_log, device_inventory_to_json, now};
 use crate::error::AppError;
 use crate::state::{AppState, DeviceInventoryRecord};
+use crate::wire::DevicePairingRequestListOutcome;
 use crate::{JsonResult, ids, json_ok};
 
 pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("devices").get(device_list))
+        .push(Router::with_path("devices/pairing-requests").get(device_pairing_requests))
+        .push(
+            Router::with_path("devices/pairing-requests/{pairing_request_id}/approve")
+                .post(device_pairing_request_approve),
+        )
+        .push(
+            Router::with_path("devices/pairing-requests/{pairing_request_id}/reject")
+                .post(device_pairing_request_reject),
+        )
         .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
         .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
         .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
@@ -62,6 +77,73 @@ async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
         "current_device_id": session.device_id,
         "devices": devices,
     }))
+}
+
+#[endpoint(
+    operation_id = "ck.self.devices.device_pairing_requests.list",
+    tags("devices"),
+    summary = "List pending device-pairing requests that this authenticated device may approve",
+    status_codes(200, 401, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.devices.device_pairing_requests.list"))]
+async fn device_pairing_requests(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DevicePairingRequestListOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    json_ok(DevicePairingRequestListOutcome {
+        requests: list_pending_device_pairing_requests(state, &session.actor, &session.device_id),
+    })
+}
+
+#[endpoint(
+    operation_id = "ck.self.devices.device_pairing_requests.approve",
+    tags("devices"),
+    summary = "Approve a pending device-pairing request from this authenticated device",
+    status_codes(200, 400, 401, 404, 409, 500)
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.self.devices.device_pairing_requests.approve")
+)]
+async fn device_pairing_request_approve(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    pairing_request_id: PathParam<String>,
+) -> JsonResult<AccountDevicePairOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let pairing_request_id = pairing_request_id.into_inner();
+    json_ok(approve_device_pairing_request(state, &session, &pairing_request_id).await?)
+}
+
+#[endpoint(
+    operation_id = "ck.self.devices.device_pairing_requests.reject",
+    tags("devices"),
+    summary = "Reject a pending device-pairing request from this authenticated device",
+    status_codes(200, 400, 401, 404, 409, 500)
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.self.devices.device_pairing_requests.reject")
+)]
+async fn device_pairing_request_reject(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    pairing_request_id: PathParam<String>,
+) -> JsonResult<DevicePairingRequestListOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let pairing_request_id = pairing_request_id.into_inner();
+    json_ok(reject_device_pairing_request(
+        state,
+        &session,
+        &pairing_request_id,
+    )?)
 }
 
 #[endpoint(

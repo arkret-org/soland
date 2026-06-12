@@ -737,6 +737,61 @@ pub struct DevLoginOutcome {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct DevicePairingRequestCreateBody {
+    pub pairing_code: String,
+    pub new_device_pubkey: Value,
+    pub challenge_signature: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub device_metadata: Value,
+    #[serde(default)]
+    pub expires_in_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Clone, salvo::oapi::ToSchema)]
+pub struct DevicePairingRequestView {
+    pub pairing_request_id: String,
+    pub state: String,
+    pub requesting_device_id: String,
+    pub pairing_code: String,
+    pub new_device_pubkey: Value,
+    pub challenge_signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub device_metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_by_device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorized_event_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejected_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejected_by_device_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DevicePairingRequestCreateOutcome {
+    pub pairing_request_id: String,
+    pub state: String,
+    pub requesting_device_id: String,
+    pub pairing_code: String,
+    pub expires_at: DateTime<Utc>,
+    pub request: DevicePairingRequestView,
+    pub notified_devices: usize,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DevicePairingRequestListOutcome {
+    pub requests: Vec<DevicePairingRequestView>,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct LogoutOutcome {
     pub ok: bool,

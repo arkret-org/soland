@@ -88,6 +88,98 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
 }
 
 #[tokio::test]
+async fn device_pairing_request_is_listed_and_approved_by_existing_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let actor = "did:web:alice.example";
+    let existing_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let new_device = "ck:device:01904100-0000-7000-8000-9b04e0000008";
+    let existing_token =
+        dev_token_for_device(state.clone(), actor, existing_device, "Alice Desktop").await;
+    let new_token = dev_token_for_device(state.clone(), actor, new_device, "Alice Browser").await;
+
+    let created: Value =
+        TestClient::post("http://server/_cokret/gate/account/device-pairing-requests")
+            .add_header("authorization", format!("Bearer {new_token}"), true)
+            .json(&serde_json::json!({
+                "pairing_code": "pairing-code",
+                "new_device_pubkey": {
+                    "kty": "OKP",
+                    "kid": new_device,
+                    "alg": "EdDSA",
+                    "key": "emtleQ"
+                },
+                "challenge_signature": "c2ln",
+                "display_name": "Alice Browser",
+                "device_metadata": {
+                    "platform": "browser"
+                }
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(created["state"], "pending");
+    let pairing_request_id = created["pairing_request_id"].as_str().unwrap();
+
+    let pending: Value = TestClient::get("http://server/_cokret/self/devices/pairing-requests")
+        .add_header("authorization", format!("Bearer {existing_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        pending["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| {
+                request["pairing_request_id"] == pairing_request_id
+                    && request["requesting_device_id"] == new_device
+                    && request["pairing_code"] == "pairing-code"
+            })
+    );
+
+    let approved: Value = TestClient::post(format!(
+        "http://server/_cokret/self/devices/pairing-requests/{pairing_request_id}/approve"
+    ))
+    .add_header("authorization", format!("Bearer {existing_token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(approved["device_id"], new_device);
+    assert_eq!(approved["device_grant"]["status"], "active");
+
+    let status: Value = TestClient::get(format!(
+        "http://server/_cokret/gate/account/device-pairing-requests/{pairing_request_id}"
+    ))
+    .add_header("authorization", format!("Bearer {new_token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(status["state"], "approved");
+    assert_eq!(status["approved_by_device_id"], existing_device);
+
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {existing_token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(viewer["devices"].as_array().unwrap().iter().any(|device| {
+        device["device_id"] == new_device
+            && device["status"] == "active"
+            && device["display_name"] == "Alice Browser"
+    }));
+}
+
+#[tokio::test]
 async fn device_pairing_challenge_and_authorization_surface_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
