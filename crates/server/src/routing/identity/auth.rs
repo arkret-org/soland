@@ -62,14 +62,9 @@ pub(super) fn protocol_account_router() -> Router {
             .post(exchange_session_grant)
             // Spec `account_auth` surface group: `ck.gate.account.session_revoke`
             // binds to `POST /_cokret/gate/account/session-grants/revoke`.
-            .push(Router::with_path("revoke").post(session_revoke)),
+                .push(Router::with_path("revoke").post(session_revoke)),
         )
         .push(Router::with_path("device-pair").post(account_device_pair))
-        .push(Router::with_path("device-pairing-requests").post(create_device_pairing_request))
-        .push(
-            Router::with_path("device-pairing-requests/{pairing_request_id}")
-                .get(get_device_pairing_request),
-        )
 }
 
 pub(super) fn legacy_router() -> Router {
@@ -545,7 +540,7 @@ fn device_id_from_pair_pubkey(new_device_pubkey: &Value) -> Result<String, AppEr
     let object = new_device_pubkey
         .as_object()
         .ok_or_else(|| AppError::invalid_param("new_device_pubkey must be an object"))?;
-    for required in ["kty", "kid", "alg", "key"] {
+    for required in ["kid", "alg"] {
         let value = object
             .get(required)
             .and_then(Value::as_str)
@@ -554,11 +549,19 @@ fn device_id_from_pair_pubkey(new_device_pubkey: &Value) -> Result<String, AppEr
             .ok_or_else(|| {
                 AppError::missing_param(format!("new_device_pubkey.{required} is required"))
             })?;
-        if required == "key" && !is_base64url_non_empty(value) {
-            return Err(AppError::invalid_param(
-                "new_device_pubkey.key must be base64url",
-            ));
-        }
+        let _ = value;
+    }
+    let public_key = object
+        .get("public_key")
+        .or_else(|| object.get("key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::missing_param("new_device_pubkey.public_key is required"))?;
+    if !is_base64url_non_empty(public_key) {
+        return Err(AppError::invalid_param(
+            "new_device_pubkey.public_key must be base64url",
+        ));
     }
     let kid = object
         .get("kid")

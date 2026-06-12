@@ -43,7 +43,7 @@ use super::projection::{
 };
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
-    backfill_gap_events, default_discussion_track, device_message_events_after,
+    backfill_gap_events, default_discussion_track, device_message_envelopes_after,
     flow_id_from_realm_id, flow_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref,
     projected_event_page, projection_event_json, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
@@ -857,12 +857,11 @@ async fn build_sync_snapshot(
             .into_iter()
             .take(TO_DEVICE_PAGE_LIMIT)
             .collect::<Vec<_>>();
-        let events = device_message_events_after(&page);
-        if let Some(max_position) = events
-            .iter()
-            .filter_map(|event| event.get("position").and_then(|position| position.as_i64()))
-            .max()
-        {
+        let events = device_message_envelopes_after(&page)
+            .into_iter()
+            .filter_map(|message| serde_json::to_value(message).ok())
+            .collect::<Vec<_>>();
+        if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = max_position;
             to_device_ack_token = state
                 .persistence

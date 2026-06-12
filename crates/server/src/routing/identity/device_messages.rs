@@ -9,7 +9,7 @@
 //! - `POST /_cokret/self/device_messages/ack` — consume a bearer ack token and prune the messages
 //!   covered by that delivery batch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -23,7 +23,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, DeviceMessageRecord};
+use crate::state::{AppState, DeviceInventoryRecord, DeviceMessageRecord};
 use crate::wire::{
     DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
     DeviceMessagesGetOutcome, DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody,
@@ -80,11 +80,57 @@ async fn send_device_messages(
         .map(|s| s.to_owned())
         .unwrap_or_else(ids::generate_request_id);
     let body = body.into_inner();
+    let sender_device = state
+        .persistence
+        .devices()
+        .get(&session.actor, &session.device_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let sender_verified = device_is_active_verified(sender_device.as_ref());
+    let mut deliverable_targets = BTreeSet::new();
+    let mut unknown_devices = BTreeMap::new();
     for devices in body.messages.values() {
         for target in devices.values() {
             if let Err(message) = validate_device_message_target(target) {
                 return Err(AppError::invalid_param(message));
             }
+        }
+    }
+    let devices_store = state.persistence.devices();
+    for (recipient, devices) in &body.messages {
+        for (device_id, target) in devices {
+            let recipient = recipient.to_string();
+            let device_id = device_id.to_string();
+            let same_principal = recipient == session.actor;
+            let verification_bootstrap = target.kind.starts_with("ck.key.verification.");
+            let secret_message = target.kind.starts_with("ck.secret.");
+            let target_record = devices_store
+                .get(&recipient, &device_id)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let target_active = device_is_active(target_record.as_ref());
+            let target_verified = device_is_active_verified(target_record.as_ref());
+
+            if !sender_verified && !(same_principal && target_verified && verification_bootstrap) {
+                return Err(AppError::capability_denied(
+                    "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
+                )
+                .with_wire_code("fresh_device_scope_violation"));
+            }
+            if secret_message && !(sender_verified && target_verified) {
+                return Err(AppError::capability_denied(
+                    "secret to-device messages require authorized sender and recipient devices",
+                )
+                .with_wire_code("device_not_authorized"));
+            }
+            if !target_active
+                || (!target_verified
+                    && !(sender_verified && same_principal && verification_bootstrap))
+            {
+                note_unknown_device(&mut unknown_devices, &recipient, &device_id);
+                continue;
+            }
+            deliverable_targets.insert((recipient, device_id));
         }
     }
     let device_messages = state.persistence.device_messages();
@@ -103,6 +149,11 @@ async fn send_device_messages(
     for (recipient, devices) in body.messages {
         let mut delivered_devices = Vec::new();
         for (device_id, content) in devices {
+            let recipient_key = recipient.to_string();
+            let device_key = device_id.to_string();
+            if !deliverable_targets.contains(&(recipient_key.clone(), device_key.clone())) {
+                continue;
+            }
             let created_at = now();
             let position = state.next_to_device_position();
             let mut content = serde_json::to_value(&content)
@@ -114,8 +165,8 @@ async fn send_device_messages(
                 .append(DeviceMessageRecord {
                     idempotency_key: idempotency_key.clone(),
                     sender: session.actor.clone(),
-                    recipient: recipient.to_string(),
-                    device_id: device_id.to_string(),
+                    recipient: recipient_key.clone(),
+                    device_id: device_key.clone(),
                     position,
                     content,
                     created_at,
@@ -124,14 +175,16 @@ async fn send_device_messages(
             {
                 tracing::error!(%error, "failed to append device message");
             }
-            delivered_devices.push(device_id.to_string());
+            delivered_devices.push(device_key);
         }
-        delivered.insert(recipient.to_string(), json!(delivered_devices));
+        if !delivered_devices.is_empty() {
+            delivered.insert(recipient.to_string(), json!(delivered_devices));
+        }
     }
     json_ok(DeviceMessagesPutOutcome {
         ok: true,
         delivered,
-        unknown_devices: BTreeMap::new(),
+        unknown_devices,
     })
 }
 
@@ -338,28 +391,38 @@ async fn ack_device_messages(
     })
 }
 
-pub fn device_message_events_after(messages: &[DeviceMessageRecord]) -> Vec<Value> {
-    messages
-        .iter()
-        .map(|message| {
-            json!({
-                "idempotency_key": message.idempotency_key,
-                "sender": message.sender,
-                "recipient": message.recipient,
-                "device_id": message.device_id,
-                "position": message.position,
-                "content": message.content,
-                "created_at": message.created_at,
-            })
-        })
-        .collect()
-}
-
-fn device_message_envelopes_after(messages: &[DeviceMessageRecord]) -> Vec<DeviceMessageEnvelope> {
+pub(crate) fn device_message_envelopes_after(
+    messages: &[DeviceMessageRecord],
+) -> Vec<DeviceMessageEnvelope> {
     messages
         .iter()
         .filter_map(device_message_envelope_from_record)
         .collect()
+}
+
+fn device_is_active(record: Option<&DeviceInventoryRecord>) -> bool {
+    record.is_some_and(|record| record.revoked_at.is_none())
+}
+
+fn device_is_active_verified(record: Option<&DeviceInventoryRecord>) -> bool {
+    record.is_some_and(|record| {
+        record.revoked_at.is_none() && record.verification_state == "verified"
+    })
+}
+
+fn note_unknown_device(
+    unknown_devices: &mut BTreeMap<String, Value>,
+    recipient: &str,
+    device_id: &str,
+) {
+    let entry = unknown_devices
+        .entry(recipient.to_owned())
+        .or_insert_with(|| json!([]));
+    if let Some(devices) = entry.as_array_mut() {
+        devices.push(json!(device_id));
+    } else {
+        *entry = json!([device_id]);
+    }
 }
 
 fn device_message_envelope_from_record(
@@ -388,8 +451,7 @@ fn device_message_envelope_from_record(
             message
                 .content
                 .get("sender_device_id")
-                .and_then(Value::as_str)
-                .unwrap_or("ck:device:00000000-0000-7000-8000-000000000000")
+                .and_then(Value::as_str)?
                 .to_owned(),
         )
         .ok()?,

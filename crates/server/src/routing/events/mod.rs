@@ -30,7 +30,7 @@ use projection::{
 
 use super::{
     TO_DEVICE_PAGE_LIMIT, append_audit_log, auth_or_render, authenticated_session,
-    device_message_events_after, is_json_integer, is_realm_deleted, is_valid_discoverability,
+    device_message_envelopes_after, is_json_integer, is_realm_deleted, is_valid_discoverability,
     is_valid_sha256_digest, now, parse_snapshot_ref, prune_expired_typing, query_param,
     query_param_all, realm_allows_plaintext_service, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,

@@ -26,9 +26,15 @@ use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::DevicePairingRequestListOutcome;
 use crate::{JsonResult, ids, json_ok};
 
-pub(super) fn router() -> Router {
+pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("devices").get(device_list))
+        .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
+        .push(Router::with_path("devices/{device_id}/rename").post(device_rename))
+}
+
+pub(super) fn router() -> Router {
+    protocol_router()
         .push(Router::with_path("devices/pairing-requests").get(device_pairing_requests))
         .push(
             Router::with_path("devices/pairing-requests/{pairing_request_id}/approve")
@@ -40,8 +46,6 @@ pub(super) fn router() -> Router {
         )
         .push(Router::with_path("devices/pairing-challenge").post(device_pairing_challenge))
         .push(Router::with_path("devices/authorize-pairing").post(device_authorize_pairing))
-        .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
-        .push(Router::with_path("devices/{device_id}/rename").post(device_rename))
 }
 
 #[endpoint(
