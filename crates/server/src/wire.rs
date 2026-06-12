@@ -1099,58 +1099,12 @@ pub struct SolandCallMediaTokenExchangeRequestBody {
     pub focus_id: String,
 }
 
-// ── B-C (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — recovery
-// policy / receipt endpoint wire shapes. Wire-level scaffold only — the
-// internal proof verifier is TODO(R3.1).
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandRecoveryPolicyRequestBody {
-    /// `ck.schema.recovery_policy.v1`.
-    pub schema: String,
-    pub policy_id: String,
-    /// `pending` | `active` | `retired`.
-    pub lifecycle: String,
-    pub epoch: u64,
-    pub body: Value,
-    pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retired_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandRecoveryPolicyOutcome {
-    pub ok: bool,
-    pub policy_id: String,
-    pub policy_version: u64,
-    pub lifecycle: String,
-    pub created_at: DateTime<Utc>,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandRecoveryReceiptRequestBody {
-    /// `ck.schema.recovery_receipt.v1`.
-    pub schema: String,
-    pub recovery_session_id: String,
-    pub policy_id: String,
-    pub policy_epoch: u64,
-    pub evidence: Value,
-    pub bound_proof: Value,
-    pub issued_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandRecoveryReceiptOutcome {
-    pub ok: bool,
-    pub recovery_session_id: String,
-    pub policy_id: String,
-    pub issued_at: DateTime<Utc>,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
+// Recovery policy / receipt endpoints (`recovery_policy_put` /
+// `recovery_receipt_put`) take `JsonBody<Value>` and validate against the
+// spec REC-1 shapes via `validate_recovery_policy` / `validate_recovery_receipt`
+// in `routing::identity::recovery`. The SDK carries the authoritative typed
+// forms (`cokret_sdk::model::{RecoveryPolicy, RecoveryReceipt}`) for clients;
+// no soland-private mirror exists.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateWebRtcSessionRequestBody {
