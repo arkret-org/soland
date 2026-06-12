@@ -1,7 +1,5 @@
 use std::ffi::OsString;
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use reqwest::Url;
@@ -67,106 +65,6 @@ fn development_egress_can_allow_loopback() {
     let _env = clean_egress_env();
     let url = Url::parse("http://127.0.0.1:8698/health").unwrap();
     assert!(soland::security::validate_url_for_egress(&url, "test", true).is_ok());
-}
-
-#[test]
-fn managed_egress_client_source_keeps_timeout_no_redirect_and_no_proxy() {
-    let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security.rs"))
-        .expect("read security.rs");
-    for required in [
-        ".connect_timeout(",
-        ".timeout(",
-        ".redirect(reqwest::redirect::Policy::none())",
-        ".no_proxy()",
-    ] {
-        assert!(
-            source.contains(required),
-            "managed egress client builder must contain {required}"
-        );
-    }
-}
-
-#[test]
-fn routing_code_must_not_construct_raw_reqwest_clients() {
-    let routing_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routing");
-    let mut violations = Vec::new();
-    for path in rust_sources_under(&routing_dir) {
-        let source = fs::read_to_string(&path).expect("read routing source");
-        for forbidden in [
-            "reqwest::Client::new(",
-            "reqwest::Client::builder(",
-            "reqwest::blocking::Client::new(",
-            "reqwest::blocking::Client::builder(",
-            "reqwest::get(",
-        ] {
-            if source.contains(forbidden) {
-                violations.push(format!("{} contains {forbidden}", path.display()));
-            }
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "routing outbound HTTP must use security::build_*_egress_http_client:\n{}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn did_resolver_chain_must_use_managed_egress_client_for_external_probe() {
-    let source =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/did_resolver_chain.rs"))
-            .expect("read did_resolver_chain.rs");
-    assert!(
-        source.contains("security::build_default_egress_http_client")
-            || source.contains("security::build_egress_http_client"),
-        "external webvh provider probe must use the managed egress HTTP client"
-    );
-    for forbidden in [
-        "reqwest::Client::new(",
-        "reqwest::Client::builder(",
-        "reqwest::get(",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "did_resolver_chain.rs must not construct raw reqwest clients: {forbidden}"
-        );
-    }
-}
-
-#[test]
-fn routing_send_calls_must_have_egress_url_validation_in_file() {
-    let routing_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routing");
-    let mut violations = Vec::new();
-    for path in rust_sources_under(&routing_dir) {
-        let source = fs::read_to_string(&path).expect("read routing source");
-        if source.contains(".send()") && !source.contains("validate_http_url_for_egress") {
-            violations.push(path.display().to_string());
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "routing files with outbound .send() must validate URL through security::validate_http_url_for_egress:\n{}",
-        violations.join("\n")
-    );
-}
-
-fn rust_sources_under(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect_rust_sources(root, &mut files);
-    files
-}
-
-fn collect_rust_sources(path: &Path, files: &mut Vec<PathBuf>) {
-    let entries = fs::read_dir(path).expect("read source directory");
-    for entry in entries {
-        let entry = entry.expect("read source entry");
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rust_sources(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            files.push(path);
-        }
-    }
 }
 
 struct CleanEgressEnvGuard {

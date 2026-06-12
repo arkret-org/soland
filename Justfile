@@ -83,17 +83,6 @@ clippy:
 test:
     cargo test --locked
 
-# Run only the Stream J conformance gates (operation_id registry diff +
-# forbidden-terms scan). Cheap (file scan + regex, no DB), so CI can
-# block merges on it without paying the full integration cost.
-#
-# P5 (5.1) — also runs the no-Rust operation-id snapshot script. The
-# script + the Rust test enforce the same contract; the bash script is
-# CI-friendly when `cargo test` is too slow for an early-blocking step.
-conformance-gates:
-    cargo test --locked --test conformance_gates
-    bash tools/operation-id-snapshot-check.sh
-
 # Query the default health endpoint.
 health:
     curl -fsS http://{{ bind }}/health

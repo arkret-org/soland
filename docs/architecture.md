@@ -26,8 +26,8 @@ A successful `POST /_cokret/self/events` walks the following stages:
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
    `cokret_sdk::events::EventEnvelope`, rejects forbidden wire fields
-   (`is_forbidden_wire_field`, see `tests/conformance_gates.rs`), and binds
-   the envelope to the authenticated principal.
+   (`is_forbidden_wire_field`), and binds the envelope to the authenticated
+   principal.
 
 2. **Replay window + signature verification**
    (`src/jws_verify.rs`, `src/routing/events/event_log.rs`). The
@@ -40,9 +40,7 @@ A successful `POST /_cokret/self/events` walks the following stages:
    `event_kind` to an `apply_*_dispatch` arm and updates the in-memory
    `ProjectionState`. CKP-0007 adds the Circle FSM, the
    `ck.realm.link` / `ck.realm.inheritance_policy` edges, and the
-   `scope_circle_id` projection columns; the conformance gate
-   (`tests/conformance_gates.rs::ckp_0007_circle_event_kinds_are_dispatched`)
-   keeps the dispatch table in lock-step with the spec registry.
+   `scope_circle_id` projection columns.
 
 4. **Persistence write** (`src/persistence.rs`). Each reducer mutation is
    funneled through one of the `*Store` traits

@@ -214,7 +214,7 @@ impl NotaryReconfigRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct SubmitControlMoveResponse {
+pub struct SubmitControlMoveOutcome {
     pub control_move_id: String,
     #[serde(default)]
     pub accepted: bool,

@@ -82,10 +82,3 @@ tracing-appender = {workspace = true}
 tracing-opentelemetry = {workspace = true,default-features = false,optional = true}
 tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
-
-[dev-dependencies]
-# Stream J conformance gates (`tests/conformance_gates.rs`): operation_id
-# registry diff + forbidden-terms scan. `walkdir` for recursing src/,
-# `regex` for the line-level pattern scan.
-regex = {workspace = true}
-walkdir = {workspace = true}

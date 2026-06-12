@@ -1388,7 +1388,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
-            "artifact drift tests for lattice family/kind/bottom mappings",
+            "SDK-backed lattice family/kind/bottom registry bindings",
             "outbound Move/Seal fanout signed intent evidence",
             "per-peer retry/durability transcript metadata"
         ],

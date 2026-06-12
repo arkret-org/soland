@@ -19,7 +19,7 @@
 //!
 //! DTO shapes mirror `sodmin/src/types/seal.rs` (`NotaryValue`,
 //! `BottomEntry`, `BottomCandidateHead`, `BottomRepairStrategy`, `SealDagSnapshot`,
-//! `SealLeaf`, `CompactionOutcome`, `SubmitControlMoveResponse`,
+//! `SealLeaf`, `CompactionOutcome`, `SubmitControlMoveOutcome`,
 //! `CompactionRequest`).
 //!
 //! v1 scope:
@@ -59,7 +59,7 @@ use crate::{JsonResult, app_error, json_ok};
 
 pub type NotaryValueOutcome = shared_seal::NotaryValue;
 pub type NotaryReconfigBody = shared_seal::NotaryReconfigRequest;
-pub type AdminSubmitControlMoveOutcome = shared_seal::SubmitControlMoveResponse;
+pub type AdminSubmitControlMoveOutcome = shared_seal::SubmitControlMoveOutcome;
 pub type BottomCandidateHeadOutcome = shared_seal::BottomCandidateHead;
 pub type BottomEntryOutcome = shared_seal::BottomEntry;
 pub type BottomRepairStrategyBody = shared_seal::BottomRepairStrategy;

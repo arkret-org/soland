@@ -159,8 +159,7 @@ cargo run --bin soland-rotate-drill --release
 
 - `_todos.md` Streams D / E / F for in-flight scaffold work.
 - `CHANGELOG.md` `[Unreleased]` for the most recent wire deltas.
-- `tests/conformance_gates.rs` — if a CI gate has started failing, this
-  is the file that documents the contract.
+- `tests/` and `src/**#[cfg(test)]` for behavior-focused regression coverage.
 
 ---
 

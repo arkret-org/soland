@@ -4333,7 +4333,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rand 0.10.1",
- "regex",
  "reqwest 0.13.4",
  "salvo",
  "salvo-oapi",
@@ -4349,7 +4348,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
- "walkdir",
 ]
 
 [[package]]

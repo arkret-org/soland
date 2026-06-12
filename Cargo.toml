@@ -40,7 +40,6 @@ opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
 rand = "0.10.1"
-regex = "1.12"
 reqwest = { version = "0.13.4", default-features = false, features = ["form"] }
 salvo = { version = "0.93.0", default-features = false }
 salvo-oapi = "0.93.0"
@@ -56,4 +55,3 @@ tracing-appender = "0.2.5"
 tracing-opentelemetry = { version = "0.33.0", default-features = false }
 tracing-subscriber = "0.3.23"
 uuid = "1.23.3"
-walkdir = "2.5"
