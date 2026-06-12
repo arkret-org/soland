@@ -417,12 +417,6 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         // successful claim and `RETURNING` the new value so the watchdog
         // can use it as a fencing token for the subsequent
         // `delete_with_fence` / `renew_claim`.
-        #[derive(QueryableByName)]
-        struct ClaimSeqRow {
-            #[diesel(sql_type = BigInt)]
-            claim_seq: i64,
-        }
-
         let updated: Option<ClaimSeqRow> = sql_query(
             "UPDATE multisig_pending \
              SET claimed_by_node_id = $2, claimed_until = $4, \

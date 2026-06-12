@@ -4369,6 +4369,7 @@ dependencies = [
  "diesel",
  "diesel-async",
  "diesel_migrations",
+ "serde_json",
  "tokio",
 ]
 

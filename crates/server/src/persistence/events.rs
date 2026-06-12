@@ -246,11 +246,6 @@ impl EventStore for PgEventStore {
 
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        #[derive(QueryableByName)]
-        struct ExistsRow {
-            #[diesel(sql_type = diesel::sql_types::Bool)]
-            present: bool,
-        }
         let event_id_uuid = ids::typed_uuid_part_or_panic(event_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(event_id_uuid)
@@ -262,14 +257,9 @@ impl EventStore for PgEventStore {
 
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>> {
         let mut conn = pg_conn(&self.pool).await?;
-        #[derive(QueryableByName)]
-        struct MaxRow {
-            #[diesel(sql_type = Nullable<BigInt>)]
-            max_seq: Option<i64>,
-        }
         sql_query("SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE actor_id = $1")
             .bind::<Text, _>(actor_id)
-            .get_result::<MaxRow>(&mut *conn)
+            .get_result::<MaxSeqRow>(&mut *conn)
             .await
             .map(|row| row.max_seq.map(|n| n.max(0) as u64))
             .map_err(PersistenceError::from)

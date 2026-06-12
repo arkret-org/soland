@@ -539,12 +539,6 @@ pub(crate) struct PgFederationOperationsStore {
     pub(crate) pool: PgPool,
 }
 
-#[derive(QueryableByName)]
-struct FederationOperationRow {
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-}
-
 #[async_trait]
 impl FederationOperationsStore for PgFederationOperationsStore {
     async fn append(&self, operation: Operation) -> PersistenceResult<()> {
@@ -580,11 +574,6 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
     async fn contains(&self, operation_id: &str) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        #[derive(QueryableByName)]
-        struct ExistsRow {
-            #[diesel(sql_type = diesel::sql_types::Bool)]
-            present: bool,
-        }
         let operation_id_uuid = ids::typed_uuid_part_or_panic(operation_id);
         sql_query("SELECT EXISTS(SELECT 1 FROM federation_operations WHERE id = $1) AS present")
             .bind::<SqlUuid, _>(operation_id_uuid)
@@ -597,12 +586,12 @@ impl FederationOperationsStore for PgFederationOperationsStore {
     async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<Operation>> {
         let mut conn = pg_conn(&self.pool).await?;
         let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
-        let rows: Vec<FederationOperationRow> = sql_query(
+        let rows: Vec<JsonPayloadRow> = sql_query(
             "SELECT payload FROM federation_operations \
              WHERE realm_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .load::<FederationOperationRow>(&mut *conn)
+        .load::<JsonPayloadRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
         rows.into_iter()
@@ -616,11 +605,11 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Operation>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let rows: Vec<FederationOperationRow> = sql_query(
+        let rows: Vec<JsonPayloadRow> = sql_query(
             "SELECT payload FROM federation_operations \
              ORDER BY created_at ASC, id ASC",
         )
-        .load::<FederationOperationRow>(&mut *conn)
+        .load::<JsonPayloadRow>(&mut *conn)
         .await
         .map_err(PersistenceError::from)?;
         rows.into_iter()

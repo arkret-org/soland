@@ -17,6 +17,9 @@ pub(crate) use diesel::{OptionalExtension, QueryableByName, sql_query};
 pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncPgConnection, RunQueryDsl};
 pub(crate) use serde_json::Value;
+pub(crate) use soland_data::query_rows::{
+    ClaimSeqRow, CountRow, ExistsRow, JsonPayloadRow, MaxSeqRow,
+};
 pub(crate) use uuid::Uuid;
 
 pub(crate) use crate::db::PgPool;

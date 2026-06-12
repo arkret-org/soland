@@ -63,12 +63,6 @@ pub(crate) struct PgKeyBackupStore {
     pub(crate) pool: PgPool,
 }
 
-#[derive(QueryableByName)]
-struct KeyBackupPayloadRow {
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-}
-
 #[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
@@ -134,7 +128,7 @@ impl KeyBackupStore for PgKeyBackupStore {
             .await;
         sql_query("SELECT payload FROM key_backups WHERE id = $1")
             .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(backup_id))
-            .get_result::<KeyBackupPayloadRow>(&mut *conn)
+            .get_result::<JsonPayloadRow>(&mut *conn)
             .await
             .optional()
             .map(|row| row.map(|r| r.payload))
@@ -154,7 +148,7 @@ impl KeyBackupStore for PgKeyBackupStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM key_backups ORDER BY created_at ASC, id ASC")
-            .load::<KeyBackupPayloadRow>(&mut *conn)
+            .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|r| r.payload).collect())
             .map_err(PersistenceError::from)

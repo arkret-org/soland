@@ -461,11 +461,6 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
 
     async fn len(&self) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool).await?;
-        #[derive(QueryableByName)]
-        struct CountRow {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            count: i64,
-        }
         sql_query("SELECT COUNT(*) AS count FROM push_bridge_cache")
             .get_result::<CountRow>(&mut *conn)
             .await
@@ -530,12 +525,6 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
 
 pub(crate) struct PgPushDeviceStore {
     pub(crate) pool: PgPool,
-}
-
-#[derive(QueryableByName)]
-struct PushDevicePayloadRow {
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
 }
 
 #[async_trait]
@@ -615,7 +604,7 @@ impl PushDeviceStore for PgPushDeviceStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM push_devices ORDER BY updated_at ASC, id ASC")
-            .load::<PushDevicePayloadRow>(&mut *conn)
+            .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)

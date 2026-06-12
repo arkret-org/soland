@@ -47,12 +47,6 @@ pub(crate) struct PgAuditStore {
     pub(crate) pool: PgPool,
 }
 
-#[derive(QueryableByName)]
-struct AuditPayloadRow {
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-}
-
 #[async_trait]
 impl AuditStore for PgAuditStore {
     async fn append(&self, entry: Value) -> PersistenceResult<()> {
@@ -106,7 +100,7 @@ impl AuditStore for PgAuditStore {
             "SELECT payload FROM audit_logs WHERE actor_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<Text, _>(actor)
-        .load::<AuditPayloadRow>(&mut *conn)
+        .load::<JsonPayloadRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(|row| row.payload).collect())
         .map_err(PersistenceError::from)
@@ -115,7 +109,7 @@ impl AuditStore for PgAuditStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM audit_logs ORDER BY created_at ASC, id ASC")
-            .load::<AuditPayloadRow>(&mut *conn)
+            .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)

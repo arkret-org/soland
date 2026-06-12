@@ -5,6 +5,7 @@
 //! - database bootstrap, connection pools, readiness-visible migration state
 //! - embedded Diesel migrations
 //! - Diesel table schema generated from those migrations
+//! - reusable raw SQL result rows that have no server-domain behavior
 //!
 //! The next layer that belongs here is the persisted model/store layer:
 //! `*Record` row types, `*Store` repository traits, `Pg*Store` implementations,
@@ -16,6 +17,7 @@
 //! workers, object storage policy, and `AppState` orchestration stay in
 //! `soland-server`.
 pub mod db;
+pub mod query_rows;
 pub mod schema;
 
 pub use db::{Db, PgPool};

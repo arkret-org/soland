@@ -247,12 +247,6 @@ pub(crate) struct PgModerationStore {
     pub(crate) pool: PgPool,
 }
 
-#[derive(QueryableByName)]
-struct ModerationPayloadRow {
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-}
-
 #[async_trait]
 impl ModerationStore for PgModerationStore {
     async fn append_report(&self, report: Value) -> PersistenceResult<()> {
@@ -331,7 +325,7 @@ impl ModerationStore for PgModerationStore {
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut *conn)
+            .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
@@ -340,7 +334,7 @@ impl ModerationStore for PgModerationStore {
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, id ASC")
-            .load::<ModerationPayloadRow>(&mut *conn)
+            .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
             .map_err(PersistenceError::from)
