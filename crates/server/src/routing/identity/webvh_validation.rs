@@ -720,12 +720,14 @@ fn decode_webvh_signature(value: &str) -> Result<Signature, String> {
 /// SEC-01 — max age of a resolver health signal before a consumer treats it as
 /// stale (hence conservatively degraded). Mirrors the freshness-`unknown`
 /// fail-closed discipline.
+#[allow(dead_code)]
 pub const RESOLVER_HEALTH_SIGNAL_MAX_AGE_SECS: i64 = 5 * 60;
 
 /// SEC-01 — a resolver degraded/health diagnostic signal. The bound fields are
 /// the canonical signing transcript; a stale "healthy" signal cannot be
 /// replayed to mask a current degraded state because `as_of` + `nonce` are
 /// covered by the signature and freshness-checked by the consumer.
+#[allow(dead_code)]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ResolverHealthSignal {
     pub resolver_service_did: String,
@@ -739,6 +741,7 @@ pub struct ResolverHealthSignal {
     pub state: String,
 }
 
+#[allow(dead_code)]
 impl ResolverHealthSignal {
     /// Canonical bytes the resolver's service-DID verification method signs and
     /// the consumer recomputes to verify the detached signature.
@@ -762,6 +765,7 @@ impl ResolverHealthSignal {
 }
 
 /// SEC-01 — reason a consumer must fail closed on a resolver health signal.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolverHealthFailReason {
     /// No signal at all — round toward degraded.
@@ -779,6 +783,7 @@ pub enum ResolverHealthFailReason {
 /// SEC-01 — consumer verdict for whether a high-risk write may rely on a
 /// resolver, given an *already signature-verified* health signal (or `None` if
 /// missing / unverifiable).
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolverHealthVerdict {
     /// Present, authorized, fresh, healthy — high-risk writes MAY proceed.
@@ -792,6 +797,7 @@ pub enum ResolverHealthVerdict {
 /// Resolving the verification method from the DID is the caller's job; this
 /// rejects a replayed/forged signal whose bytes do not bind the canonical
 /// fields.
+#[allow(dead_code)]
 pub fn verify_resolver_health_signature(
     signal: &ResolverHealthSignal,
     signature: &[u8; SIGNATURE_LENGTH],
@@ -809,6 +815,7 @@ pub fn verify_resolver_health_signature(
 /// authorization, key rotation, MLS commit, service delegation, joining a new
 /// Realm, accepting an invite). `signal` MUST already have passed
 /// [`verify_resolver_health_signature`]; `None` means missing *or* unverifiable.
+#[allow(dead_code)]
 pub fn resolver_health_verdict(
     signal: Option<&ResolverHealthSignal>,
     authorized_service_dids: &[String],

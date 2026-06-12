@@ -217,6 +217,7 @@ fn notary_value_object_from_sdk(value: &SdkNotaryValue) -> Result<Value, AppErro
         .map_err(|e| app_error!(InternalError, "serialize notary value failed: {e}"))
 }
 
+#[cfg(test)]
 fn notary_value_object_from_body(body: &NotaryReconfigBody) -> Result<Value, AppError> {
     let value = sdk_notary_value_from_body(body)?;
     notary_value_object_from_sdk(&value)
