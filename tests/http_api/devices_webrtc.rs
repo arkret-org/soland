@@ -82,7 +82,7 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
             .any(|event| {
                 event["action"] == "account.device_pair"
                     && event["outcome"] == "accepted"
-                    && event["target"]["new_device_id"] == sibling
+                    && event["payload"]["new_device_id"] == sibling
             })
     );
 }
@@ -176,7 +176,7 @@ async fn device_pairing_challenge_and_authorization_surface_work() {
             .any(|event| {
                 event["action"] == "device.authorize_pairing"
                     && event["outcome"] == "accepted"
-                    && event["target"]["target_device_id"]
+                    && event["payload"]["target_device_id"]
                         == "ck:device:01904100-0000-7000-8000-9b04e0000007"
             })
     );
@@ -288,7 +288,7 @@ async fn device_rename_updates_display_name() {
             .any(|event| {
                 event["action"] == "device.rename"
                     && event["outcome"] == "accepted"
-                    && event["target"]["display_name"] == "Work Phone"
+                    && event["payload"]["display_name"] == "Work Phone"
             })
     );
 }

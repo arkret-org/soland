@@ -1,11 +1,14 @@
 use salvo::prelude::*;
 
+mod actors;
 pub(crate) mod audit;
 mod cells;
 mod collection;
 mod control;
 mod delivery_binding;
 mod introspect;
+mod invite_tokens;
+mod media;
 mod moderation;
 mod retention;
 mod seal;
@@ -176,5 +179,8 @@ pub fn admin_router() -> Router {
             Router::with_path("realms/{realm_id}/delivery-binding-policy")
                 .get(delivery_binding::admin_get_realm_delivery_binding_policy),
         )
+        .push(actors::router())
+        .push(invite_tokens::router())
+        .push(media::router())
         .push(moderation::router())
 }

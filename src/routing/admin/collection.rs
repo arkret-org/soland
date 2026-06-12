@@ -27,7 +27,7 @@ use super::{
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
+use crate::state::{AppState, RealmDirectoryEntry, RealmInviteRecord, RealmMetaRecord};
 use crate::{ids, kinds};
 
 #[endpoint(
@@ -287,12 +287,35 @@ pub(super) async fn admin_list_realm_members(
     json_ok(admin_realm_member_items(state, &realm_id).await?)
 }
 
-async fn admin_actor_items(state: &AppState) -> Vec<Value> {
+pub(super) async fn admin_actor_items(state: &AppState) -> Vec<Value> {
+    let account_rows: BTreeMap<String, _> = state
+        .persistence
+        .accounts()
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|account| (account.did.clone(), account))
+        .collect();
     demo_actors(state)
         .await
         .into_iter()
         .map(|mut actor| {
             if let Some(object) = actor.as_object_mut() {
+                let did = object.get("did").and_then(Value::as_str).map(str::to_owned);
+                if let Some(did) = did.as_deref() {
+                    object.insert("id".to_owned(), json!(did));
+                    object.insert("actor_id".to_owned(), json!(did));
+                    object.insert(
+                        "status".to_owned(),
+                        json!(state.account_lifecycle_state(did)),
+                    );
+                    if let Some(account) = account_rows.get(did) {
+                        object.insert("account_id".to_owned(), json!(account.did));
+                        object.insert("account_row_id".to_owned(), json!(account.id));
+                        object.insert("created_at".to_owned(), json!(account.created_at));
+                    }
+                }
                 object.insert("kind".to_owned(), json!("actor"));
             }
             actor
@@ -587,7 +610,7 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-async fn admin_invite_items(state: &AppState) -> Vec<Value> {
+pub(super) async fn admin_invite_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .realm_invites()
@@ -595,22 +618,30 @@ async fn admin_invite_items(state: &AppState) -> Vec<Value> {
         .await
         .unwrap_or_default()
         .iter()
-        .map(|invite| {
-            json!({
-                "kind": "invite_token",
-                "invite_id": invite.invite_id,
-                "realm_id": invite.realm_id,
-                "inviter": invite.inviter,
-                "invitee": invite.invitee,
-                "invite_delivery_target": invite.invite_delivery_target,
-                "introduction_evidence_digest": invite.introduction_evidence_digest,
-                "token_hash": cokret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
-                "status": invite.status,
-                "expires_at": invite.expires_at,
-                "created_at": invite.created_at,
-            })
-        })
+        .map(admin_invite_item_value)
         .collect()
+}
+
+pub(super) fn admin_invite_item_value(invite: &RealmInviteRecord) -> Value {
+    json!({
+        "kind": "invite_token",
+        "id": invite.invite_id,
+        "invite_id": invite.invite_id,
+        "token": invite.invite_token,
+        "realm_id": invite.realm_id,
+        "inviter": invite.inviter,
+        "created_by": invite.inviter,
+        "invitee": invite.invitee,
+        "invite_delivery_target": invite.invite_delivery_target,
+        "introduction_evidence_digest": invite.introduction_evidence_digest,
+        "token_hash": cokret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
+        "status": invite.status,
+        "uses_allowed": 1,
+        "uses_completed": if invite.status == "accepted" { 1 } else { 0 },
+        "uses_pending": if invite.status == "pending" { 1 } else { 0 },
+        "expires_at": invite.expires_at,
+        "created_at": invite.created_at,
+    })
 }
 
 async fn admin_policy_items(state: &AppState) -> Vec<Value> {
@@ -625,7 +656,7 @@ async fn admin_policy_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-async fn admin_media_items(state: &AppState) -> Vec<Value> {
+pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
         .persistence
         .blobs()
