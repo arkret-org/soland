@@ -4322,7 +4322,6 @@ dependencies = [
  "deadpool",
  "diesel",
  "diesel-async",
- "diesel_migrations",
  "dotenvy",
  "ed25519-dalek",
  "futures-util",
@@ -4340,6 +4339,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "soland-core",
+ "soland-data",
  "subtle",
  "thiserror",
  "tokio",
@@ -4358,6 +4358,18 @@ dependencies = [
  "salvo",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "soland-data"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "deadpool",
+ "diesel",
+ "diesel-async",
+ "diesel_migrations",
+ "tokio",
 ]
 
 [[package]]

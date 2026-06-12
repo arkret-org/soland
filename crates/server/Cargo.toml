@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "soland"
 version.workspace = true
 edition.workspace = true
@@ -42,8 +42,8 @@ otel = [
 # when it's redirected to a file (PowerShell `Start-Process
 # -RedirectStandardOutput` chained through `cargo run`), so tracing
 # output is lost on graceful shutdown. The non-blocking appender keeps
-# write latency off the request path; we hold its guard for the
-# process lifetime so the channel flushes before exit.
+# the channel off the request path; we hold its guard for the
+# process lifetime so it flushes before exit.
 anyhow = {workspace = true}
 arc-swap = {workspace = true}
 async-stream = {workspace = true}
@@ -56,7 +56,6 @@ cokret-sdk = {workspace = true,features = ["full-surface", "device-runtime", "ap
 deadpool = {workspace = true,features = ["rt_tokio_1"]}
 diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
 diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
-diesel_migrations = {workspace = true,features = ["postgres"]}
 dotenvy = {workspace = true}
 ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}
@@ -74,6 +73,7 @@ serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
 soland-core = {workspace = true,features = ["salvo"]}
+soland-data = {workspace = true}
 subtle = {workspace = true}
 thiserror = {workspace = true}
 tokio = {workspace = true,features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"]}
