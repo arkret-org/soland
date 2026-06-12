@@ -1324,10 +1324,7 @@ async fn enqueue_peer_event_fanout(
         "membership_frontier": [event_id],
         "delivery_binding_frontier": [event_id],
         "destination_service_type": "principal_server",
-        "reducer_profile_digest": canonical_json_hash(&json!({
-            "domain": "ck.peer.events.submit.reducer_profile.v1",
-            "profile": "ck.reducer.v1",
-        })),
+        "reducer_profile_digest": cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
     });
     let mut hasher_input = Vec::new();
     hasher_input.extend_from_slice(state.config.service_did.as_bytes());
@@ -4496,6 +4493,16 @@ impl SolandEventsSubmitRequestBody {
                     .to_owned(),
             ));
         }
+        let expected_reducer_digest = cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
+        let actual_reducer_digest = binding.reducer_profile_digest.to_string();
+        if actual_reducer_digest != expected_reducer_digest {
+            return Err((
+                cokret_sdk::ERROR_CODE_REDUCER_PROFILE_MISMATCH,
+                format!(
+                    "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
+                ),
+            ));
+        }
         Ok(())
     }
 }
@@ -5024,6 +5031,53 @@ mod admission_tests {
         };
         let err = SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
         assert_eq!(err.0, cokret_sdk::ERROR_CODE_SCHEMA_VIOLATION);
+    }
+
+    #[test]
+    fn federation_binding_rejects_reducer_profile_digest_mismatch() {
+        let event_id =
+            cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
+        let req = EventsSubmitFederationRequestBody {
+            service_binding_ref: cokret_sdk::FederationServiceBindingRef {
+                realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+                    .unwrap(),
+                membership_frontier: vec![event_id.clone()],
+                delivery_binding_frontier: vec![event_id],
+                destination_service_type: "principal_server".to_owned(),
+                reducer_profile_digest: cokret_sdk::Hash::new(format!("sha256:{}", "2".repeat(64)))
+                    .unwrap(),
+            },
+            events: Vec::new(),
+            idempotency_key: None,
+        };
+
+        let err = SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap_err();
+        assert_eq!(err.0, cokret_sdk::ERROR_CODE_REDUCER_PROFILE_MISMATCH);
+    }
+
+    #[test]
+    fn federation_binding_accepts_registry_reducer_profile_digest() {
+        let event_id =
+            cokret_sdk::EventId::new("ck:event:01904100-0000-7000-8000-000000000001").unwrap();
+        let req = EventsSubmitFederationRequestBody {
+            service_binding_ref: cokret_sdk::FederationServiceBindingRef {
+                realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                realm_policy_digest: cokret_sdk::Hash::new(format!("sha256:{}", "1".repeat(64)))
+                    .unwrap(),
+                membership_frontier: vec![event_id.clone()],
+                delivery_binding_frontier: vec![event_id],
+                destination_service_type: "principal_server".to_owned(),
+                reducer_profile_digest: cokret_sdk::Hash::new(
+                    cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+                )
+                .unwrap(),
+            },
+            events: Vec::new(),
+            idempotency_key: None,
+        };
+
+        SolandEventsSubmitRequestBody::validate_federation_binding(&req).unwrap();
     }
 }
 

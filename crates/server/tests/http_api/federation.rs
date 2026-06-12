@@ -216,10 +216,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [event_id],
             "destination_service_type": "principal_server",
-            "reducer_profile_digest": sha256_json(&serde_json::json!({
-                "domain": "ck.peer.events.submit.reducer_profile.v1",
-                "profile": "ck.reducer.v1",
-            })),
+            "reducer_profile_digest": cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [event],
         "idempotency_key": format!("ck:outbox:event:{event_id}"),
