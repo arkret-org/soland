@@ -125,7 +125,7 @@ impl NotaryWorker {
         // The v1 Genesis Seal is an empty-delta DAG root. If this is the
         // first signed batch for the Realm, materialize that root before
         // sealing any Move so the successor never uses predecessor_refs=[].
-        let leaves = materialize_genesis_if_empty(self, state, realm_id)?;
+        let leaves = self.materialize_genesis_if_empty(state, realm_id)?;
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
@@ -617,6 +617,36 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Construction(format!("derive id: {e}")))?;
         seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
         Ok(seal)
+    }
+
+    fn materialize_genesis_if_empty(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+    ) -> Result<Vec<SealId>, NotaryError> {
+        let leaves = state.seal_store.list_leaves(realm_id)?;
+        if !leaves.is_empty() {
+            return Ok(leaves);
+        }
+
+        if let Some(genesis_id) = state.seal_store.genesis(realm_id)?
+            && state.seal_store.get(&genesis_id)?.is_some()
+        {
+            return Ok(vec![genesis_id]);
+        }
+
+        let genesis = self.build_genesis_seal(state, realm_id)?;
+        let effect = apply_seal(
+            &genesis,
+            state.move_store.as_ref(),
+            state.seal_store.as_ref(),
+            state.cell_store.as_ref(),
+            state.cell_registry.as_ref(),
+            select_jws_verifier(state),
+        )
+        .map_err(|reject| NotaryError::ApplySeal(format!("genesis: {reject}")))?;
+
+        Ok(vec![effect.seal])
     }
 }
 
