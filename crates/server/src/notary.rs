@@ -33,7 +33,7 @@
 //!   shutdown handling under tokio).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
 use base64::Engine as _;
@@ -668,6 +668,88 @@ fn warn_once_about_ephemeral_notary_key() {
 /// NotaryWorker uses, keeping all signing paths consistent.
 pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
     SigningKey::from_bytes(seed)
+}
+
+/// Process-wide guard for first-Seal materialization. Genesis Seal canonical
+/// bytes include `sealed_at` / `hlc`, so two racing minters would produce two
+/// distinct `predecessor_refs=[]` roots — a permanent fork. All paths that may
+/// create a Realm's first Seal (notary signing pass, frontier seal-head read)
+/// serialize through this lock and re-check the leaf set inside it.
+static GENESIS_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Return the Realm's current Seal leaves, materializing the empty Genesis
+/// Seal first when none exists yet.
+fn materialize_genesis_if_empty(
+    worker: &NotaryWorker,
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<Vec<SealId>, NotaryError> {
+    let _guard = GENESIS_MATERIALIZE_LOCK
+        .lock()
+        .expect("genesis materialize lock poisoned");
+    let leaves = state.seal_store.list_leaves(realm_id)?;
+    if !leaves.is_empty() {
+        return Ok(leaves);
+    }
+    let genesis = worker.build_genesis_seal(state, realm_id)?;
+    let verifier = select_jws_verifier(state);
+    let effect = apply_seal(
+        &genesis,
+        state.move_store.as_ref(),
+        state.seal_store.as_ref(),
+        state.cell_store.as_ref(),
+        state.cell_registry.as_ref(),
+        verifier,
+    )
+    .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+    tracing::info!(
+        realm_id = %realm_id,
+        seal_id = %effect.seal,
+        "materialized empty Genesis Seal"
+    );
+    Ok(vec![genesis.id])
+}
+
+/// Current accepted Seal head for a Realm — the server side of the
+/// registered account-client seal-view sourcing (`ck.self.events.frontier`
+/// realm shape `{realm_id, seal_id, control_event_set_root, state_root,
+/// hlc?}`, see cokret-spec service-http-binding). Clients mint single-leaf
+/// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`
+/// from this view.
+///
+/// An initialized Realm always has at least its Genesis Seal; when none
+/// exists yet and this deployment is the Realm's notary, the Genesis Seal is
+/// materialized on demand. Returns `Ok(None)` only when this deployment is
+/// not authorized to notarize the Realm and holds no Seal for it.
+///
+/// With multiple DAG leaves (not expected under v1 single-DID notary), the
+/// leaf with the highest `notary_seq` (id as tie-break) is served — a light
+/// client cannot sign a multi-leaf union basis anyway.
+pub fn ensure_realm_seal_head(
+    state: &AppState,
+    realm_id: &RealmId,
+) -> Result<Option<Seal>, NotaryError> {
+    let mut leaves = state.seal_store.list_leaves(realm_id)?;
+    if leaves.is_empty() {
+        let worker = NotaryWorker::for_service(state.config.service_did.clone());
+        if !worker.is_authorized_for(state, realm_id)? {
+            return Ok(None);
+        }
+        leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
+    }
+    let mut head: Option<Seal> = None;
+    for leaf in &leaves {
+        let Some(seal) = state.seal_store.get(leaf)? else {
+            continue;
+        };
+        let replace = head.as_ref().is_none_or(|current| {
+            (seal.notary_seq, seal.id.as_str()) > (current.notary_seq, current.id.as_str())
+        });
+        if replace {
+            head = Some(seal);
+        }
+    }
+    Ok(head)
 }
 
 /// Convenience: trigger a single signing pass and report a structured

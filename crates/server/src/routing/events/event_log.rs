@@ -46,7 +46,7 @@ use crate::routing::organizations;
 use crate::routing::policy_gate::{self, PolicyGateSurface};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, CanonicalEventRecord, SessionRecord};
-use crate::wire::{SolandEventsFrontierState, describe};
+use crate::wire::{EventsFrontierAccountClientState, describe};
 use crate::{artifacts, kinds};
 
 pub(super) fn router() -> Router {
@@ -448,14 +448,14 @@ async fn events_query_durable_scope(
 #[endpoint(
     operation_id = "ck.self.events.frontier",
     tags("events"),
-    summary = "Per-actor + per-realm frontier (highest accepted actor_seq / latest event)"
+    summary = "Actor frontier or Realm Seal view (registered seal_basis / seal_ref sourcing)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.events.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<SolandEventsFrontierState> {
+) -> crate::result::JsonResult<EventsFrontierAccountClientState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
@@ -465,72 +465,80 @@ async fn events_frontier(
             "events.frontier requires at least one of realm_id or actor_id",
         ));
     }
-    let internal_realm_selector = match realm_selector.as_deref() {
-        Some(value) if RealmId::new(value.to_owned()).is_ok() => Some(value.to_owned()),
-        Some(_) => return Err(AppError::invalid_param("invalid realm_id")),
-        None => None,
-    };
+
+    // Realm selector → Realm Seal view `{realm_id, seal_id,
+    // control_event_set_root, state_root, hlc}`: the registered sourcing for
+    // single-leaf Control Move `seal_basis` (`leaves=[seal_id]`) and
+    // DataEvent `seal_ref`. Takes precedence when both selectors are passed.
+    if let Some(realm_value) = realm_selector {
+        let realm_id = RealmId::new(realm_value.clone())
+            .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        let own_pcr = crate::routing::identity::recovery::principal_control_realm_for_did(
+            &session.actor,
+        );
+        let accessible = realm_value == own_pcr
+            || crate::routing::spaces::space::realm_id_accessible(
+                state,
+                &realm_value,
+                Some(&session),
+            )
+            .await;
+        if !accessible {
+            // Same code as invisible-event reads: existence must not leak.
+            return Err(AppError::not_found("realm not found"));
+        }
+        let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
+            .map_err(|e| AppError::internal(format!("seal head unavailable: {e}")))?;
+        let Some(seal) = head else {
+            return Err(AppError::not_found(
+                "realm has no accepted Seal on this deployment",
+            ));
+        };
+        return crate::result::json_ok(EventsFrontierAccountClientState {
+            frontier: json!({
+                "realm_id": realm_id.as_str(),
+                "seal_id": seal.id.as_str(),
+                "control_event_set_root": seal.control_event_set_root.as_str(),
+                "state_root": seal.state_root.as_str(),
+                "hlc": seal.hlc.as_str(),
+            }),
+            receipts: None,
+        });
+    }
+
+    // Actor selector → `{actor_id, actor_seq, event_id}`: highest accepted
+    // actor_seq among events visible to the caller.
+    let actor = actor_id.expect("selector presence checked above");
     let events = state
         .persistence
         .events()
         .snapshot_all()
         .await
         .unwrap_or_default();
-    let mut actor_frontier: BTreeMap<String, u64> = BTreeMap::new();
-    let mut realm_frontier: BTreeMap<String, Value> = BTreeMap::new();
-    let mut realm_latest: BTreeMap<String, (DateTime<Utc>, String)> = BTreeMap::new();
+    let mut best: Option<(u64, String)> = None;
     for record in &events {
-        if actor_id
-            .as_deref()
-            .is_some_and(|actor| actor != record.actor_id)
-        {
-            continue;
-        }
-        let record_realm_id = canonical_realm_id_for_record(record);
-        if internal_realm_selector.as_deref() != record_realm_id.as_deref()
-            && internal_realm_selector.is_some()
-        {
+        if record.actor_id != actor {
             continue;
         }
         if !event_visible_to_session(state, record, &session).await {
             continue;
         }
-        actor_frontier
-            .entry(record.actor_id.clone())
-            .and_modify(|seq| *seq = (*seq).max(record.actor_seq))
-            .or_insert(record.actor_seq);
-        if let Some(realm_id) = record_realm_id {
-            let replace = frontier_entry_is_newer(&realm_latest, &realm_id, record);
-            if replace {
-                realm_latest.insert(
-                    realm_id.clone(),
-                    (record.received_at, record.event_id.clone()),
-                );
-                realm_frontier.insert(
-                    realm_id,
-                    json!({
-                        "event_id": record.event_id.clone(),
-                        "actor_seq": record.actor_seq,
-                        "canonical_digest": record.canonical_digest.clone()
-                    }),
-                );
-            }
+        if best.as_ref().is_none_or(|(seq, _)| record.actor_seq > *seq) {
+            best = Some((record.actor_seq, record.event_id.clone()));
         }
     }
-
-    let generated_at = now();
-    let frontier = json!({
-        "storage": state.db.mode(),
-        "generated_at": generated_at,
-        "events_frontier": {
-            "frontier": realm_frontier.clone(),
-            "actor_seq_upper_bounds": actor_frontier.clone(),
-        },
-    });
-    crate::result::json_ok(SolandEventsFrontierState {
-        actor_frontier,
-        realm_frontier,
-        frontier,
+    let Some((actor_seq, event_id)) = best else {
+        // Same code regardless of "unknown actor" vs "nothing visible":
+        // private DIDs must not leak through the frontier surface.
+        return Err(AppError::not_found("no visible events for actor"));
+    };
+    crate::result::json_ok(EventsFrontierAccountClientState {
+        frontier: json!({
+            "actor_id": actor,
+            "actor_seq": actor_seq,
+            "event_id": event_id,
+        }),
+        receipts: None,
     })
 }
 
@@ -4274,17 +4282,6 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
                 .map(ToOwned::to_owned)
                 .collect(),
         )
-    })
-}
-
-fn frontier_entry_is_newer(
-    latest: &BTreeMap<String, (DateTime<Utc>, String)>,
-    key: &str,
-    record: &CanonicalEventRecord,
-) -> bool {
-    latest.get(key).is_none_or(|(received_at, event_id)| {
-        record.received_at > *received_at
-            || (record.received_at == *received_at && record.event_id.as_str() > event_id.as_str())
     })
 }
 

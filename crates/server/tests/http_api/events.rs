@@ -228,19 +228,71 @@ async fn events_describe_and_single_event_submit_work() {
         "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
+    // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
     let frontier: Value =
-        TestClient::get("http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example&realm_id=ck:realm:0196419b-0000-7000-8000-000000000000")
+        TestClient::get("http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(frontier["actor_frontier"]["did:web:alice.example"], 3);
+    assert_eq!(frontier["frontier"]["actor_id"], "did:web:alice.example");
+    assert_eq!(frontier["frontier"]["actor_seq"], 3);
     assert_eq!(
-        frontier["realm_frontier"]["ck:realm:0196419b-0000-7000-8000-000000000000"]["event_id"],
+        frontier["frontier"]["event_id"],
         "ck:event:01904100-0000-7000-8000-df827a7269a3"
     );
+
+    // Realm selector → spec Realm Seal view: the registered sourcing for
+    // single-leaf seal_basis / seal_ref. The Genesis Seal is materialized on
+    // demand for a Realm this deployment notarizes.
+    let seeded = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Frontier Seal View Realm",
+        None,
+        "listed",
+        &[],
+        &[],
+    )
+    .await;
+    let seeded_realm_id = seeded["realm_id"].as_str().unwrap();
+    let seal_view: Value = TestClient::get(format!(
+        "http://server/_cokret/self/events/frontier?realm_id={seeded_realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(seal_view["frontier"]["realm_id"], seeded_realm_id);
+    let seal_id = seal_view["frontier"]["seal_id"].as_str().unwrap();
+    assert!(seal_id.starts_with("ck:seal:sha256:"), "seal_id: {seal_id}");
+    assert!(
+        seal_view["frontier"]["control_event_set_root"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert!(
+        seal_view["frontier"]["state_root"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+
+    // Inaccessible realm must read as not_found (no existence leak).
+    let mut hidden = TestClient::get(
+        "http://server/_cokret/self/events/frontier?realm_id=ck:realm:0196419b-0000-7000-8000-00000000dead",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(hidden.status_code.unwrap(), StatusCode::NOT_FOUND);
+    let hidden_body: Value = hidden.take_json().await.unwrap();
+    assert_eq!(hidden_body["error"]["code"], "not_found");
 
     let mut conflicting = signed_event_envelope(
         "ck:event:01904100-0000-7000-8000-f15c8ea06c11",

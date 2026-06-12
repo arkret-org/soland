@@ -700,15 +700,16 @@ async fn lifecycle_transition(
         },
         "status_changed_at": status_changed_at.clone(),
     });
-    let frontier_key = if event_kind == "ck.self.agent.deactivate" {
-        "revocation_frontier"
-    } else {
-        "freshness_frontier"
-    };
-    payload.as_object_mut().expect("payload object").insert(
-        frontier_key.to_owned(),
-        json!({ "captured_at": status_changed_at.clone() }),
-    );
+    // pause / resume carry the spec-required `freshness_frontier`.
+    // deactivate carries no frontier field since the SPEC-SOL-003 resolution:
+    // a revocation's basis is the Control Move envelope seal_basis and its
+    // cutoff is the accepted Seal covering the Move.
+    if event_kind != "ck.self.agent.deactivate" {
+        payload.as_object_mut().expect("payload object").insert(
+            "freshness_frontier".to_owned(),
+            json!({ "captured_at": status_changed_at.clone() }),
+        );
+    }
     if let Some(reason) = reason.as_ref() {
         payload
             .as_object_mut()

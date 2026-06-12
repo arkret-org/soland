@@ -519,11 +519,18 @@ pub struct SolandBackfillOutcome {
     pub limited: bool,
 }
 
+/// Spec-shape `ck.self.events.frontier` account-client response
+/// (`service-operation-dtos.schema.json#/$defs/EventsFrontierAccountClientState`).
+/// `frontier` is a single object whose shape follows the selector: actor
+/// (`{actor_id, actor_seq, event_id}`) or Realm Seal view (`{realm_id,
+/// seal_id, control_event_set_root, state_root, hlc?}`). The Realm shape is
+/// the registered account-client source for minting a single-leaf Control
+/// Move `seal_basis` / DataEvent `seal_ref` (SPEC-SOL-003 resolution).
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandEventsFrontierState {
-    pub actor_frontier: BTreeMap<String, u64>,
-    pub realm_frontier: BTreeMap<String, Value>,
+pub struct EventsFrontierAccountClientState {
     pub frontier: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipts: Option<Vec<Value>>,
 }
 
 // `SolandSnapshotHeadState` was deleted with the 2026-06-11 spec resolution:
