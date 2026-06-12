@@ -1389,7 +1389,7 @@ pub enum MlsEffect {
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from
     /// `previous_epoch` to `new_epoch` and the attested governance
-    /// frontier was merged into the group's covered-frontier accumulator.
+    /// Seal set was merged into the group's covered_seals accumulator.
     CommitEpochAdvanced {
         group_id: String,
         previous_epoch: u64,
@@ -2947,7 +2947,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
-    // governance covered-frontier accumulation.
+    // governance covered_seals accumulation.
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
     // via `action ∈ {"publish","claim"}`; the event log itself stores

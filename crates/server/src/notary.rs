@@ -103,7 +103,7 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        max_moves: usize,
+        max_control_moves: usize,
     ) -> Result<Option<NotaryOutcome>, NotaryError> {
         // Step 1: authorization. v1 single-DID mode — accept if notary
         // cell is unset (genesis Realm) OR set to our service DID. Anything
@@ -113,9 +113,10 @@ impl NotaryWorker {
         }
 
         // Step 2: list pending Moves (oldest first).
-        let pending = state
-            .move_store
-            .list_pending_for_notary(realm_id, None, max_moves)?;
+        let pending =
+            state
+                .move_store
+                .list_pending_for_notary(realm_id, None, max_control_moves)?;
         if pending.is_empty() {
             return Ok(None);
         }
@@ -693,10 +694,10 @@ pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
 pub fn run_one_signing_pass(
     state: &AppState,
     realm_id: &RealmId,
-    max_moves: usize,
+    max_control_moves: usize,
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
     let worker = NotaryWorker::for_service(state.config.service_did.clone());
-    worker.sign_pending_for_realm(state, realm_id, max_moves)
+    worker.sign_pending_for_realm(state, realm_id, max_control_moves)
 }
 
 #[cfg(test)]

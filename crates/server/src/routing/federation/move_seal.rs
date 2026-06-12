@@ -406,10 +406,10 @@ async fn submit_seal(
 pub struct SignSealRequestBody {
     /// Realm whose pending Moves should be batch-sealed.
     pub realm_id: String,
-    /// Maximum number of pending Moves to consume in this pass.
+    /// Maximum number of pending Control Moves to consume in this pass.
     /// Default 100 if absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_moves: Option<usize>,
+    pub max_control_moves: Option<usize>,
 }
 
 /// Response body — mirrors `SubmitSealOutcome` but reports `None` when
@@ -449,13 +449,13 @@ async fn admin_sign_seal(
     let _session = aa.authenticated_session(state, req).await?;
     let SignSealRequestBody {
         realm_id,
-        max_moves,
+        max_control_moves,
     } = body.into_inner();
     let realm = RealmId::new(realm_id.clone()).map_err(|e| {
         AppError::new(ErrorCode::SchemaViolation, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let limit = max_moves.unwrap_or(100).min(1000);
+    let limit = max_control_moves.unwrap_or(100).min(1000);
 
     match crate::notary::run_one_signing_pass(state, &realm, limit) {
         Ok(Some(outcome)) => {

@@ -18,19 +18,33 @@ use regex::Regex;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-/// Locate `cokret-spec/spec/v1/artifacts/...` relative to the soland
-/// crate root (`$CARGO_MANIFEST_DIR/..`). Mirrors the resolver used by
-/// `tests/conformance_vectors.rs`.
+/// Locate `cokret-spec/spec/v1/artifacts/...` from the workspace checkout.
 fn spec_artifact(path: &str) -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .expect("soland lives next to cokret-spec")
+    workspace_checkout_root()
         .join("cokret-spec")
         .join("spec")
         .join("v1")
         .join("artifacts")
         .join(path)
+}
+
+fn workspace_checkout_root() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest.ancestors() {
+        if ancestor
+            .join("cokret-spec")
+            .join("spec")
+            .join("v1")
+            .join("artifacts")
+            .is_dir()
+        {
+            return ancestor.to_path_buf();
+        }
+    }
+    panic!(
+        "could not locate cokret-spec/spec/v1/artifacts above {}",
+        manifest.display()
+    );
 }
 
 /// soland's `src/` directory — root of the recursive scan.

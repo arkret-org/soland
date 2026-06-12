@@ -1531,7 +1531,7 @@ fn validate_message_expiry_payload(operation: &Operation) -> Result<(), &'static
         return Err("ck.message.create.payload.expiry must be an object");
     };
     for key in object.keys() {
-        if !["ttl_ms", "trigger", "anchor_hlc", "grace_ms"].contains(&key.as_str()) {
+        if !["ttl_ms", "trigger", "seal_hlc", "grace_ms"].contains(&key.as_str()) {
             return Err("ck.message.create.payload.expiry has unknown field");
         }
     }
@@ -1547,10 +1547,10 @@ fn validate_message_expiry_payload(operation: &Operation) -> Result<(), &'static
         _ => return Err("ck.message.create.payload.expiry trigger is invalid"),
     }
     if object
-        .get("anchor_hlc")
+        .get("seal_hlc")
         .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
     {
-        return Err("ck.message.create.payload.expiry anchor_hlc must be non-empty");
+        return Err("ck.message.create.payload.expiry seal_hlc must be non-empty");
     }
     if object
         .get("grace_ms")

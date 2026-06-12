@@ -2,7 +2,7 @@
 # operation-id-snapshot-check.sh — CI gate
 #
 # Compares the operation_id values that soland's source code registers
-# (any `operation_id = "<id>"` string literal under `src/`) against the
+# (any `operation_id = "<id>"` string literal under `crates/server/src/`) against the
 # canonical spec registry at
 # `cokret-spec/spec/v1/artifacts/registry/operation-registry.json`.
 #
@@ -45,7 +45,7 @@ SOLAND_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SPEC_ROOT_DEFAULT="${SOLAND_ROOT}/../cokret-spec"
 SPEC_ROOT="${1:-${SPEC_ROOT_DEFAULT}}"
 REGISTRY="${SPEC_ROOT}/spec/v1/artifacts/registry/operation-registry.json"
-SRC_ROOT="${SOLAND_ROOT}/src"
+SRC_ROOT="${SOLAND_ROOT}/crates/server/src"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required (https://jqlang.github.io/jq/)." >&2
@@ -57,7 +57,7 @@ if [[ ! -f "${REGISTRY}" ]]; then
   exit 2
 fi
 if [[ ! -d "${SRC_ROOT}" ]]; then
-  echo "ERROR: src/ not found at ${SRC_ROOT}" >&2
+  echo "ERROR: crates/server/src/ not found at ${SRC_ROOT}" >&2
   exit 2
 fi
 
@@ -81,7 +81,7 @@ if [[ ${#CANONICAL[@]} -eq 0 ]]; then
   exit 2
 fi
 
-# Scan soland's src/ for `operation_id = "<id>"` literals of ANY prefix.
+# Scan soland's server src/ for `operation_id = "<id>"` literals of ANY prefix.
 mapfile -t SOLAND_OPS < <(
   grep -RhoE 'operation_id[[:space:]]*=[[:space:]]*"[A-Za-z][A-Za-z0-9_.]+"' "${SRC_ROOT}" \
     | sed -E 's/.*"([A-Za-z][A-Za-z0-9_.]+)".*/\1/' \

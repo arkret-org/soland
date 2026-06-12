@@ -710,7 +710,7 @@ pub fn tombstone_timeline_event_for_retention(
         json!(tombstone.tombstoned_at.to_rfc3339()),
     );
     object.insert(
-        "retention_anchor_preserved".to_owned(),
+        "retention_seal_preserved".to_owned(),
         json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
@@ -741,7 +741,7 @@ pub fn retention_tombstone_payload_value(
             "retention_reason": tombstone.reason.as_str(),
             "retention_expired_at": tombstone.expired_at.to_rfc3339(),
             "retention_tombstoned_at": tombstone.tombstoned_at.to_rfc3339(),
-            "retention_anchor_preserved": tombstone.sealed,
+            "retention_seal_preserved": tombstone.sealed,
             "physical_delete": false,
         });
     };
@@ -760,7 +760,7 @@ pub fn retention_tombstone_payload_value(
         json!(tombstone.tombstoned_at.to_rfc3339()),
     );
     object.insert(
-        "retention_anchor_preserved".to_owned(),
+        "retention_seal_preserved".to_owned(),
         json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));

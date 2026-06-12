@@ -1867,7 +1867,7 @@ fn projected_mls_governance_binding_covers_policy_root(
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
             || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.mls.covered_seals.v1");
+            || cell_id.contains("ck.component.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }
@@ -1902,7 +1902,7 @@ fn projected_mls_governance_binding_metadata_digest(
         let cell_id = cell.as_str();
         let is_mls_cell = cell_id.contains("ck.component.mls.epoch.v1")
             || cell_id.contains("ck.component.mls_epoch.v1")
-            || cell_id.contains("ck.component.mls.covered_seals.v1");
+            || cell_id.contains("ck.component.covered_seals.v1");
         if !is_mls_cell {
             continue;
         }
@@ -4050,7 +4050,7 @@ fn sdk_event_from_record(
             json!(tombstone.tombstoned_at.to_rfc3339()),
         );
         unsigned.insert(
-            "retention_anchor_preserved".to_owned(),
+            "retention_seal_preserved".to_owned(),
             json!(tombstone.sealed),
         );
         unsigned.insert("physical_delete".to_owned(), json!(false));
@@ -4126,7 +4126,7 @@ fn event_visibility_metadata(state: &AppState, record: &CanonicalEventRecord) ->
         metadata["retention_reason"] = json!(tombstone.reason.as_str());
         metadata["retention_expired_at"] = json!(tombstone.expired_at.to_rfc3339());
         metadata["retention_tombstoned_at"] = json!(tombstone.tombstoned_at.to_rfc3339());
-        metadata["retention_anchor_preserved"] = json!(tombstone.sealed);
+        metadata["retention_seal_preserved"] = json!(tombstone.sealed);
         metadata["physical_delete"] = json!(false);
     }
     metadata
@@ -6051,7 +6051,7 @@ mod inception_key_window_tests {
 
     /// Post-bootstrap §5.1 device authorization: `authorized_by` an sealed
     /// device, with NO `did_inception` ref.
-    fn anchored_device_envelope() -> Value {
+    fn sealed_device_envelope() -> Value {
         json!({
             "event_id": "ck:event:01904100-0000-7000-8000-a11ce0000002",
             "kind": "ck.device.authorize",
@@ -6156,7 +6156,7 @@ mod inception_key_window_tests {
     }
 
     #[tokio::test]
-    async fn anchored_device_authorize_is_not_gated() {
+    async fn sealed_device_authorize_is_not_gated() {
         // A post-bootstrap device.authorize (no did_inception ref) is NOT
         // subject to the inception-key window even when an old entry-0 exists.
         let state = make_state(true);
@@ -6165,7 +6165,7 @@ mod inception_key_window_tests {
         enforce_inception_key_online_window(
             &state,
             &parsed("ck.device.authorize"),
-            &anchored_device_envelope(),
+            &sealed_device_envelope(),
         )
         .await
         .expect("sealed-device authorize must not be gated by the inception window");

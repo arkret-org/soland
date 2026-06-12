@@ -19,13 +19,13 @@ pub struct ArtifactError {
 }
 
 pub const EVENT_KIND_REGISTRY_JSON: &str =
-    include_str!("../../cokret-spec/spec/v1/artifacts/registry/event-kind-registry.json");
+    include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/event-kind-registry.json");
 pub const SCHEMA_REGISTRY_JSON: &str =
-    include_str!("../../cokret-spec/spec/v1/artifacts/registry/schema-registry.json");
+    include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/schema-registry.json");
 pub const OPERATION_REGISTRY_JSON: &str =
-    include_str!("../../cokret-spec/spec/v1/artifacts/registry/operation-registry.json");
+    include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/operation-registry.json");
 pub const ID_KIND_REGISTRY_JSON: &str =
-    include_str!("../../cokret-spec/spec/v1/artifacts/registry/id-kind-registry.json");
+    include_str!("../../../../cokret-spec/spec/v1/artifacts/registry/id-kind-registry.json");
 
 static EVENT_KIND_REGISTRY: OnceLock<Value> = OnceLock::new();
 static SCHEMA_REGISTRY: OnceLock<Value> = OnceLock::new();

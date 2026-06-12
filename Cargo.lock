@@ -4340,6 +4340,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "soland-core",
  "subtle",
  "thiserror",
  "tokio",
@@ -4349,6 +4350,16 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "soland-core"
+version = "0.3.0"
+dependencies = [
+ "cokret-core",
+ "salvo",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

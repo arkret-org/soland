@@ -29,8 +29,9 @@ use chrono::SecondsFormat;
 use cokret_sdk::model::{
     AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
-    AgentParticipationSetRequestBody as AgentParticipationSetReqBody, effective_participation,
-    validate_agent_slug, validate_selection_within_ceiling,
+    AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentProvisionOutcome,
+    AgentProvisionRequestBody, effective_participation, validate_agent_slug,
+    validate_selection_within_ceiling,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -42,8 +43,6 @@ use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
-use cokret_sdk::model::{AgentProvisionOutcome, AgentProvisionRequestBody};
-
 use crate::wire::{
     SolandAgentGrantAttachRequestBody, SolandAgentGrantDetachOutcome, SolandAgentGrantOutcome,
     SolandAgentKeyPairOutcome, SolandAgentKeyPairRequestBody, SolandAgentLifecycleOutcome,
@@ -578,8 +577,9 @@ async fn provision_agent(
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    let agent_principal_did = cokret_sdk::Did::new(agent_principal_id)
-        .map_err(|err| AppError::internal(format!("generated agent principal DID invalid: {err}")))?;
+    let agent_principal_did = cokret_sdk::Did::new(agent_principal_id).map_err(|err| {
+        AppError::internal(format!("generated agent principal DID invalid: {err}"))
+    })?;
     json_ok(AgentProvisionOutcome {
         agent_principal_id: agent_principal_did,
         pairing_request_id,

@@ -14,12 +14,12 @@
 //!    `delivered_at = now()` so subsequent polls don't redeliver.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
-//!    initializes its covered-frontier accumulator.
+//!    initializes its covered_seals accumulator.
 //!
 //! 4. **commit_epoch increment** — `apply_commit_epoch`. The reducer only accepts a commit whose
 //!    `expected_prev_epoch` matches the group's current stored epoch (0 for a brand-new group).
 //!    Stale / out-of-order commits are rejected with `mls_epoch_skew`. Accepted commits merge the
-//!    attested governance frontier into the group's covered-frontier accumulator.
+//!    attested governance Seal set into the group's covered_seals accumulator.
 //!
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
@@ -48,7 +48,7 @@ pub const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 /// profile, relationship, or device metadata outside the opaque MLS bytes.
 pub const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for commits whose governance binding does not name an
-/// attested frontier to add into the covered-frontier accumulator.
+/// attested governance Seal set to add into the covered_seals accumulator.
 pub const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
 /// Reject code for a second genesis against an already initialized group.
 pub const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
@@ -270,7 +270,7 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// G3.S1 — initialize a new MLS group at epoch 0.
 ///
 /// The canonical payload is `mls_genesis_payload` from the spec
-/// registry. The reducer stores the epoch and covered-frontier summary
+/// registry. The reducer stores the epoch and covered_seals summary
 /// only; opaque GroupInfo / ratchet tree material remains in the
 /// durable event payload and object store references.
 pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> ProjectionEffectOut {

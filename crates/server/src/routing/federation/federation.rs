@@ -3074,7 +3074,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anchor_fanout_records_anchor_target_and_retry_metadata() {
+    async fn seal_fanout_records_seal_target_and_retry_metadata() {
         let cfg = config_with_policy(
             FederationPolicy::Mesh,
             vec!["https://peer-seal.example".to_owned()],
@@ -3084,12 +3084,8 @@ mod tests {
         assert_eq!(targets, vec!["https://peer-seal.example".to_owned()]);
 
         let peer_hash = sha256_hex("https://peer-seal.example".as_bytes());
-        let anchor_hash = sha256_hex("ck:seal:sha256:02".as_bytes());
-        let txn_id = format!(
-            "outbound_anchor:{}:{}",
-            &peer_hash[..16],
-            &anchor_hash[..16]
-        );
+        let seal_hash = sha256_hex("ck:seal:sha256:02".as_bytes());
+        let txn_id = format!("outbound_seal:{}:{}", &peer_hash[..16], &seal_hash[..16]);
         let transcript = state
             .persistence
             .federation_transactions()

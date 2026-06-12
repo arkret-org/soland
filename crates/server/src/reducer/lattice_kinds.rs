@@ -16,7 +16,7 @@
 // comments) continues to compile.
 pub use cokret_sdk::lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, CapabilityDelegate, CapabilityDerived, CapabilityGrant,
-    CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog, CoveredFrontier,
+    CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog, CoveredSeals,
     CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, DevicePushRoute,
     DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
     MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,

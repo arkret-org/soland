@@ -1,0 +1,91 @@
+[package]
+name = "soland"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+default-run = "soland"
+description = "Reference Cokret v1 principal server implementation built on Salvo, Diesel, and PostgreSQL."
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["cokret", "decentralized", "did", "salvo", "server"]
+categories = ["network-programming", "web-programming::http-server"]
+authors.workspace = true
+
+[features]
+default = []
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
+[dependencies]
+# Constant-time equality for MAC/signature token comparison (SOL-03-004:
+# presign-token check). Already in the lock tree via the crypto stack.
+# events.subscribe streaming. `bytes` for the
+# Bytes chunks `salvo::Response::stream` consumes; `futures-util` for
+# Stream combinators; `async-stream` for the `stream!` async-generator
+# macro that lets us interleave history yields + tokio::select on the
+# broadcast channel + heartbeat ticker.
+# Production Ed25519 JWS verification. ed25519-dalek
+# does the verify; bs58 decodes the multibase (base58btc-prefixed-z) public key
+# segment of did:key DID URLs and didDocument verificationMethod entries.
+# Lock-free pointer swap for the NotaryWorker signing key. Used
+# by `rotate-signing-key` admin endpoint so concurrent signing passes never
+# observe a torn read across the rotation.
+# `rand` for fresh ed25519 seed generation in rotate-signing-key.
+# Durable, observable tracing output when the runner harness sets
+# `SOLAND_LOG_FILE`. Without this appender, Windows fully-buffers stdout
+# when it's redirected to a file (PowerShell `Start-Process
+# -RedirectStandardOutput` chained through `cargo run`), so tracing
+# output is lost on graceful shutdown. The non-blocking appender keeps
+# write latency off the request path; we hold its guard for the
+# process lifetime so the channel flushes before exit.
+anyhow = {workspace = true}
+arc-swap = {workspace = true}
+async-stream = {workspace = true}
+async-trait = {workspace = true}
+base64 = {workspace = true}
+bs58 = {workspace = true}
+bytes = {workspace = true}
+chrono = {workspace = true,features = ["serde"]}
+cokret-sdk = {workspace = true,features = ["full-surface", "device-runtime", "applet-runtime", "salvo", "signer"]}
+deadpool = {workspace = true,features = ["rt_tokio_1"]}
+diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"]}
+diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
+diesel_migrations = {workspace = true,features = ["postgres"]}
+dotenvy = {workspace = true}
+ed25519-dalek = {workspace = true}
+futures-util = {workspace = true}
+hex = {workspace = true}
+hmac = {workspace = true}
+object_store = {workspace = true,features = ["aws"]}
+opentelemetry = {workspace = true,default-features = false,features = ["trace"],optional = true}
+opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}
+opentelemetry_sdk = {workspace = true,default-features = false,features = ["trace", "rt-tokio"],optional = true}
+rand = {workspace = true}
+reqwest = {workspace = true,default-features = false,features = ["form", "json", "rustls"]}
+salvo = {workspace = true,default-features = false,features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "test", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"]}
+salvo-oapi = {workspace = true,features = ["yaml"]}
+serde = {workspace = true,features = ["derive"]}
+serde_json = {workspace = true}
+sha2 = {workspace = true}
+soland-core = {workspace = true,features = ["salvo"]}
+subtle = {workspace = true}
+thiserror = {workspace = true}
+tokio = {workspace = true,features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"]}
+tracing = {workspace = true}
+tracing-appender = {workspace = true}
+tracing-opentelemetry = {workspace = true,default-features = false,optional = true}
+tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
+uuid = {workspace = true,features = ["v4", "v7", "serde"]}
+
+[dev-dependencies]
+# Stream J conformance gates (`tests/conformance_gates.rs`): operation_id
+# registry diff + forbidden-terms scan. `walkdir` for recursing src/,
+# `regex` for the line-level pattern scan.
+regex = {workspace = true}
+walkdir = {workspace = true}

@@ -155,7 +155,7 @@ pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start
 //     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
 //     suffix.
 //   - `ck.mls.proposal`      — MLS proposal (wire-only; no reducer projection yet).
-//   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered-frontier
+//   - `ck.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
 //     accumulator).
 //   - `ck.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
 //     no reducer projection yet).
@@ -164,7 +164,7 @@ pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start
 // retry path for messages that arrived before the key material; today the
 // recipient silently drops them.
 // MLS commits now require a governance binding with an attested
-// membership/covered frontier; the soland reducer accumulates that
+// membership / covered_seals evidence; the soland reducer accumulates that
 // frontier in `MlsCommitEpoch.covered_seals`. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.

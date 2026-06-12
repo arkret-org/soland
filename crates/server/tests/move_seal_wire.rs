@@ -567,7 +567,7 @@ async fn notary_worker_signs_pending_move_and_publishes_seal() {
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "realm_id": realm_id().as_str(),
-            "max_moves": 100,
+            "max_control_moves": 100,
         }))
         .send(&app)
         .await
@@ -1402,7 +1402,7 @@ async fn seed_member_cell_join(state: AppState, token: &str) -> String {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_control_moves": 100}))
         .send(&app)
         .await
         .take_json()
@@ -1499,7 +1499,7 @@ async fn admin_list_cells_filters_by_prefix() {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_control_moves": 100}))
         .send(&app)
         .await
         .take_json()
@@ -1606,7 +1606,7 @@ async fn admin_list_cells_paginates_with_limit_and_offset() {
         .unwrap();
     let _: Value = TestClient::post("http://server/_soland/admin/seals/sign")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({"realm_id": realm_id().as_str(), "max_moves": 100}))
+        .json(&json!({"realm_id": realm_id().as_str(), "max_control_moves": 100}))
         .send(&app)
         .await
         .take_json()
