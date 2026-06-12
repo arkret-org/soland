@@ -582,6 +582,80 @@ async fn incremental_sync_omits_quiet_realm_from_delta() {
 }
 
 #[tokio::test]
+async fn incremental_sync_meta_only_delta_advances_cursor_once() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = dev_token(state.clone()).await;
+    let created = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Meta-only Realm",
+        Some("projection-only sync regression"),
+        "listed",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = created["realm_id"].as_str().unwrap().to_owned();
+
+    let baseline = account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
+    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+    assert!(
+        baseline["realms"][&realm_id].is_object(),
+        "full sync MUST include the seeded realm baseline: {baseline}"
+    );
+
+    let mut meta = state
+        .persistence
+        .realm_meta()
+        .get(&realm_id)
+        .await
+        .unwrap()
+        .expect("seeded realm meta");
+    meta.updated_at = chrono::Utc::now() + chrono::Duration::seconds(1);
+    state
+        .persistence
+        .realm_meta()
+        .put(&realm_id, &meta)
+        .await
+        .unwrap();
+
+    let meta_delta = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=0&after={cursor}"),
+    )
+    .await;
+    assert!(
+        meta_delta["realms"][&realm_id].is_object(),
+        "meta-only change MUST emit the realm once: {meta_delta}"
+    );
+    assert!(
+        meta_delta["realms"][&realm_id]["timeline"]["events"]
+            .as_array()
+            .is_some_and(|events| events.is_empty()),
+        "regression setup must be meta-only, not a timeline event: {meta_delta}"
+    );
+
+    let next_cursor = meta_delta["cursor"].as_str().unwrap().to_owned();
+    let quiet = account_subscribe_frame(
+        state.clone(),
+        Some(&alice),
+        &format!("catchup=true&max_wait_ms=0&after={next_cursor}"),
+    )
+    .await;
+    assert!(
+        quiet["realms"][&realm_id].is_null(),
+        "same meta-only projection MUST NOT repeat after its cursor: {quiet}"
+    );
+    assert!(
+        quiet["realms"]
+            .as_object()
+            .is_some_and(|map| !map.contains_key(&realm_id)),
+        "quiet delta must omit the meta-only realm entirely: {quiet}"
+    );
+}
+
+#[tokio::test]
 async fn incremental_sync_emits_realm_with_new_timeline_event() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;

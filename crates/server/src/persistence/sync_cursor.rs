@@ -28,10 +28,10 @@ pub struct SyncCursorRecord {
 /// Durable handle table behind the stateful sync cursor.
 ///
 /// `upsert` keeps the FIRST `issued_at_ms` on conflict (refreshing only the
-/// expiry): `issued_at_ms` means "when this position frontier was reached",
-/// and the incremental-sync skip optimisation reads it to elide unchanged
-/// realms — advancing it on a dedup re-mint could skip deltas a crashed
-/// client never persisted.
+/// expiry): `issued_at_ms` is used for forward-progress pruning of older
+/// handles. Account subscribe freshness is represented by `positions.realms`
+/// plus `positions.account_realms`, so a projection-only delta must advance
+/// the relevant position instead of relying on a refreshed issue timestamp.
 #[async_trait]
 pub trait SyncCursorStore: Send + Sync {
     async fn get(&self, handle: &str) -> PersistenceResult<Option<SyncCursorRecord>>;
@@ -94,9 +94,8 @@ impl SyncCursorStore for MemorySyncCursorStore {
     async fn upsert(&self, record: &SyncCursorRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
         match data.get_mut(&record.handle) {
-            // Dedup re-mint: refresh the expiry only; `issued_at_ms` keeps
-            // marking when this position frontier was first reached (see
-            // trait doc).
+            // Dedup re-mint: refresh the expiry only; `issued_at_ms`
+            // remains the pruning watermark for this handle (see trait doc).
             Some(existing) => existing.expires_at_ms = record.expires_at_ms,
             None => {
                 data.insert(record.handle.clone(), record.clone());
@@ -220,9 +219,8 @@ impl SyncCursorStore for PgSyncCursorStore {
 
     async fn upsert(&self, record: &SyncCursorRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        // Dedup re-mint refreshes the expiry only; `issued_at_ms` keeps
-        // marking when this position frontier was first reached (see trait
-        // doc).
+        // Dedup re-mint refreshes the expiry only; `issued_at_ms` remains
+        // the pruning watermark for this handle (see trait doc).
         sql_query(
             "INSERT INTO sync_cursor_handles \
              (id, principal_id, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \

@@ -94,7 +94,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_MEDIA_SERVICE_LEGACY_REJECT` | unset | Reject legacy realm media-service payloads instead of compatibility handling. |
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
 | `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
-| `SOLAND_PROFILE_STATELESS_CURSOR` | unset | Advertise and allow the stateless cursor profile. |
 | `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |
 | `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
 | `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |

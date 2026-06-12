@@ -13,15 +13,19 @@ async fn sync_directory_and_index_share_demo_realm() {
         .take_json()
         .await
         .unwrap();
-    for profile in ["board", "chat", "topic"] {
-        assert!(
-            sync_describe["supported_sync_profiles"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|value| value == profile)
-        );
-    }
+    assert_eq!(
+        sync_describe["supported_sync_profiles"],
+        serde_json::json!([
+            "initial",
+            "incremental",
+            "board",
+            "chat",
+            "topic",
+            "converse",
+            "backfill_gap",
+            "bottom_cell_repair"
+        ])
+    );
 
     let invalid_profile =
         TestClient::post("http://server/_cokret/self/account/subscribe?catchup=true")

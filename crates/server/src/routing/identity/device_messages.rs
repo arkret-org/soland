@@ -342,6 +342,7 @@ async fn get_device_messages(
                 Some(&session),
                 None,
                 BTreeMap::new(),
+                BTreeMap::new(),
                 to_device_position,
             )
             .await,

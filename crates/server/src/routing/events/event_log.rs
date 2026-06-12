@@ -4095,6 +4095,11 @@ fn sdk_event_from_record(
             .get("authorization_ref")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        applet_id: object
+            .get("applet_id")
+            .and_then(Value::as_str)
+            .and_then(|value| cokret_sdk::AppletId::new(value.to_owned()).ok()),
+        external_ref: object.get("external_ref").cloned(),
         actor_kind: object
             .get("actor_kind")
             .cloned()
