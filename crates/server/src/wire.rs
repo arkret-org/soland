@@ -546,11 +546,24 @@ pub struct SolandAuthzCheckRequestBody {
     pub context: Option<Value>,
 }
 
-// spec `service-operation-dtos.schema.json#/$defs/AuthzCheckOutcome`
-// (additionalProperties: false). required: `decision` (five-valued enum:
-// allow / soft_deny / hard_deny / quarantine / require_review). Diagnostic
-// trace data is carried in spec-allowed fields (`matched_grants`,
-// `policy_results`) rather than private `grants`/`reason`/`decision_trace`.
+// AUTHORITATIVE FORM: spec
+// `service-operation-dtos.schema.json#/$defs/AuthzCheckOutcome`
+// (additionalProperties: false; `ck.self.authz.check` already binds it via
+// operation-registry `response_schema_ref`). required: `decision` (five-valued
+// enum: allow / soft_deny / hard_deny / quarantine / require_review).
+// Diagnostic trace data is carried in spec-allowed fields (`matched_grants`,
+// `policy_results`, `obligations`, `reason_code`) rather than private
+// `grants`/`reason`/`decision_trace`.
+//
+// This stays a soland-local DTO (NOT `pub use cokret_sdk::model::AuthzCheckOutcome`)
+// because the SDK type genuinely DIVERGES from the authoritative spec schema:
+// SDK `AuthzDecision` serializes `allow|deny|quarantine|require_review|soft_fail`,
+// while the spec enum is `allow|soft_deny|hard_deny|quarantine|require_review`
+// (`deny`/`soft_fail` are not spec values; `soft_deny`/`hard_deny` are absent
+// from the SDK). `pub use`-ing the SDK type would emit spec-invalid `decision`
+// strings. Reconciling SDK↔spec is an owner/SDK-side decision; soland tracks the
+// spec form here. See cotask `_spec_review/soland-derived-spec-issues.md`
+// SPEC-SOL-002.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandAuthzCheckOutcome {
     pub decision: String,
@@ -934,170 +947,33 @@ pub struct SolandKeysBackupsList {
     pub next_cursor: Option<String>,
 }
 
-// CKP-0008 / CKP-0009 (spec head 37ce729) — Personal Agent 11 operations.
-//
-// The shapes below carry the cross-project HTTP contract for sodmin /
-// yougen / cotest; reducer-side semantics are P2-impl TODO stubs in
-// `routing::events::agents`.
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentKeyPairRequestBody {
-    pub agent_principal_id: String,
-    pub verification_method: String,
-    #[serde(default)]
-    pub runtime_attestation: Option<Value>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentKeyPairOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub verification_method: String,
-    pub authorized_at: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-// `POST /_cokret/self/agents` (`ck.self.agent.provision`) request/response
-// shapes are the SDK-authoritative `cokret_sdk::model::
-// {AgentProvisionRequestBody, AgentProvisionOutcome}` (spec
-// `agent-operations.schema.json#/$defs/agent_provision_request_body` /
-// `agent_provision_outcome`) — no soland-private provision body exists.
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentView {
-    pub agent_principal_id: String,
-    pub controller_did: String,
-    pub agent_id: String,
-    pub display_name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_slug: Option<String>,
-    pub state: String,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pairing_request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-    #[serde(default)]
-    pub grants: Vec<Value>,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentList {
-    pub agents: Vec<SolandAgentView>,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentLifecycleRequestBody {
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentLifecycleOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub state: String,
-    pub status_changed_at: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentRotateKeyRequestBody {
-    pub new_verification_method: String,
-    #[serde(default)]
-    pub previous_key_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentRotateKeyOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub authorized_verification_method: String,
-    pub revoked_verification_method: Option<String>,
-    pub at: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentGrantAttachRequestBody {
-    pub grant_kind: String,
-    #[serde(rename = "agent_key_scope")]
-    pub scope: Value,
-    #[serde(default)]
-    pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentGrantOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub grant_id: String,
-    pub grant_kind: String,
-    #[serde(rename = "agent_key_scope")]
-    pub scope: Value,
-    pub state: String,
-    pub created_at: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentGrantDetachOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub grant_id: String,
-    pub detached_at: String,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentSidecarThreadEnsureRequestBody {
-    #[serde(default)]
-    pub agent_principal_id: Option<String>,
-    #[serde(default)]
-    pub context_realm_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentSidecarThreadEnsureOutcome {
-    pub ok: bool,
-    pub agent_principal_id: String,
-    pub sidecar_circle_id: String,
-    pub realm_id: String,
-    pub created: bool,
-    #[serde(default)]
-    pub todos: Vec<String>,
-}
+// CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
+// DTO is the SDK-authoritative `cokret_sdk::model::Agent*` shape (spec
+// `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
+// `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
+// `{ok, authorized_event_ref}`; grant attach/detach outcomes are
+// `{ok, grant_id}` / `{ok, revoked_at}`; sidecar ensure carries the typed
+// `private_circle_id`/`private_flow_id`/`private_relation_id`. The lifecycle
+// outcome (`agent_lifecycle_state` = `operation_status_outcome` =
+// `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
+// spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
+// `AgentProvisionOutcome` were already SDK-backed.
+pub use cokret_sdk::model::{
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome, AgentRotateKeyRequestBody,
+    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
+};
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
-// token exchange wire shapes. Response types come straight from the SDK
-// (`CallMediaTokenExchangeOutcome` / `CallMediaParticipantBinding` derive
-// ToSchema under the `salvo` feature), so soland no longer mints private
-// mirrors that can drift from the spec DTOs.
+// token exchange wire shapes. Both the request body and the response types
+// come straight from the SDK (`CallMediaTokenExchangeRequestBody` carries
+// typed ids `realm_id`/`call_id`/`actor_id`/`device_id` plus the optional
+// `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
+// / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
+// so soland no longer mints private mirrors that can drift from the spec DTOs.
+pub use cokret_sdk::model::CallMediaTokenExchangeRequestBody;
 pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandCallMediaTokenExchangeRequestBody {
-    pub realm_id: String,
-    pub call_id: String,
-    pub actor_id: String,
-    pub device_id: String,
-    /// Focus id chosen by the caller. MUST equal the committed
-    /// `ck.call.state.session_focus`; otherwise the handler rejects with
-    /// `focus_mismatch`.
-    pub focus_id: String,
-}
 
 // Recovery policy / receipt endpoints (`recovery_policy_put` /
 // `recovery_receipt_put`) take `JsonBody<Value>` and validate against the

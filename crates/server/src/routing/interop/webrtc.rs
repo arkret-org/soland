@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::{CallId, RealmId};
+use cokret_sdk::RealmId;
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -35,9 +35,9 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, SessionRecord, WebRtcSessionRecord, WebRtcSignalRecord};
 use crate::wire::{
-    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CreateWebRtcSessionOutcome,
-    CreateWebRtcSessionRequestBody, OkOutcome, SolandCallMediaTokenExchangeRequestBody,
-    WebRtcSignalOutcome, WebRtcSignalRequestBody, WebRtcSignalsOutcome,
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,
+    CreateWebRtcSessionOutcome, CreateWebRtcSessionRequestBody, OkOutcome, WebRtcSignalOutcome,
+    WebRtcSignalRequestBody, WebRtcSignalsOutcome,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -814,32 +814,36 @@ impl MediaTokenIssuer for MediasoupMediaIssuer {
 async fn handle_rtc_token(
     state: &AppState,
     session: &SessionRecord,
-    body: SolandCallMediaTokenExchangeRequestBody,
+    body: CallMediaTokenExchangeRequestBody,
 ) -> JsonResult<CallMediaTokenExchangeOutcome> {
     use crate::error::ErrorCode;
 
-    // Validation produces the SDK typed ids the response binding carries, so
-    // the wire outcome reuses `cokret_sdk::CallMediaTokenExchangeOutcome`
-    // directly instead of a stringly soland mirror.
-    let realm_id = RealmId::new(body.realm_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    if !is_valid_webrtc_session_id(&body.call_id) {
+    // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
+    // `device_id` arrive already validated as the corresponding scalar id types,
+    // and the response binding carries the same typed ids — so the wire outcome
+    // reuses `cokret_sdk::CallMediaTokenExchangeOutcome` directly instead of a
+    // stringly soland mirror.
+    let realm_id = body.realm_id.clone();
+    if !is_valid_webrtc_session_id(body.call_id.as_str()) {
         return Err(AppError::invalid_param("invalid call_id"));
     }
-    let call_id = CallId::new(body.call_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid call_id"))?;
-    let actor_id = validate_did(&body.actor_id)
-        .ok()
-        .filter(|_| body.actor_id == session.actor)
-        .ok_or_else(|| AppError::invalid_param("actor_id must match the authenticated actor"))?;
-    let device_id = validate_device_id(&body.device_id)
-        .ok()
-        .filter(|_| body.device_id == session.device_id)
-        .ok_or_else(|| AppError::invalid_param("device_id must match the authenticated device"))?;
+    let call_id = body.call_id.clone();
+    if body.actor_id.as_str() != session.actor {
+        return Err(AppError::invalid_param(
+            "actor_id must match the authenticated actor",
+        ));
+    }
+    let actor_id = body.actor_id.clone();
+    if body.device_id.as_str() != session.device_id {
+        return Err(AppError::invalid_param(
+            "device_id must match the authenticated device",
+        ));
+    }
+    let device_id = body.device_id.clone();
     if body.focus_id.trim().is_empty() {
         return Err(AppError::invalid_param("focus_id is required"));
     }
-    if !realm_has_member(state, &body.realm_id, &body.actor_id).await {
+    if !realm_has_member(state, body.realm_id.as_str(), body.actor_id.as_str()).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -848,16 +852,16 @@ async fn handle_rtc_token(
     let webrtc = state
         .persistence
         .webrtc()
-        .get(&body.call_id)
+        .get(body.call_id.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("call session not found"))?;
-    if webrtc.realm_id != body.realm_id {
+    if webrtc.realm_id != body.realm_id.as_str() {
         return Err(AppError::invalid_param(
             "call_id does not belong to the requested realm",
         ));
     }
-    if !webrtc.participants.contains(&body.actor_id) {
+    if !webrtc.participants.contains(body.actor_id.as_str()) {
         return Err(
             AppError::capability_denied("actor is not a participant of the call")
                 .with_wire_code(crate::error::reasons::PARTICIPANT_IDENTITY_UNRECOGNISED),
@@ -883,7 +887,7 @@ async fn handle_rtc_token(
     let _recording_bypass_reason: &str =
         crate::error::reasons::RECORDING_ARTIFACT_PIPELINE_BYPASSED;
 
-    let media_epoch = media_service_epoch_for_realm(state, &body.realm_id)?;
+    let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
     // MEDIA-2 — focus selection (oldest-membership-wins). A committed
     // `ck.call.state.session_focus` projection wins when present; otherwise we
@@ -944,10 +948,10 @@ async fn handle_rtc_token(
     let signing_key = state.notary_signing_key();
     let issue_request = MediaTokenIssueRequestBody {
         focus,
-        realm_id: &body.realm_id,
-        call_id: &body.call_id,
-        actor_id: &body.actor_id,
-        device_id: &body.device_id,
+        realm_id: body.realm_id.as_str(),
+        call_id: body.call_id.as_str(),
+        actor_id: body.actor_id.as_str(),
+        device_id: body.device_id.as_str(),
         participant_identity: &participant_identity,
         issued_at,
         expires_at,
@@ -1397,7 +1401,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
 #[tracing::instrument(skip_all, fields(op = "ck.self.call.media.token_exchange"))]
 async fn cokret_rtc_token(
     aa: AuthArgs,
-    body: JsonBody<SolandCallMediaTokenExchangeRequestBody>,
+    body: JsonBody<CallMediaTokenExchangeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CallMediaTokenExchangeOutcome> {

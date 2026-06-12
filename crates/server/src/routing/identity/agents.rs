@@ -27,12 +27,17 @@
 
 use chrono::SecondsFormat;
 use cokret_sdk::model::{
-    AgentParticipation, AgentParticipationEntry,
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleState,
+    AgentList, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
-    AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentProvisionOutcome,
-    AgentProvisionRequestBody, effective_participation, validate_agent_slug,
+    AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
+    AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
+    AgentRotateKeyOutcome, AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentView, effective_participation, validate_agent_slug,
     validate_selection_within_ceiling,
 };
+use cokret_sdk::{EventId, GrantId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -43,13 +48,6 @@ use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
-use crate::wire::{
-    SolandAgentGrantAttachRequestBody, SolandAgentGrantDetachOutcome, SolandAgentGrantOutcome,
-    SolandAgentKeyPairOutcome, SolandAgentKeyPairRequestBody, SolandAgentLifecycleOutcome,
-    SolandAgentLifecycleRequestBody, SolandAgentList, SolandAgentRotateKeyOutcome,
-    SolandAgentRotateKeyRequestBody, SolandAgentSidecarThreadEnsureOutcome,
-    SolandAgentSidecarThreadEnsureRequestBody, SolandAgentView,
-};
 
 /// Mounted under `/_cokret/self`.
 pub(super) fn protocol_router() -> Router {
@@ -130,41 +128,53 @@ fn generate_agent_principal_did() -> String {
     format!("did:web:agent-{}.agents.example", uuid::Uuid::now_v7())
 }
 
-/// Map a persisted agent_principal JSON record to the wire `SolandAgentView`.
-fn agent_view_from_record(record: &Value) -> SolandAgentView {
-    let field = |key: &str| {
-        record
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    SolandAgentView {
-        agent_principal_id: field("agent_principal_id"),
-        controller_did: field("controller_did"),
-        agent_id: field("agent_id"),
-        display_name: field("display_name"),
-        agent_slug: record
-            .get("agent_slug")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        state: record
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("active")
-            .to_owned(),
-        created_at: field("created_at"),
-        updated_at: field("updated_at"),
-        pairing_request_id: record
-            .get("pairing_request_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        expires_at: record
-            .get("pairing_expires_at")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+/// Project a persisted agent_principal JSON record into the spec
+/// `agent_projection` shape (`agent-operations.schema.json#/$defs/agent_projection`):
+/// `{agent_principal_id, display_name?, agent_slug?, status, created_at?, updated_at?}`.
+/// soland-internal columns (`controller_did`, `agent_id`, `pairing_*`) are NOT
+/// part of the protocol projection and are dropped at the wire boundary; the
+/// persistence `state` column carries the `agent_status` enum value verbatim.
+fn agent_projection_from_record(record: &Value) -> Value {
+    let str_field = |key: &str| record.get(key).and_then(Value::as_str);
+    let mut projection = serde_json::Map::new();
+    projection.insert(
+        "agent_principal_id".to_owned(),
+        json!(str_field("agent_principal_id").unwrap_or_default()),
+    );
+    if let Some(display_name) = str_field("display_name").filter(|value| !value.is_empty()) {
+        projection.insert("display_name".to_owned(), json!(display_name));
+    }
+    if let Some(agent_slug) = str_field("agent_slug").filter(|value| !value.is_empty()) {
+        projection.insert("agent_slug".to_owned(), json!(agent_slug));
+    }
+    projection.insert(
+        "status".to_owned(),
+        json!(str_field("state").unwrap_or("active")),
+    );
+    if let Some(created_at) = str_field("created_at").filter(|value| !value.is_empty()) {
+        projection.insert("created_at".to_owned(), json!(created_at));
+    }
+    if let Some(updated_at) = str_field("updated_at").filter(|value| !value.is_empty()) {
+        projection.insert("updated_at".to_owned(), json!(updated_at));
+    }
+    Value::Object(projection)
+}
+
+/// Build the spec `agent_view` (`agent-operations.schema.json#/$defs/agent_view`)
+/// from a persisted record: `{agent: <agent_projection>, status, grants[], key_state}`.
+/// The `agent`/`status` pair is required; `grants`/`key_state` default empty until
+/// the per-agent grant + key projections are wired.
+fn agent_view_from_record(record: &Value) -> AgentView {
+    let status = record
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("active")
+        .to_owned();
+    AgentView {
+        agent: agent_projection_from_record(record),
+        status,
         grants: Vec::new(),
-        todos: Vec::new(),
+        key_state: Value::Null,
     }
 }
 
@@ -379,18 +389,19 @@ async fn get_agent_participation(
 #[tracing::instrument(skip_all, fields(op = "ck.gate.account.agent_key_pair"))]
 async fn agent_key_pair(
     aa: AuthArgs,
-    body: JsonBody<SolandAgentKeyPairRequestBody>,
+    body: JsonBody<AgentKeyPairRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentKeyPairOutcome> {
+) -> JsonResult<AgentKeyPairOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    validate_agent_principal_id(&body.agent_principal_id)?;
+    let agent_principal_id = body.agent_principal_id.as_str();
+    validate_agent_principal_id(agent_principal_id)?;
     if body.verification_method.trim().is_empty() {
         return Err(AppError::invalid_param("verification_method is required"));
     }
-    if verification_method_principal(&body.verification_method) != body.agent_principal_id {
+    if verification_method_principal(&body.verification_method) != agent_principal_id {
         return Err(AppError::invalid_param(
             "verification_method DID must match agent_principal_id",
         ));
@@ -431,29 +442,30 @@ async fn agent_key_pair(
     let _ = state
         .persistence
         .agents()
-        .set_state(&body.agent_principal_id, "active", &authorized_at)
+        .set_state(agent_principal_id, "active", &authorized_at)
         .await;
     append_audit_log(
         state,
         Some(&session.actor),
         "ck.agent.key.authorize",
         json!({
-            "agent_principal_id": body.agent_principal_id,
+            "agent_principal_id": agent_principal_id,
             "verification_method": body.verification_method,
         }),
         "accepted",
     )
     .await;
-    json_ok(SolandAgentKeyPairOutcome {
+    // Spec `agent_key_pair_outcome` = `{ok, authorized_event_ref}`. The audit
+    // row above is the deployment-local stand-in for the durable
+    // `ck.agent.key.authorize` event; we mint the event id the outcome MUST
+    // carry so clients can pin the authorization (P2-impl: persist the real
+    // signed event under this id + controller approval consumption +
+    // runtime_attestation verifier).
+    let authorized_event_ref = EventId::new(ids::generate_event_id())
+        .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?;
+    json_ok(AgentKeyPairOutcome {
         ok: true,
-        agent_principal_id: body.agent_principal_id,
-        verification_method: body.verification_method,
-        authorized_at,
-        todos: vec![
-            "P2-impl: write ck.agent.key.authorize event into the event log".to_owned(),
-            "P2-impl: persist controller approval consumption before accepting key authorization".to_owned(),
-            "P2-impl: wire runtime_attestation verifier before accepting attested key authorization".to_owned(),
-        ],
+        authorized_event_ref,
     })
 }
 
@@ -599,7 +611,7 @@ async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentList> {
+) -> JsonResult<AgentList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
@@ -608,11 +620,11 @@ async fn list_agents(
         .list_for_controller(&session.actor)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
-    json_ok(SolandAgentList {
-        agents: records.iter().map(agent_view_from_record).collect(),
+    // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
+    json_ok(AgentList {
+        agents: records.iter().map(agent_projection_from_record).collect(),
         next_cursor: None,
         has_more: false,
-        todos: Vec::new(),
     })
 }
 
@@ -628,7 +640,7 @@ async fn get_agent(
     agent_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentView> {
+) -> JsonResult<AgentView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -652,10 +664,10 @@ async fn lifecycle_transition(
     aa: &AuthArgs,
     req: &Request,
     agent_id: String,
-    new_state: &str,
+    new_state: AgentLifecycleState,
     event_kind: &str,
     reason: Option<String>,
-) -> Result<SolandAgentLifecycleOutcome, AppError> {
+) -> Result<Value, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
     // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
@@ -679,7 +691,7 @@ async fn lifecycle_transition(
             "ck.self.agent.pause" => "pause",
             "ck.self.agent.resume" => "resume",
             "ck.self.agent.deactivate" => "deactivate",
-            _ => new_state,
+            _ => new_state.as_wire_str(),
         },
         "previous_status": match event_kind {
             "ck.self.agent.resume" => "paused",
@@ -703,29 +715,19 @@ async fn lifecycle_transition(
             .expect("payload object")
             .insert("reason".to_owned(), Value::String(reason.clone()));
     }
-    // Persist the lifecycle state transition on the agent_principal row.
+    // Persist the lifecycle state transition on the agent_principal row. The
+    // persisted `state` column carries the `agent_status` enum value; the
+    // lifecycle transitions land at `active` / `paused` / `deactivated`.
+    let new_status = new_state.as_wire_str();
     let _ = state
         .persistence
         .agents()
-        .set_state(&agent_id, new_state, &status_changed_at)
+        .set_state(&agent_id, new_status, &status_changed_at)
         .await;
     append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
-    let mut todos = vec![format!(
-        "P2-impl: emit {event_kind} event + fan-out capability cache invalidation"
-    )];
-    if event_kind == "ck.self.agent.deactivate" {
-        todos.push(
-            "P2-impl: fan-out ck.agent.key.revoke + ck.capability.revoke + runtime endpoint revocation"
-                .to_owned(),
-        );
-    }
-    Ok(SolandAgentLifecycleOutcome {
-        ok: true,
-        agent_principal_id: agent_id,
-        state: new_state.to_owned(),
-        status_changed_at,
-        todos,
-    })
+    // spec `agent_lifecycle_state` = `operation_status_outcome` =
+    // `{ok: true, status}` (status is the post-transition `agent_status`).
+    Ok(json!({ "ok": true, "status": new_status }))
 }
 
 #[endpoint(
@@ -738,10 +740,10 @@ async fn lifecycle_transition(
 async fn pause_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentLifecycleRequestBody>,
+    body: JsonBody<AgentPauseRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentLifecycleOutcome> {
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -750,7 +752,7 @@ async fn pause_agent(
             &aa,
             req,
             agent_id.into_inner(),
-            "paused",
+            AgentLifecycleState::Paused,
             "ck.self.agent.pause",
             body.reason,
         )
@@ -768,21 +770,24 @@ async fn pause_agent(
 async fn resume_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentLifecycleRequestBody>,
+    body: JsonBody<AgentResumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentLifecycleOutcome> {
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    // spec `agent_resume_request_body` carries an optional
+    // `sidecar_exposure_ack`, not a `reason`. P2-impl: thread the ack into the
+    // sidecar exposure consent ledger before re-activating the agent.
+    let _body = body.into_inner();
     json_ok(
         lifecycle_transition(
             state,
             &aa,
             req,
             agent_id.into_inner(),
-            "active",
+            AgentLifecycleState::Active,
             "ck.self.agent.resume",
-            body.reason,
+            None,
         )
         .await?,
     )
@@ -798,10 +803,10 @@ async fn resume_agent(
 async fn deactivate_agent(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentLifecycleRequestBody>,
+    body: JsonBody<AgentDeactivateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentLifecycleOutcome> {
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -810,7 +815,7 @@ async fn deactivate_agent(
             &aa,
             req,
             agent_id.into_inner(),
-            "deactivated",
+            AgentLifecycleState::Deactivated,
             "ck.self.agent.deactivate",
             body.reason,
         )
@@ -828,44 +833,43 @@ async fn deactivate_agent(
 async fn rotate_agent_key(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentRotateKeyRequestBody>,
+    body: JsonBody<AgentRotateKeyRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentRotateKeyOutcome> {
+) -> JsonResult<AgentRotateKeyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();
-    if body.new_verification_method.trim().is_empty() {
-        return Err(AppError::invalid_param(
-            "new_verification_method is required",
-        ));
-    }
-    let at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // spec `agent_rotate_key_request_body` = `{replacement_key, proof_of_possession}`.
+    let replacement_kid = body
+        .replacement_key
+        .get("kid")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::invalid_param("replacement_key.kid is required"))?;
     append_audit_log(
         state,
         Some(&session.actor),
         "ck.self.agent.rotate_key",
         json!({
             "agent_principal_id": agent_id,
-            "new_verification_method": body.new_verification_method,
-            "previous_key_id": body.previous_key_id,
+            "replacement_key": body.replacement_key,
         }),
         "accepted",
     )
     .await;
-    json_ok(SolandAgentRotateKeyOutcome {
+    let _ = replacement_kid;
+    // spec `agent_rotate_key_outcome` = `{ok, authorized_event_ref}`. The
+    // authorized event id pins the new key authorization (P2-impl: emit the
+    // real ck.agent.key.revoke + ck.agent.key.authorize chain under it and
+    // invalidate session-grants bound to the revoked key).
+    let authorized_event_ref = EventId::new(ids::generate_event_id())
+        .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?;
+    json_ok(AgentRotateKeyOutcome {
         ok: true,
-        agent_principal_id: agent_id,
-        authorized_verification_method: body.new_verification_method,
-        revoked_verification_method: body.previous_key_id,
-        at,
-        todos: vec![
-            "P2-impl: emit ck.agent.key.revoke + ck.agent.key.authorize chain".to_owned(),
-            "P2-impl: invalidate session-grants bound to the revoked verification_method"
-                .to_owned(),
-        ],
+        authorized_event_ref,
     })
 }
 
@@ -879,21 +883,23 @@ async fn rotate_agent_key(
 async fn attach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentGrantAttachRequestBody>,
+    body: JsonBody<AgentGrantAttachRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<SolandAgentGrantOutcome> {
+) -> JsonResult<AgentGrantAttachOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     validate_agent_principal_id(&agent_id)?;
     let body = body.into_inner();
-    if body.grant_kind.trim().is_empty() {
-        return Err(AppError::invalid_param("grant_kind is required"));
+    // spec `agent_grant_attach_request_body` = `{grant: object}`.
+    if !body.grant.is_object() {
+        return Err(AppError::invalid_param("grant must be an object"));
     }
-    let grant_id = ids::generate("accountability_grant");
-    let created_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // spec `agent_grant_attach_outcome.grant_id` MUST be a `ck:grant:<uuidv7>`.
+    let grant_id = GrantId::new(ids::generate_grant_id())
+        .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -901,25 +907,15 @@ async fn attach_agent_grant(
         json!({
             "agent_principal_id": agent_id,
             "grant_id": grant_id,
-            "grant_kind": body.grant_kind,
-            "agent_key_scope": body.scope,
+            "grant": body.grant,
         }),
         "accepted",
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(SolandAgentGrantOutcome {
-        ok: true,
-        agent_principal_id: agent_id,
-        grant_id,
-        grant_kind: body.grant_kind,
-        scope: body.scope,
-        state: "active".to_owned(),
-        created_at,
-        todos: vec![
-            "P2-impl: emit ck.capability.grant event with accountability_grant binding".to_owned(),
-        ],
-    })
+    // spec `agent_grant_attach_outcome` = `{ok, grant_id}`. P2-impl: emit the
+    // real ck.capability.grant event with the accountability_grant binding.
+    json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
 }
 
 #[endpoint(
@@ -935,7 +931,7 @@ async fn detach_agent_grant(
     grant_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentGrantDetachOutcome> {
+) -> JsonResult<AgentGrantDetachOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
@@ -946,7 +942,7 @@ async fn detach_agent_grant(
             "grant_id must be a ck:accountability_grant:<uuidv7> or ck:grant:<uuidv7> typed id",
         ));
     }
-    let detached_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let revoked_at = now();
     append_audit_log(
         state,
         Some(&session.actor),
@@ -958,12 +954,11 @@ async fn detach_agent_grant(
         "accepted",
     )
     .await;
-    json_ok(SolandAgentGrantDetachOutcome {
+    // spec `agent_grant_detach_outcome` = `{ok, revoked_at}`. P2-impl: emit the
+    // real ck.capability.revoke event + cache invalidation.
+    json_ok(AgentGrantDetachOutcome {
         ok: true,
-        agent_principal_id: agent_id,
-        grant_id,
-        detached_at,
-        todos: vec!["P2-impl: emit ck.capability.revoke event + cache invalidation".to_owned()],
+        revoked_at,
     })
 }
 
@@ -977,23 +972,30 @@ async fn detach_agent_grant(
 async fn ensure_sidecar_thread(
     aa: AuthArgs,
     agent_id: PathParam<String>,
-    body: JsonBody<SolandAgentSidecarThreadEnsureRequestBody>,
+    body: JsonBody<AgentSidecarThreadEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
-    ensure_sidecar_thread_impl(aa, agent_id.into_inner(), body.into_inner(), depot, req).await
+) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
+    // Legacy `/_cokret/self/agents/{id}/sidecar-thread/ensure` route: the path
+    // `{agent_id}` MUST agree with the spec body's `agent_principal_id`.
+    let agent_id = agent_id.into_inner();
+    let body = body.into_inner();
+    if body.agent_principal_id.as_str() != agent_id {
+        return Err(AppError::invalid_param(
+            "path agent_id must match body agent_principal_id",
+        ));
+    }
+    ensure_sidecar_thread_impl(aa, body, depot, req).await
 }
 
 async fn ensure_sidecar_thread_impl(
     aa: AuthArgs,
-    agent_id: String,
-    body: SolandAgentSidecarThreadEnsureRequestBody,
+    body: AgentSidecarThreadEnsureRequestBody,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
+) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    validate_agent_principal_id(&agent_id)?;
     // ERR-1 — SIDECAR_CREATE_DENIED + PAIRING_REQUEST_EXPIRED reason
     // codes surface here when the controller<->agent sidecar policy
     // forbids creation or when the pairing request has timed out.
@@ -1003,36 +1005,37 @@ async fn ensure_sidecar_thread_impl(
     //   - PAIRING_REQUEST_EXPIRED when pairing_request.expires_at <= now
     let _sidecar_denied_reason: &str = crate::error::reasons::SIDECAR_CREATE_DENIED;
     let _pairing_expired_reason: &str = crate::error::reasons::PAIRING_REQUEST_EXPIRED;
-    let realm_id = body
-        .context_realm_id
-        .unwrap_or_else(|| ids::generate("realm"));
-    // `sidecar_circle_id` describes the value's use (the sidecar thread's
-    // Circle). Its typed prefix must be registered `ck:circle:`, not the
-    // unregistered `ck:sidecar_circle:`.
-    let sidecar_circle_id = ids::generate("circle");
+    // spec `agent_sidecar_thread_ensure_outcome` =
+    // `{ok, private_circle_id, private_flow_id, private_relation_id,
+    //   pending_member_reconciliations?}`. The private Circle / Flow / Relation
+    // ids are minted here; P2-impl: derive the deterministic
+    // controller_agent_circle_key for true idempotent creation and enforce the
+    // context-realm-preferred sidecar home policy.
+    let private_circle_id = cokret_sdk::CircleId::new(ids::generate_circle_id())
+        .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
+    let private_flow_id = cokret_sdk::FlowId::new(ids::generate("flow"))
+        .map_err(|err| AppError::internal(format!("generated flow id invalid: {err}")))?;
+    let private_relation_id = cokret_sdk::RelationId::new(ids::generate_relation_id())
+        .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
     append_audit_log(
         state,
         Some(&session.actor),
         "ck.self.agent.sidecar_thread.ensure",
         json!({
-            "agent_principal_id": agent_id,
-            "sidecar_circle_id": sidecar_circle_id,
-            "realm_id": realm_id,
+            "agent_principal_id": body.agent_principal_id,
+            "controller_principal_id": body.controller_principal_id,
+            "realm_id": body.realm_id,
+            "private_circle_id": private_circle_id,
         }),
         "accepted",
     )
     .await;
-    let _ = now();
-    json_ok(SolandAgentSidecarThreadEnsureOutcome {
+    json_ok(AgentSidecarThreadEnsureOutcome {
         ok: true,
-        agent_principal_id: agent_id,
-        sidecar_circle_id,
-        realm_id,
-        created: true,
-        todos: vec![
-            "P2-impl: derive controller_agent_circle_key + idempotent Circle creation".to_owned(),
-            "P2-impl: enforce context-realm-preferred sidecar home policy".to_owned(),
-        ],
+        private_circle_id,
+        private_flow_id,
+        private_relation_id,
+        pending_member_reconciliations: Vec::new(),
     })
 }
 
@@ -1045,16 +1048,11 @@ async fn ensure_sidecar_thread_impl(
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.ensure"))]
 async fn ensure_sidecar_thread_canonical(
     aa: AuthArgs,
-    body: JsonBody<SolandAgentSidecarThreadEnsureRequestBody>,
+    body: JsonBody<AgentSidecarThreadEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandAgentSidecarThreadEnsureOutcome> {
-    let mut body = body.into_inner();
-    let agent_id = body
-        .agent_principal_id
-        .take()
-        .ok_or_else(|| AppError::missing_param("agent_principal_id is required"))?;
-    ensure_sidecar_thread_impl(aa, agent_id, body, depot, req).await
+) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
+    ensure_sidecar_thread_impl(aa, body.into_inner(), depot, req).await
 }
 
 #[cfg(test)]
@@ -1079,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_view_from_record_includes_agent_slug() {
+    fn agent_view_projects_spec_shape_dropping_internal_columns() {
         let view = agent_view_from_record(&json!({
             "agent_principal_id": "did:web:agent.example",
             "controller_did": "did:web:example.com:users:alice",
@@ -1090,6 +1088,14 @@ mod tests {
             "created_at": "2026-06-11T00:00:00.000Z",
             "updated_at": "2026-06-11T00:00:00.000Z"
         }));
-        assert_eq!(view.agent_slug.as_deref(), Some("summary"));
+        // spec `agent_view` = `{agent: <agent_projection>, status, ...}`.
+        assert_eq!(view.status, "active");
+        let agent = serde_json::to_value(&view).expect("view serializes");
+        assert_eq!(agent["agent"]["agent_slug"], "summary");
+        assert_eq!(agent["agent"]["status"], "active");
+        assert_eq!(agent["agent"]["agent_principal_id"], "did:web:agent.example");
+        // soland-internal columns MUST NOT leak into the protocol projection.
+        assert!(agent["agent"].get("controller_did").is_none());
+        assert!(agent["agent"].get("agent_id").is_none());
     }
 }

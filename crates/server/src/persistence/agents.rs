@@ -296,9 +296,11 @@ impl AgentParticipationStore for PgAgentParticipationStore {
 }
 
 /// CKP-0008 — native personal agent principal persistence (provision /
-/// list / get / lifecycle). JSON Value records mirror SolandAgentView:
-/// agent_principal_id, controller_did, agent_id, display_name,
-/// agent_slug, state, created_at, updated_at.
+/// list / get / lifecycle). JSON Value records carry the soland-internal
+/// agent_principal columns: agent_principal_id, controller_did, agent_id,
+/// display_name, agent_slug, state, created_at, updated_at. The wire boundary
+/// projects these into the spec `agent_projection` (dropping the internal
+/// columns) — see `routing::identity::agents::agent_projection_from_record`.
 #[async_trait]
 pub trait AgentStore: Send + Sync {
     async fn put(&self, record: Value) -> PersistenceResult<()>;
