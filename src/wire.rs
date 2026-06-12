@@ -903,20 +903,11 @@ pub struct SolandAgentKeyPairOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SolandAgentProvisionRequestBody {
-    pub display_name: String,
-    #[serde(default)]
-    pub agent_slug: Option<String>,
-    #[serde(default)]
-    pub pairing_ttl_ms: Option<u64>,
-    #[serde(default)]
-    pub controller_did: Option<String>,
-    #[serde(default)]
-    pub agent_id: Option<String>,
-    #[serde(default)]
-    pub initial_grants: Vec<Value>,
-}
+// `POST /_cokret/self/agents` (`ck.self.agent.provision`) request/response
+// shapes are the SDK-authoritative `cokret_sdk::model::
+// {AgentProvisionRequestBody, AgentProvisionOutcome}` (spec
+// `agent-operations.schema.json#/$defs/agent_provision_request_body` /
+// `agent_provision_outcome`) — no soland-private provision body exists.
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandAgentView {

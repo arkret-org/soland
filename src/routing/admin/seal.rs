@@ -1,9 +1,10 @@
 //! Stream H' admin surface — notary cell, Bottom diagnostics, Seal DAG.
 //!
 //! Endpoints:
-//! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind,
-//!   single_did?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
-//!   paused}`).
+//! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value: the
+//!   SDK-authoritative `NotaryValue` (internally tagged on `kind`, fields
+//!   `did|k|n|members|primary|recovery_members`) plus the envelope hints
+//!   `revocation_freshness_window_ms?` / `paused`.
 //! - `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` — submit a reconfig Move that
 //!   writes the new notary cell value (cas-register on
 //!   `ck:cell:ck.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
@@ -17,10 +18,11 @@
 //!   snapshot.
 //! - `POST /_soland/admin/realms/{realm_id}/seal-dag/compact` — trigger a signed compaction Seal.
 //!
-//! DTO shapes mirror `sodmin/src/types/seal.rs` (`NotaryValue`,
-//! `BottomEntry`, `WinnerHead`, `BottomRepairStrategy`, `SealDagSnapshot`,
-//! `SealLeaf`, `SignSealOutcome`, `SubmitMoveOutcome`,
-//! `CompactionRequest`).
+//! The notary cell value wire shape is the SDK-authoritative
+//! `cokret_sdk::NotaryValue`; the surrounding DTOs (`BottomEntry`,
+//! `WinnerHead`, `BottomRepairStrategy`, `SealDagSnapshot`, `SealLeaf`,
+//! `SubmitMoveOutcome`, `CompactionRequest`) are mirrored by
+//! `sodmin/src/types/seal.rs`.
 //!
 //! v1 scope:
 //! - `single_did` reconfigure / `head_in_winner` repair / compaction each invoke the existing
@@ -39,8 +41,8 @@ use cokret_sdk::lattice::CellState;
 use cokret_sdk::move_event::{Effect, LatticeOp, LatticeOpType};
 use cokret_sdk::state_res::{CellStore, MoveStore, SealStore};
 use cokret_sdk::{
-    CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, PartialSignature, RealmId, SealId,
-    ThresholdAggregator, UnsignedMove,
+    CellRef, Did, Ed25519MoveSigner, Hlc, Move, MoveSigner, NotaryValue, PartialSignature, RealmId,
+    SealId, ThresholdAggregator, UnsignedMove,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -53,57 +55,30 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
-// ── DTOs (mirroring sodmin/src/types/seal.rs exactly) ──────────────────
+// ── DTOs (notary value = SDK-authoritative wire; rest mirrored by sodmin) ──
 
 /// `GET /_soland/admin/realms/{realm_id}/notary` response.
 ///
-/// Shape mirrors sodmin's `NotaryValue`. `kind_raw` is one of
-/// `single_did|threshold|open_set|mixed`; only the fields relevant to
-/// `kind_raw` are populated.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+/// `value` is the SDK-authoritative [`NotaryValue`] (internally tagged on
+/// `kind`: `single_did{did} | threshold{k,n,members} | open_set{members} |
+/// mixed{primary,recovery_members}`), flattened so the wire carries exactly
+/// the canonical cell-value shape, plus the envelope hints
+/// (`revocation_freshness_window_ms`, `paused`) that ride alongside the
+/// profile in the cell value object.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct NotaryValueOutcome {
-    pub kind_raw: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub single_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_k: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_n: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub threshold_dids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_set_members: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixed_primary: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_recovery: Vec<String>,
+    #[serde(flatten)]
+    pub value: NotaryValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_freshness_window_ms: Option<u64>,
     #[serde(default)]
     pub paused: bool,
 }
 
-/// `POST .../notary/reconfigure` request body — matches
-/// `NotaryReconfigRequest::to_reconfigure_body()` on sodmin.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct NotaryReconfigBody {
-    /// One of `single_did|threshold|open_set|mixed`.
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub single_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_k: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_n: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub threshold_dids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_set_members: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixed_primary: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_recovery: Vec<String>,
-}
+/// `POST .../notary/reconfigure` request body — exactly the
+/// SDK-authoritative [`NotaryValue`] wire shape (internal tag `kind`).
+/// No alias spellings are accepted.
+pub type NotaryReconfigBody = NotaryValue;
 
 /// Mirrors sodmin's `SubmitMoveOutcome`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -322,93 +297,26 @@ fn admin_signer_for(state: &AppState, admin_did_str: &str) -> Result<Ed25519Move
     }
 }
 
-/// Convert an `NotaryReconfigBody` into the canonical notary
-/// cell value object (per spec `cell-notary-v1.schema.json`). Returns
-/// `Err` for shape violations the SDK's `NotaryValue::validate()` would
-/// reject — we don't actually round-trip through `NotaryValue` here so
-/// extra envelope fields (`revocation_freshness_window_ms`, `paused`) survive.
-fn notary_value_object_from_body(body: &NotaryReconfigBody) -> Result<Value, AppError> {
-    let invalid =
-        |reason: &str| app_error!(InvalidParam, "{}", reason).with_status(StatusCode::BAD_REQUEST);
-    let mut v = serde_json::Map::new();
-    v.insert("kind".to_owned(), Value::String(body.kind.clone()));
-    match body.kind.as_str() {
-        "single_did" => {
-            let did = body
-                .single_did
-                .as_deref()
-                .ok_or_else(|| invalid("single_did profile requires `single_did` field"))?;
-            v.insert("did".to_owned(), Value::String(did.to_owned()));
-        }
-        "threshold" => {
-            let k = body
-                .threshold_k
-                .ok_or_else(|| invalid("threshold profile requires `threshold_k`"))?;
-            let n = body
-                .threshold_n
-                .ok_or_else(|| invalid("threshold profile requires `threshold_n`"))?;
-            if body.threshold_dids.is_empty() {
-                return Err(invalid("threshold profile requires `threshold_dids`"));
-            }
-            if k == 0 || n == 0 || k > n {
-                return Err(invalid("threshold k must be 1..=n and n must be >= 1"));
-            }
-            if body.threshold_dids.len() as u32 != n {
-                return Err(invalid("threshold_dids length must match threshold_n"));
-            }
-            v.insert("k".to_owned(), Value::from(k));
-            v.insert("n".to_owned(), Value::from(n));
-            v.insert(
-                "members".to_owned(),
-                Value::Array(
-                    body.threshold_dids
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        "open_set" => {
-            if body.open_set_members.is_empty() {
-                return Err(invalid("open_set profile requires `open_set_members`"));
-            }
-            v.insert(
-                "members".to_owned(),
-                Value::Array(
-                    body.open_set_members
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        "mixed" => {
-            let primary = body
-                .mixed_primary
-                .as_deref()
-                .ok_or_else(|| invalid("mixed profile requires `mixed_primary`"))?;
-            if body.mixed_recovery.is_empty() {
-                return Err(invalid("mixed profile requires `mixed_recovery`"));
-            }
-            if body.mixed_recovery.iter().any(|d| d == primary) {
-                return Err(invalid("mixed primary must not appear in mixed_recovery"));
-            }
-            v.insert("primary".to_owned(), Value::String(primary.to_owned()));
-            v.insert(
-                "recovery_members".to_owned(),
-                Value::Array(
-                    body.mixed_recovery
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        other => {
-            return Err(invalid(&format!("unknown notary kind `{other}`")));
-        }
+/// Wire discriminator string for a [`NotaryValue`] profile (the value the
+/// internal `kind` tag serializes to).
+fn notary_kind_str(value: &NotaryValue) -> &'static str {
+    match value {
+        NotaryValue::SingleDid { .. } => "single_did",
+        NotaryValue::Threshold { .. } => "threshold",
+        NotaryValue::OpenSet { .. } => "open_set",
+        NotaryValue::Mixed { .. } => "mixed",
     }
-    Ok(Value::Object(v))
+}
+
+/// Validate the proposed [`NotaryValue`] via the SDK's structural rules and
+/// serialize it into the canonical notary cell value object. The cell value
+/// is exactly the authoritative wire shape — no alias spellings.
+fn notary_value_object_from_body(body: &NotaryReconfigBody) -> Result<Value, AppError> {
+    body.validate().map_err(|e| {
+        app_error!(InvalidParam, "invalid notary value: {e}").with_status(StatusCode::BAD_REQUEST)
+    })?;
+    serde_json::to_value(body)
+        .map_err(|e| app_error!(InternalError, "serialize notary value failed: {e}"))
 }
 
 /// Choose a fresh `seal_ref` for a brand-new admin Move. If
@@ -477,103 +385,45 @@ fn notary_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
     })
 }
 
-/// Best-effort projection of a JSON cell value into the typed
-/// `NotaryValueOutcome` shape. The on-wire notary cell value is
-/// expected to look like `{shape: single_did|threshold|open_set|mixed,
-/// did|dids[]|members[]|..., revocation_freshness_window_ms?, paused?}`.
+/// Project a JSON cell value into the typed [`NotaryValueOutcome`]. The
+/// on-wire notary cell value MUST be the SDK-authoritative `NotaryValue`
+/// shape (internal tag `kind`, fields `did|k|n|members|primary|
+/// recovery_members`); legacy alias spellings (`shape`/`kind_raw`/
+/// `single_did`/`threshold_dids`/...) are rejected.
 ///
-/// When the value is `None` we return a default `single_did` placeholder
-/// pointed at the service DID — that matches the genesis-Space
-/// "implicit notary is service_did" rule the in-process notary
-/// worker already implements (see `crate::notary::is_authorized_for`).
-fn notary_value_from_cell(value: Option<&Value>, service_did: &str) -> NotaryValueOutcome {
+/// When the value is `None` we return a `single_did` placeholder pointed
+/// at the service DID — that matches the genesis-Space "implicit notary is
+/// service_did" rule the in-process notary worker already implements (see
+/// `crate::notary::is_authorized_for`).
+fn notary_value_from_cell(
+    value: Option<&Value>,
+    service_did: &str,
+) -> Result<NotaryValueOutcome, AppError> {
     let Some(value) = value else {
-        return NotaryValueOutcome {
-            kind_raw: "single_did".to_owned(),
-            single_did: Some(service_did.to_owned()),
-            ..Default::default()
-        };
+        let did = Did::new(service_did.to_owned())
+            .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
+        return Ok(NotaryValueOutcome {
+            value: NotaryValue::SingleDid { did },
+            revocation_freshness_window_ms: None,
+            paused: false,
+        });
     };
-    // Two on-wire shapes are accepted — either the spec-aligned
-    // `{shape, did|dids|members|...}` form (used by the in-process
-    // notary worker) or the sodmin DTO form (`{kind_raw, ...}`).
-    // Either way we end up returning the sodmin DTO form.
-    let kind_raw = value
-        .get("shape")
-        .or_else(|| value.get("kind"))
-        .or_else(|| value.get("kind_raw"))
-        .and_then(Value::as_str)
-        .unwrap_or("single_did")
-        .to_owned();
-    let single_did = value
-        .get("did")
-        .or_else(|| value.get("single_did"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let threshold_k = value
-        .get("threshold_k")
-        .or_else(|| value.get("k"))
-        .and_then(Value::as_u64)
-        .map(|n| n as u32);
-    let threshold_n = value
-        .get("threshold_n")
-        .or_else(|| value.get("n"))
-        .and_then(Value::as_u64)
-        .map(|n| n as u32);
-    let threshold_dids = value
-        .get("threshold_dids")
-        .or_else(|| value.get("dids"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let open_set_members = value
-        .get("open_set_members")
-        .or_else(|| value.get("members"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mixed_primary = value
-        .get("mixed_primary")
-        .or_else(|| value.get("primary"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let mixed_recovery = value
-        .get("mixed_recovery")
-        .or_else(|| value.get("recovery"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let revocation_freshness_window_ms = value
-        .get("revocation_freshness_window_ms")
-        .and_then(Value::as_u64);
-    let paused = value
-        .get("paused")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    NotaryValueOutcome {
-        kind_raw,
-        single_did,
-        threshold_k,
-        threshold_n,
-        threshold_dids,
-        open_set_members,
-        mixed_primary,
-        mixed_recovery,
-        revocation_freshness_window_ms,
-        paused,
-    }
+    let parsed: NotaryValue = serde_json::from_value(value.clone()).map_err(|e| {
+        app_error!(
+            InternalError,
+            "notary cell value does not match the authoritative NotaryValue wire shape: {e}"
+        )
+    })?;
+    Ok(NotaryValueOutcome {
+        value: parsed,
+        revocation_freshness_window_ms: value
+            .get("revocation_freshness_window_ms")
+            .and_then(Value::as_u64),
+        paused: value
+            .get("paused")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 /// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntryOutcome`.
@@ -705,7 +555,7 @@ pub(super) async fn admin_get_notary(
     json_ok(notary_value_from_cell(
         value.as_ref(),
         &state.config.service_did,
-    ))
+    )?)
 }
 
 /// `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` —
@@ -769,19 +619,17 @@ pub(super) async fn admin_reconfigure_notary(
     // signer DID and operator DID converge for that admin.
     let service_signer_did = state.config.service_did.clone();
     let operator_did = admin_session.actor.clone();
-    let proposed_members: Vec<&str> = match body.kind.as_str() {
-        "single_did" => body
-            .single_did
-            .as_deref()
-            .map(|s| vec![s])
-            .unwrap_or_default(),
-        "threshold" => body.threshold_dids.iter().map(|s| s.as_str()).collect(),
-        "open_set" => body.open_set_members.iter().map(|s| s.as_str()).collect(),
-        "mixed" => std::iter::once(body.mixed_primary.as_deref().unwrap_or(""))
-            .chain(body.mixed_recovery.iter().map(|s| s.as_str()))
-            .filter(|s| !s.is_empty())
+    let proposed_members: Vec<&str> = match &body {
+        NotaryValue::SingleDid { did } => vec![did.as_str()],
+        NotaryValue::Threshold { members, .. } | NotaryValue::OpenSet { members } => {
+            members.iter().map(|d| d.as_str()).collect()
+        }
+        NotaryValue::Mixed {
+            primary,
+            recovery_members,
+        } => std::iter::once(primary.as_str())
+            .chain(recovery_members.iter().map(|d| d.as_str()))
             .collect(),
-        _ => Vec::new(),
     };
     if proposed_members
         .iter()
@@ -805,7 +653,10 @@ pub(super) async fn admin_reconfigure_notary(
             value: Some(new_value),
             from: None,
             to: None,
-            reason: Some(format!("admin_reconfigure_notary:{}", body.kind)),
+            reason: Some(format!(
+                "admin_reconfigure_notary:{}",
+                notary_kind_str(&body)
+            )),
             issuer_seq: None,
         },
     };
@@ -2004,57 +1855,71 @@ mod tests {
 
     #[test]
     fn notary_value_from_cell_defaults_to_service_did_when_absent() {
-        let resp = notary_value_from_cell(None, "did:web:soland.local");
-        assert_eq!(resp.kind_raw, "single_did");
-        assert_eq!(resp.single_did.as_deref(), Some("did:web:soland.local"));
-    }
-
-    #[test]
-    fn notary_value_from_cell_reads_spec_shape_form() {
-        let v = json!({
-            "shape": "single_did",
-            "did": "did:web:alice.example",
-            "revocation_freshness_window_ms": 60000,
-            "paused": false,
-        });
-        let resp = notary_value_from_cell(Some(&v), "did:web:server");
-        assert_eq!(resp.kind_raw, "single_did");
-        assert_eq!(resp.single_did.as_deref(), Some("did:web:alice.example"));
-        assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
+        let resp = notary_value_from_cell(None, "did:web:soland.local").unwrap();
+        match &resp.value {
+            NotaryValue::SingleDid { did } => assert_eq!(did.as_str(), "did:web:soland.local"),
+            other => panic!("expected SingleDid, got {other:?}"),
+        }
         assert!(!resp.paused);
     }
 
     #[test]
-    fn notary_value_from_cell_reads_threshold_shape() {
+    fn notary_value_from_cell_reads_authoritative_single_did_form() {
         let v = json!({
-            "shape": "threshold",
-            "k": 2,
-            "n": 3,
-            "dids": ["did:ck:a", "did:ck:b", "did:ck:c"],
+            "kind": "single_did",
+            "did": "did:web:alice.example",
+            "revocation_freshness_window_ms": 60000,
+            "paused": false,
         });
-        let resp = notary_value_from_cell(Some(&v), "did:web:s");
-        assert_eq!(resp.kind_raw, "threshold");
-        assert_eq!(resp.threshold_k, Some(2));
-        assert_eq!(resp.threshold_n, Some(3));
-        assert_eq!(resp.threshold_dids.len(), 3);
-        assert!(resp.single_did.is_none());
+        let resp = notary_value_from_cell(Some(&v), "did:web:server").unwrap();
+        match &resp.value {
+            NotaryValue::SingleDid { did } => assert_eq!(did.as_str(), "did:web:alice.example"),
+            other => panic!("expected SingleDid, got {other:?}"),
+        }
+        assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
+        assert!(!resp.paused);
+        // Serialized wire shape carries the internal `kind` tag plus the
+        // envelope fields at the top level.
+        let j = serde_json::to_value(&resp).unwrap();
+        assert_eq!(j["kind"], "single_did");
+        assert_eq!(j["did"], "did:web:alice.example");
+        assert_eq!(j["revocation_freshness_window_ms"], 60000);
     }
 
     #[test]
-    fn notary_value_from_cell_reads_dto_form_too() {
-        // Sodmin DTO form on the cell value — accepted as a fallback so
-        // round-tripping through soland's own typed admin write is also
-        // shape-stable.
+    fn notary_value_from_cell_reads_authoritative_threshold_form() {
         let v = json!({
-            "kind_raw": "open_set",
-            "open_set_members": ["did:1", "did:2"],
+            "kind": "threshold",
+            "k": 2,
+            "n": 3,
+            "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
         });
-        let resp = notary_value_from_cell(Some(&v), "did:web:s");
-        assert_eq!(resp.kind_raw, "open_set");
-        assert_eq!(
-            resp.open_set_members,
-            vec!["did:1".to_owned(), "did:2".to_owned()]
-        );
+        let resp = notary_value_from_cell(Some(&v), "did:web:s").unwrap();
+        match &resp.value {
+            NotaryValue::Threshold { k, n, members } => {
+                assert_eq!((*k, *n), (2, 3));
+                assert_eq!(members.len(), 3);
+            }
+            other => panic!("expected Threshold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notary_value_from_cell_rejects_legacy_alias_forms() {
+        // Pre-rename flat DTO spellings are no longer accepted: the
+        // authoritative wire is the SDK `NotaryValue` only.
+        for legacy in [
+            json!({"kind_raw": "open_set", "open_set_members": ["did:1", "did:2"]}),
+            json!({"shape": "single_did", "did": "did:web:alice.example"}),
+            json!({"kind": "single_did", "single_did": "did:web:alice.example"}),
+            json!({"kind": "threshold", "threshold_k": 2, "threshold_n": 3,
+                   "threshold_dids": ["did:a", "did:b", "did:c"]}),
+        ] {
+            assert!(
+                notary_value_from_cell(Some(&legacy), "did:web:s").is_err(),
+                "legacy form must be rejected: {legacy}"
+            );
+        }
     }
 
     #[test]
@@ -2127,26 +1992,36 @@ mod tests {
     }
 
     #[test]
-    fn notary_reconfig_body_round_trip_via_to_value_matches_sodmin_shape() {
-        // Lock the wire shape against accidental rename-on-serialize. The
-        // sodmin client constructs this body via
-        // `NotaryReconfigRequest::to_reconfigure_body()`; round-tripping
-        // through serde here confirms the field names line up.
-        let body = NotaryReconfigBody {
-            kind: "threshold".to_owned(),
-            threshold_k: Some(2),
-            threshold_n: Some(3),
-            threshold_dids: vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()],
-            ..Default::default()
-        };
-        let j = serde_json::to_value(&body).unwrap();
-        assert_eq!(j["kind"], "threshold");
-        assert_eq!(j["threshold_k"], 2);
-        assert_eq!(j["threshold_n"], 3);
-        assert_eq!(j["threshold_dids"].as_array().unwrap().len(), 2);
-        assert!(j.get("single_did").is_none());
-        assert!(j.get("open_set_members").is_none());
-        assert!(j.get("mixed_primary").is_none());
+    fn notary_reconfig_body_is_the_sdk_authoritative_wire_shape() {
+        // Lock the wire shape against accidental rename-on-serialize: the
+        // reconfigure body IS the SDK `NotaryValue` (internal tag `kind`,
+        // fields `k`/`n`/`members`). The cell value object written by
+        // `notary_value_object_from_body` is byte-identical to the body.
+        let body: NotaryReconfigBody = serde_json::from_value(json!({
+            "kind": "threshold",
+            "k": 2,
+            "n": 3,
+            "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+        }))
+        .unwrap();
+        let cell_value = notary_value_object_from_body(&body).unwrap();
+        assert_eq!(cell_value["kind"], "threshold");
+        assert_eq!(cell_value["k"], 2);
+        assert_eq!(cell_value["n"], 3);
+        assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
+        assert!(cell_value.get("threshold_k").is_none());
+        assert!(cell_value.get("threshold_dids").is_none());
+
+        // Structural violations are rejected by the SDK validator
+        // (members.len() != n).
+        let invalid: NotaryReconfigBody = serde_json::from_value(json!({
+            "kind": "threshold",
+            "k": 2,
+            "n": 3,
+            "members": ["did:ck:a"],
+        }))
+        .unwrap();
+        assert!(notary_value_object_from_body(&invalid).is_err());
     }
 
     #[test]

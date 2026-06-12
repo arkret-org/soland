@@ -381,12 +381,6 @@ impl NotaryWorker {
             // not authorized to advance until recovery.
             return Ok(false);
         };
-        let shape = value
-            .get("shape")
-            .or_else(|| value.get("kind"))
-            .or_else(|| value.get("kind_raw"))
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
         // Optional `paused` short-circuit — sodmin can flip the cell value
         // to a paused form to halt the worker without changing the profile.
         if value
@@ -396,60 +390,56 @@ impl NotaryWorker {
         {
             return Ok(false);
         }
-        match shape {
-            "single_did" => {
-                let did = value
-                    .get("did")
-                    .or_else(|| value.get("single_did"))
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-                Ok(did == self.service_did)
-            }
-            "threshold" => {
-                let members = read_did_list(&value, &["members", "threshold_dids", "dids"]);
-                Ok(self.is_round_leader(&members))
-            }
-            "open_set" => {
-                let members = read_did_list(&value, &["members", "open_set_members"]);
-                Ok(self.is_round_leader(&members))
-            }
-            "mixed" => {
-                let primary = value
-                    .get("primary")
-                    .or_else(|| value.get("mixed_primary"))
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-                let recovery = read_did_list(&value, &["recovery_members", "mixed_recovery"]);
+        // The cell value MUST be the SDK-authoritative `NotaryValue` wire
+        // shape (internal tag `kind`, fields `did|k|n|members|primary|
+        // recovery_members`). Anything else — including the pre-rename
+        // alias spellings (`shape`/`kind_raw`/`threshold_dids`/...) — is
+        // fail-closed: not authorized.
+        let Ok(notary_value) = serde_json::from_value::<cokret_sdk::NotaryValue>(value.clone())
+        else {
+            return Ok(false);
+        };
+        match notary_value {
+            cokret_sdk::NotaryValue::SingleDid { did } => Ok(did.as_str() == self.service_did),
+            cokret_sdk::NotaryValue::Threshold { members, .. }
+            | cokret_sdk::NotaryValue::OpenSet { members } => Ok(self.is_round_leader(&members)),
+            cokret_sdk::NotaryValue::Mixed {
+                primary,
+                recovery_members,
+            } => {
+                // `revocation_freshness_window_ms` is an envelope field
+                // riding alongside the profile in the cell value object.
                 let staleness_ms = value
                     .get("revocation_freshness_window_ms")
                     .and_then(|n| n.as_u64())
                     .unwrap_or(60_000);
-                if primary == self.service_did {
+                if primary.as_str() == self.service_did {
                     return Ok(true);
                 }
                 // Recovery members take over only if the latest leaf is
                 // older than `staleness_ms` AND this node is the lex-smallest
                 // recovery member.
-                if recovery.iter().any(|d| d == &self.service_did)
+                if recovery_members
+                    .iter()
+                    .any(|d| d.as_str() == self.service_did)
                     && self.frontier_is_stale(state, realm_id, staleness_ms)?
                 {
-                    Ok(self.is_round_leader(&recovery))
+                    Ok(self.is_round_leader(&recovery_members))
                 } else {
                     Ok(false)
                 }
             }
-            _ => Ok(false),
         }
     }
 
     /// Lex-smallest-DID leader election: this node is the leader when its
     /// `service_did` is the smallest entry in `members`. Empty list → no
     /// leader (returns false).
-    fn is_round_leader(&self, members: &[String]) -> bool {
-        let Some(leader) = members.iter().min() else {
+    fn is_round_leader<S: AsRef<str>>(&self, members: &[S]) -> bool {
+        let Some(leader) = members.iter().map(|m| m.as_ref()).min() else {
             return false;
         };
-        leader == &self.service_did
+        leader == self.service_did
     }
 
     /// Mixed-profile recovery gate: did the latest leaf go stale beyond
@@ -698,21 +688,6 @@ pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
     SigningKey::from_bytes(seed)
 }
 
-/// Read a DID list from an notary cell value, accepting any of the
-/// alternate field names emitted by sodmin / spec / soland's own
-/// admin DTO. Returns an empty vec when no candidate field exists.
-fn read_did_list(value: &serde_json::Value, candidates: &[&str]) -> Vec<String> {
-    for key in candidates {
-        if let Some(arr) = value.get(*key).and_then(|v| v.as_array()) {
-            return arr
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect();
-        }
-    }
-    Vec::new()
-}
-
 /// Convenience: trigger a single signing pass and report a structured
 /// summary — used by the admin endpoint.
 pub fn run_one_signing_pass(
@@ -731,28 +706,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_did_list_picks_first_present_alias() {
+    fn notary_cell_value_parses_authoritative_wire_only() {
+        // The authoritative `NotaryValue` form parses; envelope extras
+        // (`paused`, `revocation_freshness_window_ms`) are tolerated.
         let v = json!({
-            "members": ["did:ck:a", "did:ck:b"],
-            "threshold_dids": ["did:should-not-be-read"],
+            "kind": "threshold",
+            "k": 2,
+            "n": 3,
+            "members": ["did:ck:a", "did:ck:b", "did:ck:c"],
+            "revocation_freshness_window_ms": 60000,
+            "paused": false,
         });
-        let dids = read_did_list(&v, &["members", "threshold_dids"]);
-        assert_eq!(dids, vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()]);
-    }
+        let parsed: cokret_sdk::NotaryValue = serde_json::from_value(v).unwrap();
+        match parsed {
+            cokret_sdk::NotaryValue::Threshold { k, n, members } => {
+                assert_eq!((k, n), (2, 3));
+                assert_eq!(members.len(), 3);
+            }
+            other => panic!("expected Threshold, got {other:?}"),
+        }
 
-    #[test]
-    fn read_did_list_returns_empty_when_no_candidate_matches() {
-        let v = json!({"unrelated": [1, 2, 3]});
-        assert!(read_did_list(&v, &["members", "dids"]).is_empty());
-    }
-
-    #[test]
-    fn read_did_list_filters_non_string_entries_silently() {
-        let v = json!({
-            "members": ["did:ck:a", 42, null, "did:ck:b"],
-        });
-        let dids = read_did_list(&v, &["members"]);
-        assert_eq!(dids, vec!["did:ck:a".to_owned(), "did:ck:b".to_owned()]);
+        // Pre-rename alias spellings are rejected — the worker treats
+        // them as not-authorized (fail closed), never silently reads them.
+        for legacy in [
+            json!({"kind_raw": "threshold", "threshold_dids": ["did:a"]}),
+            json!({"shape": "single_did", "did": "did:ck:a"}),
+            json!({"kind": "threshold", "k": 2, "n": 3, "threshold_dids": ["did:a"]}),
+            json!({"kind": "mixed", "mixed_primary": "did:p", "mixed_recovery": ["did:r"]}),
+        ] {
+            assert!(
+                serde_json::from_value::<cokret_sdk::NotaryValue>(legacy.clone()).is_err(),
+                "legacy alias form must fail to parse: {legacy}"
+            );
+        }
     }
 
     #[test]
@@ -780,6 +766,6 @@ mod tests {
     #[test]
     fn is_round_leader_returns_false_for_empty_member_set() {
         let worker = NotaryWorker::for_service("did:ck:a");
-        assert!(!worker.is_round_leader(&[]));
+        assert!(!worker.is_round_leader::<String>(&[]));
     }
 }

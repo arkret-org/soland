@@ -42,13 +42,14 @@ use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
+use cokret_sdk::model::{AgentProvisionOutcome, AgentProvisionRequestBody};
+
 use crate::wire::{
     SolandAgentGrantAttachRequestBody, SolandAgentGrantDetachOutcome, SolandAgentGrantOutcome,
     SolandAgentKeyPairOutcome, SolandAgentKeyPairRequestBody, SolandAgentLifecycleOutcome,
-    SolandAgentLifecycleRequestBody, SolandAgentList, SolandAgentProvisionRequestBody,
-    SolandAgentRotateKeyOutcome, SolandAgentRotateKeyRequestBody,
-    SolandAgentSidecarThreadEnsureOutcome, SolandAgentSidecarThreadEnsureRequestBody,
-    SolandAgentView,
+    SolandAgentLifecycleRequestBody, SolandAgentList, SolandAgentRotateKeyOutcome,
+    SolandAgentRotateKeyRequestBody, SolandAgentSidecarThreadEnsureOutcome,
+    SolandAgentSidecarThreadEnsureRequestBody, SolandAgentView,
 };
 
 /// Mounted under `/_cokret/self`.
@@ -155,8 +156,14 @@ fn agent_view_from_record(record: &Value) -> SolandAgentView {
             .to_owned(),
         created_at: field("created_at"),
         updated_at: field("updated_at"),
-        pairing_request_id: None,
-        expires_at: None,
+        pairing_request_id: record
+            .get("pairing_request_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        expires_at: record
+            .get("pairing_expires_at")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         grants: Vec::new(),
         todos: Vec::new(),
     }
@@ -420,6 +427,13 @@ async fn agent_key_pair(
         )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
+    // authorizing the first runtime key flips it to `active`.
+    let _ = state
+        .persistence
+        .agents()
+        .set_state(&body.agent_principal_id, "active", &authorized_at)
+        .await;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -444,35 +458,42 @@ async fn agent_key_pair(
     })
 }
 
+/// Generate a short human-relayable pairing code for the provision
+/// outcome (`agent_provision_outcome.pairing_code`). 8 decimal digits
+/// from the OS CSPRNG.
+fn generate_pairing_code() -> String {
+    use rand::RngExt;
+    let mut buf = [0u8; 4];
+    rand::rng().fill(&mut buf);
+    format!("{:08}", u32::from_be_bytes(buf) % 100_000_000)
+}
+
 #[endpoint(
     operation_id = "ck.self.agent.provision",
     tags("agents"),
-    summary = "Provision a personal agent (DID + first agent key + grant attach)",
+    summary = "Provision a personal agent (DID + pairing request)",
     status_codes(201, 400, 401, 403, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.provision"))]
 async fn provision_agent(
     aa: AuthArgs,
-    body: JsonBody<SolandAgentProvisionRequestBody>,
+    body: JsonBody<AgentProvisionRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<SolandAgentView> {
+) -> JsonResult<AgentProvisionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.display_name.trim().is_empty() {
-        return Err(AppError::invalid_param("display_name is required"));
-    }
-    let controller_did = body.controller_did.unwrap_or_else(|| session.actor.clone());
-    if validate_did(&controller_did).is_err() {
-        return Err(AppError::invalid_param("controller_did must be a DID"));
-    }
-    if controller_did != session.actor {
-        return Err(AppError::capability_denied(
-            "controller_did must match the authenticated session actor",
-        ));
-    }
+    // Spec `agent_provision_request_body` carries no controller_did —
+    // the controller is ALWAYS the authenticated principal.
+    let controller_did = session.actor.clone();
+    let display_name = body
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let agent_slug = body
         .agent_slug
         .as_deref()
@@ -499,23 +520,28 @@ async fn provision_agent(
             ));
         }
     }
-    let agent_id = body
-        .agent_id
-        .unwrap_or_else(|| format!("did:web:agent.{}", session.actor.replace([':', '/'], ".")));
-    if validate_did(&agent_id).is_err() {
-        return Err(AppError::invalid_param("agent_id must be a DID"));
-    }
+    // The agent's actor DID is server-generated (the spec body carries no
+    // client-supplied agent_id).
+    let agent_id = format!("did:web:agent.{}", session.actor.replace([':', '/'], "."));
     let agent_principal_id = generate_agent_principal_did();
-    let timestamp = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let now_utc = chrono::Utc::now();
+    let timestamp = now_utc.to_rfc3339_opts(SecondsFormat::Millis, true);
     let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
+    let pairing_code = generate_pairing_code();
     let pairing_ttl_ms = body
         .pairing_ttl_ms
         .unwrap_or(15 * 60 * 1000)
         .min(24 * 60 * 60 * 1000);
-    let expires_at = (chrono::Utc::now() + chrono::Duration::milliseconds(pairing_ttl_ms as i64))
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
+    let requested_scope = body
+        .requested_scope
+        .map(|scope| serde_json::to_value(scope).unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
     // Persist the agent_principal row so list/get/lifecycle + grant/session
-    // paths have a real principal to operate on (CKP-0008).
+    // paths have a real principal to operate on (CKP-0008). Per the spec
+    // agent lifecycle the agent starts `pending_runtime_key`; the gate
+    // `ck.gate.account.agent_key_pair` flips it to `active` once the
+    // runtime key is authorized.
     state
         .persistence
         .agents()
@@ -523,9 +549,14 @@ async fn provision_agent(
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
             "agent_id": agent_id,
-            "display_name": body.display_name,
+            "display_name": display_name,
             "agent_slug": agent_slug.clone(),
-            "state": "active",
+            "requested_scope": requested_scope,
+            "accountability": body.accountability,
+            "state": "pending_runtime_key",
+            "pairing_request_id": pairing_request_id,
+            "pairing_code": pairing_code,
+            "pairing_expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             "created_at": timestamp,
             "updated_at": timestamp,
         }))
@@ -539,26 +570,21 @@ async fn provision_agent(
             "agent_principal_id": agent_principal_id,
             "controller_did": controller_did,
             "agent_id": agent_id,
-            "display_name": body.display_name,
-            "agent_slug": agent_slug.clone(),
+            "display_name": display_name,
+            "agent_slug": agent_slug,
+            "pairing_request_id": pairing_request_id,
         }),
         "accepted",
     )
     .await;
     res.status_code(StatusCode::CREATED);
-    json_ok(SolandAgentView {
-        agent_principal_id,
-        controller_did,
-        agent_id,
-        display_name: body.display_name,
-        agent_slug,
-        state: "active".to_owned(),
-        created_at: timestamp.clone(),
-        updated_at: timestamp,
-        pairing_request_id: Some(pairing_request_id),
-        expires_at: Some(expires_at),
-        grants: body.initial_grants,
-        todos: Vec::new(),
+    let agent_principal_did = cokret_sdk::Did::new(agent_principal_id)
+        .map_err(|err| AppError::internal(format!("generated agent principal DID invalid: {err}")))?;
+    json_ok(AgentProvisionOutcome {
+        agent_principal_id: agent_principal_did,
+        pairing_request_id,
+        pairing_code: Some(pairing_code),
+        expires_at,
     })
 }
 
