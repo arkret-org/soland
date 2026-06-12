@@ -1212,6 +1212,43 @@ pub(in crate::routing) async fn submit_event_value(
     // not on the projection operation payload.
     enforce_inception_key_online_window(state, &parsed, &envelope).await?;
 
+    // SPEC-SOL-003 follow-through — an accepted durable `ck.device.revoke`
+    // is the canonical revocation trigger (device-lifecycle.md §2.2).
+    // Validate the revocation against the submitting session, then flip the
+    // device record the auth gate reads BEFORE persisting the event: a
+    // failed flip rejects the submission (no event-without-enforcement),
+    // while a flipped record with a failed persist only over-revokes — the
+    // safe direction, the peer device can resubmit.
+    if parsed.kind == "ck.device.revoke" {
+        let target_device_id = validate_device_revoke_submission(session, &parsed, &envelope)?;
+        crate::routing::identity::auth::revoke_device_record(
+            state,
+            &parsed.actor_id,
+            &target_device_id,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("device revocation enforcement failed: {error}"),
+            )
+        })?;
+        append_audit_log(
+            state,
+            Some(&parsed.actor_id),
+            "device.revoke",
+            json!({
+                "revoked_device_id": target_device_id,
+                "by_device_id": session.device_id.clone(),
+                "via": "ck.device.revoke",
+                "event_id": parsed.event_id.clone(),
+            }),
+            "accepted",
+        )
+        .await;
+    }
+
     // CKP-0007: a message's effective circle-scope is derived from its Flow
     // (spec: `scope_circle_id` is a Flow field, never carried on the message).
     // Stamp the authoritative top-level `effective_scope` onto the stored
@@ -4278,6 +4315,53 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
                 .collect(),
         )
     })
+}
+
+/// SPEC-SOL-003 — pre-acceptance validation for the durable
+/// `ck.device.revoke` Control Move. v1 scaffold scope: only the principal
+/// may revoke its own sibling devices (recovery-service revocation lands
+/// with the recovery flows), and a device MUST NOT revoke itself
+/// (`device-lifecycle.md` §2.2 self-lockout rule, mirrored from the
+/// `/_soland/self/devices/{id}/revoke` scaffold). The principal-control
+/// realm binding itself is enforced by
+/// `validate_principal_control_realm_binding`; payload field presence by
+/// the registry payload schema.
+fn validate_device_revoke_submission(
+    session: &SessionRecord,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Result<String, SubmitOneError> {
+    let payload = envelope.get("payload").cloned().unwrap_or(Value::Null);
+    let principal_id = payload
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let device_id = payload
+        .get("device_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if device_id.is_empty() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "ck.device.revoke payload.device_id is required",
+        ));
+    }
+    if principal_id != parsed.actor_id {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "ck.device.revoke payload.principal_id must be the submitting actor",
+        ));
+    }
+    if device_id == session.device_id {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "cannot_self_revoke",
+            "a device cannot revoke itself; revoke from a peer device",
+        ));
+    }
+    Ok(device_id.to_owned())
 }
 
 pub(super) fn canonical_realm_id_for_record(record: &CanonicalEventRecord) -> Option<String> {
