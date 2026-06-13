@@ -547,27 +547,7 @@ pub struct EventsFrontierAccountClientState {
 // so soland re-uses them directly instead of carrying local copies.
 pub use cokret_sdk::model::{AuthzCheckOutcome, AuthzCheckRequestBody};
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushRegisterRequestBody {
-    pub operation_id: Option<String>,
-    pub principal_id: Option<String>,
-    pub device_id: String,
-    pub push_gateway: String,
-    pub push_key: String,
-    pub platform: Option<String>,
-    pub app_id: Option<String>,
-    pub display_name: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub request_id: Option<String>,
-    pub proof: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct PushUnregisterRequestBody {
-    pub device_id: String,
-    pub push_key: Option<String>,
-    pub app_id: Option<String>,
-}
+pub use cokret_sdk::model::{PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody};
 
 fn default_true() -> bool {
     true
@@ -877,20 +857,9 @@ pub struct SolandIdentityResolveOutcome {
 // names `cokret_sdk::KeysBackupsPutOutcome` / `KeysBackupsDeleteOutcome`
 // resolve to the *client-side* twins from `key_backup_client` (same wire
 // shape, no salvo `ToSchema`); the server must use the `model` ones.
-pub use cokret_sdk::model::{KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsPutOutcome};
-
-// spec `keys-operations.schema.json#/$defs/keys_backups_list`
-// (additionalProperties: false). required: backups, has_more; next_cursor
-// optional. Still a local DTO: the SDK's `model::KeysBackupsList` is missing
-// the spec-required `has_more` field, so it cannot carry this response until
-// the SDK type is fixed (cross-repo follow-up).
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandKeysBackupsList {
-    pub backups: Vec<Value>,
-    pub has_more: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-}
+pub use cokret_sdk::model::{
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
+};
 
 // CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
 // DTO is the SDK-authoritative `cokret_sdk::model::Agent*` shape (spec

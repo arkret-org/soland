@@ -127,9 +127,11 @@ pub(crate) async fn enforce_operation_policy_server(
                 .unwrap_or_else(|| "local policy gate denied operation".to_owned()),
         )),
         MergedAuthzDecision::RemoteDeny { remote, .. } => Err(PolicyGateRejection::forbidden(
-            remote
-                .reason_code
-                .unwrap_or_else(|| "policy_server_denied".to_owned()),
+            if remote.reason_code.trim().is_empty() {
+                "policy_server_denied".to_owned()
+            } else {
+                remote.reason_code
+            },
             "realm policy server denied operation",
         )),
         MergedAuthzDecision::RemoteObligationFailed { error, .. } => {
@@ -203,9 +205,10 @@ fn policy_request_for_operation(
         source_service_did,
         source_service_type: "soland".to_owned(),
         source_ip_digest: digest_value("policy-gate:no-source-ip")?,
-        signed_transport: surface_value,
+        signed_transport: true,
         event_preview,
         auth_context: json!({
+            "surface": surface_value,
             "operation_id": operation.operation_id.as_str(),
             "object_type": operation.object_type.as_str(),
         }),

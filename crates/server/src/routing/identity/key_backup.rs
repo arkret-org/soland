@@ -16,7 +16,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoverySessionRecord};
 use crate::wire::{
-    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsPutOutcome, SolandKeysBackupsList,
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -1325,6 +1325,12 @@ fn key_backup_metadata_for_list(mut backup: Value) -> Value {
     backup
 }
 
+fn key_backup_summary_for_list(backup: Value) -> Result<cokret_sdk::model::KeyBackupSummary, AppError> {
+    serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
+        AppError::internal(format!("stored key backup metadata does not match SDK summary: {error}"))
+    })
+}
+
 async fn ensure_key_backup_delete_is_series_tail(
     state: &AppState,
     actor_id: &str,
@@ -1447,7 +1453,7 @@ async fn list_key_backups(
     backup_class: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<SolandKeysBackupsList> {
+) -> JsonResult<KeysBackupsList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let series_filter = series_id.into_inner();
@@ -1486,12 +1492,12 @@ async fn list_key_backups(
     });
     let backups = backups
         .into_iter()
-        .map(key_backup_metadata_for_list)
-        .collect();
+        .map(key_backup_summary_for_list)
+        .collect::<Result<Vec<_>, _>>()?;
     // The store returns the full owned set in one page, so the list is never
     // truncated: `has_more` is false and no continuation cursor is emitted.
     let _ = cursor.into_inner();
-    json_ok(SolandKeysBackupsList {
+    json_ok(KeysBackupsList {
         backups,
         has_more: false,
         next_cursor: None,

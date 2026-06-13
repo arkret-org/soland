@@ -38,8 +38,9 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AccountDataRecord, AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
-    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterRequestBody, PushRulesOutcome,
-    PushUnregisterRequestBody, SessionGrantIntrospectionProof, UpsertPushRuleOutcome,
+    OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
+    PushRulesOutcome, PushUnregisterDeviceRequestBody, SessionGrantIntrospectionProof,
+    UpsertPushRuleOutcome,
     UpsertPushRuleRequestBody,
 };
 
@@ -58,7 +59,7 @@ const PUSH_RULES_ACCOUNT_DATA_TYPE: &str = "ck.push_rules";
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.push.register_device"))]
 pub(super) async fn push_register(
-    body: JsonBody<PushRegisterRequestBody>,
+    body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::PushRegisterDeviceOutcome> {
@@ -85,20 +86,16 @@ pub(super) async fn push_register(
             }
         },
     };
-    if body.device_id.trim().is_empty() {
+    if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::invalid_param("invalid device_id"));
     }
-    let registration_id = format!("ck:push:{}", body.device_id);
-    let principal_id = body.principal_id.clone();
-    let device_id = body.device_id.clone();
+    let registration_id = format!("ck:push:{}", body.device_id.as_str());
+    let principal_id = session.actor.clone();
+    let device_id = body.device_id.as_str().to_owned();
     let platform = body.platform.clone();
     let app_id = body.app_id.clone();
     let push_gateway = body.push_gateway.clone();
     let push_key = body.push_key.clone();
-    let request_id = body.request_id.clone();
-    let operation_id = body.operation_id.clone();
-    let idempotency_key = body.idempotency_key.clone();
-    let proof_present = body.proof.is_some();
     let mut warnings = Vec::new();
     if let Some(auth_warning) = auth_warning {
         warnings.push(auth_warning);
@@ -115,10 +112,6 @@ pub(super) async fn push_register(
             "app_id": app_id,
             "push_gateway": push_gateway,
             "push_key": push_key,
-            "request_id": request_id,
-            "operation_id": operation_id,
-            "idempotency_key": idempotency_key,
-            "proof_present": proof_present,
             "auth_mode": if warnings.is_empty() { "bearer" } else { "session_grant_bridge" },
         }))
         .await
@@ -154,14 +147,14 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
 #[tracing::instrument(skip_all, fields(op = "ck.edge.push.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
-    body: JsonBody<PushUnregisterRequestBody>,
+    body: JsonBody<PushUnregisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<OkOutcome> {
+) -> JsonResult<cokret_sdk::PushUnregisterDeviceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.device_id.trim().is_empty() {
+    if body.device_id.as_str().trim().is_empty() {
         return Err(AppError::invalid_param("invalid device_id"));
     }
     let removed = state
@@ -169,7 +162,7 @@ pub(super) async fn push_unregister(
         .push_devices()
         .unregister(
             &session.actor,
-            &body.device_id,
+            body.device_id.as_str(),
             body.push_key.as_deref(),
             body.app_id.as_deref(),
         )
@@ -187,7 +180,7 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(OkOutcome { ok: true })
+    json_ok(cokret_sdk::PushUnregisterDeviceOutcome { ok: true })
 }
 
 #[endpoint(
@@ -438,7 +431,7 @@ async fn verify_push_gateway_contract_drift(
 async fn push_register_session_grant_bridge(
     state: &AppState,
     req: &Request,
-    body: &PushRegisterRequestBody,
+    body: &PushRegisterDeviceRequestBody,
 ) -> Result<Option<SessionRecord>, (StatusCode, &'static str, &'static str)> {
     let Some(grant) = req.headers().get("x-cokret-session-grant") else {
         return Ok(None);
@@ -457,16 +450,18 @@ async fn push_register_session_grant_bridge(
             "X-Cokret-Session-Grant must not be empty",
         ));
     }
-    let Some(principal_id) = body
-        .principal_id
-        .as_deref()
+    let Some(principal_id) = optional_ascii_header(
+        req,
+        "x-cokret-principal-id",
+        "X-Cokret-Principal-Id",
+    )?
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
         return Err((
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "principal_id is required when using X-Cokret-Session-Grant",
+            "X-Cokret-Principal-Id is required when using X-Cokret-Session-Grant",
         ));
     };
     if !principal_id.starts_with("did:") {
@@ -525,7 +520,7 @@ async fn push_register_session_grant_bridge(
     Ok(Some(SessionRecord {
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
         actor: principal_id.to_owned(),
-        device_id: body.device_id.clone(),
+        device_id: body.device_id.as_str().to_owned(),
         audience: state.config.service_did.clone(),
         expires_at,
         created_at: now(),
