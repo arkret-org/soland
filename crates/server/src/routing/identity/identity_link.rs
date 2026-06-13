@@ -7,13 +7,15 @@
 //!
 //! Spec reference surface — these helpers are exercised by the conformance
 //! suite and out-of-tree signers; not all are wired into a soland route yet.
-#![allow(dead_code)]
+//! Per-item `#[allow(dead_code)]` is used instead of a module-level blanket
+//! so future genuinely-dead code is still surfaced by the compiler.
 
 use cokret_sdk::compute_policy_frontier_digest;
 use serde_json::Value;
 
 /// Spec T13 — compute the four-field policy frontier hash for an
 /// identity_link cache entry via SDK.
+#[allow(dead_code)] // spec reference surface; exercised by unit tests / out-of-tree signers
 pub fn identity_link_policy_frontier_digest(
     disclosure_policy: &Value,
     history_visibility: &Value,
@@ -30,6 +32,7 @@ pub fn identity_link_policy_frontier_digest(
 
 /// Spec T13 — five governance-input change classifications that MUST
 /// eagerly invalidate cached identity_link routing decisions.
+#[allow(dead_code)] // spec reference surface; not yet wired into a soland route
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdentityLinkInvalidationTrigger {
     DisclosurePolicyStricter,

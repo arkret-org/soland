@@ -910,13 +910,12 @@ pub struct SolandKeysBackupsList {
 // `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
-pub use cokret_sdk::model::CallMediaTokenExchangeRequestBody;
 pub use cokret_sdk::model::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
     AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
     AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
-    AgentSidecarThreadEnsureRequestBody, AgentView,
+    AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
 pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
 
