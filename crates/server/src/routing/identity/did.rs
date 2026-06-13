@@ -372,11 +372,11 @@ pub(super) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.resolve",
+    operation_id = "ck.root.identity.query.resolve",
     tags("identity"),
     summary = "Resolve a DID via local webvh store + SDK resolver chain"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.query.resolve"))]
 pub(super) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
     depot: &mut Depot,
@@ -436,11 +436,11 @@ pub(super) async fn identity_resolve(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.get_document",
+    operation_id = "ck.root.identity.document.resource.get",
     tags("identity"),
     summary = "Fetch the locally-cached DID document for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.get_document"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.document.resource.get"))]
 pub(super) async fn identity_document(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -508,11 +508,11 @@ pub(super) async fn identity_did_document(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.get_log",
+    operation_id = "ck.root.identity.log.query.list",
     tags("identity"),
     summary = "Return the local webvh key-log events for a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.get_log"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.log.query.list"))]
 pub(super) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -547,11 +547,11 @@ pub(super) async fn identity_log(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.get_receipts",
+    operation_id = "ck.root.identity.receipts.query.list",
     tags("identity"),
     summary = "Read issuer receipts for the local webvh key-log of a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.get_receipts"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.receipts.query.list"))]
 pub(super) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -585,12 +585,12 @@ pub(super) async fn identity_receipts(
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.submit_did_operation",
+    operation_id = "ck.root.identity.command.submit_did_operation",
     tags("identity"),
     summary = "Submit a method-neutral DID operation to the local registry",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.submit_did_operation"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.command.submit_did_operation"))]
 pub(super) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<Value>,
@@ -657,7 +657,7 @@ pub(super) async fn identity_submit_did_operation(
     );
     let method_evidence = json!({
         "mode": "submitted_operation",
-        "source": "ck.root.identity.submit_did_operation",
+        "source": "ck.root.identity.command.submit_did_operation",
         "previous": existing
             .as_ref()
             .map(|record| record.method_evidence.clone())

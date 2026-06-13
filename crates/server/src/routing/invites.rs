@@ -42,24 +42,24 @@ pub(crate) fn open_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.peer.invites.submit",
+    operation_id = "ck.peer.invites.command.submit",
     tags("peer"),
     summary = "Private Principal Server invite delivery"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.invites.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ck.peer.invites.command.submit"))]
 async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
         .parse_json::<Value>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ck.peer.invites.submit request body"))?;
+        .map_err(|_| AppError::bad_json("invalid ck.peer.invites.command.submit request body"))?;
     super::events::peer::validate_peer_request(state, req, Some(&body))?;
     validate_content_digest(req, &body)?;
 
     let delivery: InviteDeliveryRequest =
         serde_json::from_value(body.clone()).map_err(|error| {
             super::events::peer::schema_violation(format!(
-                "invalid ck.peer.invites.submit shape: {error}"
+                "invalid ck.peer.invites.command.submit shape: {error}"
             ))
         })?;
     delivery.validate_minimal().map_err(|error| {
@@ -137,7 +137,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
             })?;
     let request_hash = canonical::canonical_sha256(&body).map_err(|error| {
         super::events::peer::schema_violation(format!(
-            "ck.peer.invites.submit body is not canonical-hashable: {error}"
+            "ck.peer.invites.command.submit body is not canonical-hashable: {error}"
         ))
     })?;
     let session = SessionRecord {
@@ -200,11 +200,11 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
 }
 
 #[endpoint(
-    operation_id = "ck.open.invite_locator.resolve",
+    operation_id = "ck.open.invite_locator.query.resolve",
     tags("open"),
     summary = "Resolve an online invite locator token"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.open.invite_locator.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.open.invite_locator.query.resolve"))]
 async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     if locator_token_appears_in_url(req) {
         return Err(AppError::invalid_param(
@@ -395,7 +395,7 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
 
 /// Read the subject's private `invite_receive_policy`, falling back to the
 /// recommended default. `blocked_subjects` written by
-/// `ck.self.contact.tombstone(block_peer)` are merged from the in-memory
+/// `ck.self.contact.command.tombstone(block_peer)` are merged from the in-memory
 /// override store.
 fn resolve_invite_receive_policy(state: &AppState, subject: &str) -> InviteReceivePolicy {
     state

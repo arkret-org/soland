@@ -22,11 +22,11 @@ use crate::wire::{
 use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
-    operation_id = "ck.self.read_cursor.set",
+    operation_id = "ck.self.read_cursor.command.advance",
     tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.set"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.command.advance"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -92,11 +92,11 @@ pub(super) async fn set_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "ck.self.read_cursor.list",
+    operation_id = "ck.self.read_cursor.query.list",
     tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.query.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

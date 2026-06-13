@@ -3,8 +3,7 @@
 //! Mounted under `/_soland/admin/moderation/...`:
 //!
 //! ### Queue
-//! - `GET /queue` — canonical queue read (`ck.admin.get_moderation_queue`) is served by
-//!   [`super::spec`]; this suite does NOT re-bind it.
+//! - `GET /queue` — local queue read served by [`super::spec`]; this suite does NOT re-bind it.
 //! - `POST /queue/{id}/assign` — assign reviewer DIDs.
 //! - `POST /queue/{id}/priority` — set priority.
 //!
@@ -47,8 +46,8 @@ use crate::state::AppState;
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
-        // `GET queue` (canonical `ck.admin.get_moderation_queue`) is owned
-        // by `super::spec` to keep the single `/_soland/admin/moderation/queue` URL
+        // `GET queue` is owned by `super::spec` to keep the single
+        // `/_soland/admin/moderation/queue` URL
         // bound to exactly one handler; only the sub-paths live here.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
         .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))
@@ -63,9 +62,8 @@ pub(super) fn router() -> Router {
 
 // ── Queue ────────────────────────────────────────────────────────────
 //
-// The canonical `GET /_soland/admin/moderation/queue` read
-// (`ck.admin.get_moderation_queue`) lives in `super::spec`; the queue
-// sub-actions (assign / priority) are below.
+// The local `GET /_soland/admin/moderation/queue` read lives in
+// `super::spec`; the queue sub-actions (assign / priority) are below.
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AssignReviewerReq {

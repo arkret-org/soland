@@ -1247,20 +1247,24 @@ async fn verify_delete_ownership_proof(
     // not a header. `proof` is an object (the detached-JWS metadata); the
     // development form is accepted as a plain string for opt-in dev builds.
     let body = req.parse_json::<Value>().await.map_err(|_| {
-        AppError::invalid_param("ck.self.keys.backups.delete request body must be JSON")
+        AppError::invalid_param("ck.self.keys.backups.resource.delete request body must be JSON")
     })?;
     let object = body.as_object().ok_or_else(|| {
-        AppError::invalid_param("ck.self.keys.backups.delete request body must be an object")
+        AppError::invalid_param(
+            "ck.self.keys.backups.resource.delete request body must be an object",
+        )
     })?;
     for key in object.keys() {
         if !matches!(key.as_str(), "proof" | "reason") {
             return Err(AppError::invalid_param(
-                "ck.self.keys.backups.delete permits only proof and reason",
+                "ck.self.keys.backups.resource.delete permits only proof and reason",
             ));
         }
     }
     let proof_value = object.get("proof").ok_or_else(|| {
-        AppError::invalid_param("ck.self.keys.backups.delete requires a proof in the request body")
+        AppError::invalid_param(
+            "ck.self.keys.backups.resource.delete requires a proof in the request body",
+        )
     })?;
     // Dev-mode escape hatch: a bare string proof.
     if let Some(proof) = proof_value.as_str() {
@@ -1283,7 +1287,7 @@ async fn verify_delete_ownership_proof(
         return verify_key_backup_delete_jws_proof(state, &proof, backup_id, actor_id).await;
     }
     Err(AppError::invalid_param(
-        "ck.self.keys.backups.delete proof must be an object or a development proof string",
+        "ck.self.keys.backups.resource.delete proof must be an object or a development proof string",
     ))
 }
 
@@ -1385,11 +1389,11 @@ async fn ensure_key_backup_delete_is_series_tail(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.put",
+    operation_id = "ck.self.keys.backups.resource.replace",
     tags("keys"),
     summary = "Store an encrypted key backup payload by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.resource.replace"))]
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -1439,7 +1443,7 @@ async fn put_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.list",
+    operation_id = "ck.self.keys.backups.query.list",
     tags("keys"),
     summary = "List encrypted key backups owned by the authenticated actor",
     parameters(
@@ -1448,7 +1452,7 @@ async fn put_key_backup(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
     )
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.query.list"))]
 async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
@@ -1508,11 +1512,11 @@ async fn list_key_backups(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.unlock",
+    operation_id = "ck.self.keys.backups.command.unlock",
     tags("keys"),
     summary = "Unlock and return the full encrypted key backup envelope by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.unlock"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.command.unlock"))]
 async fn unlock_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
@@ -1527,17 +1531,21 @@ async fn unlock_key_backup(
     // `{proof}` only; the unlock proof MUST NOT travel in a header or query.
     let body = body.into_inner();
     let object = body.as_object().ok_or_else(|| {
-        AppError::invalid_param("ck.self.keys.backups.unlock request body must be an object")
+        AppError::invalid_param(
+            "ck.self.keys.backups.command.unlock request body must be an object",
+        )
     })?;
     for key in object.keys() {
         if key != "proof" {
             return Err(AppError::invalid_param(
-                "ck.self.keys.backups.unlock permits only proof",
+                "ck.self.keys.backups.command.unlock permits only proof",
             ));
         }
     }
     let proof = object.get("proof").ok_or_else(|| {
-        AppError::invalid_param("ck.self.keys.backups.unlock requires a proof in the request body")
+        AppError::invalid_param(
+            "ck.self.keys.backups.command.unlock requires a proof in the request body",
+        )
     })?;
     let Some(backup) = state
         .persistence
@@ -1596,11 +1604,11 @@ async fn unlock_key_backup(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.backups.delete",
+    operation_id = "ck.self.keys.backups.resource.delete",
     tags("keys"),
     summary = "Delete an encrypted key backup by backup_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.backups.resource.delete"))]
 async fn delete_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,

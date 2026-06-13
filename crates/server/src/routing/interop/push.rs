@@ -52,11 +52,11 @@ const PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS: i64 = 24;
 const PUSH_RULES_ACCOUNT_DATA_TYPE: &str = "ck.push_rules";
 
 #[endpoint(
-    operation_id = "ck.edge.push.register_device",
+    operation_id = "ck.edge.push.command.register_device",
     tags("push"),
     summary = "Register a device + push gateway token (bearer or session-grant bridge)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.register_device"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.register_device"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
@@ -139,11 +139,11 @@ fn canonical_error_code(wire: &str) -> crate::error::ErrorCode {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.push.unregister_device",
+    operation_id = "ck.edge.push.command.unregister_device",
     tags("push"),
     summary = "Unregister a push device for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.unregister_device"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
     body: JsonBody<PushUnregisterDeviceRequestBody>,
@@ -293,11 +293,11 @@ pub(super) async fn delete_push_rule(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.push.notify",
+    operation_id = "ck.edge.push.command.notify",
     tags("push"),
     summary = "Fan out a push notification through the rule engine"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.push.notify"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.push.command.notify"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyRequestBody>,
     depot: &mut Depot,

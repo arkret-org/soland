@@ -41,7 +41,7 @@ pub fn protocol_router() -> Router {
             Router::with_path("gate")
                 .push(auth::protocol_account_router())
                 // Spec `account_auth` surface group: account registration on
-                // the gate trust segment (`ck.gate.account.register`).
+                // the gate trust segment (`ck.gate.account.command.register`).
                 .push(account::protocol_gate_router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )

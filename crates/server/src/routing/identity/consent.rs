@@ -143,11 +143,11 @@ async fn project_consent_revoke_operation(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.list",
+    operation_id = "ck.self.consent.query.list",
     tags("consent"),
     summary = "List consent cells visible to the authenticated holder"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.consent.query.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -174,12 +174,12 @@ async fn list_consent_cells(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.get",
+    operation_id = "ck.self.consent.resource.get",
     tags("consent"),
     summary = "Read one holder-private consent cell",
     status_codes(200, 400, 401, 403, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.consent.resource.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -215,12 +215,12 @@ async fn get_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.grant",
+    operation_id = "ck.self.consent.command.grant",
     tags("consent"),
     summary = "Grant scoped consent to a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -266,12 +266,12 @@ async fn grant_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.revoke",
+    operation_id = "ck.self.consent.command.revoke",
     tags("consent"),
     summary = "Revoke scoped consent from a peer DID",
     status_codes(200, 400, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -305,12 +305,12 @@ async fn revoke_consent_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.consent.request",
+    operation_id = "ck.self.consent.command.request",
     tags("consent"),
     summary = "Open a scoped consent request",
     status_codes(200, 201, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.consent.request"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.consent.command.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -559,7 +559,7 @@ pub(crate) fn grant_contact_managed_consent(
     (event_id, updated)
 }
 
-/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.tombstone`
+/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.tombstone`
 /// MUST enumerate and revoke the holder's contact-managed active grant
 /// dots toward `peer`. When `scopes` is empty, default to every scope the
 /// holder currently grants `peer` (the recommended `revoke_scopes` default).

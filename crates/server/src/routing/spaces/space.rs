@@ -50,11 +50,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.get",
+    operation_id = "ck.self.realm.resource.get",
     tags("realms"),
     summary = "Get a Realm lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.resource.get"))]
 async fn get_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -70,11 +70,14 @@ async fn get_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.moderation_policy.effective",
+    operation_id = "ck.self.realm.moderation_policy.query.effective",
     tags("realms", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.moderation_policy.effective"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.self.realm.moderation_policy.query.effective")
+)]
 async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -94,11 +97,14 @@ async fn get_realm_effective_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.moderation_policy.set",
+    operation_id = "ck.self.realm.moderation_policy.resource.replace",
     tags("realms", "policy"),
     summary = "Set a Realm moderation-policy override"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.moderation_policy.set"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.self.realm.moderation_policy.resource.replace")
+)]
 async fn upsert_realm_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -195,11 +201,11 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "ck.self.realm.export",
+    operation_id = "ck.self.realm.query.export",
     tags("realms"),
     summary = "Full event log + projection dump for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.realm.export"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.query.export"))]
 async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,

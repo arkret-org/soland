@@ -512,7 +512,7 @@ pub struct IndexSpaceHierarchyOutcome {
     pub frontier: Value,
 }
 
-/// Spec-shape `ck.self.events.frontier` account-client response
+/// Spec-shape `ck.self.events.query.frontier` account-client response
 /// (`service-operation-dtos.schema.json#/$defs/EventsFrontierAccountClientState`).
 /// `frontier` is a single object whose shape follows the selector: actor
 /// (`{actor_id, actor_seq, event_id}`) or Realm Seal view (`{realm_id,
@@ -527,8 +527,8 @@ pub struct EventsFrontierAccountClientState {
 }
 
 // `SolandSnapshotHeadState` was deleted with the 2026-06-11 spec resolution:
-// `ck.self.snapshot.head` / `ck.peer.snapshot.head` return the full signed
-// `ck.schema.snapshot.v1` manifest (the spec `SnapshotHeadState` DTO was
+// `ck.self.snapshot.query.manifest_head` / `ck.peer.snapshot.query.manifest_head` return the full
+// signed `ck.schema.snapshot.v1` manifest (the spec `SnapshotHeadState` DTO was
 // removed and hard-rejected in renames.json). soland answers both operations
 // with `not_implemented` until it can produce a real Snapshot detached proof.
 
@@ -864,7 +864,7 @@ pub use cokret_sdk::{
 // `recovery_receipt_put`) take `JsonBody<Value>` and validate against the
 // spec REC-1 shapes via `validate_recovery_policy` / `validate_recovery_receipt`
 // in `routing::identity::recovery`. Recovery policy publish is the standard
-// `ck.root.identity.recovery_policy.put` surface; recovery receipt write remains
+// `ck.root.identity.recovery_policy.command.publish` surface; recovery receipt write remains
 // product-local. The SDK carries the authoritative typed forms
 // (`cokret_sdk::model::{RecoveryPolicy, RecoveryReceipt}`) for clients; no
 // soland-private mirror exists.
@@ -945,21 +945,21 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "ck.find.directory.describe",
-    "ck.find.directory.search_realms",
-    "ck.find.directory.resolve_realm",
-    "ck.find.directory.resolve_target",
-    "ck.find.directory.resolve_agent_selector",
-    "ck.find.directory.list_handles_for_subject",
-    "ck.self.blob.upload",
-    "ck.self.blob.head",
-    "ck.self.blob.get",
-    "ck.self.keys.backups.put",
-    "ck.self.keys.backups.list",
-    "ck.self.keys.backups.unlock",
-    "ck.self.keys.backups.delete",
-    "ck.peer.invites.submit",
-    "ck.open.invite_locator.resolve",
+    "ck.find.directory.query.describe",
+    "ck.find.directory.query.search_realms",
+    "ck.find.directory.query.resolve_realm",
+    "ck.find.directory.query.resolve_target",
+    "ck.find.directory.query.resolve_agent_selector",
+    "ck.find.directory.query.list_handles_for_subject",
+    "ck.self.blob.upload.create",
+    "ck.self.blob.resource.head",
+    "ck.self.blob.resource.get",
+    "ck.self.keys.backups.resource.replace",
+    "ck.self.keys.backups.query.list",
+    "ck.self.keys.backups.command.unlock",
+    "ck.self.keys.backups.resource.delete",
+    "ck.peer.invites.command.submit",
+    "ck.open.invite_locator.query.resolve",
 ];
 
 /// Spec operations soland deliberately does NOT declare even though their
@@ -1072,18 +1072,18 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ck.self.snapshot.head returns a signed ck.schema.snapshot.v1 manifest; the legacy /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ck.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the legacy /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",
             "status": "standard_gate_supported_with_legacy_scaffold",
-            "spec_operation": "ck.gate.account.device_pair",
+            "spec_operation": "ck.gate.account.command.pair_device",
             "canonical_path": "/_cokret/gate/account/device-pair",
             "product_paths": [
                 "/_soland/self/devices/pairing-challenge",
                 "/_soland/self/devices/authorize-pairing"
             ],
-            "reason": "ck.gate.account.device_pair is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. ck.gate.account.oidc_callback is delegated to the bridges deployment and not served here."
+            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
@@ -1207,7 +1207,7 @@ pub fn describe(
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
             // advertise `ck.profile.media_service_binding.v1` whenever the
-            // server exposes the `ck.self.call.media.token_exchange` handler.
+            // server exposes the `ck.self.call.media.exchange.issue_token` handler.
             // soland mounts the handler unconditionally (see
             // `routing::interop::webrtc::router` — `/_cokret/self/rtc/token`),
             // so the claim is unconditional too.
@@ -1297,7 +1297,7 @@ pub fn describe(
                     "{}/_cokret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
                 ),
-                "operations": ["ck.self.blob.upload"],
+                "operations": ["ck.self.blob.upload.create"],
                 "extension_profile_required": serde_json::Value::Null,
                 "tus_version": crate::routing::TUS_VERSIONS,
                 "tus_extensions": crate::routing::TUS_EXTENSIONS,
@@ -1626,7 +1626,7 @@ mod tests {
         );
         assert_eq!(
             value["supported_bindings"][1]["operations"],
-            json!(["ck.self.blob.upload"])
+            json!(["ck.self.blob.upload.create"])
         );
         assert!(value["supported_bindings"][1]["extension_profile_required"].is_null());
         assert!(

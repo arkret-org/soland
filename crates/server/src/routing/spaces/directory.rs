@@ -108,7 +108,7 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/announce").post(directory_announce))
         .push(Router::with_path("directory/withdraw").post(directory_withdraw))
         // Spec-canonical directory push-webhook registration
-        // (`ck.find.directory.push.register`). The retired `/_soland/find/
+        // (`ck.find.directory.push.command.register`). The retired `/_soland/find/
         // directory/subscribe` legacy mirror used the same handler under the
         // historical `subscribe` path; the protocol surface mounts only the
         // canonical `push/register` path.
@@ -134,11 +134,11 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<DirectoryDescriptio
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.search_realms",
+    operation_id = "ck.find.directory.query.search_realms",
     tags("directory"),
     summary = "Fuzzy-text + visibility-filtered realm search"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_realms"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_realms"))]
 async fn search_realms(
     body: JsonBody<DirectorySearchRealmsRequestBody>,
     depot: &mut Depot,
@@ -179,11 +179,11 @@ async fn search_realms(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.resolve_realm",
+    operation_id = "ck.find.directory.query.resolve_realm",
     tags("directory"),
     summary = "Resolve a realm by id / alias / invite_token / signed_link"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_realm"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_realm"))]
 async fn resolve_realm(
     body: JsonBody<DirectoryResolveRealmRequestBody>,
     depot: &mut Depot,
@@ -260,11 +260,11 @@ async fn resolve_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.resolve_target",
+    operation_id = "ck.find.directory.query.resolve_target",
     tags("directory"),
     summary = "Resolve a Realm / Flow / Message share address to a policy-limited preview"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_target"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_target"))]
 async fn resolve_target(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -885,7 +885,7 @@ fn join_candidates_for_resolved_realm(
         service_type: RealmJoinCandidateServiceType::PrincipalServer,
         role: RealmJoinCandidateRole::Primary,
         endpoint: Some(state.config.public_base_url.clone()),
-        operations: vec!["ck.self.events.submit".to_owned()],
+        operations: vec!["ck.self.events.command.submit".to_owned()],
         join_methods,
         priority: Some(0),
         source: RealmJoinCandidateSource::DirectoryIngest,
@@ -898,11 +898,11 @@ fn join_candidates_for_resolved_realm(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.search_organizations",
+    operation_id = "ck.find.directory.query.search_organizations",
     tags("directory"),
     summary = "Fuzzy-text search across known organizations (demo data for now)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_organizations"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_organizations"))]
 async fn search_organizations(
     body: JsonBody<DirectorySearchOrganizationsRequestBody>,
     depot: &mut Depot,
@@ -933,11 +933,11 @@ async fn search_organizations(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.resolve_organization",
+    operation_id = "ck.find.directory.query.resolve_organization",
     tags("directory"),
     summary = "Resolve an organization by organization_id or handle"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_organization"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_organization"))]
 async fn resolve_organization(
     body: JsonBody<DirectoryResolveOrganizationRequestBody>,
     depot: &mut Depot,
@@ -1024,11 +1024,11 @@ async fn resolve_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.search_actors",
+    operation_id = "ck.find.directory.query.search_actors",
     tags("directory"),
     summary = "Search actors visible to the calling session"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_actors"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_actors"))]
 async fn search_actors(
     body: JsonBody<DirectorySearchActorsRequestBody>,
     depot: &mut Depot,
@@ -1072,11 +1072,11 @@ async fn search_actors(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.search_users",
+    operation_id = "ck.find.directory.query.search_users",
     tags("directory"),
     summary = "Search users via a POST body to avoid query-string leakage"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.search_users"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.search_users"))]
 async fn search_users(
     body: JsonBody<DirectorySearchUsersRequestBody>,
     depot: &mut Depot,
@@ -1088,11 +1088,11 @@ async fn search_users(
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let query = body.query;
     let session = authenticated_session(state, req).await.ok();
-    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `ck.find.directory.search_users`
+    // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `ck.find.directory.query.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
     // `<localpart>:<domain>`) + optional `display_name`/`verified`/`subject`
     // survive the rename. Other actor metadata (presence, organization,
-    // avatar) goes through `ck.find.directory.search_actors` or
+    // avatar) goes through `ck.find.directory.query.search_actors` or
     // `ck.directory.resolve-handle`.
     let mut results: Vec<UserSearchOutcome> = Vec::new();
     for actor in demo_actors(state).await {
@@ -1117,7 +1117,7 @@ async fn search_users(
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
-/// `ck.find.directory.search_users` response entry. Only `handle` (canonical
+/// `ck.find.directory.query.search_users` response entry. Only `handle` (canonical
 /// `<localpart>:<domain>` per handle-claim.schema.json, cokret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
 fn project_search_users_row(
@@ -1381,11 +1381,11 @@ fn local_handle_resolution_outcome(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.resolve_handle",
+    operation_id = "ck.find.directory.query.resolve_handle",
     tags("directory"),
     summary = "Resolve a normalized actor handle (e.g. `@alice`) to a DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_handle"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_handle"))]
 async fn resolve_handle(
     body: JsonBody<DirectoryResolveHandleRequestBody>,
     depot: &mut Depot,
@@ -1569,11 +1569,14 @@ fn signed_agent_selector_claim(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.resolve_agent_selector",
+    operation_id = "ck.find.directory.query.resolve_agent_selector",
     tags("directory"),
     summary = "Resolve a controller-scoped native personal agent selector exactly"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.resolve_agent_selector"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.find.directory.query.resolve_agent_selector")
+)]
 async fn resolve_agent_selector(
     body: JsonBody<DirectoryResolveAgentSelectorRequestBody>,
     depot: &mut Depot,
@@ -1777,11 +1780,14 @@ fn signed_handle_claim(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.list_handles_for_subject",
+    operation_id = "ck.find.directory.query.list_handles_for_subject",
     tags("directory"),
     summary = "List current context-visible handle claims for a known subject DID"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.list_handles_for_subject"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.find.directory.query.list_handles_for_subject")
+)]
 async fn list_handles_for_subject(
     body: JsonBody<DirectoryListHandlesForSubjectRequestBody>,
     depot: &mut Depot,
@@ -2058,11 +2064,14 @@ fn primary_handle_from_subject_claims(claims: &[Value]) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.private_contact_discovery",
+    operation_id = "ck.find.directory.query.private_contact_discovery",
     tags("directory"),
     summary = "Privacy-preserving contact discovery over padded identifier batches"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.private_contact_discovery"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.find.directory.query.private_contact_discovery")
+)]
 async fn private_contact_discovery(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -2170,11 +2179,11 @@ async fn private_contact_discovery(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.announce",
+    operation_id = "ck.find.directory.command.announce",
     tags("directory"),
     summary = "Announce a discoverable directory resource"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.announce"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.command.announce"))]
 async fn directory_announce(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -2222,11 +2231,11 @@ async fn directory_announce(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.withdraw",
+    operation_id = "ck.find.directory.command.withdraw",
     tags("directory"),
     summary = "Withdraw a previously-announced directory resource"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.withdraw"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.command.withdraw"))]
 async fn directory_withdraw(
     body: JsonBody<Value>,
     depot: &mut Depot,
@@ -2268,11 +2277,11 @@ async fn directory_withdraw(
 }
 
 #[endpoint(
-    operation_id = "ck.find.directory.push.register",
+    operation_id = "ck.find.directory.push.command.register",
     tags("directory"),
     summary = "Subscribe to directory update notifications"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.find.directory.push.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.find.directory.push.command.register"))]
 async fn directory_subscribe(
     body: JsonBody<Value>,
     depot: &mut Depot,

@@ -2581,7 +2581,7 @@ fn apply_capability_derived_dispatch(
 // `ck.mls.keypackage` kind covers both publish and claim. The reducer
 // dispatches on `payload.action == "publish" | "claim"` (the publish-
 // vs-claim split lives at the HTTP operation_id layer:
-// `ck.self.keys.keypackages.upload` vs `ck.self.keys.keypackages.claim`).
+// `ck.self.keys.keypackages.upload.create` vs `ck.self.keys.keypackages.command.claim`).
 
 fn apply_mls_keypackage_dispatch(
     s: &mut ProjectionState,

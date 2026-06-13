@@ -40,7 +40,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("policy/check").post(policy_check))
         // Spec `policy_document` operation group (`ck.self.policy_document.*`),
         // canonical path `/_cokret/self/policies*`. These are the owner-scoped
-        // authorization policy documents backing `ck.self.policy.check`.
+        // authorization policy documents backing `ck.self.policy.query.check`.
         .push(
             Router::with_path("policies")
                 .get(list_policy_documents)
@@ -65,11 +65,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.list",
+    operation_id = "ck.self.policy_document.query.list",
     tags("policy"),
     summary = "List policy documents owned by the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.query.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
     scope: QueryParam<String, false>,
@@ -106,11 +106,11 @@ async fn list_policy_documents(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.get",
+    operation_id = "ck.self.policy_document.resource.get",
     tags("policy"),
     summary = "Read a single policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.resource.get"))]
 async fn get_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -133,11 +133,11 @@ async fn get_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.upsert",
+    operation_id = "ck.self.policy_document.command.upsert",
     tags("policy"),
     summary = "Idempotently create or replace a policy document"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.command.upsert"))]
 async fn upsert_policy_document(
     aa: AuthArgs,
     body: JsonBody<UpsertPolicyDocumentRequestBody>,
@@ -307,11 +307,11 @@ async fn patch_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy_document.delete",
+    operation_id = "ck.self.policy_document.resource.delete",
     tags("policy"),
     summary = "Delete a policy document by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.delete"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy_document.resource.delete"))]
 async fn delete_policy_document(
     aa: AuthArgs,
     policy_id: PathParam<String>,
@@ -338,11 +338,11 @@ async fn delete_policy_document(
 }
 
 #[endpoint(
-    operation_id = "ck.self.policy.check",
+    operation_id = "ck.self.policy.query.check",
     tags("policy"),
     summary = "Evaluate a policy decision for an actor + action + resource tuple"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.policy.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.policy.query.check"))]
 async fn policy_check(
     aa: AuthArgs,
     body: JsonBody<SolandPolicyCheckRequestBody>,

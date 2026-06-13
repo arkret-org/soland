@@ -188,11 +188,11 @@ struct HealthCheckRow {
 }
 
 #[endpoint(
-    operation_id = "ck.server.describe",
+    operation_id = "ck.server.query.describe",
     tags("server"),
     summary = "Server capability description"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.server.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.server.query.describe"))]
 async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     json_ok(ServerDescribeOutcome(build_server_description(state)))
@@ -515,7 +515,7 @@ pub(in crate::routing) async fn authz_describe() -> JsonResult<Value> {
         ],
         "check_request_example": {
             "actor": "did:web:alice.example",
-            "action": "ck.self.keys.backups.unlock",
+            "action": "ck.self.keys.backups.command.unlock",
             "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
             "resources": [
                 {
@@ -563,10 +563,10 @@ pub(in crate::routing) async fn policies_describe() -> JsonResult<Value> {
         "upsert_request_example": {
             "scope": "space",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "ck.self.keys.backups.unlock",
+            "policy_type": "ck.self.keys.backups.command.unlock",
             "effect": "require_review",
             "payload": {
-                "actions": ["ck.self.keys.backups.unlock"],
+                "actions": ["ck.self.keys.backups.command.unlock"],
                 "resource": {
                     "kind": "blob",
                     "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
@@ -644,14 +644,14 @@ pub(in crate::routing) async fn key_backups_describe() -> JsonResult<Value> {
         "item_path": "/_cokret/self/keys/backups/{backup_id}",
         "schema": "ck.schema.key_backup.v1",
         "operations": [
-            "ck.self.keys.backups.put",
-            "ck.self.keys.backups.list",
-            "ck.self.keys.backups.unlock",
-            "ck.self.keys.backups.delete"
+            "ck.self.keys.backups.resource.replace",
+            "ck.self.keys.backups.query.list",
+            "ck.self.keys.backups.command.unlock",
+            "ck.self.keys.backups.resource.delete"
         ],
         // Spec key-management.md §7.8 — implementations MUST publish the
         // effective per-principal rolling-24h full-ciphertext download
-        // quota they enforce on `ck.self.keys.backups.unlock`.
+        // quota they enforce on `ck.self.keys.backups.command.unlock`.
         "limits": {
             "daily_principal_download_limit":
                 crate::routing::identity::key_backup::key_backup_daily_download_limit(),
@@ -782,7 +782,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "agent_runtime_attestation".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_cokret/gate/account/agent-key-pair".to_owned(),
-                contract: "ck.gate.account.agent_key_pair".to_owned(),
+                contract: "ck.gate.account.command.pair_agent_key".to_owned(),
                 stability: "unsupported_fail_closed".to_owned(),
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
@@ -814,7 +814,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_cokret/self/blob/presign".to_owned(),
-                contract: "ck.self.blob.presign".to_owned(),
+                contract: "ck.self.blob.command.presign".to_owned(),
                 stability: "local_direct_serve".to_owned(),
                 todo: "issues soland-signed local /blob/get URLs; backend-native object-store presign is not claimed.".to_owned(),
             },

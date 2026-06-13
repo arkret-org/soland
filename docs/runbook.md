@@ -208,7 +208,7 @@ Common ops actions:
 | Symptom | Probable cause | Action |
 |---|---|---|
 | `agent_paused` storm on one realm | Admin policy change or pairing drift | Inspect last `ck.self.agent.pause` event for the principal; confirm with admin in sodmin |
-| `pairing_request_expired` | Pairing window elapsed; default 10 min | Re-issue `ck.gate.account.agent_key_pair`; check NTP drift on client |
+| `pairing_request_expired` | Pairing window elapsed; default 10 min | Re-issue `ck.gate.account.command.pair_agent_key`; check NTP drift on client |
 | `proof_invalid` on pairing | Canonical-digest mismatch — usually a client serializer bug | Pull the raw payload from `agent_pairing_attempts` table and diff JCS bytes |
 | `verification_method_principal_mismatch` | DID resolved to a different principal than payload claims | Likely DID-doc misalignment in `coauth`; coordinate with that team |
 
@@ -273,7 +273,7 @@ Operational behaviors:
 ### Media token issuer (rotating service_signature.kid, focus binding troubleshooting)
 
 soland is the canonical issuer of media tokens. The wire surface is
-`ck.self.call.media.token_exchange` (`POST /rtc/token`).
+`ck.self.call.media.exchange.issue_token` (`POST /rtc/token`).
 
 `service_signature.kid` rotation:
 

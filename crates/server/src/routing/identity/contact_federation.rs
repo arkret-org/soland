@@ -5,7 +5,7 @@
 //! `tombstoned`) are principal-scoped and cross-Realm. When the issuer and the
 //! target holder live on different Principal Servers, the issuer-side server
 //! federates the signed fact to the target holder's server via
-//! `ck.peer.contacts.submit` (`POST /_cokret/peer/contacts`); the recipient
+//! `ck.peer.contacts.command.submit` (`POST /_cokret/peer/contacts`); the recipient
 //! projects the original signed envelope into the target holder's contact
 //! projection without re-signing it.
 //!
@@ -192,17 +192,17 @@ fn contact_delivery_idempotency_key(
 }
 
 #[endpoint(
-    operation_id = "ck.peer.contacts.submit",
+    operation_id = "ck.peer.contacts.command.submit",
     tags("peer"),
     summary = "Private Principal Server contact fact delivery"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.peer.contacts.submit"))]
+#[tracing::instrument(skip_all, fields(op = "ck.peer.contacts.command.submit"))]
 async fn peer_contacts_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = req
         .parse_json::<Value>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ck.peer.contacts.submit request body"))?;
+        .map_err(|_| AppError::bad_json("invalid ck.peer.contacts.command.submit request body"))?;
     super::super::events::peer::validate_peer_request(state, req, Some(&body))?;
     validate_content_digest(req, &body)?;
 

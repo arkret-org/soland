@@ -296,7 +296,7 @@ async fn describe_advertises_tus_binding_and_limits() {
     );
     assert_eq!(
         tus_binding["operations"],
-        serde_json::json!(["ck.self.blob.upload"])
+        serde_json::json!(["ck.self.blob.upload.create"])
     );
     assert!(tus_binding["extension_profile_required"].is_null());
     assert_eq!(tus_binding["tus_version"], serde_json::json!(["1.0.0"]));

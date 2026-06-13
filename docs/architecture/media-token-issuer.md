@@ -1,6 +1,6 @@
 # Media Token Issuer
 
-> Spec: `cokret-spec @ b47ff6ec`, `ck.self.call.media.token_exchange` operation.
+> Spec: `cokret-spec @ b47ff6ec`, `ck.self.call.media.exchange.issue_token` operation.
 > Companion runbook: [`../runbook.md` → Media token issuer](../runbook.md#media-token-issuer-rotating-service_signaturekid-focus-binding-troubleshooting).
 > SDK type reference:
 > [`cokret-rust-sdk docs/architecture.md`](../../../cokret-rust-sdk/docs/architecture.md#call-media-cxcallmediatoken_exchange).

@@ -2,7 +2,7 @@
 //!
 //! Bot and ghost actors are second-class identities tied to a primary actor's
 //! authority (the applet controller). Canonical provisioning happens through
-//! `ck.self.applet.install` / `ck.applet.registration`; this registry is the local
+//! `ck.self.applet.command.install` / `ck.applet.registration`; this registry is the local
 //! runtime state those flows populate. Per
 //! `extensions/applet-integration.md` §3–§5:
 //!

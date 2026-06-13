@@ -204,12 +204,12 @@ fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_policy.get",
+    operation_id = "ck.root.identity.recovery_policy.resource.get",
     tags("identity", "recovery"),
     summary = "Read the currently accepted recovery policy (REC-1)",
     status_codes(200, 401, 403, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.resource.get"))]
 async fn recovery_policy_get(
     aa: AuthArgs,
     principal_id: QueryParam<String, false>,
@@ -1099,12 +1099,15 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "ck.root.identity.recovery_policy.put",
+    operation_id = "ck.root.identity.recovery_policy.command.publish",
     tags("identity", "recovery"),
     summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.put"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.root.identity.recovery_policy.command.publish")
+)]
 async fn recovery_policy_put(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -1182,7 +1185,7 @@ async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ck.root.identity.recovery_policy.put",
+        "ck.root.identity.recovery_policy.command.publish",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),

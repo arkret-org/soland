@@ -741,7 +741,7 @@ fn materialize_genesis_if_empty(
 }
 
 /// Current accepted Seal head for a Realm — the server side of the
-/// registered account-client seal-view sourcing (`ck.self.events.frontier`
+/// registered account-client seal-view sourcing (`ck.self.events.query.frontier`
 /// realm shape `{realm_id, seal_id, control_event_set_root, state_root,
 /// hlc?}`, see cokret-spec service-http-binding). Clients mint single-leaf
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`

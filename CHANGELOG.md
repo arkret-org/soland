@@ -12,7 +12,7 @@ and the project tracks Cokret v1 spec revisions.
 
 ## R3.3 — Spec sync 2026-05-28 (cokret-spec @ cced4b8)
 
-- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CKP-0011 shareable object addressing / `ck.find.directory.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- R3.3 spec sync — pin to cokret-spec @ cced4b8 (CKP-0011 shareable object addressing / `ck.find.directory.query.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3.2 — Spec sync 2026-05-28 (cokret-spec @ b56cab1)
@@ -25,11 +25,11 @@ and the project tracks Cokret v1 spec revisions.
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3 — Spec sync 2026-05-27 (cokret-spec @ b47ff6ec)
 
-- HTTP-1: `POST /api/v1/rtc/token` (ck.self.call.media.token_exchange) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
+- HTTP-1: `POST /api/v1/rtc/token` (ck.self.call.media.exchange.issue_token) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: all 20 R3 reason codes (`pairing_request_expired`, `proof_invalid`, agent / media-binding / recovery / handle homograph families) exposed as `pub const` strings under `crate::error::reasons` and grouped in `R3_NEW_REASONS`; per-handler wiring deferred to R3.1.
-- PROF-1: `ck.profile.media_service_binding.v1` and `ck.profile.accountable_principals.strict_reject.v1` advertised in `ck.server.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
+- PROF-1: `ck.profile.media_service_binding.v1` and `ck.profile.accountable_principals.strict_reject.v1` advertised in `ck.server.query.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 
@@ -101,8 +101,8 @@ on the reducer / federation / state-machine surfaces. See
 - **BREAKING** `ck.realm.create` reducer now captures and locks `trust_domain`
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
-- **BREAKING** `ServiceDescribe` v2: `ck.server.describe` /
-  `ck.self.account.describe` / `ck.self.events.describe` / `ck.edge.applet.describe` all return
+- **BREAKING** `ServiceDescribe` v2: `ck.server.query.describe` /
+  `ck.self.account.query.describe` / `ck.self.events.query.describe` / `ck.edge.applet.query.describe` all return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty
@@ -241,7 +241,7 @@ below. Producers on the old wire MUST upgrade.
   `service_did`-derived default) before processing `ck.cross_signing.reset`
   events. The boot path validates the value via the SDK
   `TypedTrustDomainId` regex.
-- Producers MUST move ephemeral kinds off `ck.self.events.submit`; the
+- Producers MUST move ephemeral kinds off `ck.self.events.command.submit`; the
   endpoint no longer accepts them under any compatibility flag.
 - Producers MUST add `trust_domain` and `reset_event_id` to every
   `ck.cross_signing.reset` payload (matching the enclosing

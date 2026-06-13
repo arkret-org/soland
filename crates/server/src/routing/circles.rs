@@ -166,11 +166,11 @@ impl From<&CircleProjection> for CircleOutcome {
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ck.self.circle.list",
+    operation_id = "ck.self.circle.query.list",
     tags("circles"),
     summary = "List Circles visible to the caller within a given Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.query.list"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,
@@ -190,11 +190,11 @@ async fn list_circles(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.get",
+    operation_id = "ck.self.circle.resource.get",
     tags("circles"),
     summary = "Fetch a single Circle by id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.resource.get"))]
 async fn get_circle(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -212,11 +212,11 @@ async fn get_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.create",
+    operation_id = "ck.self.circle.command.create",
     tags("circles"),
     summary = "Create a Circle (ck.circle.create)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.create"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.create"))]
 async fn post_circle(
     aa: AuthArgs,
     body: JsonBody<CreateCircleRequestBody>,
@@ -256,11 +256,11 @@ async fn post_circle(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.member.add",
+    operation_id = "ck.self.circle.member.command.add",
     tags("circles"),
     summary = "Add or change a Circle member (ck.circle.member.state)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.add"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.command.add"))]
 async fn post_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -356,11 +356,11 @@ async fn post_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.member.remove",
+    operation_id = "ck.self.circle.member.resource.delete",
     tags("circles"),
     summary = "Remove a Circle member (ck.circle.member.state → removed)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.remove"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.member.resource.delete"))]
 async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -393,11 +393,11 @@ async fn delete_circle_member(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.scope_rotate",
+    operation_id = "ck.self.circle.command.rotate_scope",
     tags("circles"),
     summary = "Rotate the Circle's bound MLS group (CKP-0007)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.scope_rotate"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.rotate_scope"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -420,11 +420,11 @@ async fn post_scope_rotate(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.archive",
+    operation_id = "ck.self.circle.command.archive",
     tags("circles"),
     summary = "Archive a Circle (ck.circle.archive)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.archive"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.archive"))]
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
@@ -435,11 +435,11 @@ async fn post_circle_archive(
 }
 
 #[endpoint(
-    operation_id = "ck.self.circle.tombstone",
+    operation_id = "ck.self.circle.command.tombstone",
     tags("circles"),
     summary = "Tombstone a Circle (ck.circle.tombstone)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.circle.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.tombstone"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,

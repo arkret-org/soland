@@ -7,7 +7,7 @@ use cokret_sdk::Operation;
 //
 // `ck.circle.seal_commit` is reducer-DERIVED (sub-seal emitted on
 // the Circle's profile cadence) and MUST NOT be submitted directly via
-// `ck.self.events.submit`. The SDK gates this in
+// `ck.self.events.command.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
 pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CK_CIRCLE_CREATE;
 // Flow lifecycle (round 13 — Flow projection state machine). spec
@@ -146,9 +146,9 @@ pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start
 // Canonical kinds per
 // `cokret-spec/spec/v1/artifacts/schemas/event-envelope.schema.json` (kind enum):
 //   - `ck.mls.keypackage`    — KeyPackage publication. The publish/claim distinction lives at the
-//     HTTP operation_id layer (`ck.self.keys.keypackages.upload` /
-//     `ck.self.keys.keypackages.claim`); the event log stores only the canonical kind. The reducer
-//     dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
+//     HTTP operation_id layer (`ck.self.keys.keypackages.upload.create` /
+//     `ck.self.keys.keypackages.command.claim`); the event log stores only the canonical kind. The
+//     reducer dispatches publish-vs-claim on the `payload.action == "publish" | "claim"` field.
 //   - `ck.mls.welcome`       — Welcome envelope reference. Per-(recipient, device) queue semantics
 //     are conveyed via payload shape; no separate `.enqueue` suffix.
 //   - `ck.mls.commit`        — MLS commit (bumps the group's stored epoch by +1 from

@@ -609,7 +609,7 @@ async fn invite_receive_policy_get_set_round_trips() {
     assert_eq!(rejected.status_code.unwrap().as_u16(), 403);
 }
 
-/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.respond(accept)`
+/// Spec contact-and-direct-conversation.md §3 — `ck.self.contact.command.respond(accept)`
 /// MUST write a target-controlled `ck.consent.grant` per granted scope. The
 /// minted grant dot uses the event-bearing `{event_id}:{seq}` form, so the
 /// holder's `GET /_cokret/self/contacts` row for the peer surfaces a canonical

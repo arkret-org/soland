@@ -62,7 +62,7 @@ async fn events_describe_and_single_event_submit_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.events.submit")
+            .any(|operation| operation == "ck.self.events.command.submit")
     );
     assert_eq!(describe["limits"]["max_event_bytes"], 64 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);

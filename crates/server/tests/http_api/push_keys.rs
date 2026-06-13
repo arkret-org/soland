@@ -999,7 +999,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.notify"}
+                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": stale_at,
@@ -1061,7 +1061,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "remote_contract": {
                 "contract": "ck.push.bridge.describe",
                 "service_did": "did:web:push.example",
-                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.notify"}
+                "delivery": {"notify_path": "/_cokret/edge/push/notify", "operation_id": "ck.edge.push.command.notify"}
             },
             "trust_level": "trusted",
             "freshness_at": now,

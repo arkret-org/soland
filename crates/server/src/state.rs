@@ -163,8 +163,8 @@ impl EventNotification {
     }
 }
 
-/// In-process reconnect gate for `ck.self.events.subscribe` and
-/// `ck.self.account.subscribe`. Keys are operation + caller identity + selector
+/// In-process reconnect gate for `ck.self.events.stream.subscribe` and
+/// `ck.self.account.stream.subscribe`. Keys are operation + caller identity + selector
 /// scope, and values are the earliest accepted reconnect time.
 #[derive(Clone, Debug, Default)]
 pub struct SubscribeReconnectGate {
@@ -205,11 +205,11 @@ mod subscribe_reconnect_gate_tests {
     fn reports_remaining_window_and_expires() {
         let mut gate = SubscribeReconnectGate::default();
         let now = Utc::now();
-        gate.arm("ck.self.events.subscribe|alice|realm-a", now, 10_000);
+        gate.arm("ck.self.events.stream.subscribe|alice|realm-a", now, 10_000);
 
         let retry_after = gate
             .retry_after_ms(
-                "ck.self.events.subscribe|alice|realm-a",
+                "ck.self.events.stream.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(2_500),
             )
             .expect("cooldown active");
@@ -217,7 +217,7 @@ mod subscribe_reconnect_gate_tests {
 
         assert!(
             gate.retry_after_ms(
-                "ck.self.events.subscribe|alice|realm-a",
+                "ck.self.events.stream.subscribe|alice|realm-a",
                 now + ChronoDuration::milliseconds(10_000),
             )
             .is_none()
@@ -943,7 +943,7 @@ pub struct AppState {
     /// `persistence.sync_cursors()` table, so a restart no longer invalidates
     /// every client's resume cursor.
     pub sync_cursor_hmac_key: [u8; 32],
-    /// Revoked cursor authorities (`ck.self.account.cursor_revoke`). High-assurance
+    /// Revoked cursor authorities (`ck.self.account.command.revoke_cursor`). High-assurance
     /// optional endpoint: a revoked cursor returns `cursor_revoked` and MUST NOT
     /// advance to-device ack, account-subscribe resume position, wait-for barrier
     /// state, or dropped-recovery state. Entries are pruned once the revoked
@@ -969,12 +969,12 @@ pub struct AppState {
     /// is subject/private state and MUST NOT enter the durable Realm event
     /// log; the in-memory map is the bounded fallback until durable holder
     /// state hydration lands. Subjects without an entry fall back to the
-    /// recommended default policy. `ck.self.contact.tombstone(block_peer)`
+    /// recommended default policy. `ck.self.contact.command.tombstone(block_peer)`
     /// writes the peer DID into the holder entry's `blocked_subjects`.
     pub invite_receive_policies: Arc<Mutex<BTreeMap<String, cokret_sdk::InviteReceivePolicy>>>,
     /// Direct conversation binding projection keyed by sorted participant DID
     /// pair. This is the bounded server-side fallback for
-    /// `ck.self.direct_conversation.resolve` until signed
+    /// `ck.self.direct_conversation.command.resolve` until signed
     /// `ck.direct_conversation.bound` event projection is fully wired.
     pub direct_conversation_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
     /// Runtime state for sovereign-main / enclave deployment handshakes,
@@ -1015,7 +1015,7 @@ pub struct AppState {
     pub seal_store: Arc<cokret_sdk::state_res::MemorySealStore>,
     pub cell_store: Arc<cokret_sdk::state_res::MemoryCellStore>,
     pub cell_registry: Arc<cokret_sdk::state_res::MemoryCellRegistry>,
-    /// Live event notification channel for `ck.self.events.subscribe`
+    /// Live event notification channel for `ck.self.events.stream.subscribe`
     /// long-poll/SSE streaming. Writers
     /// (`routing::events::projection::project_accepted_operations`,
     /// `routing::federation::move_seal::submit_seal`,
@@ -1141,8 +1141,9 @@ pub struct AccountRecord {
     pub localpart: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_soland/self/account/profile` (operationId `ck.self.account.update_profile`);
-    /// rendered by `demo_actors` in directory search results.
+    /// `POST /_soland/self/account/profile` (operationId
+    /// `ck.self.account.command.update_profile`); rendered by `demo_actors` in directory
+    /// search results.
     pub bio: Option<String>,
     /// HTTPS URL pointing at the actor's avatar image. Server holds the
     /// link verbatim — no transcoding or caching.
@@ -1311,7 +1312,7 @@ pub const KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX: u32 = 256;
 /// as "per principal per 24h".
 pub const KEY_BACKUP_DOWNLOAD_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
-/// A revoked cursor authority recorded by `ck.self.account.cursor_revoke`.
+/// A revoked cursor authority recorded by `ck.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that
@@ -1434,7 +1435,7 @@ pub struct ContactRecord {
     pub message: Option<String>,
     /// Service DID of the Principal Server hosting the contact's *peer* end,
     /// when learned from a cross-Principal-Server contact delivery
-    /// (`ck.peer.contacts.submit`, `source-service-did` header). `None` for
+    /// (`ck.peer.contacts.command.submit`, `source-service-did` header). `None` for
     /// same-Principal-Server contacts. In-memory projection only — surfaced on
     /// `contact_list_row.peer_service_did` so the holder can address
     /// responses/invites back to the peer's home server.
@@ -2227,7 +2228,7 @@ impl AppState {
             // cell family. Replaces the SDK's built-in defaults (which
             // covered only ~10 generic families).
             cell_registry: Arc::new(crate::reducer::lattice_kinds::build_sdk_cell_registry()),
-            // Live event broadcast for ck.self.events.subscribe streaming.
+            // Live event broadcast for ck.self.events.stream.subscribe streaming.
             // Capacity 1024 events; readers
             // falling behind get `Lagged` and emit `dropped` control frames.
             event_broadcast: broadcast::channel::<EventNotification>(1024).0,

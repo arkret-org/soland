@@ -1,8 +1,8 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.report`) — file a report. Persists
-//!   both the report record and a derived queue item (`ModerationQueueItem`) per the spec's triage
-//!   architecture.
+//! - `POST /_cokret/self/moderation/report` (`ck.self.moderation.command.report`) — file a report.
+//!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
+//!   spec's triage architecture.
 //! - `POST /_cokret/self/moderation/appeal` (`ck.moderation.appeal.submit`) — file an appeal
 //!   against a moderation decision. Validates the four-state FSM via
 //!   `crate::routing::admin::moderation::AppealState` and enforces separation-of-duties when the
@@ -37,11 +37,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.moderation.report",
+    operation_id = "ck.self.moderation.command.report",
     tags("moderation"),
     summary = "File a moderation report for content in a federated Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.moderation.report"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.moderation.command.report"))]
 async fn moderation_report(
     aa: AuthArgs,
     body: JsonBody<ModerationReportRequestBody>,

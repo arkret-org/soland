@@ -376,14 +376,22 @@ mod tests {
                     && group
                         .operations
                         .iter()
-                        .any(|op| op == "ck.self.events.submit")
+                        .any(|op| op == "ck.self.events.command.submit")
             }),
             "events_sync operation surface group should come from operation-registry.json"
         );
 
         let operations = operation_ids_for_surface_groups(&["events_sync", "push"]);
-        assert!(operations.iter().any(|op| op == "ck.self.events.submit"));
-        assert!(operations.iter().any(|op| op == "ck.edge.push.notify"));
+        assert!(
+            operations
+                .iter()
+                .any(|op| op == "ck.self.events.command.submit")
+        );
+        assert!(
+            operations
+                .iter()
+                .any(|op| op == "ck.edge.push.command.notify")
+        );
         assert!(operations.iter().all(|op| operation_ids().contains(op)));
     }
 
