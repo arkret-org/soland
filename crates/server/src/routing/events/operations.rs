@@ -1798,8 +1798,8 @@ async fn validate_audience_mention_operation_policy(
     };
     for mention in mentions {
         let count =
-            estimate_audience_recipient_count(&mention.audience, &members, operation, state);
-        audience_mention_policy_allows(&policy, &mention.audience, count)?;
+            estimate_audience_recipient_count(mention.audience(), &members, operation, state);
+        audience_mention_policy_allows(&policy, mention.audience(), count)?;
     }
     Ok(())
 }
@@ -2009,7 +2009,6 @@ fn validate_morph_schema_migrate_capability(operation: &Operation) -> Result<(),
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod invite_create_schema_tests {

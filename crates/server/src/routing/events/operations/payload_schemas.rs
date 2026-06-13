@@ -1,7 +1,8 @@
 use super::*;
 
 pub(crate) const MESSAGE_CREATE_FIELDS: &[&str] = &["content", "encrypted_content"];
-pub(crate) const MESSAGE_TARGET_FIELDS: &[&str] = &["target_ref", "target_event_id", "event_id", "target"];
+pub(crate) const MESSAGE_TARGET_FIELDS: &[&str] =
+    &["target_ref", "target_event_id", "event_id", "target"];
 pub(crate) const MESSAGE_CONTENT_FIELDS: &[&str] = &["content", "encrypted_content"];
 pub(crate) const REDACTION_TARGET_FIELDS: &[&str] = &["target_event_id", "target", "redacts"];
 pub(crate) const REACTION_TARGET_FIELDS: &[&str] = &[
@@ -33,7 +34,8 @@ pub(crate) const MLS_GENESIS_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequ
     "ck.mls.genesis requires mls_group_id for reducer projection",
 )];
 pub(crate) const MLS_WELCOME_GROUP_FIELDS: &[&str] = &["group_id", "mls_group_id"];
-pub(crate) const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] = &["recipient_actor_id", "recipient_principal_id"];
+pub(crate) const MLS_WELCOME_RECIPIENT_FIELDS: &[&str] =
+    &["recipient_actor_id", "recipient_principal_id"];
 pub(crate) const MLS_WELCOME_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         MLS_WELCOME_GROUP_FIELDS,
@@ -139,24 +141,28 @@ pub(crate) const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 pub(crate) const INVITE_STATE_REQUIREMENTS: &[PayloadRequirement] = &[];
-pub(crate) const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "object",
-    "ck.realm.create operation requires payload.object",
-)];
-pub(crate) const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "patch",
-    "ck.realm.update operation requires patch",
-)];
-pub(crate) const REALM_ARCHIVE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "archived",
-    "ck.realm.archive operation requires archived",
-)];
+pub(crate) const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "object",
+        "ck.realm.create operation requires payload.object",
+    )];
+pub(crate) const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "patch",
+        "ck.realm.update operation requires patch",
+    )];
+pub(crate) const REALM_ARCHIVE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "archived",
+        "ck.realm.archive operation requires archived",
+    )];
 pub(crate) const REALM_TERMINAL_REQUIREMENTS: &[PayloadRequirement] = &[];
 pub(crate) const REALM_MODERATION_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[];
-pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "value",
-    "realm policy event requires value",
-)];
+pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "value",
+        "realm policy event requires value",
+    )];
 pub(crate) const REALM_DISAPPEARING_POLICY_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("enabled", "ck.realm.disappearing_policy requires enabled"),
     PayloadRequirement::Required(
@@ -194,15 +200,17 @@ pub(crate) const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
 // `ck.space.archive` / `ck.space.restore` / `ck.space.tombstone` share the
 // spec-canonical `space_id` target field.
 pub(crate) const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id"];
-pub(crate) const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    SPACE_CONTAINER_LIFECYCLE_ID_FIELDS,
-    "space lifecycle operation requires space_id",
-)];
+pub(crate) const SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::AnyOf(
+        SPACE_CONTAINER_LIFECYCLE_ID_FIELDS,
+        "space lifecycle operation requires space_id",
+    )];
 // `ck.space.create` carries a full Space object under `object`.
-pub(crate) const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "object",
-    "space create operation requires object",
-)];
+pub(crate) const SPACE_CONTAINER_CREATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "object",
+        "space create operation requires object",
+    )];
 // `ck.space.update` carries the canonical Space target field plus patch.
 pub(crate) const SPACE_CONTAINER_UPDATE_ID_FIELDS: &[&str] = &["space_id"];
 pub(crate) const SPACE_CONTAINER_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
@@ -249,14 +257,16 @@ pub(crate) const FLOW_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("patch", "flow update operation requires patch"),
 ];
 // `ck.morph.archive` / `ck.morph.restore` payload: just `morph_id`.
-pub(crate) const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "morph_id",
-    "morph lifecycle operation requires morph_id",
-)];
-pub(crate) const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "object",
-    "morph create operation requires object",
-)];
+pub(crate) const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "morph_id",
+        "morph lifecycle operation requires morph_id",
+    )];
+pub(crate) const MORPH_CREATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "object",
+        "morph create operation requires object",
+    )];
 pub(crate) const MORPH_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         &["target_ref", "morph_id"],
@@ -471,14 +481,16 @@ pub(crate) const AGENT_ACTION_REQUEST_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::Required("request_id", "ck.agent.action_request requires request_id"),
 ];
-pub(crate) const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "request_id",
-    "ck.agent.action_approve requires request_id",
-)];
-pub(crate) const AGENT_ACTION_REJECT_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "request_id",
-    "ck.agent.action_reject requires request_id",
-)];
+pub(crate) const AGENT_ACTION_APPROVE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "request_id",
+        "ck.agent.action_approve requires request_id",
+    )];
+pub(crate) const AGENT_ACTION_REJECT_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "request_id",
+        "ck.agent.action_reject requires request_id",
+    )];
 
 pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("principal_id", "cross_signing reset requires principal_id"),

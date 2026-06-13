@@ -1,6 +1,6 @@
 use super::*;
 
-async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
+pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
     let store = state.persistence.realm_meta();
     let realm_meta = store.get(realm_id).await.ok().flatten();
     realm_meta.is_some_and(|record| {
@@ -25,7 +25,7 @@ pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str
         == Some("e2ee_required")
 }
 
-fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
+pub(crate) fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
     // Current soland RealmMetaRecord projects the encryption mechanism but not
     // the separate content_encryption_floor field yet. Treat any non-plaintext
     // profile as content-only E2EE for Flow content admission.
@@ -326,8 +326,14 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AudienceMentionNode {
+pub(crate) struct AudienceMentionNode {
     audience: String,
+}
+
+impl AudienceMentionNode {
+    pub(crate) fn audience(&self) -> &str {
+        &self.audience
+    }
 }
 
 pub(crate) fn operation_audience_mentions(
