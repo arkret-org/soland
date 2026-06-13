@@ -2,13 +2,12 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use cokret_sdk::BackupId;
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-use cokret_sdk::BackupId;
 
 use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
@@ -1325,9 +1324,13 @@ fn key_backup_metadata_for_list(mut backup: Value) -> Value {
     backup
 }
 
-fn key_backup_summary_for_list(backup: Value) -> Result<cokret_sdk::model::KeyBackupSummary, AppError> {
+fn key_backup_summary_for_list(
+    backup: Value,
+) -> Result<cokret_sdk::model::KeyBackupSummary, AppError> {
     serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
-        AppError::internal(format!("stored key backup metadata does not match SDK summary: {error}"))
+        AppError::internal(format!(
+            "stored key backup metadata does not match SDK summary: {error}"
+        ))
     })
 }
 

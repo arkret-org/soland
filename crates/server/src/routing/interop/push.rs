@@ -40,8 +40,7 @@ use crate::state::{AccountDataRecord, AppState, PushRuleRecord, SessionRecord};
 use crate::wire::{
     OkOutcome, PushNotifyOutcome, PushNotifyRequestBody, PushRegisterDeviceRequestBody,
     PushRulesOutcome, PushUnregisterDeviceRequestBody, SessionGrantIntrospectionProof,
-    UpsertPushRuleOutcome,
-    UpsertPushRuleRequestBody,
+    UpsertPushRuleOutcome, UpsertPushRuleRequestBody,
 };
 
 /// C33.1 (T0-3a): freshness budget for the persisted gateway-contract
@@ -450,13 +449,10 @@ async fn push_register_session_grant_bridge(
             "X-Cokret-Session-Grant must not be empty",
         ));
     }
-    let Some(principal_id) = optional_ascii_header(
-        req,
-        "x-cokret-principal-id",
-        "X-Cokret-Principal-Id",
-    )?
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let Some(principal_id) =
+        optional_ascii_header(req, "x-cokret-principal-id", "X-Cokret-Principal-Id")?
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     else {
         return Err((
             StatusCode::BAD_REQUEST,

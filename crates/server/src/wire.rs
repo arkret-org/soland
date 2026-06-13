@@ -545,9 +545,10 @@ pub struct EventsFrontierAccountClientState {
 // (allow / soft_deny / hard_deny / quarantine / require_review) and
 // `AuthzCheckRequestBody` to `{ actor_id, action, resource?, context? }`,
 // so soland re-uses them directly instead of carrying local copies.
-pub use cokret_sdk::model::{AuthzCheckOutcome, AuthzCheckRequestBody};
-
-pub use cokret_sdk::model::{PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody};
+pub use cokret_sdk::model::{
+    AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
+    PushUnregisterDeviceRequestBody,
+};
 
 fn default_true() -> bool {
     true
@@ -825,42 +826,8 @@ pub struct SendMessageRequestBody {
     pub encrypted: bool,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IdentityDescribeOutcome {
-    pub service_did: String,
-    pub registry_mode: String,
-    pub supported_receipts: Vec<String>,
-    pub protocol_version: String,
-    pub profiles: Vec<String>,
-    pub resolver_policy: Value,
-    pub did_webvh: Value,
-    pub todos: Vec<String>,
-}
-
 // Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
 // authoritative carrier for identity operation shapes); no soland mirrors.
-pub use cokret_sdk::{IdentityLogOutcome, IdentityReceiptsOutcome};
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandIdentityResolveOutcome {
-    pub did_document: Value,
-    pub key_log_head: Option<String>,
-    pub seq: u64,
-    pub receipts: Vec<Value>,
-    pub method_evidence: Value,
-}
-
-// Key-backup put/delete outcomes are the SDK server-side DTOs
-// (`cokret_sdk::model` is the authoritative carrier for
-// `keys-operations.schema.json#/$defs/keys_backups_put_outcome` /
-// `keys_backups_delete_outcome`); no soland mirrors. NOTE: the crate-root
-// names `cokret_sdk::KeysBackupsPutOutcome` / `KeysBackupsDeleteOutcome`
-// resolve to the *client-side* twins from `key_backup_client` (same wire
-// shape, no salvo `ToSchema`); the server must use the `model` ones.
-pub use cokret_sdk::model::{
-    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
-};
-
 // CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
 // DTO is the SDK-authoritative `cokret_sdk::model::Agent*` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
@@ -886,7 +853,20 @@ pub use cokret_sdk::model::{
     AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
     AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
-pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
+// Key-backup put/delete outcomes are the SDK server-side DTOs
+// (`cokret_sdk::model` is the authoritative carrier for
+// `keys-operations.schema.json#/$defs/keys_backups_put_outcome` /
+// `keys_backups_delete_outcome`); no soland mirrors. NOTE: the crate-root
+// names `cokret_sdk::KeysBackupsPutOutcome` / `KeysBackupsDeleteOutcome`
+// resolve to the *client-side* twins from `key_backup_client` (same wire
+// shape, no salvo `ToSchema`); the server must use the `model` ones.
+pub use cokret_sdk::model::{
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
+};
+pub use cokret_sdk::{
+    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, IdentityLogOutcome,
+    IdentityReceiptsOutcome,
+};
 
 // Recovery policy / receipt endpoints (`recovery_policy_put` /
 // `recovery_receipt_put`) take `JsonBody<Value>` and validate against the
