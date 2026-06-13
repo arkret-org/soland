@@ -1084,7 +1084,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.self.media.ice_config",
         "issue signed ICE config",
     ),
-    // R3 spec-sync — recovery policy read is canonical; publish/history stay
+    // R3 spec-sync — recovery policy read/publish are canonical; history stays
     // on the deployment-local `_soland` surface.
     (
         "/_cokret/root/identity/recovery-policy",
@@ -1094,10 +1094,10 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "read the active recovery policy",
     ),
     (
-        "/_soland/root/identity/recovery-policy",
+        "/_cokret/root/identity/recovery-policy",
         PathItemType::Post,
         "identity",
-        "org.cokret.soland.identity.recovery_policy.put",
+        "ck.root.identity.recovery_policy.put",
         "submit a ck.schema.recovery_policy.v1 policy",
     ),
     (

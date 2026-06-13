@@ -3,7 +3,7 @@
 //! Mounts recovery policy / receipt endpoints introduced in cokret-spec b47ff6ec:
 //!
 //! - `GET /_cokret/root/identity/recovery-policy` — read the active recovery policy.
-//! - `POST /_soland/root/identity/recovery-policy`  — persist + advance a recovery policy.
+//! - `POST /_cokret/root/identity/recovery-policy` — persist + advance a recovery policy.
 //! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
 //!   session.
 //!
@@ -116,13 +116,16 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
 
 /// Spec-canonical recovery surface mounted under `/_cokret/root/identity`.
 ///
-/// The standard read surface exposes the active recovery policy. Recovery
-/// session lifecycle operations also live here. Policy publish/history and
-/// recovery receipt write/history remain product-private on the `/_soland`
-/// track.
+/// The standard surface exposes recovery policy read/publish plus recovery
+/// session lifecycle operations. Policy history and recovery receipt
+/// write/history remain product-private on the `/_soland` track.
 pub(super) fn protocol_router() -> Router {
     Router::with_path("identity")
-        .push(Router::with_path("recovery-policy").get(recovery_policy_get))
+        .push(
+            Router::with_path("recovery-policy")
+                .post(recovery_policy_put)
+                .get(recovery_policy_get),
+        )
         .push(
             Router::with_path("recovery-sessions").post(recovery_session_create), // C-P2 (REC-1)
         )
@@ -141,11 +144,6 @@ pub(super) fn protocol_router() -> Router {
 
 pub(super) fn router() -> Router {
     Router::with_path("identity")
-        .push(
-            Router::with_path("recovery-policy")
-                .post(recovery_policy_put)
-                .get(recovery_policy_get),
-        )
         .push(Router::with_path("recovery-policies").get(recovery_policies_get))
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
         .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
@@ -1101,15 +1099,12 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_policy.put",
+    operation_id = "ck.root.identity.recovery_policy.put",
     tags("identity", "recovery"),
     summary = "Submit a ck.schema.recovery_policy.v1 policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_policy.put")
-)]
+#[tracing::instrument(skip_all, fields(op = "ck.root.identity.recovery_policy.put"))]
 async fn recovery_policy_put(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -1122,6 +1117,14 @@ async fn recovery_policy_put(
     let payload = body.into_inner();
 
     let mut record = validate_recovery_policy(&payload)?;
+    if record.principal_id != session.actor {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "principal_id does not match the authenticated principal",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("recovery_principal_isolation"));
+    }
     verify_recovery_auth_signature(
         state,
         &payload,
@@ -1179,7 +1182,7 @@ async fn recovery_policy_put(
     append_audit_log(
         state,
         Some(&session.actor),
-        "org.cokret.soland.identity.recovery_policy.put",
+        "ck.root.identity.recovery_policy.put",
         json!({
             "policy_id": record.policy_id.clone(),
             "principal_id": record.principal_id.clone(),

@@ -871,9 +871,11 @@ pub use cokret_sdk::{
 // Recovery policy / receipt endpoints (`recovery_policy_put` /
 // `recovery_receipt_put`) take `JsonBody<Value>` and validate against the
 // spec REC-1 shapes via `validate_recovery_policy` / `validate_recovery_receipt`
-// in `routing::identity::recovery`. The SDK carries the authoritative typed
-// forms (`cokret_sdk::model::{RecoveryPolicy, RecoveryReceipt}`) for clients;
-// no soland-private mirror exists.
+// in `routing::identity::recovery`. Recovery policy publish is the standard
+// `ck.root.identity.recovery_policy.put` surface; recovery receipt write remains
+// product-local. The SDK carries the authoritative typed forms
+// (`cokret_sdk::model::{RecoveryPolicy, RecoveryReceipt}`) for clients; no
+// soland-private mirror exists.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CreateWebRtcSessionRequestBody {

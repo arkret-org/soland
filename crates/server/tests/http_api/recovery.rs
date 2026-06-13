@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 use soland::state::{
     CanonicalEventRecord, DeviceInventoryRecord, RecoveryPolicyRecord, SessionRecord,
+    WebvhDocumentRecord,
 };
 
 use super::common::*;
@@ -39,6 +40,8 @@ const RECEIPT_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
+const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
@@ -55,7 +58,7 @@ async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
     // inventory (and policy) survive; the receipt verifies against the persisted
     // device key.
     let restarted = shared_recovery_state(persistence.clone());
-    let token = dev_token(restarted.clone()).await;
+    let token = recovery_token_for_principal(restarted.clone(), &principal_id).await;
     let receipt = signed_device_recovery_receipt(
         &recovery_device_key(),
         &principal_id,
@@ -76,9 +79,9 @@ async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_tampered_signature_body() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
     let mut policy = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -100,9 +103,10 @@ async fn recovery_policy_production_accepts_verified_payload() {
     let state =
         shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
     let token = "prod_recovery_token";
-    seed_bearer_session(&state, token).await;
     let signing = SigningKey::from_bytes(&[77u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    seed_bearer_session(&state, token, &principal_id).await;
+    ingest_fresh_recovery_did_document(&state, &principal_id).await;
     let policy = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -119,9 +123,9 @@ async fn recovery_policy_production_accepts_verified_payload() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_missing_signed_field_coverage() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[73u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
     let reduced_fields: Vec<&str> = POLICY_FIELDS
         .iter()
         .copied()
@@ -143,9 +147,9 @@ async fn recovery_policy_rejects_missing_signed_field_coverage() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_receipt_rejects_policy_binding_mismatch() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[74u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
     let policy = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -201,9 +205,9 @@ async fn recovery_receipt_rejects_unauthorized_device() {
     // §15 step 7 — a receipt for a device with no accepted ck.device.authorize
     // MUST be rejected (no authorized device key to verify against).
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[79u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
     // Publish an active policy but NEVER authorize the device.
     let policy = signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
     let pbody = post_recovery_policy(state.clone(), &token, &policy, StatusCode::CREATED).await;
@@ -229,9 +233,9 @@ async fn recovery_receipt_requires_backup_classes_unlocked() {
     // device-lifecycle.md §15 step 7: backup_classes_unlocked is a required
     // normative receipt field. Dropping it MUST be rejected.
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[78u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
     let policy = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -270,9 +274,10 @@ async fn recovery_receipt_requires_backup_classes_unlocked() {
 async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
-    let token = dev_token(state.clone()).await;
     let signing = SigningKey::from_bytes(&[76u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
+    let token = recovery_token_for_principal(state.clone(), &principal_id).await;
+    ingest_fresh_recovery_did_document(&state, &principal_id).await;
     let v1 = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -303,8 +308,6 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
 }
 
 // ── REC-1 read APIs (C-P1) ─────────────────────────────────────────────────
-
-const RECOVERY_TEST_DEVICE: &str = "ck:device:01904100-0000-7000-8000-a11ce0000001";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_null_without_active_policy() {
@@ -1497,10 +1500,41 @@ async fn seed_recovery_policy(
     policy_id
 }
 
-async fn seed_bearer_session(state: &AppState, token: &str) {
+async fn recovery_token_for_principal(state: AppState, principal_id: &str) -> String {
+    dev_token_for_device(
+        state,
+        principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery Test Device",
+    )
+    .await
+}
+
+async fn ingest_fresh_recovery_did_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
-    let actor = "did:web:alice.example";
-    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    state
+        .persistence
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: did.to_owned(),
+            did_document: serde_json::json!({
+                "id": did,
+                "verificationMethod": [],
+            }),
+            key_log_head: Some("sha256:recovery-test-head".to_owned()),
+            seq: 1,
+            method_evidence: serde_json::json!({ "mode": "test" }),
+            fetched_at: now,
+            expires_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+}
+
+async fn seed_bearer_session(state: &AppState, token: &str, actor: &str) {
+    let now = chrono::Utc::now();
+    let device_id = RECOVERY_TEST_DEVICE;
     state
         .persistence
         .sessions()
@@ -1656,7 +1690,7 @@ async fn post_recovery_policy(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
-    let mut response = TestClient::post("http://server/_soland/root/identity/recovery-policy")
+    let mut response = TestClient::post("http://server/_cokret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))
