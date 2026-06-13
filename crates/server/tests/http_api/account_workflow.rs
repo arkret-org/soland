@@ -642,7 +642,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(expired_body["error"]["code"], "cursor_expired");
 
     let exported: Value = TestClient::get(format!(
-        "http://server/_soland/self/realms/{realm_id}/export"
+        "http://server/_cokret/self/realms/{realm_id}/export"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
     .send(&app_from_state(state.clone()))

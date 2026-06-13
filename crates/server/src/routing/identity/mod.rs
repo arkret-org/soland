@@ -65,6 +65,10 @@ pub fn protocol_router() -> Router {
         .push(
             Router::with_path("self")
                 .push(account::protocol_router())
+                // Spec `account_data` group (`ck.self.account_data.*`).
+                .push(account_data::router())
+                // Spec `consent` group (`ck.self.consent.*`).
+                .push(consent::router())
                 .push(device::protocol_router())
                 .push(keys::router())
                 .push(key_backup::protocol_router())
@@ -109,8 +113,6 @@ pub fn legacy_router() -> Router {
         .push(
             Router::with_path("self")
                 .push(account::router())
-                .push(account_data::router())
-                .push(consent::router())
                 .push(device::router())
                 .push(keys::router())
                 .push(key_backup::legacy_router())

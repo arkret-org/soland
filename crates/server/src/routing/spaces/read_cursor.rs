@@ -1,8 +1,8 @@
-//! Legacy read cursor compatibility handlers.
+//! Read cursor (`ck.self.read_cursor.*`) handlers.
 //!
 //! Protocol writes use `ck.read_cursor.advance` actor-private events; the
 //! resulting account-private state is consumed through projection/account sync.
-//! This module is mounted only under `/_soland/self/read-cursors*`.
+//! Mounted on the protocol surface at `/_cokret/self/read-cursors*`.
 
 use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::http::StatusCode;
@@ -22,11 +22,11 @@ use crate::wire::{
 use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
-    operation_id = "org.cokret.soland.read_cursors.set",
+    operation_id = "ck.self.read_cursor.set",
     tags("read_cursors"),
     summary = "Set the authenticated actor's read marker for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.read_cursors.set"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.set"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -92,11 +92,11 @@ pub(super) async fn set_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.read_cursors.list",
+    operation_id = "ck.self.read_cursor.list",
     tags("read_cursors"),
     summary = "List the authenticated actor's read markers, optionally filtered by Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.read_cursors.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.read_cursor.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

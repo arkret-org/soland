@@ -13,6 +13,9 @@
 //! - `POST /_cokret/find/directory/resolve-handle`
 //! - `POST /_cokret/find/directory/resolve-agent-selector`
 //! - `POST /_cokret/find/directory/list-handles-for-subject`
+//! - `POST /_cokret/find/directory/announce`
+//! - `POST /_cokret/find/directory/withdraw`
+//! - `POST /_cokret/find/directory/push/register`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
@@ -104,30 +107,12 @@ pub(crate) fn protocol_router() -> Router {
         )
         .push(Router::with_path("directory/announce").post(directory_announce))
         .push(Router::with_path("directory/withdraw").post(directory_withdraw))
-}
-
-pub(crate) fn legacy_router() -> Router {
-    Router::new()
-        .push(Router::with_path("directory/describe").get(directory_describe))
-        .push(Router::with_path("directory/search-realms").post(search_realms))
-        .push(Router::with_path("directory/resolve-realm").post(resolve_realm))
-        .push(Router::with_path("directory/resolve-target").post(resolve_target))
-        .push(Router::with_path("directory/search-organizations").post(search_organizations))
-        .push(Router::with_path("directory/resolve-organization").post(resolve_organization))
-        .push(Router::with_path("directory/search-actors").post(search_actors))
-        .push(Router::with_path("directory/search-users").post(search_users))
-        .push(Router::with_path("directory/resolve-handle").post(resolve_handle))
-        .push(Router::with_path("directory/resolve-agent-selector").post(resolve_agent_selector))
-        .push(
-            Router::with_path("directory/list-handles-for-subject").post(list_handles_for_subject),
-        )
-        .push(
-            Router::with_path("directory/private-contact-discovery")
-                .post(private_contact_discovery),
-        )
-        .push(Router::with_path("directory/announce").post(directory_announce))
-        .push(Router::with_path("directory/withdraw").post(directory_withdraw))
-        .push(Router::with_path("directory/subscribe").post(directory_subscribe))
+        // Spec-canonical directory push-webhook registration
+        // (`ck.find.directory.push.register`). The retired `/_soland/find/
+        // directory/subscribe` legacy mirror used the same handler under the
+        // historical `subscribe` path; the protocol surface mounts only the
+        // canonical `push/register` path.
+        .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
 #[endpoint]

@@ -25,27 +25,36 @@ use crate::state::{AppState, RealmDirectoryEntry, SessionRecord};
 use crate::wire::{RealmLifecycleOutcome, now};
 use crate::{JsonResult, json_ok};
 
-pub(super) fn router() -> Router {
+/// Spec `realm_read` operation group (`ck.self.realm.*`): Realm lifecycle read,
+/// full export, and Realm moderation-policy effective/set. Canonical path
+/// `/_cokret/self/realms/{realm_id}*`.
+pub(super) fn protocol_router() -> Router {
+    Router::new().push(
+        Router::with_path("realms/{realm_id}")
+            .get(get_realm)
+            .push(
+                Router::with_path("moderation-policy/effective")
+                    .get(get_realm_effective_moderation_policy),
+            )
+            .push(Router::with_path("moderation-policy").post(upsert_realm_moderation_policy))
+            .push(Router::with_path("export").get(export_realm)),
+    )
+}
+
+/// Soland-local Space-container child-order cell read surface
+/// (`org.cokret.soland.spaces.cells.get`); no canonical operation, stays on the
+/// `/_soland` product surface.
+pub(super) fn legacy_router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("realms/{realm_id}")
-                .get(get_realm)
-                .push(
-                    Router::with_path("moderation-policy/effective")
-                        .get(get_realm_effective_moderation_policy),
-                )
-                .push(Router::with_path("moderation-policy").post(upsert_realm_moderation_policy))
-                .push(Router::with_path("export").get(export_realm)),
-        )
         .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.realms.get",
+    operation_id = "ck.self.realm.get",
     tags("realms"),
     summary = "Get a Realm lifecycle response (owner + members)"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.get"))]
 async fn get_realm(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -61,14 +70,11 @@ async fn get_realm(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.realms.moderation_policy.effective.get",
+    operation_id = "ck.self.realm.moderation_policy.effective",
     tags("realms", "policy"),
     summary = "Get organization-inherited effective moderation policy"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.realms.moderation_policy.effective.get")
-)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.moderation_policy.effective"))]
 async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -88,14 +94,11 @@ async fn get_realm_effective_moderation_policy(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.realms.moderation_policy.upsert",
+    operation_id = "ck.self.realm.moderation_policy.set",
     tags("realms", "policy"),
     summary = "Set a Realm moderation-policy override"
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.realms.moderation_policy.upsert")
-)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.moderation_policy.set"))]
 async fn upsert_realm_moderation_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -192,11 +195,11 @@ async fn get_space_cell(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.realms.export",
+    operation_id = "ck.self.realm.export",
     tags("realms"),
     summary = "Full event log + projection dump for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.realms.export"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.realm.export"))]
 async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,

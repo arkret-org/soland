@@ -34,7 +34,7 @@ async fn policy_check_and_validation_work() {
     assert_eq!(policy["decision_trace"]["action"], "message.send");
     assert_eq!(policy["decision_trace"]["cache"]["mode"], "in_memory");
 
-    let unauthenticated_policy = TestClient::post("http://server/_soland/self/policies")
+    let unauthenticated_policy = TestClient::post("http://server/_cokret/self/policies")
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
@@ -48,7 +48,7 @@ async fn policy_check_and_validation_work() {
         Some(StatusCode::UNAUTHORIZED)
     );
 
-    let policy_document: Value = TestClient::post("http://server/_soland/self/policies")
+    let policy_document: Value = TestClient::post("http://server/_cokret/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "scope": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -67,7 +67,7 @@ async fn policy_check_and_validation_work() {
     let policy_id = policy_document["policy_id"].as_str().unwrap().to_owned();
     assert_eq!(policy_document["payload"]["effect"], "deny");
 
-    let policies: Value = TestClient::get("http://server/_soland/self/policies")
+    let policies: Value = TestClient::get("http://server/_cokret/self/policies")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -101,7 +101,7 @@ async fn policy_check_and_validation_work() {
     assert!(denied["decision_trace"]["missing_proofs"].is_array());
 
     let deleted: Value =
-        TestClient::delete(format!("http://server/_soland/self/policies/{policy_id}"))
+        TestClient::delete(format!("http://server/_cokret/self/policies/{policy_id}"))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await

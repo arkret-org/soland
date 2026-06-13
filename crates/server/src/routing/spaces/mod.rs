@@ -25,26 +25,30 @@ pub fn router() -> Router {
 
 pub fn protocol_router() -> Router {
     Router::new()
-}
-
-pub fn legacy_router() -> Router {
-    Router::new()
-        .push(space::router())
-        .push(reaction::router())
+        // Spec `realm_read` group (`ck.self.realm.*`).
+        .push(space::protocol_router())
+        // Spec `read_cursor` group (`ck.self.read_cursor.*`), canonical path
+        // `/_cokret/self/read-cursors`.
         .push(
             Router::with_path("read-cursors")
                 .post(read_cursor::set_read_cursor)
                 .get(read_cursor::get_read_cursors),
         )
+}
+
+pub fn legacy_router() -> Router {
+    Router::new()
+        .push(space::legacy_router())
+        .push(reaction::router())
         .push(relation::router())
         .push(index::router())
 }
 
 /// `find`-segment directory discovery surface (`/_cokret/find/directory/*`).
+///
+/// The historical `/_soland/find/directory/*` legacy mirror has been retired;
+/// directory discovery is served only from the canonical `/_cokret/find/...`
+/// protocol tree.
 pub fn find_router() -> Router {
     directory::protocol_router()
-}
-
-pub fn find_legacy_router() -> Router {
-    directory::legacy_router()
 }

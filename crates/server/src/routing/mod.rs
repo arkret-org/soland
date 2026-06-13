@@ -195,8 +195,17 @@ fn api_v1_router() -> Router {
                 .push(spaces::router())
                 // self/events/*.
                 .push(events::router())
-                // self/authz/* + self/policy/check.
+                // self/authz/* + self/policy/check + self/policies (policy_document).
                 .push(access::router())
+                // self/circles/* (ck.self.circle.*).
+                .push(circles::router())
+                // self/organizations/* (ck.self.organization.*).
+                .push(organizations::router())
+                // self/realms/{realm_id}/links* + effective-policy
+                // (ck.self.realm_link.*).
+                .push(realms::router())
+                // self/realms/{realm_id}/policy-server (ck.self.realm_policy_server.*).
+                .push(realm_policy::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_cokret/self/keys/keypackages/*` (see `mls::router`).
                 .push(mls::router()),
@@ -253,17 +262,15 @@ fn soland_local_router() -> Router {
         .push(
             Router::with_path("self")
                 .push(spaces::legacy_router())
-                .push(realms::router())
-                .push(circles::router())
-                .push(organizations::router())
                 .push(events::legacy_router())
                 .push(access::legacy_router())
                 .push(admin::audit_router())
                 .push(conformance::router())
-                .push(mls::legacy_router())
-                .push(realm_policy::router()),
+                .push(mls::legacy_router()),
         )
-        .push(Router::with_path("find").push(spaces::find_legacy_router()))
+        // `/_soland/find/directory/*` legacy mirror retired — directory
+        // discovery is served only from the canonical `/_cokret/find/...`
+        // protocol tree (see `api_v1_router`).
         .push(Router::with_path("peer").push(federation::router()))
         .push(interop::legacy_router())
         .push(extensions::legacy_router())
@@ -444,64 +451,10 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.open.invite_locator.resolve",
         "resolve invite locator token",
     ),
-    // CKP-0007 (P2A.3) — Circle admin surface. Operation ids align with
-    // `ck.circles.*` (sibling of `ck.realms.*` / `ck.spaces.*`).
-    (
-        "/_soland/self/circles",
-        PathItemType::Post,
-        "circles",
-        "org.cokret.soland.circles.create",
-        "create a Circle (ck.circle.create)",
-    ),
-    (
-        "/_soland/self/circles",
-        PathItemType::Get,
-        "circles",
-        "org.cokret.soland.circles.list",
-        "list Circles for a Realm",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}",
-        PathItemType::Get,
-        "circles",
-        "org.cokret.soland.circles.get",
-        "fetch a Circle by id",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}/members",
-        PathItemType::Post,
-        "circles",
-        "org.cokret.soland.circles.members.add",
-        "add or change a Circle member",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}/members/{actor_id}",
-        PathItemType::Delete,
-        "circles",
-        "org.cokret.soland.circles.members.remove",
-        "remove a Circle member",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}/scope-rotate",
-        PathItemType::Post,
-        "circles",
-        "org.cokret.soland.circles.scope_rotate",
-        "rotate the Circle's bound MLS group",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}/archive",
-        PathItemType::Post,
-        "circles",
-        "org.cokret.soland.circles.archive",
-        "archive a Circle (ck.circle.archive)",
-    ),
-    (
-        "/_soland/self/circles/{circle_id}/tombstone",
-        PathItemType::Post,
-        "circles",
-        "org.cokret.soland.circles.tombstone",
-        "tombstone a Circle (ck.circle.tombstone)",
-    ),
+    // Circle admin surface (`ck.self.circle.*`) was promoted to the protocol
+    // surface at `/_cokret/self/circles*`; its operation ids are now emitted by
+    // the typed `#[endpoint]` handlers in `circles.rs`, so they no longer appear
+    // in this soland-extension table.
     (
         "/_cokret/self/events/describe",
         PathItemType::Get,
@@ -824,34 +777,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "ck.self.authz.check",
         "check authorization",
     ),
-    (
-        "/_soland/self/policies",
-        PathItemType::Get,
-        "policy",
-        "org.cokret.soland.policies.list",
-        "list policies",
-    ),
-    (
-        "/_soland/self/policies/{policy_id}",
-        PathItemType::Get,
-        "policy",
-        "org.cokret.soland.policies.get",
-        "get policy",
-    ),
-    (
-        "/_soland/self/policies",
-        PathItemType::Post,
-        "policy",
-        "org.cokret.soland.policies.upsert",
-        "upsert policy",
-    ),
-    (
-        "/_soland/self/policies/{policy_id}",
-        PathItemType::Delete,
-        "policy",
-        "org.cokret.soland.policies.delete",
-        "delete policy",
-    ),
+    // policy_document CRUD (`ck.self.policy_document.*`) was promoted to the
+    // protocol surface at `/_cokret/self/policies*`; its operation ids are now
+    // emitted by the typed `#[endpoint]` handlers in `access/policy.rs`. The
+    // soland-local PATCH compatibility route stays on the product surface but is
+    // registered via its own `#[endpoint]` annotation, not this table.
     (
         "/_cokret/edge/push/register-device",
         PathItemType::Post,

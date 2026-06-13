@@ -128,7 +128,7 @@ async fn get_cell(
     scope: &str,
 ) -> Value {
     TestClient::get(format!(
-        "http://server/_soland/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
+        "http://server/_cokret/self/consent/cells/{holder}?peer={peer}&consent_scope={scope}"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .send(app)
@@ -147,7 +147,7 @@ async fn grant_cell(
     expires_at: Option<String>,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_soland/self/consent/cells/{holder}/grant"
+        "http://server/_cokret/self/consent/cells/{holder}/grant"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -170,7 +170,7 @@ async fn revoke_cell(
     scope: &str,
 ) -> Value {
     TestClient::post(format!(
-        "http://server/_soland/self/consent/cells/{holder}/revoke"
+        "http://server/_cokret/self/consent/cells/{holder}/revoke"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({ "peer_did": peer, "consent_scope": scope }))
