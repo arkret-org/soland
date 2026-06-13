@@ -1,11 +1,11 @@
-﻿use std::sync::OnceLock;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use diesel_async::AsyncPgConnection;
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
-use diesel_async::pooled_connection::deadpool::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use diesel_async::pooled_connection::deadpool::Pool;
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -70,8 +70,10 @@ async fn run_migrations(database_url: &str) -> anyhow::Result<()> {
     let url = database_url.to_owned();
     tokio::task::spawn_blocking(move || {
         use diesel::Connection;
-        let mut wrapper = AsyncConnectionWrapper::<AsyncPgConnection>::establish(&url)
-            .map_err(|error| anyhow::anyhow!("failed to establish migration connection: {error}"))?;
+        let mut wrapper =
+            AsyncConnectionWrapper::<AsyncPgConnection>::establish(&url).map_err(|error| {
+                anyhow::anyhow!("failed to establish migration connection: {error}")
+            })?;
         wrapper
             .run_pending_migrations(MIGRATIONS)
             .map_err(|error| anyhow::anyhow!("failed to run database migrations: {error}"))?;

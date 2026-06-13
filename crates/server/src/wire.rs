@@ -927,13 +927,6 @@ pub struct SolandKeysBackupsList {
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
 // `AgentProvisionOutcome` were already SDK-backed.
-pub use cokret_sdk::model::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome, AgentRotateKeyRequestBody,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
-};
-
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Both the request body and the response types
 // come straight from the SDK (`CallMediaTokenExchangeRequestBody` carries
@@ -942,6 +935,13 @@ pub use cokret_sdk::model::{
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
 pub use cokret_sdk::model::CallMediaTokenExchangeRequestBody;
+pub use cokret_sdk::model::{
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
+    AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentView,
+};
 pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
 
 // Recovery policy / receipt endpoints (`recovery_policy_put` /

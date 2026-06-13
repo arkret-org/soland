@@ -607,11 +607,7 @@ async fn provision_agent(
     status_codes(200, 401, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.self.agent.list"))]
-async fn list_agents(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentList> {
+async fn list_agents(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<AgentList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
@@ -1094,7 +1090,10 @@ mod tests {
         let agent = serde_json::to_value(&view).expect("view serializes");
         assert_eq!(agent["agent"]["agent_slug"], "summary");
         assert_eq!(agent["agent"]["status"], "active");
-        assert_eq!(agent["agent"]["agent_principal_id"], "did:web:agent.example");
+        assert_eq!(
+            agent["agent"]["agent_principal_id"],
+            "did:web:agent.example"
+        );
         // soland-internal columns MUST NOT leak into the protocol projection.
         assert!(agent["agent"].get("controller_did").is_none());
         assert!(agent["agent"].get("agent_id").is_none());

@@ -229,14 +229,15 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
-    let frontier: Value =
-        TestClient::get("http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let frontier: Value = TestClient::get(
+        "http://server/_cokret/self/events/frontier?actor_id=did:web:alice.example",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(frontier["frontier"]["actor_id"], "did:web:alice.example");
     assert_eq!(frontier["frontier"]["actor_seq"], 3);
     assert_eq!(
