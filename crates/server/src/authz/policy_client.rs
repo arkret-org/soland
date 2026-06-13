@@ -61,7 +61,7 @@ pub struct PolicyCheckRequestInput {
     pub source_service_did: Did,
     pub source_service_type: String,
     pub source_ip_digest: Hash,
-    pub signed_transport: Value,
+    pub signed_transport: bool,
     pub event_preview: Value,
     pub auth_context: Value,
     /// When `true`, the cache lookup is skipped and the result is NOT
@@ -82,6 +82,8 @@ impl PolicyCheckRequestInput {
             "source": {
                 "service_did": self.source_service_did.as_str(),
                 "service_type": self.source_service_type,
+                "source_ip_digest": self.source_ip_digest.as_str(),
+                "signed_transport": self.signed_transport,
             },
             "event_preview": self.event_preview,
             "auth_context": self.auth_context,
@@ -99,14 +101,15 @@ impl PolicyCheckRequestInput {
             request_id: self.request_id,
             realm_id: self.realm_id,
             actor_id: self.actor_id,
+            device_id: None,
             action: self.action,
             request_canonical_digest,
             source: PolicyCheckSource {
                 service_did: self.source_service_did,
                 service_type: self.source_service_type,
+                source_ip_digest: Some(self.source_ip_digest),
+                signed_transport: self.signed_transport,
             },
-            source_ip_digest: self.source_ip_digest,
-            signed_transport: self.signed_transport,
             event_preview: self.event_preview,
             auth_context: self.auth_context,
         }
@@ -378,19 +381,20 @@ impl PolicyClient {
             sig: "proxy".to_owned(),
         };
         PolicyCheckOutcome {
+            request_id: request.request_id.clone(),
             decision: AuthzDecision::HardDeny,
             bound_to,
+            reason_code: match config.on_timeout.as_str() {
+                "deny" => "policy_server_denied_on_timeout".to_owned(),
+                _ => reason_code.to_owned(),
+            },
+            expires_at: chrono::Utc::now()
+                + chrono::Duration::seconds(config.cache_ttl_seconds as i64),
             auth_state_digest: zero_hash.clone(),
             policy_frontier_digest: zero_hash.clone(),
             membership_frontier_digest: zero_hash,
             signature,
-            reason_code: Some(match config.on_timeout.as_str() {
-                "deny" => "policy_server_denied_on_timeout".to_owned(),
-                _ => reason_code.to_owned(),
-            }),
-            expires_at: Some(
-                chrono::Utc::now() + chrono::Duration::seconds(config.cache_ttl_seconds as i64),
-            ),
+            next_retry_at: None,
             obligations: vec![serde_json::json!({
                 "kind": "log_to_audit",
                 "fields": {"decision_proxy": true, "reason_code": reason_code}
@@ -492,10 +496,8 @@ struct PolicyDecisionTranscript<'a> {
     auth_state_digest: &'a Hash,
     policy_frontier_digest: &'a Hash,
     membership_frontier_digest: &'a Hash,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason_code: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expires_at: Option<&'a str>,
+    reason_code: &'a str,
+    expires_at: &'a str,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     obligations: &'a [Value],
 }
@@ -504,7 +506,7 @@ fn policy_decision_transcript_bytes(
     request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Result<Vec<u8>, PolicyClientError> {
-    let expires_at = response.expires_at.as_ref().map(format_canonical_rfc3339);
+    let expires_at = format_canonical_rfc3339(&response.expires_at);
     let transcript = PolicyDecisionTranscript {
         kind: "ck.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
@@ -513,8 +515,8 @@ fn policy_decision_transcript_bytes(
         auth_state_digest: &response.auth_state_digest,
         policy_frontier_digest: &response.policy_frontier_digest,
         membership_frontier_digest: &response.membership_frontier_digest,
-        reason_code: response.reason_code.as_deref(),
-        expires_at: expires_at.as_deref(),
+        reason_code: response.reason_code.as_str(),
+        expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
     cokret_sdk::canonical::canonical_json_bytes(&transcript)
@@ -683,7 +685,7 @@ mod tests {
             source_service_did: Did::new("did:web:soland.local").unwrap(),
             source_service_type: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
-            signed_transport: serde_json::json!({"signed": true}),
+            signed_transport: true,
             event_preview: Value::Null,
             auth_context: Value::Null,
             bypass_cache,
@@ -693,6 +695,7 @@ mod tests {
     fn sample_response() -> PolicyCheckOutcome {
         let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         PolicyCheckOutcome {
+            request_id: "req-1".to_owned(),
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ck:realm:01904100-0000-7000-8000-000000000001").unwrap(),
@@ -708,8 +711,9 @@ mod tests {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: "base64stub".to_owned(),
             },
-            reason_code: Some("ok".to_owned()),
-            expires_at: Some(Utc::now() + chrono::Duration::seconds(60)),
+            reason_code: "ok".to_owned(),
+            expires_at: Utc::now() + chrono::Duration::seconds(60),
+            next_retry_at: None,
             obligations: Vec::new(),
         }
     }
@@ -753,6 +757,7 @@ mod tests {
         let wire_request = input.clone().into_wire();
         let zero = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         let mut response = PolicyCheckOutcome {
+            request_id: wire_request.request_id.clone(),
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
                 realm_id: wire_request.realm_id.clone(),
@@ -768,8 +773,9 @@ mod tests {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: String::new(),
             },
-            reason_code: Some("ok".to_owned()),
-            expires_at: Some(Utc::now() + chrono::Duration::seconds(60)),
+            reason_code: "ok".to_owned(),
+            expires_at: Utc::now() + chrono::Duration::seconds(60),
+            next_retry_at: None,
             obligations: Vec::new(),
         };
         let transcript =
@@ -798,7 +804,7 @@ mod tests {
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::Allow));
-        assert_eq!(resp.reason_code.as_deref(), Some("ok"));
+        assert_eq!(resp.reason_code, "ok");
     }
 
     #[tokio::test]
@@ -863,7 +869,7 @@ mod tests {
             "fail-closed must produce a deny decision"
         );
         // The reason_code distinguishes synthesised vs upstream decisions.
-        let reason = resp.reason_code.as_deref().unwrap_or("");
+        let reason = resp.reason_code.as_str();
         assert!(
             reason == "policy_server_timeout"
                 || reason == "policy_server_transport_error"

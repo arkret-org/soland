@@ -8,6 +8,8 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use cokret_sdk::BackupId;
+
 use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -1629,10 +1631,10 @@ async fn delete_key_backup(
         "deleted",
     )
     .await;
-    // SDK `KeysBackupsDeleteOutcome` carries only the spec-required
-    // `deleted: const true`; the optional `backup_id` echo was dropped when
-    // the local mirror DTO was retired in favour of the SDK type.
-    json_ok(KeysBackupsDeleteOutcome { deleted: true })
+    json_ok(KeysBackupsDeleteOutcome {
+        deleted: true,
+        backup_id: BackupId::new(backup_id).ok(),
+    })
 }
 
 #[cfg(test)]

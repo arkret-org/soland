@@ -421,6 +421,7 @@ pub(super) async fn events_query_durable_scope_impl(
         next_cursor,
         prev_cursor: None,
         has_more,
+        range_completeness: Value::Null,
     })
 }
 
@@ -976,9 +977,11 @@ fn events_submit_outcome(
             .filter_map(|event_id| EventId::new(event_id).ok())
             .collect(),
         rejected,
+        quarantine: Vec::new(),
         actor_frontier: Value::Null,
         realm_frontier: Value::Null,
         cursor,
+        original_outcome: None,
     }
 }
 

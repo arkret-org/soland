@@ -60,7 +60,7 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
         source_service_did: Did::new("did:web:soland.local").unwrap(),
         source_service_type: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
-        signed_transport: serde_json::json!({"signed": true}),
+        signed_transport: true,
         event_preview: Value::Null,
         auth_context: Value::Null,
         bypass_cache,
@@ -94,14 +94,15 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
         request_id: input.request_id.clone(),
         realm_id: input.realm_id.clone(),
         actor_id: input.actor_id.clone(),
+        device_id: None,
         action: input.action.clone(),
         request_canonical_digest: input.canonical_request_hash(),
         source: PolicyCheckSource {
             service_did: input.source_service_did.clone(),
             service_type: input.source_service_type.clone(),
+            source_ip_digest: Some(input.source_ip_digest.clone()),
+            signed_transport: input.signed_transport,
         },
-        source_ip_digest: input.source_ip_digest.clone(),
-        signed_transport: input.signed_transport.clone(),
         event_preview: input.event_preview.clone(),
         auth_context: input.auth_context.clone(),
     }
@@ -117,6 +118,7 @@ fn mock_allow_response(
     let expires_at =
         chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp() + 60, 0).unwrap();
     let mut response = PolicyCheckOutcome {
+        request_id: request.request_id.clone(),
         decision: AuthzDecision::Allow,
         bound_to: PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
@@ -132,8 +134,9 @@ fn mock_allow_response(
             kid: format!("{POLICY_SERVER_DID}#key-1"),
             sig: String::new(),
         },
-        reason_code: Some("ok".to_owned()),
-        expires_at: Some(expires_at),
+        reason_code: "ok".to_owned(),
+        expires_at,
+        next_retry_at: None,
         obligations: Vec::new(),
     };
     let transcript = policy_decision_transcript_bytes(&request, &response);
@@ -150,10 +153,8 @@ struct PolicyDecisionTranscript<'a> {
     auth_state_digest: &'a Hash,
     policy_frontier_digest: &'a Hash,
     membership_frontier_digest: &'a Hash,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason_code: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expires_at: Option<&'a str>,
+    reason_code: &'a str,
+    expires_at: &'a str,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     obligations: &'a [Value],
 }
@@ -162,10 +163,7 @@ fn policy_decision_transcript_bytes(
     request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Vec<u8> {
-    let expires_at = response
-        .expires_at
-        .as_ref()
-        .map(|ts| ts.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+    let expires_at = response.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let transcript = PolicyDecisionTranscript {
         kind: "ck.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
@@ -174,8 +172,8 @@ fn policy_decision_transcript_bytes(
         auth_state_digest: &response.auth_state_digest,
         policy_frontier_digest: &response.policy_frontier_digest,
         membership_frontier_digest: &response.membership_frontier_digest,
-        reason_code: response.reason_code.as_deref(),
-        expires_at: expires_at.as_deref(),
+        reason_code: response.reason_code.as_str(),
+        expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
     cokret_sdk::canonical::canonical_json_bytes(&transcript).unwrap()
@@ -301,7 +299,7 @@ async fn policy_server_integration_timeout_fails_closed() {
     match decision {
         MergedAuthzDecision::RemoteDeny { remote, .. } => {
             assert!(matches!(remote.decision, AuthzDecision::HardDeny));
-            let reason = remote.reason_code.as_deref().unwrap_or("");
+            let reason = remote.reason_code.as_str();
             assert!(
                 reason == "policy_server_timeout"
                     || reason == "policy_server_transport_error"
