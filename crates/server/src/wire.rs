@@ -11,7 +11,8 @@ pub use cokret_sdk::{
     KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
     KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome, PushNotifyRequestBody,
     RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
-    RealmJoinCandidateSource, RealmJoinMethod,
+    RealmJoinCandidateSource, RealmJoinMethod, SessionGrantExchangeRequestBody,
+    SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -692,31 +693,6 @@ pub struct DevLoginRequestBody {
     pub actor: String,
     pub device_id: String,
     pub display_name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SessionGrantExchangeRequestBody {
-    pub grant_jwt: String,
-    pub principal_id: String,
-    pub device_id: String,
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub introspection_proof: Option<SessionGrantIntrospectionProof>,
-}
-
-#[derive(Debug, Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
-pub struct SessionGrantIntrospectionProof {
-    pub challenge: String,
-    pub proof_jwt: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DevLoginOutcome {
-    pub access_token: String,
-    pub token_type: String,
-    pub actor: String,
-    pub device_id: String,
-    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

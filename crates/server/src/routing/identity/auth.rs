@@ -40,9 +40,9 @@ use crate::state::{
     AccountRecord, AppState, DeviceInventoryRecord, DevicePairingRequestRecord, SessionRecord,
 };
 use crate::wire::{
-    DevLoginOutcome, DevLoginRequestBody, DevicePairingRequestCreateBody,
-    DevicePairingRequestCreateOutcome, DevicePairingRequestListOutcome, DevicePairingRequestView,
-    LogoutOutcome, SessionGrantExchangeRequestBody, SessionGrantIntrospectionProof,
+    DevLoginRequestBody, DevicePairingRequestCreateBody, DevicePairingRequestCreateOutcome,
+    DevicePairingRequestListOutcome, DevicePairingRequestView, LogoutOutcome,
+    SessionGrantExchangeRequestBody, SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 
@@ -717,44 +717,56 @@ fn account_existing_session_error(
 async fn dev_login(
     depot: &mut Depot,
     body: JsonBody<DevLoginRequestBody>,
-) -> JsonResult<DevLoginOutcome> {
+) -> JsonResult<SessionLoginOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     if !state.config.development_mode {
         return Err(AppError::not_found("endpoint not available"));
     }
     let body = body.into_inner();
-    if validate_did(&body.actor).is_err() || body.device_id.trim().is_empty() {
+    let actor = validate_did(&body.actor);
+    let device_id = validate_device_id(&body.device_id);
+    let (actor, device_id) = match (actor, device_id) {
+        (Ok(actor), Ok(device_id)) => (actor, device_id),
+        _ => {
+            return Err(AppError::invalid_param(
+                "actor must be a DID and device_id is required",
+            ));
+        }
+    };
+    let actor_str = actor.as_str();
+    let device_id_str = device_id.as_str();
+    if device_id_str.trim().is_empty() {
         return Err(AppError::invalid_param(
             "actor must be a DID and device_id is required",
         ));
     }
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.actor)?;
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, actor_str)?;
     // Spec: A.3 — auth handlers consult the in-memory failed-login
     // counter before doing anything else. An actor that crossed the
     // threshold gets a 403 `policy_denied` (lockout) until the lockout window
     // expires, without revealing whether the credential would otherwise
     // have been valid.
-    if let Some(error) = account_lockout_error(state, &body.actor) {
+    if let Some(error) = account_lockout_error(state, actor_str) {
         return Err(error);
     }
     let account = state
         .persistence
         .accounts()
-        .get(&body.actor)
+        .get(actor_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    if let Some(error) = account_new_session_error(state, &body.actor) {
+    if let Some(error) = account_new_session_error(state, actor_str) {
         return Err(error);
     }
     if account.is_none() {
-        let synthetic_handle = handle_for_did(&body.actor);
+        let synthetic_handle = handle_for_did(actor_str);
         let synthetic_display = body
             .display_name
             .clone()
             .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
         let record = AccountRecord {
             id: crate::ids::generate_account_id(),
-            did: body.actor.clone(),
+            did: actor_str.to_owned(),
             localpart: normalize_localpart(&synthetic_handle),
             display_name: Some(synthetic_display),
             bio: None,
@@ -769,7 +781,7 @@ async fn dev_login(
             .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
             state,
-            Some(&body.actor),
+            Some(actor_str),
             "account.register",
             json!({"handle": record.handle(), "via": "dev_login"}),
             "accepted",
@@ -778,12 +790,12 @@ async fn dev_login(
     }
 
     let expires_at = now() + Duration::hours(12);
-    let token = token_for(&body.actor, &body.device_id, expires_at.timestamp_millis());
+    let token = token_for(actor_str, device_id_str, expires_at.timestamp_millis());
     let token_hash = session_token_hash(&token, &state.config.service_did);
     let session = SessionRecord {
         token_hash,
-        actor: body.actor.clone(),
-        device_id: body.device_id.clone(),
+        actor: actor_str.to_owned(),
+        device_id: device_id_str.to_owned(),
         audience: state.config.service_did.clone(),
         expires_at,
         created_at: now(),
@@ -799,20 +811,20 @@ async fn dev_login(
     let existing_devices = state
         .persistence
         .devices()
-        .list_for_actor(&body.actor)
+        .list_for_actor(actor_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let verification_state =
-        initial_session_device_verification_state(&existing_devices, &body.device_id);
+        initial_session_device_verification_state(&existing_devices, device_id_str);
     let device_payload = json!({
-        "device_id": body.device_id.clone(),
+        "device_id": device_id_str,
         "display_name": body.display_name.clone(),
         "verification": verification_state,
         "last_seen_at": seen_at
     });
     let device = DeviceInventoryRecord {
-        actor: body.actor.clone(),
-        device_id: body.device_id.clone(),
+        actor: actor_str.to_owned(),
+        device_id: device_id_str.to_owned(),
         display_name: body.display_name.clone(),
         verification_state: verification_state.to_owned(),
         payload: device_payload,
@@ -828,19 +840,19 @@ async fn dev_login(
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
-        Some(&body.actor),
+        Some(actor_str),
         "auth.dev_login",
-        json!({"device_id": body.device_id.clone()}),
+        json!({"device_id": device_id_str}),
         "accepted",
     )
     .await;
-    state.clear_failed_login(&body.actor);
+    state.clear_failed_login(actor_str);
 
-    json_ok(DevLoginOutcome {
+    json_ok(SessionLoginOutcome {
         access_token: token,
         token_type: "Bearer".to_owned(),
-        actor: body.actor,
-        device_id: body.device_id,
+        actor: actor.clone(),
+        device_id: device_id.clone(),
         expires_at,
     })
 }
@@ -854,30 +866,31 @@ async fn dev_login(
 async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequestBody>,
-) -> JsonResult<DevLoginOutcome> {
+) -> JsonResult<SessionLoginOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if body.grant_jwt.trim().is_empty()
-        || validate_did(&body.principal_id).is_err()
-        || validate_device_id(&body.device_id).is_err()
-    {
+    let principal_id = body.principal_id;
+    let device_id = body.device_id;
+    let principal_id_str = principal_id.as_str();
+    let device_id_str = device_id.as_str();
+    if body.grant_jwt.trim().is_empty() {
         return Err(AppError::invalid_param(
             "grant_jwt, principal_id, and device_id are required",
         ));
     }
-    if let Some(error) = account_lockout_error(state, &body.principal_id) {
+    if let Some(error) = account_lockout_error(state, principal_id_str) {
         return Err(error);
     }
     let account = state
         .persistence
         .accounts()
-        .get(&body.principal_id)
+        .get(principal_id_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         return Err(AppError::not_found("account is not registered"));
     }
-    if let Some(error) = account_new_session_error(state, &body.principal_id) {
+    if let Some(error) = account_new_session_error(state, principal_id_str) {
         return Err(error);
     }
 
@@ -885,8 +898,8 @@ async fn exchange_session_grant(
         state,
         SessionGrantValidationInput {
             grant_jwt: body.grant_jwt.as_str(),
-            principal_id: body.principal_id.as_str(),
-            device_id: body.device_id.as_str(),
+            principal_id: principal_id_str,
+            device_id: device_id_str,
             proof: body.introspection_proof.as_ref(),
         },
     )
@@ -898,7 +911,7 @@ async fn exchange_session_grant(
             // the rolling lockout window. Account is locked after 5
             // failures in 15 min; clearing happens on the success
             // path below.
-            record_failed_login_attempt(state, &body.principal_id, "session_grant_exchange").await;
+            record_failed_login_attempt(state, principal_id_str, "session_grant_exchange").await;
             return Err(error);
         }
     };
@@ -907,15 +920,15 @@ async fn exchange_session_grant(
         .map(|grant| grant.expires_at)
         .unwrap_or_else(|| now() + Duration::hours(12));
     let token = token_for(
-        &body.principal_id,
-        &body.device_id,
+        principal_id_str,
+        device_id_str,
         expires_at.timestamp_millis(),
     );
     let token_hash = session_token_hash(&token, &state.config.service_did);
     let session = SessionRecord {
         token_hash,
-        actor: body.principal_id.clone(),
-        device_id: body.device_id.clone(),
+        actor: principal_id_str.to_owned(),
+        device_id: device_id_str.to_owned(),
         audience: state.config.service_did.clone(),
         expires_at,
         created_at: now(),
@@ -931,21 +944,21 @@ async fn exchange_session_grant(
     let existing_devices = state
         .persistence
         .devices()
-        .list_for_actor(&body.principal_id)
+        .list_for_actor(principal_id_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let verification_state =
-        initial_session_device_verification_state(&existing_devices, &body.device_id);
+        initial_session_device_verification_state(&existing_devices, device_id_str);
     let device_payload = json!({
-        "device_id": body.device_id.clone(),
+        "device_id": device_id_str,
         "display_name": body.display_name.clone(),
         "verification": verification_state,
         "last_seen_at": seen_at,
         "session_grant_bridge": true,
     });
     let device = DeviceInventoryRecord {
-        actor: body.principal_id.clone(),
-        device_id: body.device_id.clone(),
+        actor: principal_id_str.to_owned(),
+        device_id: device_id_str.to_owned(),
         display_name: body.display_name.clone(),
         verification_state: verification_state.to_owned(),
         payload: device_payload,
@@ -961,10 +974,10 @@ async fn exchange_session_grant(
         .map_err(|error| AppError::internal(error.to_string()))?;
     append_audit_log(
         state,
-        Some(&body.principal_id),
+        Some(principal_id_str),
         "auth.session_grant_exchange",
         json!({
-            "device_id": body.device_id.clone(),
+            "device_id": device_id_str,
             "grant_bridge": true,
             "coauth_introspection": grant.is_some(),
             "one_time_use_consumed": grant.as_ref().map(|grant| grant.one_time_use_consumed).unwrap_or(false),
@@ -972,13 +985,13 @@ async fn exchange_session_grant(
         "accepted",
     )
     .await;
-    state.clear_failed_login(&body.principal_id);
+    state.clear_failed_login(principal_id_str);
 
-    json_ok(DevLoginOutcome {
+    json_ok(SessionLoginOutcome {
         access_token: token,
         token_type: "Bearer".to_owned(),
-        actor: body.principal_id,
-        device_id: body.device_id,
+        actor: principal_id.clone(),
+        device_id: device_id.clone(),
         expires_at,
     })
 }
