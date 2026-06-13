@@ -6,7 +6,10 @@ impl ProjectionState {
     /// The payload is taken whole as the cell value so downstream readers
     /// (`realm_delivery_binding_policy_cell_value` + the `apply_membership`
     /// validation path) can inspect each policy field directly.
-    pub(crate) fn apply_delivery_binding_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+    pub(crate) fn apply_delivery_binding_policy(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
@@ -21,7 +24,10 @@ impl ProjectionState {
     /// components cell. The Event Envelope wire shape is a generic state
     /// payload (`{"value": ...}`), while reducer tests and Move-era callers may
     /// pass the value directly; both forms are accepted and normalized here.
-    pub(crate) fn apply_realm_policy_components(&mut self, operation: &Operation) -> ProjectionEffect {
+    pub(crate) fn apply_realm_policy_components(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = state_payload_value(&operation.payload).clone();
         if let Some(join_policy) = value.get("join_policy")
@@ -73,7 +79,10 @@ impl ProjectionState {
     /// - `target_realm_id` is required and MUST be a Realm-shaped id.
     /// - `status` defaults to `active`; valid values are `active|rejected|tombstoned`.
     /// - Self-referential links (target == source) are rejected with `realm_link_self_reference`.
-    pub(crate) fn apply_realm_disappearing_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+    pub(crate) fn apply_realm_disappearing_policy(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
             "ck:cell:ck.component.realm.disappearing_policy.v1:{realm_id}"
