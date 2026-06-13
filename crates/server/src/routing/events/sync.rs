@@ -2997,8 +2997,11 @@ async fn events_query_impl(
     let limit = parts.limit;
     let (cursor, stop_cursor, backward) = events_query_cursor_and_stop(&parts);
 
-    // Single-Realm fast path preserves the original `SolandBackfillOutcome` shape
-    // for soland's existing test surface (ck.sync.backfill behavior).
+    // Single-Realm fast path: paginate + apply visibility over the projection
+    // store, then enrich the final page to full Event envelopes
+    // (`full_events_from_projection_json`) so the response is the spec
+    // `EventsQueryOutcome { events: Vec<Event> }` shape, uniform with the
+    // actor-scoped durable reader (SOL-05-003).
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
         match projected_event_page(state, realm_id, cursor.as_deref(), limit).await {
