@@ -4534,19 +4534,6 @@ pub enum SolandEventsSubmitRequestBody {
 }
 
 impl SolandEventsSubmitRequestBody {
-    /// Classify an incoming JSON body without consuming it. Returns the
-    /// discriminator name for tracing / metrics.
-    #[allow(dead_code)]
-    pub fn shape(body: &Value) -> &'static str {
-        if body.get("service_binding_ref").is_some() {
-            "federation"
-        } else if body.get("events").is_some() {
-            "batch"
-        } else {
-            "single"
-        }
-    }
-
     /// Spec B1.6 — validate the `service_binding_ref` carried on a
     /// federation submit. All 6 fields MUST be populated and well-shaped
     /// per SDK typed validators (already enforced by deserialisation); we
@@ -5081,19 +5068,6 @@ mod admission_tests {
         let err = realm_policy_components_check(&payload, &[], true, true, Some("not-a-hash"))
             .unwrap_err();
         assert_eq!(err.0, ErrorCode::MlsGovernanceBindingStale);
-    }
-
-    #[test]
-    fn events_submit_shape_classifies_three_forms() {
-        let single = json!({"event_id": "x"});
-        let batch = json!({"events": []});
-        let federation = json!({"events": [], "service_binding_ref": {"realm_id": "x"}});
-        assert_eq!(SolandEventsSubmitRequestBody::shape(&single), "single");
-        assert_eq!(SolandEventsSubmitRequestBody::shape(&batch), "batch");
-        assert_eq!(
-            SolandEventsSubmitRequestBody::shape(&federation),
-            "federation"
-        );
     }
 
     #[test]

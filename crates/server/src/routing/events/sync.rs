@@ -3446,32 +3446,6 @@ mod tests;
 // EventsSubscribe NDJSON typed frames + cursor handle entropy (spec B1.5/T03).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.5 — wrap a typed `EventsSubscribeFrameBody` in the envelope
-/// shape soland emits on the wire (kept distinct from the SDK body type so
-/// the per-frame `seq` / `realm_id` envelope can evolve independently of
-/// the SDK's `kind`-tagged body).
-///
-/// The envelope serialises a flattened body via `#[serde(flatten)]` so
-/// downstream consumers see exactly the SDK `EventsSubscribeFrameBody`
-/// fields plus the wrapper's `seq` / `realm_id` / `cursor` fields at the
-/// top level.
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SubscribeFrameEnvelope {
-    /// Monotonic per-connection sequence (matches the legacy `seq` field).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-    /// Originating Realm (for fan-out frames). Optional; absent on
-    /// `heartbeat`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub realm_id: Option<String>,
-    /// Cursor for the frame, when applicable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(flatten)]
-    pub body: cokret_sdk::EventsSubscribeFrameBody,
-}
-
 /// Spec B1.5 — when an implementation would emit a `Dropped` frame but
 /// cannot supply a resume cursor, the wire-breaking rule downgrades to
 /// `ResyncRequired`. Callers use [`dropped_or_resync`] to construct the

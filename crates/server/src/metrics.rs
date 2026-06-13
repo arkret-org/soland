@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use salvo::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -10,6 +12,9 @@ use tokio::task::JoinHandle;
 
 use crate::state::AppState;
 
+/// Fixed latency buckets for `soland_request_duration_seconds`. Kept byte-for-byte
+/// identical to the historical hand-rolled exposition so `prometheus-alerts.yml`
+/// and the Grafana dashboard continue to match.
 const DURATION_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
@@ -22,7 +27,36 @@ const DURATION_BUCKETS: [f64; 11] = [
 /// (e.g. forgot to fold `ck:...` ids in `normalize_path_for_metrics`).
 const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
 
-static METRICS: OnceLock<Mutex<HttpMetrics>> = OnceLock::new();
+// ─────────────────────────────────────────────────────────────────────────
+// Metric names. The `metrics-exporter-prometheus` recorder auto-appends the
+// `_total` suffix to counters, so counters that must expose a `_total` name on
+// the wire are REGISTERED without it. Gauges/histograms keep their full name.
+// The exact wire names below are referenced by `examples/prometheus-alerts.yml`
+// and `docs/grafana-operational-dashboard.json` and MUST stay byte-stable.
+// ─────────────────────────────────────────────────────────────────────────
+const REQUEST_COUNTER: &str = "soland_request"; // wire: soland_request_total
+const REQUEST_DURATION: &str = "soland_request_duration_seconds";
+const AUDIT_APPEND_FAILURES: &str = "soland_audit_append_failures"; // wire: ..._total
+const FEDERATION_DLQ: &str = "soland_federation_outbox_dead_letter"; // wire: ..._total
+const EGRESS_DENIED: &str = "soland_egress_denied"; // wire: ..._total
+const DIGEST_MISMATCH: &str = "soland_digest_mismatch"; // wire: ..._total
+const FEDERATION_RETRY: &str = "soland_federation_retry"; // wire: ..._total
+const DB_POOL_IN_USE: &str = "soland_db_pool_in_use";
+const FEDERATION_OUTBOX_DEPTH: &str = "soland_federation_outbox_depth";
+
+static PROMETHEUS_HANDLE: OnceLock<Result<PrometheusHandle, String>> = OnceLock::new();
+
+/// Cardinality tracker for the `op` label. The exporter does not surface the
+/// live label-set count, so we track distinct `op` values here purely to drive
+/// the P5 (5.4) sticky warning; this is observability bookkeeping, not the
+/// metric store.
+static OP_CARDINALITY: OnceLock<Mutex<OpCardinality>> = OnceLock::new();
+
+#[derive(Default)]
+struct OpCardinality {
+    seen: BTreeSet<String>,
+    warning_emitted: bool,
+}
 
 #[derive(Clone)]
 pub struct MetricsMiddleware;
@@ -44,10 +78,73 @@ impl Handler for MetricsMiddleware {
     }
 }
 
+/// Install (idempotently) the global Prometheus recorder and register metric
+/// descriptions + the fixed latency buckets. Returns a reference to the shared
+/// [`PrometheusHandle`] used to render the exposition on scrape.
+fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
+    match PROMETHEUS_HANDLE.get_or_init(|| {
+        let handle = PrometheusBuilder::new()
+            .set_buckets_for_metric(Matcher::Full(REQUEST_DURATION.to_owned()), &DURATION_BUCKETS)
+            .map_err(|err| err.to_string())?
+            .install_recorder()
+            .map_err(|err| err.to_string())?;
+
+        describe_counter!(
+            REQUEST_COUNTER,
+            "HTTP requests by operation and status."
+        );
+        describe_histogram!(
+            REQUEST_DURATION,
+            "HTTP request duration by operation."
+        );
+        describe_counter!(
+            AUDIT_APPEND_FAILURES,
+            "Audit-log append failures (spec C.3.7)."
+        );
+        describe_counter!(
+            FEDERATION_DLQ,
+            "Federation outbox rows moved to the dead-letter ledger."
+        );
+        describe_counter!(
+            EGRESS_DENIED,
+            "Outbound requests denied by the deployment egress policy."
+        );
+        describe_counter!(
+            DIGEST_MISMATCH,
+            "Payload digest mismatches rejected by admission paths."
+        );
+        describe_counter!(
+            FEDERATION_RETRY,
+            "Federation delivery retry state transitions."
+        );
+        describe_gauge!(
+            DB_POOL_IN_USE,
+            "PostgreSQL pool connections currently checked out."
+        );
+        describe_gauge!(
+            FEDERATION_OUTBOX_DEPTH,
+            "Undelivered federation outbox rows."
+        );
+        Ok(handle)
+    }) {
+        Ok(handle) => Ok(handle),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+fn op_cardinality() -> &'static Mutex<OpCardinality> {
+    OP_CARDINALITY.get_or_init(|| Mutex::new(OpCardinality::default()))
+}
+
 pub async fn spawn_metrics_server(
     state: AppState,
     bind: SocketAddr,
 ) -> anyhow::Result<JoinHandle<()>> {
+    // Install the recorder eagerly so the very first request after startup
+    // records into the global recorder rather than the no-op fallback.
+    if let Err(error) = prometheus_handle() {
+        tracing::error!(%error, "failed to install Prometheus metrics recorder");
+    }
     let listener = TcpListener::bind(bind).await?;
     Ok(tokio::spawn(async move {
         loop {
@@ -98,45 +195,22 @@ async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> an
     Ok(())
 }
 
+/// Render the Prometheus exposition. Scrape-time gauges (DB pool depth,
+/// federation outbox depth) are sampled from live [`AppState`] just before
+/// the exposition is rendered, mirroring the pull semantics of the previous
+/// hand-rolled endpoint.
 pub async fn render_metrics(state: &AppState) -> String {
-    let mut output = render_http_metrics();
-    output.push_str(
-        "# HELP soland_db_pool_in_use PostgreSQL pool connections currently checked out.\n",
-    );
-    output.push_str("# TYPE soland_db_pool_in_use gauge\n");
-    output.push_str(&format!(
-        "soland_db_pool_in_use {}\n",
-        state.db.pool_in_use()
-    ));
-    output.push_str("# HELP soland_federation_outbox_depth Undelivered federation outbox rows.\n");
-    output.push_str("# TYPE soland_federation_outbox_depth gauge\n");
-    output.push_str(&format!(
-        "soland_federation_outbox_depth {}\n",
-        federation_outbox_depth(state).await
-    ));
-    output.push_str(
-        "# HELP soland_audit_append_failures_total Audit-log append failures (spec C.3.7).\n",
-    );
-    output.push_str("# TYPE soland_audit_append_failures_total counter\n");
-    output.push_str(&format!(
-        "soland_audit_append_failures_total {}\n",
-        audit_append_failures()
-    ));
-    // P5 (5.4) — federation outbox DLQ counter. The dispatcher
-    // (`routing::federation::outbox`) bumps this every time a row is
-    // moved to the dead-letter ledger (either `terminal_http_status` or
-    // `retry_budget_exhausted`). The counter is a process-lifetime
-    // monotonic; pair with `soland_federation_outbox_depth` for
-    // queue-depth alerts.
-    output.push_str(
-        "# HELP soland_federation_outbox_dead_letter_total Federation outbox rows moved to the dead-letter ledger.\n",
-    );
-    output.push_str("# TYPE soland_federation_outbox_dead_letter_total counter\n");
-    output.push_str(&format!(
-        "soland_federation_outbox_dead_letter_total {}\n",
-        federation_outbox_dead_letter_total()
-    ));
-    output
+    // Sample scrape-time gauges into the recorder right before rendering.
+    gauge!(DB_POOL_IN_USE).set(state.db.pool_in_use() as f64);
+    gauge!(FEDERATION_OUTBOX_DEPTH).set(federation_outbox_depth(state).await as f64);
+
+    match prometheus_handle() {
+        Ok(handle) => handle.render(),
+        Err(error) => {
+            tracing::error!(%error, "metrics recorder unavailable");
+            format!("# metrics recorder unavailable: {error}\n")
+        }
+    }
 }
 
 /// Increment the audit-append-failure counter. Called from
@@ -144,15 +218,7 @@ pub async fn render_metrics(state: &AppState) -> String {
 /// rejects the append; the counter feeds the `soland_audit_append_failures_total`
 /// metric for alerting. Spec: C.3.7.
 pub fn record_audit_append_failure() {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    metrics.audit_append_failures = metrics.audit_append_failures.saturating_add(1);
-}
-
-fn audit_append_failures() -> u64 {
-    metrics_state()
-        .lock()
-        .expect("metrics lock")
-        .audit_append_failures
+    counter!(AUDIT_APPEND_FAILURES).increment(1);
 }
 
 /// P5 (5.4) — bump the federation-outbox dead-letter counter. Called
@@ -162,70 +228,24 @@ fn audit_append_failures() -> u64 {
 /// landed in the ledger). Feeds
 /// `soland_federation_outbox_dead_letter_total`.
 pub fn record_federation_outbox_dead_letter() {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    metrics.federation_outbox_dead_letters =
-        metrics.federation_outbox_dead_letters.saturating_add(1);
-}
-
-fn federation_outbox_dead_letter_total() -> u64 {
-    metrics_state()
-        .lock()
-        .expect("metrics lock")
-        .federation_outbox_dead_letters
+    counter!(FEDERATION_DLQ).increment(1);
 }
 
 pub fn record_egress_denied(reason: &str, target_class: &str) {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    *metrics
-        .egress_denied
-        .entry((normalize_label(reason), normalize_label(target_class)))
-        .or_insert(0) += 1;
-}
-
-fn egress_denied_totals() -> Vec<((String, String), u64)> {
-    metrics_state()
-        .lock()
-        .expect("metrics lock")
-        .egress_denied
-        .iter()
-        .map(|(labels, count)| (labels.clone(), *count))
-        .collect()
+    counter!(
+        EGRESS_DENIED,
+        "reason" => normalize_label(reason),
+        "target_class" => normalize_label(target_class)
+    )
+    .increment(1);
 }
 
 pub fn record_digest_mismatch(scope: &str) {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    *metrics
-        .digest_mismatches
-        .entry(normalize_label(scope))
-        .or_insert(0) += 1;
-}
-
-fn digest_mismatch_totals() -> Vec<(String, u64)> {
-    metrics_state()
-        .lock()
-        .expect("metrics lock")
-        .digest_mismatches
-        .iter()
-        .map(|(scope, count)| (scope.clone(), *count))
-        .collect()
+    counter!(DIGEST_MISMATCH, "scope" => normalize_label(scope)).increment(1);
 }
 
 pub fn record_federation_retry_state(state: &str) {
-    let mut metrics = metrics_state().lock().expect("metrics lock");
-    *metrics
-        .federation_retry_states
-        .entry(normalize_label(state))
-        .or_insert(0) += 1;
-}
-
-fn federation_retry_totals() -> Vec<(String, u64)> {
-    metrics_state()
-        .lock()
-        .expect("metrics lock")
-        .federation_retry_states
-        .iter()
-        .map(|(state, count)| (state.clone(), *count))
-        .collect()
+    counter!(FEDERATION_RETRY, "state" => normalize_label(state)).increment(1);
 }
 
 async fn federation_outbox_depth(state: &AppState) -> usize {
@@ -239,172 +259,39 @@ async fn federation_outbox_depth(state: &AppState) -> usize {
 }
 
 fn record_http_request(op: &str, status: u16, duration: Duration) {
-    let (cardinality_warning_payload, warning_threshold) = {
-        let mut metrics = metrics_state().lock().expect("metrics lock");
-        *metrics
-            .request_totals
-            .entry((op.to_owned(), status))
-            .or_insert(0) += 1;
+    counter!(
+        REQUEST_COUNTER,
+        "op" => op.to_owned(),
+        "status" => status.to_string()
+    )
+    .increment(1);
+    histogram!(REQUEST_DURATION, "op" => op.to_owned()).record(duration.as_secs_f64());
 
-        let seconds = duration.as_secs_f64();
-        let histogram = metrics.request_durations.entry(op.to_owned()).or_default();
-        histogram.count += 1;
-        histogram.sum_seconds += seconds;
-        for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
-            if seconds <= *bucket {
-                histogram.bucket_counts[index] += 1;
-            }
-        }
-
-        // Cardinality cap: warn (sticky, once per crossing) when the
-        // unique `op` label count crosses
-        // `REQUEST_OP_LABEL_CARDINALITY_THRESHOLD`. We do not drop any
-        // labels here — the counter still records — but a sustained
-        // upward drift typically means `normalize_path_for_metrics`
-        // failed to fold an id segment and the time-series store is
-        // about to explode.
-        let unique_ops = metrics.request_durations.len();
-        let crossed = unique_ops > REQUEST_OP_LABEL_CARDINALITY_THRESHOLD
-            && !metrics.cardinality_warning_emitted;
-        if crossed {
-            metrics.cardinality_warning_emitted = true;
-            (Some(unique_ops), REQUEST_OP_LABEL_CARDINALITY_THRESHOLD)
+    // Cardinality cap: warn (sticky, once per crossing) when the unique `op`
+    // label count crosses `REQUEST_OP_LABEL_CARDINALITY_THRESHOLD`. We do not
+    // drop any labels here — the counter still records — but a sustained
+    // upward drift typically means `normalize_path_for_metrics` failed to fold
+    // an id segment and the time-series store is about to explode.
+    let warning_payload = {
+        let mut card = op_cardinality().lock().expect("op cardinality lock");
+        card.seen.insert(op.to_owned());
+        let unique_ops = card.seen.len();
+        if unique_ops > REQUEST_OP_LABEL_CARDINALITY_THRESHOLD && !card.warning_emitted {
+            card.warning_emitted = true;
+            Some(unique_ops)
         } else {
-            (None, REQUEST_OP_LABEL_CARDINALITY_THRESHOLD)
+            None
         }
     };
 
-    if let Some(unique_ops) = cardinality_warning_payload {
+    if let Some(unique_ops) = warning_payload {
         tracing::warn!(
             target: "metrics_cardinality",
             unique_op_labels = unique_ops,
-            threshold = warning_threshold,
+            threshold = REQUEST_OP_LABEL_CARDINALITY_THRESHOLD,
             "soland_request_total operation label cardinality crossed the warning threshold; \
              audit normalize_path_for_metrics for an id segment that is not being folded"
         );
-    }
-}
-
-fn render_http_metrics() -> String {
-    let metrics = metrics_state().lock().expect("metrics lock").clone();
-    let mut output = String::new();
-    output.push_str("# HELP soland_request_total HTTP requests by operation and status.\n");
-    output.push_str("# TYPE soland_request_total counter\n");
-    for ((op, status), count) in &metrics.request_totals {
-        output.push_str(&format!(
-            "soland_request_total{{op=\"{}\",status=\"{}\"}} {}\n",
-            escape_label(op),
-            status,
-            count
-        ));
-    }
-
-    output.push_str("# HELP soland_request_duration_seconds HTTP request duration by operation.\n");
-    output.push_str("# TYPE soland_request_duration_seconds histogram\n");
-    for (op, histogram) in &metrics.request_durations {
-        for (index, bucket) in DURATION_BUCKETS.iter().enumerate() {
-            output.push_str(&format!(
-                "soland_request_duration_seconds_bucket{{op=\"{}\",le=\"{}\"}} {}\n",
-                escape_label(op),
-                bucket,
-                histogram.bucket_counts[index]
-            ));
-        }
-        output.push_str(&format!(
-            "soland_request_duration_seconds_bucket{{op=\"{}\",le=\"+Inf\"}} {}\n",
-            escape_label(op),
-            histogram.count
-        ));
-        output.push_str(&format!(
-            "soland_request_duration_seconds_sum{{op=\"{}\"}} {:.6}\n",
-            escape_label(op),
-            histogram.sum_seconds
-        ));
-        output.push_str(&format!(
-            "soland_request_duration_seconds_count{{op=\"{}\"}} {}\n",
-            escape_label(op),
-            histogram.count
-        ));
-    }
-
-    output.push_str(
-        "# HELP soland_egress_denied_total Outbound requests denied by the deployment egress policy.\n",
-    );
-    output.push_str("# TYPE soland_egress_denied_total counter\n");
-    for ((reason, target_class), count) in egress_denied_totals() {
-        output.push_str(&format!(
-            "soland_egress_denied_total{{reason=\"{}\",target_class=\"{}\"}} {}\n",
-            escape_label(&reason),
-            escape_label(&target_class),
-            count
-        ));
-    }
-    output.push_str(
-        "# HELP soland_digest_mismatch_total Payload digest mismatches rejected by admission paths.\n",
-    );
-    output.push_str("# TYPE soland_digest_mismatch_total counter\n");
-    for (scope, count) in digest_mismatch_totals() {
-        output.push_str(&format!(
-            "soland_digest_mismatch_total{{scope=\"{}\"}} {}\n",
-            escape_label(&scope),
-            count
-        ));
-    }
-    output.push_str(
-        "# HELP soland_federation_retry_total Federation delivery retry state transitions.\n",
-    );
-    output.push_str("# TYPE soland_federation_retry_total counter\n");
-    for (state, count) in federation_retry_totals() {
-        output.push_str(&format!(
-            "soland_federation_retry_total{{state=\"{}\"}} {}\n",
-            escape_label(&state),
-            count
-        ));
-    }
-    output
-}
-
-fn metrics_state() -> &'static Mutex<HttpMetrics> {
-    METRICS.get_or_init(|| Mutex::new(HttpMetrics::default()))
-}
-
-#[derive(Clone, Default)]
-struct HttpMetrics {
-    request_totals: BTreeMap<(String, u16), u64>,
-    request_durations: BTreeMap<String, HistogramStats>,
-    /// Audit-log append failures since process start. Spec: C.3.7 —
-    /// every `append_audit_log` failure bumps this counter so on-call
-    /// can alert on durable-audit drops.
-    audit_append_failures: u64,
-    /// P5 (5.4) — federation outbox dead-letter counter. Bumped from
-    /// `routing::federation::outbox::insert_dead_letter` each time a
-    /// row is moved to the DLQ ledger. Pairs with
-    /// `soland_federation_outbox_depth` for queue alerting.
-    federation_outbox_dead_letters: u64,
-    egress_denied: BTreeMap<(String, String), u64>,
-    digest_mismatches: BTreeMap<String, u64>,
-    federation_retry_states: BTreeMap<String, u64>,
-    /// P5 (5.4 metrics cardinality cap) — sticky one-shot flag so we
-    /// emit the cardinality-threshold warning once per process even
-    /// when the operator never lowers the cardinality back below the
-    /// threshold. Reset only on process restart.
-    cardinality_warning_emitted: bool,
-}
-
-#[derive(Clone)]
-struct HistogramStats {
-    count: u64,
-    sum_seconds: f64,
-    bucket_counts: [u64; DURATION_BUCKETS.len()],
-}
-
-impl Default for HistogramStats {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            sum_seconds: 0.0,
-            bucket_counts: [0; DURATION_BUCKETS.len()],
-        }
     }
 }
 
@@ -443,13 +330,6 @@ fn looks_like_path_id(segment: &str) -> bool {
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':'))
 }
 
-fn escape_label(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\n', "\\n")
-        .replace('"', "\\\"")
-}
-
 fn normalize_label(value: &str) -> String {
     let normalized = value
         .trim()
@@ -474,17 +354,29 @@ fn normalize_label(value: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Render against the live global recorder. Tests share one process-wide
+    /// recorder, so assertions check for substring presence (monotonic
+    /// counters never decrease) rather than exact values.
+    fn render() -> String {
+        prometheus_handle().expect("recorder installs").render()
+    }
+
     #[test]
     fn metrics_render_required_http_series() {
         let op = "GET /_cokret/self/events/{event_id}";
         record_http_request(op, 200, Duration::from_millis(25));
-        let rendered = render_http_metrics();
+        let rendered = render();
 
+        // Byte-stable wire names referenced by prometheus-alerts.yml + Grafana.
         assert!(rendered.contains("soland_request_total"));
         assert!(rendered.contains("status=\"200\""));
         assert!(rendered.contains("soland_request_duration_seconds_bucket"));
         assert!(rendered.contains("soland_request_duration_seconds_sum"));
         assert!(rendered.contains("soland_request_duration_seconds_count"));
+        // Fixed bucket boundaries must survive the migration.
+        assert!(rendered.contains("le=\"0.005\""));
+        assert!(rendered.contains("le=\"10\"") || rendered.contains("le=\"10.0\""));
+        assert!(rendered.contains("le=\"+Inf\""));
     }
 
     #[test]
@@ -492,8 +384,11 @@ mod tests {
         record_egress_denied("blocked address", "federation outbox");
         record_digest_mismatch("blob upload");
         record_federation_retry_state("retry scheduled");
-        let rendered = render_http_metrics();
+        record_audit_append_failure();
+        record_federation_outbox_dead_letter();
+        let rendered = render();
 
+        // Byte-stable wire names (counters carry the exporter `_total` suffix).
         assert!(rendered.contains("soland_egress_denied_total"));
         assert!(rendered.contains("reason=\"blocked_address\""));
         assert!(rendered.contains("target_class=\"federation_outbox\""));
@@ -501,6 +396,8 @@ mod tests {
         assert!(rendered.contains("scope=\"blob_upload\""));
         assert!(rendered.contains("soland_federation_retry_total"));
         assert!(rendered.contains("state=\"retry_scheduled\""));
+        assert!(rendered.contains("soland_audit_append_failures_total"));
+        assert!(rendered.contains("soland_federation_outbox_dead_letter_total"));
     }
 
     #[test]

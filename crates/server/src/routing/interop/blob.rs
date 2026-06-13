@@ -1149,17 +1149,6 @@ pub fn classify_presign_blob_block(
 pub const PRESIGN_CACHE_CONTROL: &str = "private, no-store";
 pub const PRESIGN_REFERRER_POLICY: &str = "no-referrer";
 
-/// Scrub a presign URL down to its origin + path for tracing/logging.
-/// Spec T11 — the query string carries the signature and MUST NOT appear
-/// in logs.
-#[allow(dead_code)]
-pub fn scrub_presign_url_for_log(url: &str) -> String {
-    match url.split_once('?') {
-        Some((origin_path, _query)) => format!("{origin_path}?<scrubbed>"),
-        None => url.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod presign_block_tests {
     use super::*;
@@ -1204,13 +1193,6 @@ mod presign_block_tests {
         );
     }
 
-    #[test]
-    fn presign_url_scrub_drops_query_string() {
-        let s = scrub_presign_url_for_log("https://s3/x/y?token=xyz&sig=abc");
-        assert!(!s.contains("token=xyz"));
-        assert!(!s.contains("sig=abc"));
-        assert!(s.contains("https://s3/x/y"));
-    }
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@ use super::*;
 #[async_trait]
 pub trait PresenceStore: Send + Sync {
     async fn put(&self, presence: PresenceRecord) -> PersistenceResult<()>;
-    #[allow(dead_code)]
     async fn get(&self, actor: &str) -> PersistenceResult<Option<PresenceRecord>>;
 }
 
