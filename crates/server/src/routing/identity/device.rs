@@ -26,15 +26,15 @@ use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::DevicePairingRequestListOutcome;
 use crate::{JsonResult, ids, json_ok};
 
-pub(super) fn protocol_router() -> Router {
+/// SOL-01-012/013: device list/revoke/rename are soland **product** capabilities
+/// (`org.cokret.soland.devices.*`); the spec defines no `/_cokret/self/devices`
+/// list/revoke/rename surface, so they MUST NOT occupy the protocol namespace.
+/// All device-management endpoints are mounted under `/_soland/self/devices*`.
+pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("devices").get(device_list))
         .push(Router::with_path("devices/{device_id}/revoke").post(device_revoke))
         .push(Router::with_path("devices/{device_id}/rename").post(device_rename))
-}
-
-pub(super) fn router() -> Router {
-    protocol_router()
         .push(Router::with_path("devices/pairing-requests").get(device_pairing_requests))
         .push(
             Router::with_path("devices/pairing-requests/{pairing_request_id}/approve")
@@ -84,12 +84,15 @@ async fn device_list(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
 }
 
 #[endpoint(
-    operation_id = "ck.self.devices.device_pairing_requests.list",
+    operation_id = "org.cokret.soland.devices.pairing_request.list",
     tags("devices"),
     summary = "List pending device-pairing requests that this authenticated device may approve",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.devices.device_pairing_requests.list"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.devices.pairing_request.list")
+)]
 async fn device_pairing_requests(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -103,14 +106,14 @@ async fn device_pairing_requests(
 }
 
 #[endpoint(
-    operation_id = "ck.self.devices.device_pairing_requests.approve",
+    operation_id = "org.cokret.soland.devices.pairing_request.approve",
     tags("devices"),
     summary = "Approve a pending device-pairing request from this authenticated device",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.self.devices.device_pairing_requests.approve")
+    fields(op = "org.cokret.soland.devices.pairing_request.approve")
 )]
 async fn device_pairing_request_approve(
     aa: AuthArgs,
@@ -125,14 +128,14 @@ async fn device_pairing_request_approve(
 }
 
 #[endpoint(
-    operation_id = "ck.self.devices.device_pairing_requests.reject",
+    operation_id = "org.cokret.soland.devices.pairing_request.reject",
     tags("devices"),
     summary = "Reject a pending device-pairing request from this authenticated device",
     status_codes(200, 400, 401, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ck.self.devices.device_pairing_requests.reject")
+    fields(op = "org.cokret.soland.devices.pairing_request.reject")
 )]
 async fn device_pairing_request_reject(
     aa: AuthArgs,

@@ -274,7 +274,7 @@ pub enum BottomRepairStrategy {
 impl BottomRepairStrategy {
     pub fn label(&self) -> &'static str {
         match self {
-            BottomRepairStrategy::HeadInWinner { .. } => "head_in winner",
+            BottomRepairStrategy::HeadInWinner { .. } => "head_in_winner",
             BottomRepairStrategy::Manual { .. } => "manual",
         }
     }

@@ -1087,6 +1087,8 @@ fn verify_inbound_federation_http_signature(
 
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
+    let endpoint_digest =
+        validate_destination_authority(state, req, &authority, &destination_service_did)?;
     let method = req.method().as_str().to_ascii_uppercase();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_did, "outer")?;
@@ -1100,6 +1102,7 @@ fn verify_inbound_federation_http_signature(
         &source_trust_domain,
         &destination_trust_domain,
         &request_digest,
+        endpoint_digest.as_deref(),
         &outer_params,
     );
     verify_signature_header(
@@ -1210,6 +1213,8 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
 
     let target_uri = signature_target_uri(req, state);
     let authority = signature_authority(req, state);
+    let endpoint_digest =
+        validate_destination_authority(state, req, &authority, &destination_service_did)?;
     let method = req.method().as_str().to_ascii_uppercase();
     let outer_params = signature_params(req, "signature-input")?;
     validate_signature_params(&outer_params, &source_service_did, "outer")?;
@@ -1223,6 +1228,7 @@ pub(in crate::routing) fn verify_inbound_peer_http_signature(
         &source_trust_domain,
         &destination_trust_domain,
         &request_digest,
+        endpoint_digest.as_deref(),
         &outer_params,
     );
     verify_signature_header(
@@ -1280,8 +1286,17 @@ fn federation_http_signature_base(
     source_trust_domain: &str,
     destination_trust_domain: &str,
     request_digest: &str,
+    destination_service_endpoint_digest: Option<&str>,
     signature_params: &str,
 ) -> String {
+    // federation.md §3.2 line 180/185: when a Destination-Service-Endpoint-Digest
+    // is present it MUST be a covered component of the signature transcript so the
+    // signer commits to the destination endpoint (anti virtual-host confusion on
+    // shared ingress). Single-endpoint deployments omit it and the component is
+    // simply absent from the base.
+    let endpoint_component = destination_service_endpoint_digest
+        .map(|digest| format!("\"destination-service-endpoint-digest\": {digest}\n"))
+        .unwrap_or_default();
     format!(
         "\"@method\": {method}\n\
          \"@target-uri\": {target_uri}\n\
@@ -1292,8 +1307,63 @@ fn federation_http_signature_base(
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}\n\
          \"request-canonical-digest\": {request_digest}\n\
+         {endpoint_component}\
          \"@signature-params\": {signature_params}",
     )
+}
+
+/// federation.md §3.2 line 105-106: verify the signed `@authority` host matches
+/// the endpoint registered for the Destination-Service-DID. Because the inbound
+/// path already enforces `destination_service_did == this service`, the
+/// authoritative endpoint is this service's own published `public_base_url`.
+///
+/// Returns the `Destination-Service-Endpoint-Digest` to bind into the transcript
+/// when the request carries that header (required on shared ingress, line 180);
+/// when present it MUST equal the sha256 digest of the registered endpoint
+/// canonical URL.
+fn validate_destination_authority(
+    state: &AppState,
+    req: &Request,
+    authority: &str,
+    destination_service_did: &str,
+) -> Result<Option<String>, AppError> {
+    // The registered endpoint authority for this (destination) service.
+    if let Some(expected_authority) = public_base_url_authority(state) {
+        if !authority.eq_ignore_ascii_case(&expected_authority) {
+            crate::metrics::record_digest_mismatch("federation_authority_mismatch");
+            return Err(signature_error(
+                "signed @authority host does not match the Destination-Service-DID endpoint",
+            ));
+        }
+    }
+
+    // Optional endpoint-digest binding (conditional-required on shared ingress).
+    let observed = req
+        .headers()
+        .get("destination-service-endpoint-digest")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(observed_digest) = observed {
+        let expected_digest = cokret_sdk::canonical::sha256_digest(
+            state
+                .config
+                .public_base_url
+                .trim_end_matches('/')
+                .as_bytes(),
+        );
+        if observed_digest != expected_digest {
+            crate::metrics::record_digest_mismatch("federation_endpoint_digest_mismatch");
+            return Err(signature_error(
+                "Destination-Service-Endpoint-Digest does not match the registered endpoint",
+            ));
+        }
+        // Sanity: the digest must be for *this* service's destination DID.
+        debug_assert_eq!(destination_service_did, state.config.service_did);
+        return Ok(Some(observed_digest));
+    }
+    Ok(None)
 }
 
 fn required_header(req: &Request, name: &str) -> Result<String, AppError> {
@@ -1335,21 +1405,40 @@ fn validate_signature_params(
         )));
     }
     let now = Utc::now().timestamp();
-    if let Some(created) = signature_param_value(signature_params, "created")
+    // federation.md §3.2: `created` and `expires` are MUST-present signature
+    // parameters; the freshness window is normative and is the only protocol-level
+    // replay backstop on the inbound write path (an evicted replay cache MUST NOT
+    // allow a byte-for-byte replay that falls outside this window). Fail closed when
+    // either is absent or unparsable rather than silently accepting the signature.
+    let created = signature_param_value(signature_params, "created")
         .and_then(|value| value.parse::<i64>().ok())
-    {
-        if created > now + 300 {
-            return Err(signature_error(format!(
-                "{label} signature created timestamp is in the future"
-            )));
-        }
+        .ok_or_else(|| {
+            signature_error(format!(
+                "{label} Signature-Input missing required `created` parameter"
+            ))
+        })?;
+    let expires = signature_param_value(signature_params, "expires")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| {
+            signature_error(format!(
+                "{label} Signature-Input missing required `expires` parameter"
+            ))
+        })?;
+    // `created` MUST be within ±30s of local clock (both directions).
+    if (created - now).abs() > 30 {
+        return Err(signature_error(format!(
+            "{label} signature created timestamp outside ±30s clock-skew window"
+        )));
     }
-    if let Some(expires) = signature_param_value(signature_params, "expires")
-        .and_then(|value| value.parse::<i64>().ok())
-    {
-        if expires < now {
-            return Err(signature_error(format!("{label} signature is expired")));
-        }
+    // Window width MUST NOT exceed 300s.
+    if expires < created || expires - created > 300 {
+        return Err(signature_error(format!(
+            "{label} signature validity window exceeds 300s"
+        )));
+    }
+    // `expires` MUST be in the future relative to local clock.
+    if expires < now {
+        return Err(signature_error(format!("{label} signature is expired")));
     }
     Ok(())
 }

@@ -25,13 +25,12 @@ use cokret_sdk::{
     SessionRevokeOutcome, SessionRevokeRequestBody,
 };
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::device_messages::fanout_actor_private_update;
 use super::{
     append_audit_log, bearer_token, handle_for_did, is_valid_handle, normalize_handle,
     normalize_localpart, now, render_error, validate_device_id, validate_did,
@@ -41,16 +40,13 @@ use crate::state::{
     AccountRecord, AppState, DeviceInventoryRecord, DevicePairingRequestRecord, SessionRecord,
 };
 use crate::wire::{
-    DevLoginRequestBody, DevicePairingRequestCreateBody, DevicePairingRequestCreateOutcome,
-    DevicePairingRequestListOutcome, DevicePairingRequestView, LogoutOutcome,
+    DevLoginRequestBody, DevicePairingRequestListOutcome, DevicePairingRequestView, LogoutOutcome,
     SessionGrantExchangeRequestBody, SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 
 const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
-const DEVICE_PAIRING_REQUEST_TTL_MS: u64 = 10 * 60 * 1000;
-const DEVICE_PAIRING_REQUEST_MIN_TTL_MS: u64 = 60 * 1000;
 
 pub(super) fn router() -> Router {
     legacy_router()
@@ -92,145 +88,6 @@ async fn account_device_pair(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     json_ok(authorize_account_device_pair(state, &session, body.into_inner()).await?)
-}
-
-#[endpoint(
-    operation_id = "ck.gate.account.device_pairing_request.create",
-    tags("auth"),
-    summary = "Create a pending device-pairing request for existing-device approval",
-    status_codes(200, 400, 401, 409, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.device_pairing_request.create"))]
-async fn create_device_pairing_request(
-    aa: super::AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<DevicePairingRequestCreateBody>,
-) -> JsonResult<DevicePairingRequestCreateOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let pairing_code = body.pairing_code.trim().to_owned();
-    if pairing_code.is_empty() {
-        return Err(AppError::missing_param("pairing_code is required"));
-    }
-    if !is_base64url_non_empty(body.challenge_signature.trim()) {
-        return Err(AppError::invalid_param(
-            "challenge_signature must be non-empty base64url",
-        ));
-    }
-    let requesting_device_id = device_id_from_pair_pubkey(&body.new_device_pubkey)?;
-    if requesting_device_id != session.device_id {
-        return Err(AppError::invalid_param(
-            "new_device_pubkey.kid must match the bearer session device",
-        )
-        .with_wire_code("device_pairing_request_device_mismatch"));
-    }
-    let created_at = now();
-    let ttl_ms = body
-        .expires_in_ms
-        .unwrap_or(DEVICE_PAIRING_REQUEST_TTL_MS)
-        .clamp(
-            DEVICE_PAIRING_REQUEST_MIN_TTL_MS,
-            DEVICE_PAIRING_REQUEST_TTL_MS,
-        );
-    let expires_at = created_at + Duration::milliseconds(ttl_ms as i64);
-    let pairing_request_id = uuid::Uuid::now_v7().to_string();
-    let device_metadata = if body.device_metadata.is_null() {
-        json!({})
-    } else {
-        body.device_metadata
-    };
-    let record = DevicePairingRequestRecord {
-        pairing_request_id: pairing_request_id.clone(),
-        actor: session.actor.clone(),
-        requesting_device_id: requesting_device_id.clone(),
-        pairing_code,
-        new_device_pubkey: body.new_device_pubkey,
-        challenge_signature: body.challenge_signature.trim().to_owned(),
-        display_name: body.display_name,
-        device_metadata,
-        created_at,
-        expires_at,
-        approved_at: None,
-        approved_by_device_id: None,
-        authorized_event_ref: None,
-        rejected_at: None,
-        rejected_by_device_id: None,
-    };
-    {
-        let mut requests = state
-            .device_pairing_requests
-            .lock()
-            .expect("device pairing requests lock");
-        requests.retain(|_, existing| existing.expires_at > created_at);
-        requests.insert(pairing_request_id.clone(), record.clone());
-    }
-    let request = device_pairing_request_view(&record, created_at);
-    let notified_devices = fanout_actor_private_update(
-        state,
-        &session.actor,
-        &session.device_id,
-        "ck.device.pairing.request",
-        json!({
-            "pairing_request_id": pairing_request_id,
-            "requesting_device_id": requesting_device_id,
-            "pairing_code": request.pairing_code.clone(),
-            "display_name": request.display_name.clone(),
-            "expires_at": expires_at,
-        }),
-    )
-    .await;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "account.device_pairing_request.create",
-        json!({
-            "requesting_device_id": session.device_id,
-            "pairing_request_id": request.pairing_request_id.clone(),
-            "notified_devices": notified_devices,
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(DevicePairingRequestCreateOutcome {
-        pairing_request_id: request.pairing_request_id.clone(),
-        state: request.state.clone(),
-        requesting_device_id: request.requesting_device_id.clone(),
-        pairing_code: request.pairing_code.clone(),
-        expires_at,
-        request,
-        notified_devices,
-    })
-}
-
-#[endpoint(
-    operation_id = "ck.gate.account.device_pairing_request.get",
-    tags("auth"),
-    summary = "Read a pending device-pairing request status for this account",
-    status_codes(200, 401, 404, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.device_pairing_request.get"))]
-async fn get_device_pairing_request(
-    aa: super::AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    pairing_request_id: PathParam<String>,
-) -> JsonResult<DevicePairingRequestView> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let pairing_request_id = pairing_request_id.into_inner();
-    let record = state
-        .device_pairing_requests
-        .lock()
-        .expect("device pairing requests lock")
-        .get(&pairing_request_id)
-        .cloned()
-        .ok_or_else(|| AppError::not_found("device pairing request not found"))?;
-    if record.actor != session.actor {
-        return Err(AppError::not_found("device pairing request not found"));
-    }
-    json_ok(device_pairing_request_view(&record, now()))
 }
 
 pub(super) async fn approve_device_pairing_request(

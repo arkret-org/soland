@@ -13,5 +13,8 @@ target*/
 .claude/
 *.pem
 *.log
+# Captured build/check output (transient, never tracked).
+build_err.txt
+build*.txt
 /_circle_rollout_baseline.md
 /_*_todos.md

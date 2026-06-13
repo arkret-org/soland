@@ -69,7 +69,9 @@ pub fn protocol_router() -> Router {
                 .push(account_data::router())
                 // Spec `consent` group (`ck.self.consent.*`).
                 .push(consent::router())
-                .push(device::protocol_router())
+                // SOL-01-012: device management (list/revoke/rename) is a soland
+                // product capability and is mounted on the product face
+                // (/_soland/self/devices*) via `device::router()`, NOT here.
                 .push(keys::router())
                 .push(key_backup::protocol_router())
                 .push(device_messages::protocol_router())

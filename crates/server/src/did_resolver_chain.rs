@@ -109,19 +109,36 @@ fn blocking_webvh_document_lookup(
     did: String,
 ) -> Result<crate::persistence::PersistenceResult<Option<crate::state::WebvhDocumentRecord>>, String>
 {
-    let run_lookup = move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| error.to_string())?;
-        Ok(runtime.block_on(async move { persistence.webvh().get_document(&did).await }))
-    };
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::spawn(run_lookup)
-            .join()
-            .map_err(|_| "local DID lookup worker panicked".to_owned())?
-    } else {
-        run_lookup()
+    let fut = async move { persistence.webvh().get_document(&did).await };
+    match tokio::runtime::Handle::try_current() {
+        // Inside the production multi-threaded runtime: reuse the shared runtime
+        // handle rather than spawning a fresh OS thread + building a brand-new
+        // current-thread runtime on every DID resolution. `block_in_place` moves
+        // this worker off the async poll loop so blocking on the DB query does not
+        // stall the executor (SOL-02-003).
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
+        }
+        // Inside a current-thread runtime (e.g. `#[tokio::test]`): `block_in_place`
+        // would panic, so run the future on a separate thread with its own
+        // throwaway runtime and join it.
+        Ok(_) => std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())?;
+            Ok(runtime.block_on(fut))
+        })
+        .join()
+        .map_err(|_| "local DID lookup worker panicked".to_owned())?,
+        // No runtime in scope (cold path): build a throwaway runtime inline.
+        Err(_) => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())?;
+            Ok(runtime.block_on(fut))
+        }
     }
 }
 

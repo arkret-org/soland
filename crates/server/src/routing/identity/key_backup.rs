@@ -2,7 +2,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::BackupId;
+use cokret_sdk::{BackupId, DeviceId, Did};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -717,6 +717,104 @@ async fn enforce_recovery_policy_ref(
     Ok(())
 }
 
+/// key-management.md §7.4.1 (normative): a device signature alone cannot defend
+/// against a malicious/compromised server injecting or substituting a backup
+/// envelope signed by a revoked old device key. Before a receiver trusts/uses an
+/// envelope (recovery or read), it MUST anchor `auth_data.signature` to the
+/// actor's cross-signing trust root — i.e. the signing device MUST be authorized
+/// by an SSK binding chaining to the current published generation, MUST NOT be
+/// revoked, and the envelope signature MUST verify against that anchored device
+/// key. If it cannot be linked, the envelope MUST be rejected as
+/// `untrusted_backup_signature`, even when the series chain and ciphertext_digest
+/// are internally self-consistent.
+fn anchor_key_backup_auth_data_trust_root(
+    state: &AppState,
+    actor_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let untrusted = || {
+        AppError::new(
+            ErrorCode::InvalidSignature,
+            "key backup auth_data.signature is not anchored to the actor cross-signing trust root",
+        )
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code("untrusted_backup_signature")
+    };
+
+    let auth = backup
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(untrusted)?;
+    let device_id = auth
+        .get("device_id")
+        .and_then(Value::as_str)
+        .ok_or_else(untrusted)?;
+    let signature_b64 = auth
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(untrusted)?;
+    let claimed_generation = auth.get("ssk_generation").and_then(Value::as_u64);
+
+    let principal = Did::new(actor_id.to_owned()).map_err(|_| untrusted())?;
+    let device = DeviceId::new(device_id.to_owned()).map_err(|_| untrusted())?;
+
+    // Resolve the device public key and confirm it is anchored under the actor's
+    // current published SSK generation (cross-signing trust root).
+    let device_public_key = {
+        let mgr = state.cross_signing.lock().expect("cross_signing lock");
+        if mgr.is_device_revoked(&principal, &device) {
+            return Err(untrusted());
+        }
+        let published = mgr
+            .current_cross_signing(&principal)
+            .ok_or_else(untrusted)?;
+        let published_generation = published.generation;
+        let record = mgr.device(&principal, &device).ok_or_else(untrusted)?;
+        // The device MUST participate in the cross-signed trust chain (a bootstrap
+        // binding alone is not a cross-signing anchor) and that binding MUST chain
+        // to the *current* published generation.
+        let binding = record
+            .cross_signing_binding
+            .as_ref()
+            .ok_or_else(untrusted)?;
+        if binding.ssk_generation != published_generation {
+            return Err(untrusted());
+        }
+        // When the envelope declares an ssk_generation it MUST match the binding.
+        if let Some(generation) = claimed_generation {
+            if generation != published_generation {
+                return Err(untrusted());
+            }
+        }
+        record.device_public_key.clone().ok_or_else(untrusted)?
+    };
+
+    // Verify the envelope's auth_data.signature against the anchored device key
+    // over the envelope canonical bytes (signature field stripped), matching the
+    // PUT-time signing transcript.
+    let verifying_key =
+        crate::routing::identity::cross_signing::decode_ed25519_key(&device_public_key, "ed25519")
+            .map_err(|_| untrusted())?;
+    let mut unsigned = backup.clone();
+    if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
+        auth_data.remove("signature");
+    }
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+        AppError::internal(format!(
+            "key backup envelope canonicalization failed: {error}"
+        ))
+    })?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| untrusted())?;
+    let signature = Signature::from_slice(&raw).map_err(|_| untrusted())?;
+    verifying_key
+        .verify(&canonical, &signature)
+        .map_err(|_| untrusted())?;
+    Ok(())
+}
+
 fn key_backup_canonical_digest_without_signature(backup: &Value) -> Result<String, AppError> {
     let mut canonical = backup.clone();
     if let Some(auth_data) = canonical
@@ -1079,7 +1177,12 @@ async fn enforce_key_backup_series_chain(
         .get("supersedes")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    for existing in store.snapshot_all().await.unwrap_or_default() {
+    // Fail closed on DB read errors: an empty snapshot would silently let a
+    // non-monotonic / duplicate-genesis envelope pass the chain guard.
+    let snapshot = store.snapshot_all().await.map_err(|error| {
+        AppError::internal(format!("key backup series chain lookup failed: {error}"))
+    })?;
+    for existing in snapshot {
         if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
             continue;
         }
@@ -1354,13 +1457,18 @@ async fn ensure_key_backup_delete_is_series_tail(
     if series_id.is_empty() {
         return Ok(());
     }
-    for existing in state
+    // Fail closed on DB read errors: an empty snapshot would silently skip the
+    // tail check and allow deleting a non-tail envelope of an active series,
+    // which key-management.md §7.8 forbids (MUST).
+    let snapshot = state
         .persistence
         .key_backups()
         .snapshot_all()
         .await
-        .unwrap_or_default()
-    {
+        .map_err(|error| {
+            AppError::internal(format!("key backup series tail lookup failed: {error}"))
+        })?;
+    for existing in snapshot {
         if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
             continue;
         }
@@ -1565,6 +1673,12 @@ async fn unlock_key_backup(
     // `proof.backup_id` to equal the envelope's own `backup_id`.
     verify_key_backup_unlock_proof(state, proof, &session.actor, &session.device_id, &backup)
         .await?;
+    // key-management.md §7.4.1 — anchor the released envelope's auth_data.signature
+    // to the actor's cross-signing trust root before returning the full ciphertext.
+    // Without this, a malicious/compromised server could substitute an envelope
+    // signed by a revoked old device key; such envelopes MUST be rejected as
+    // `untrusted_backup_signature` even when series chain / ciphertext_digest match.
+    anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup)?;
     // Spec key-management.md §7.8 — per-principal rolling-24h download quota
     // on full-ciphertext reads. The over-threshold download MUST be withheld
     // (429) and MUST land in the audit log as a `key_backup_read` access

@@ -519,3 +519,73 @@ async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     assert_eq!(after.response["retry"]["status"], "retry_scheduled");
     assert!(after.response["per_peer_state"]["next_retry_at"].is_string());
 }
+
+// --- validate_signature_params freshness window (federation.md §3.2) ---
+
+const SIG_TEST_DID: &str = "did:web:test.local";
+
+fn sig_params(extra: &str) -> String {
+    format!(
+        "sig1=(\"@method\");keyid=\"{SIG_TEST_DID}#federation-fanout-key\";alg=\"ed25519\"{extra}"
+    )
+}
+
+#[test]
+fn validate_signature_params_accepts_fresh_window() {
+    let now = Utc::now().timestamp();
+    let params = sig_params(&format!(";created={now};expires={}", now + 120));
+    validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect("fresh signature within ±30s / 300s window must pass");
+}
+
+#[test]
+fn validate_signature_params_rejects_missing_created() {
+    let now = Utc::now().timestamp();
+    let params = sig_params(&format!(";expires={}", now + 120));
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("missing `created` must fail closed");
+    assert!(format!("{err:?}").contains("created"));
+}
+
+#[test]
+fn validate_signature_params_rejects_missing_expires() {
+    let now = Utc::now().timestamp();
+    let params = sig_params(&format!(";created={now}"));
+    let err = validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("missing `expires` must fail closed");
+    assert!(format!("{err:?}").contains("expires"));
+}
+
+#[test]
+fn validate_signature_params_rejects_past_clock_skew() {
+    let now = Utc::now().timestamp();
+    // created 60s in the past exceeds the ±30s window.
+    let params = sig_params(&format!(";created={};expires={}", now - 60, now + 120));
+    validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("created beyond -30s skew must fail closed");
+}
+
+#[test]
+fn validate_signature_params_rejects_future_clock_skew() {
+    let now = Utc::now().timestamp();
+    let params = sig_params(&format!(";created={};expires={}", now + 60, now + 120));
+    validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("created beyond +30s skew must fail closed");
+}
+
+#[test]
+fn validate_signature_params_rejects_window_over_300s() {
+    let now = Utc::now().timestamp();
+    let params = sig_params(&format!(";created={now};expires={}", now + 400));
+    validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("validity window over 300s must fail closed");
+}
+
+#[test]
+fn validate_signature_params_rejects_already_expired() {
+    let now = Utc::now().timestamp();
+    // created within skew but expires already past.
+    let params = sig_params(&format!(";created={};expires={}", now - 20, now - 1));
+    validate_signature_params(&params, SIG_TEST_DID, "test")
+        .expect_err("already-expired signature must fail closed");
+}

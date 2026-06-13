@@ -143,6 +143,12 @@ pub async fn spawn_metrics_server(
         tracing::error!(%error, "failed to install Prometheus metrics recorder");
     }
     let listener = TcpListener::bind(bind).await?;
+    // Bound the number of concurrent in-flight scrape connections so a flood of
+    // slow/zombie connections cannot leak unbounded tasks + socket handles
+    // (SOL-02-005). A scrape endpoint never needs high concurrency.
+    let connection_limit = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        METRICS_MAX_CONCURRENT_CONNECTIONS,
+    ));
     Ok(tokio::spawn(async move {
         loop {
             let (stream, remote_addr) = match listener.accept().await {
@@ -152,15 +158,41 @@ pub async fn spawn_metrics_server(
                     continue;
                 }
             };
+            // Acquire a permit before spawning; if all permits are held, drop the
+            // connection rather than queueing unbounded work.
+            let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                tracing::debug!(%remote_addr, "metrics scrape rejected: connection limit reached");
+                drop(stream);
+                continue;
+            };
             let state = state.clone();
             tokio::spawn(async move {
-                if let Err(error) = handle_metrics_connection(stream, state).await {
-                    tracing::debug!(%remote_addr, %error, "metrics scrape failed");
+                let _permit = permit;
+                // Cap total connection lifetime so a connection that never sends a
+                // request (slowloris/zombie) cannot pin its task forever.
+                match tokio::time::timeout(
+                    METRICS_CONNECTION_TIMEOUT,
+                    handle_metrics_connection(stream, state),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::debug!(%remote_addr, %error, "metrics scrape failed")
+                    }
+                    Err(_) => {
+                        tracing::debug!(%remote_addr, "metrics scrape timed out")
+                    }
                 }
             });
         }
     }))
 }
+
+/// Upper bound on concurrent metrics scrape connections (SOL-02-005).
+const METRICS_MAX_CONCURRENT_CONNECTIONS: usize = 64;
+/// Maximum wall-clock lifetime for a single scrape connection (SOL-02-005).
+const METRICS_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> anyhow::Result<()> {
     let mut buffer = [0_u8; 2048];

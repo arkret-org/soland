@@ -88,10 +88,14 @@ impl PolicyCheckRequestInput {
             "event_preview": self.event_preview,
             "auth_context": self.auth_context,
         });
-        let bytes = cokret_sdk::canonical::canonical_json_bytes(&canonical_input)
-            .unwrap_or_else(|_| Vec::new());
-        let digest = blake3_or_sha256(&bytes);
-        Hash::new(format!("sha256:{digest}"))
+        // SDK is the single source of canonical-JSON + sha256 + `sha256:` prefix
+        // (cokret_sdk::canonical::canonical_sha256), shared with jws_verify /
+        // notary / reducer so the digest is byte-identical across paths. Preserve
+        // the prior fail-open all-zeros fallback for the (canonicalization-error)
+        // edge case rather than introducing a new failure mode here.
+        let digest = cokret_sdk::canonical::canonical_sha256(&canonical_input)
+            .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(b""));
+        Hash::new(digest)
             .unwrap_or_else(|_| Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap())
     }
 
@@ -114,18 +118,6 @@ impl PolicyCheckRequestInput {
             auth_context: self.auth_context,
         }
     }
-}
-
-fn blake3_or_sha256(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    digest.iter().fold(String::with_capacity(64), |mut acc, b| {
-        use std::fmt::Write;
-        let _ = write!(&mut acc, "{b:02x}");
-        acc
-    })
 }
 
 /// Cached decision entry. Stores the canonical wire response plus the

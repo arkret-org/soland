@@ -1081,9 +1081,12 @@ fn profile_limitations() -> Vec<Value> {
             "canonical_path": "/_cokret/gate/account/device-pair",
             "product_paths": [
                 "/_soland/self/devices/pairing-challenge",
-                "/_soland/self/devices/authorize-pairing"
+                "/_soland/self/devices/authorize-pairing",
+                "/_soland/self/devices/pairing-requests",
+                "/_soland/self/devices/pairing-requests/{pairing_request_id}/approve",
+                "/_soland/self/devices/pairing-requests/{pairing_request_id}/reject"
             ],
-            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
+            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. The /_soland/self/devices/pairing-requests* approval family (operation ids org.cokret.soland.devices.pairing_request.*) is a soland product-face deployment extension; v1 core does not define /_cokret/self/devices/pairing-requests* as a canonical approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",
