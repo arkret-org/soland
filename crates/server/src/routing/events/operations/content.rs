@@ -327,7 +327,13 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AudienceMentionNode {
-    pub(crate) audience: String,
+    audience: String,
+}
+
+impl AudienceMentionNode {
+    pub(crate) fn audience(&self) -> &str {
+        &self.audience
+    }
 }
 
 pub(crate) fn operation_audience_mentions(

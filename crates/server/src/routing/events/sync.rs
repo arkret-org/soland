@@ -655,7 +655,6 @@ fn presence_sync_event_json(record: PresenceRecord) -> Value {
     event
 }
 
-
 #[derive(Debug, Default)]
 pub struct SyncCursor {
     /// Visible timeline frontier per Realm.

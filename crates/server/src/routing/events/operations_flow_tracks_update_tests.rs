@@ -1,4 +1,3 @@
-
 use cokret_sdk::Operation;
 use serde_json::json;
 

@@ -1589,7 +1589,6 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     #[test]
