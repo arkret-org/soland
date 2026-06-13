@@ -28,19 +28,19 @@ const DURATION_BUCKETS: [f64; 11] = [
 const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
 
 // ─────────────────────────────────────────────────────────────────────────
-// Metric names. The `metrics-exporter-prometheus` recorder auto-appends the
-// `_total` suffix to counters, so counters that must expose a `_total` name on
-// the wire are REGISTERED without it. Gauges/histograms keep their full name.
-// The exact wire names below are referenced by `examples/prometheus-alerts.yml`
-// and `docs/grafana-operational-dashboard.json` and MUST stay byte-stable.
+// Metric names. The `metrics-exporter-prometheus` text exporter renders metric
+// keys verbatim — it does NOT auto-append the `_total` counter suffix — so the
+// full wire name (including `_total`) is registered here. These exact names are
+// referenced by `examples/prometheus-alerts.yml` and
+// `docs/grafana-operational-dashboard.json` and MUST stay byte-stable.
 // ─────────────────────────────────────────────────────────────────────────
-const REQUEST_COUNTER: &str = "soland_request"; // wire: soland_request_total
+const REQUEST_COUNTER: &str = "soland_request_total";
 const REQUEST_DURATION: &str = "soland_request_duration_seconds";
-const AUDIT_APPEND_FAILURES: &str = "soland_audit_append_failures"; // wire: ..._total
-const FEDERATION_DLQ: &str = "soland_federation_outbox_dead_letter"; // wire: ..._total
-const EGRESS_DENIED: &str = "soland_egress_denied"; // wire: ..._total
-const DIGEST_MISMATCH: &str = "soland_digest_mismatch"; // wire: ..._total
-const FEDERATION_RETRY: &str = "soland_federation_retry"; // wire: ..._total
+const AUDIT_APPEND_FAILURES: &str = "soland_audit_append_failures_total";
+const FEDERATION_DLQ: &str = "soland_federation_outbox_dead_letter_total";
+const EGRESS_DENIED: &str = "soland_egress_denied_total";
+const DIGEST_MISMATCH: &str = "soland_digest_mismatch_total";
+const FEDERATION_RETRY: &str = "soland_federation_retry_total";
 const DB_POOL_IN_USE: &str = "soland_db_pool_in_use";
 const FEDERATION_OUTBOX_DEPTH: &str = "soland_federation_outbox_depth";
 
