@@ -3195,6 +3195,7 @@ async fn durable_events_query_from_parts(
         next_cursor,
         prev_cursor: None,
         has_more,
+        range_completeness: Value::Null,
     }
 }
 

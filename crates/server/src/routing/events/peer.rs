@@ -531,6 +531,7 @@ async fn peer_events_query_response(
         next_cursor,
         prev_cursor,
         has_more,
+        range_completeness: Value::Null,
     })
 }
 
