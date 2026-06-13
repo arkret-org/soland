@@ -59,7 +59,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert!(hidden_bob["results"].as_array().unwrap().is_empty());
+    assert!(hidden_bob["users"].as_array().unwrap().is_empty());
 
     let me: Value = TestClient::get("http://server/_soland/self/account/me")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -151,7 +151,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(visible_bob["results"][0]["actor_id"], "did:web:bob.example");
+    assert_eq!(visible_bob["users"][0]["did"], "did:web:bob.example");
 
     let created_realm = seed_test_realm(
         &state,
@@ -175,7 +175,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .take_json()
             .await
             .unwrap();
-    assert!(hidden_realm["results"].as_array().unwrap().is_empty());
+    assert!(hidden_realm["realms"].as_array().unwrap().is_empty());
 
     let invite_realm = seed_test_realm(
         &state,
@@ -245,7 +245,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .await
             .unwrap();
     assert_eq!(
-        listed_search["results"][0]["realm_id"],
+        listed_search["realms"][0]["realm_id"],
         listed_realm_id.as_str()
     );
     let anonymous_sync_after_listed =
@@ -276,7 +276,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .take_json()
             .await
             .unwrap();
-    assert!(unlisted_search["results"].as_array().unwrap().is_empty());
+    assert!(unlisted_search["realms"].as_array().unwrap().is_empty());
     let unlisted_resolve: Value =
         TestClient::post("http://server/_cokret/find/directory/resolve-realm")
             .json(&serde_json::json!({"realm_id": unlisted_realm_id.clone()}))
@@ -771,7 +771,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert!(directory["results"].as_array().unwrap().is_empty());
+    assert!(directory["realms"].as_array().unwrap().is_empty());
 
     let index: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({"realm_ids": [realm_id]}))

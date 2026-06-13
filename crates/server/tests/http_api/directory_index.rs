@@ -54,7 +54,7 @@ async fn sync_directory_and_index_share_demo_realm() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(directory["results"].as_array().unwrap().len(), 1);
+    assert_eq!(directory["realms"].as_array().unwrap().len(), 1);
 
     let index: Value = TestClient::post("http://server/_soland/self/index/query")
         .json(&serde_json::json!({"realm_ids": ["ck:realm:0196419b-0000-7000-8000-000000000000"]}))
@@ -77,11 +77,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .await
             .unwrap();
     assert_eq!(
-        organizations["results"][0]["preview"]["organization_id"],
+        organizations["organizations"][0]["preview"]["organization_id"],
         "ck:org:demo"
     );
     assert_eq!(
-        organizations["results"][0]["organization_did"],
+        organizations["organizations"][0]["organization_did"],
         "did:web:soland.local"
     );
 
@@ -112,9 +112,9 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(actors["results"][0]["actor_id"], "did:web:alice.example");
+    assert_eq!(actors["actors"][0]["actor_id"], "did:web:alice.example");
     assert_eq!(
-        actors["results"][0]["preview"]["did"],
+        actors["actors"][0]["preview"]["did"],
         "did:web:alice.example"
     );
 
@@ -128,18 +128,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     // DIR-1 (R3.1, cokret-spec @ 7157ee8) — search_users rows surface the
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
-    assert_eq!(users["results"][0]["actor_id"], "did:web:alice.example");
-    assert_eq!(
-        users["results"][0]["preview"]["handle"],
-        "alice:soland.local"
-    );
-    assert!(users["results"][0]["preview"].get("handle_uri").is_none());
-    assert!(users["results"][0]["preview"].get("presence").is_none());
-    assert!(
-        users["results"][0]["preview"]
-            .get("organization_id")
-            .is_none()
-    );
+    assert_eq!(users["users"][0]["did"], "did:web:alice.example");
+    assert_eq!(users["users"][0]["handle"], "alice:soland.local");
+    assert!(users["users"][0].get("handle_uri").is_none());
+    assert!(users["users"][0].get("presence").is_none());
+    assert!(users["users"][0].get("organization_id").is_none());
 
     let handle: Value = TestClient::post("http://server/_cokret/find/directory/resolve-handle")
         .json(&serde_json::json!({"handle": "alice"}))
@@ -232,7 +225,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         .take_json()
         .await
         .unwrap();
-    assert!(hidden_bob["results"].as_array().unwrap().is_empty());
+    assert!(hidden_bob["users"].as_array().unwrap().is_empty());
 
     let realm = seed_test_realm(
         &state,
@@ -350,7 +343,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
             .await;
         assert_eq!(response.status_code.unwrap(), StatusCode::OK);
         let body: Value = response.take_json().await.unwrap();
-        assert!(body["results"].as_array().unwrap().is_empty());
+        assert!(body["organizations"].as_array().unwrap().is_empty());
     }
 }
 

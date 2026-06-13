@@ -9,7 +9,7 @@
 //! - `POST /_cokret/find/directory/search-organizations`
 //! - `POST /_cokret/find/directory/resolve-organization`
 //! - `POST /_cokret/find/directory/search-actors`
-//! - `POST /_cokret/find/directory/search-users`        — same as search-actors via body `q`
+//! - `POST /_cokret/find/directory/search-users`        — mention/user search via body `query`
 //! - `POST /_cokret/find/directory/resolve-handle`
 //! - `POST /_cokret/find/directory/resolve-agent-selector`
 //! - `POST /_cokret/find/directory/list-handles-for-subject`
@@ -39,8 +39,9 @@ use cokret_sdk::{
     DirectorySearchRealmsRequestBody, DirectorySearchUsersRequestBody, DirectorySubjectHandleList,
     DirectoryUserSearchOutcome, Ed25519MoveSigner, JoinRule, LinkType, MoveSigner,
     OrganizationPreview, RealmId, RealmJoinCandidate, RealmJoinCandidateRole,
-    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod, RealmPreview,
-    RealmRef, TargetDescriptor, canonical, parse_address, target_digest, validate_agent_slug,
+    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
+    RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef, TargetDescriptor,
+    UserSearchOutcome, canonical, parse_address, target_digest, validate_agent_slug,
 };
 use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
@@ -160,10 +161,11 @@ async fn search_realms(
 ) -> JsonResult<DirectoryRealmSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
+    let requested_limit = body.limit.unwrap_or(20).clamp(1, 100) as usize;
     let query = RealmDirectoryQuery {
         text: body.query,
         public_only: false,
-        limit: body.limit.map(|limit| limit as usize),
+        limit: Some(requested_limit + 1),
         ..Default::default()
     };
     let session = authenticated_session(state, req).await.ok();
@@ -177,12 +179,17 @@ async fn search_realms(
             results.push(realm_entry);
         }
     }
+    let has_more = results.len() > requested_limit;
+    if has_more {
+        results.truncate(requested_limit);
+    }
     json_ok(DirectoryRealmSearchOutcome {
-        results: results
+        realms: results
             .iter()
             .map(realm_preview_from_directory_entry)
             .collect(),
         next_cursor: None,
+        has_more,
     })
 }
 
@@ -413,25 +420,34 @@ fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> &'static str {
 }
 
 fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) -> RealmPreview {
-    let mut preview = serde_json::Map::new();
-    if let Some(description) = entry.description.as_ref() {
-        preview.insert("summary".to_owned(), json!(description));
-    }
-    if !entry.tags.is_empty() {
-        preview.insert(
-            "tags".to_owned(),
-            json!(entry.tags.iter().cloned().collect::<Vec<_>>()),
-        );
-    }
-    if let Some(category) = entry.category.as_ref() {
-        preview.insert("category".to_owned(), json!(category));
-    }
-    preview.insert("public".to_owned(), json!(entry.public));
-
+    let discoverability = if entry.public {
+        "public"
+    } else {
+        "invite_only"
+    };
     RealmPreview {
         realm_id: entry.realm_id.clone(),
+        alias: None,
         title: Some(entry.title.clone()),
-        preview: Value::Object(preview),
+        avatar_blob_ref: None,
+        organization_did: None,
+        join_rule: Some(join_rule_for_discoverability(discoverability).to_owned()),
+        member_count_bucket: entry
+            .public
+            .then_some(entry.members.len())
+            .filter(|count| *count > 0)
+            .map(member_count_bucket),
+        summary: entry.description.clone(),
+        owning_organizations: Vec::new(),
+        preview_ref: None,
+        discoverability: Some(discoverability.to_owned()),
+        history_visibility: None,
+        join_candidates: Vec::new(),
+        as_of: entry.as_of,
+        source_refs: entry.source_refs.clone(),
+        policy_revision: entry.policy_revision.clone(),
+        stale: None,
+        divergent: None,
     }
 }
 
@@ -544,10 +560,10 @@ async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectory
             json!(realm_history_visibility(state, realm_entry.realm_id.as_str()).await),
         );
     }
-    if fields.contains(&"member_count_bucket") {
+    if fields.contains(&"member_count_bucket") && !realm_entry.members.is_empty() {
         preview.insert(
             "member_count_bucket".to_owned(),
-            json!(member_count_bucket(realm_entry.members.len())),
+            json!(member_count_bucket_wire(realm_entry.members.len())),
         );
     }
     if fields.contains(&"preview_ref") {
@@ -566,20 +582,42 @@ async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectory
         );
     }
 
-    json!({
-        "realm_id": realm_entry.realm_id.as_str(),
-        "title": realm_entry.title,
-        "preview": preview,
-    })
+    preview.insert("realm_id".to_owned(), json!(realm_entry.realm_id.as_str()));
+    preview.insert("as_of".to_owned(), json!(realm_entry.as_of));
+    preview.insert(
+        "source_refs".to_owned(),
+        json!(realm_entry.source_refs.clone()),
+    );
+    preview.insert(
+        "policy_revision".to_owned(),
+        json!(realm_entry.policy_revision.clone()),
+    );
+    Value::Object(preview)
 }
 
-fn member_count_bucket(count: usize) -> &'static str {
+fn member_count_bucket(count: usize) -> RealmMemberCountBucket {
+    RealmMemberCountBucket::Bucket(member_count_bucket_label(count))
+}
+
+fn member_count_bucket_wire(count: usize) -> &'static str {
+    match member_count_bucket_label(count) {
+        RealmMemberCountBucketLabel::OneToTen => "1-10",
+        RealmMemberCountBucketLabel::ElevenToFifty => "11-50",
+        RealmMemberCountBucketLabel::FiftyOneToOneHundred => "51-100",
+        RealmMemberCountBucketLabel::OneHundredOneToFiveHundred => "101-500",
+        RealmMemberCountBucketLabel::FiveHundredOneToTwoThousand => "501-2000",
+        RealmMemberCountBucketLabel::TwoThousandPlus => "2000+",
+    }
+}
+
+fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketLabel {
     match count {
-        0 => "0",
-        1 => "1",
-        2..=10 => "2_10",
-        11..=100 => "11_100",
-        _ => "100_plus",
+        0..=10 => RealmMemberCountBucketLabel::OneToTen,
+        11..=50 => RealmMemberCountBucketLabel::ElevenToFifty,
+        51..=100 => RealmMemberCountBucketLabel::FiftyOneToOneHundred,
+        101..=500 => RealmMemberCountBucketLabel::OneHundredOneToFiveHundred,
+        501..=2000 => RealmMemberCountBucketLabel::FiveHundredOneToTwoThousand,
+        _ => RealmMemberCountBucketLabel::TwoThousandPlus,
     }
 }
 
@@ -897,13 +935,15 @@ async fn search_organizations(
     if state.config.development_mode && query_matches(&organization, body.query.as_deref()) {
         results.push(organization);
     }
+    let has_more = results.len() > limit;
     json_ok(DirectoryOrganizationSearchOutcome {
-        results: results
+        organizations: results
             .into_iter()
             .take(limit)
             .map(|organization| organization_preview_from_value(&organization, state))
             .collect::<Result<Vec<_>, _>>()?,
         next_cursor: None,
+        has_more,
     })
 }
 
@@ -1017,15 +1057,16 @@ async fn search_actors(
         && organization_did.as_str() != state.config.service_did
     {
         return json_ok(DirectoryActorSearchOutcome {
-            results: Vec::new(),
+            actors: Vec::new(),
             next_cursor: None,
+            has_more: false,
         });
     }
 
     let session = authenticated_session(state, req).await.ok();
     let mut results: Vec<ActorPreview> = Vec::new();
     for actor in demo_actors(state).await {
-        if results.len() >= limit {
+        if results.len() > limit {
             break;
         }
         if actor_visible_to(state, &actor, session.as_ref()).await
@@ -1034,9 +1075,14 @@ async fn search_actors(
             results.push(actor_preview_from_value(&actor)?);
         }
     }
+    let has_more = results.len() > limit;
+    if has_more {
+        results.truncate(limit);
+    }
     json_ok(DirectoryActorSearchOutcome {
-        results,
+        actors: results,
         next_cursor: None,
+        has_more,
     })
 }
 
@@ -1055,7 +1101,7 @@ async fn search_users(
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
-    let query = body.q;
+    let query = body.query;
     let session = authenticated_session(state, req).await.ok();
     // DIR-1 (R3.1, cokret-spec @ 7157ee8) — `ck.find.directory.search_users`
     // response rows MUST NOT carry `handle_uri`. Only `handle` (canonical
@@ -1063,44 +1109,61 @@ async fn search_users(
     // survive the rename. Other actor metadata (presence, organization,
     // avatar) goes through `ck.find.directory.search_actors` or
     // `ck.directory.resolve-handle`.
-    let mut results: Vec<ActorPreview> = Vec::new();
+    let mut results: Vec<UserSearchOutcome> = Vec::new();
     for actor in demo_actors(state).await {
-        if results.len() >= limit {
+        if results.len() > limit {
             break;
         }
         if actor_visible_to(state, &actor, session.as_ref()).await
             && query_matches(&actor, Some(query.as_str()))
         {
-            let projected = project_search_users_row(state, &actor);
-            results.push(actor_preview_from_value(&projected)?);
+            results.push(project_search_users_row(state, &actor)?);
         }
     }
-    json_ok(DirectoryUserSearchOutcome { results })
+    let has_more = results.len() > limit;
+    if has_more {
+        results.truncate(limit);
+    }
+    json_ok(DirectoryUserSearchOutcome {
+        users: results,
+        next_cursor: None,
+        has_more,
+    })
 }
 
 /// DIR-1 — project a [`demo_actors`] row into the spec-shape
 /// `ck.find.directory.search_users` response entry. Only `handle` (canonical
 /// `<localpart>:<domain>` per handle-claim.schema.json, cokret-spec @
 /// 7157ee8) + optional `display_name`/`verified`/`subject` survive.
-fn project_search_users_row(state: &AppState, actor: &Value) -> Value {
+fn project_search_users_row(
+    state: &AppState,
+    actor: &Value,
+) -> Result<UserSearchOutcome, AppError> {
     let service_domain = service_handle_domain(&state.config.service_did);
     let canonical = actor
         .get("handle")
         .and_then(Value::as_str)
         .and_then(|handle| canonicalize_handle_for_service(handle, &service_domain))
         .unwrap_or_default();
-    let mut row = serde_json::Map::new();
-    row.insert("handle".to_owned(), json!(canonical));
-    if let Some(display_name) = actor.get("display_name").and_then(Value::as_str) {
-        row.insert("display_name".to_owned(), json!(display_name));
-    }
-    if let Some(did) = actor.get("did").and_then(Value::as_str) {
-        row.insert("subject".to_owned(), json!(did));
-    }
-    if let Some(verified) = actor.get("verified") {
-        row.insert("verified".to_owned(), verified.clone());
-    }
-    Value::Object(row)
+    let did = actor
+        .get("did")
+        .or_else(|| actor.get("subject"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("directory user search row missing DID"))?;
+    Ok(UserSearchOutcome {
+        handle: (!canonical.is_empty()).then_some(canonical),
+        did: Did::new(did.to_owned()).map_err(|error| {
+            AppError::internal(format!("directory user DID is invalid: {error}"))
+        })?,
+        display_name: actor
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        avatar_blob_ref: None,
+        membership: None,
+        verified: actor.get("verified").and_then(Value::as_bool),
+        member_delivery_binding: None,
+    })
 }
 
 #[derive(Debug)]

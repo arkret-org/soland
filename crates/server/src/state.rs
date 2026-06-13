@@ -248,6 +248,9 @@ pub struct RealmDirectoryEntry {
     pub members: BTreeSet<Did>,
     pub public: bool,
     pub category: Option<String>,
+    pub as_of: DateTime<Utc>,
+    pub source_refs: Vec<String>,
+    pub policy_revision: String,
 }
 
 impl RealmDirectoryEntry {
@@ -260,6 +263,9 @@ impl RealmDirectoryEntry {
             members: BTreeSet::new(),
             public: false,
             category: None,
+            as_of: Utc::now(),
+            source_refs: vec![crate::ids::generate_event_id()],
+            policy_revision: "local".to_owned(),
         }
     }
 }
@@ -2887,6 +2893,11 @@ async fn hydrate_realm_create_event(
     entry.description = summary.clone();
     entry.public = discoverability == "public";
     entry.members.insert(actor);
+    entry.as_of = record.received_at;
+    entry.source_refs = vec![record.event_id.clone()];
+    entry.policy_revision = preview_policy_digest
+        .clone()
+        .unwrap_or_else(|| record.canonical_digest.clone());
     realms.upsert(entry);
 
     let meta = RealmMetaRecord {
