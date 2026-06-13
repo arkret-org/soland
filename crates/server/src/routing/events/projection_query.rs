@@ -422,6 +422,8 @@ async fn list_space_container_projections(
         realm_id: response_realm_id,
         spaces,
         total,
+        next_cursor: None,
+        has_more: false,
     })
 }
 
@@ -496,6 +498,8 @@ async fn list_flow_projections(
         realm_id: response_realm_id,
         flows,
         total,
+        next_cursor: None,
+        has_more: false,
     })
 }
 
@@ -557,6 +561,8 @@ async fn list_morph_projections(
         realm_id: response_realm_id,
         morphs,
         total,
+        next_cursor: None,
+        has_more: false,
     })
 }
 
