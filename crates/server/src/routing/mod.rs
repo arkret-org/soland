@@ -25,7 +25,7 @@ pub(crate) mod events;
 // G3.S9: extensions (applet manifest verifier, bot/ghost actor, TSP, sovereign enclave).
 pub mod extensions;
 pub mod federation;
-mod identity;
+pub(crate) mod identity;
 mod interop;
 pub(crate) mod invites;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).

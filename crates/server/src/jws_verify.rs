@@ -27,6 +27,9 @@ use ed25519_dalek::VerifyingKey;
 use crate::persistence::{
     WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS, WebvhFreshness, verify_did_document_freshness,
 };
+use crate::routing::identity::webvh_validation::{
+    WebvhLogEntry, validate_log_chain, validate_witness_policy_for_log, verify_scid_against_did,
+};
 use crate::state::AppState;
 
 /// DID document freshness threshold for high-risk verification paths. Equal
@@ -186,10 +189,77 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
     };
     match verify_did_document_freshness(&record, chrono::Utc::now(), max_age) {
         WebvhFreshness::Fresh => Ok(()),
-        WebvhFreshness::Stale => Err(format!(
-            "DID document is stale for high-risk verification (exceeded {HIGH_RISK_DID_FRESHNESS_MAX_SECS}s freshness window): {did}"
-        )),
+        WebvhFreshness::Stale => {
+            let stale_error = format!(
+                "DID document is stale for high-risk verification (exceeded {HIGH_RISK_DID_FRESHNESS_MAX_SECS}s freshness window): {did}"
+            );
+            if !is_embedded_webvh_document(did, &record) {
+                return Err(stale_error);
+            }
+            if let Err(error) =
+                refresh_embedded_webvh_document_for_high_risk(state, did, &record).await
+            {
+                return Err(format!(
+                    "{stale_error}; embedded refresh unavailable: {error}"
+                ));
+            }
+            Ok(())
+        }
     }
+}
+
+fn is_embedded_webvh_document(did: &Did, record: &crate::state::WebvhDocumentRecord) -> bool {
+    did.as_str().starts_with("did:webvh:")
+        && record
+            .method_evidence
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            == Some("embedded_webvh_provider")
+}
+
+async fn refresh_embedded_webvh_document_for_high_risk(
+    state: &AppState,
+    did: &Did,
+    record: &crate::state::WebvhDocumentRecord,
+) -> Result<(), String> {
+    if !is_embedded_webvh_document(did, record) {
+        return Err("document is not a local embedded did:webvh record".to_owned());
+    }
+
+    let events = state
+        .persistence
+        .webvh()
+        .list_log_events(did.as_str())
+        .await
+        .map_err(|error| format!("DID log lookup failed: {error}"))?;
+    let Some(last_event) = events.last() else {
+        return Err("embedded did:webvh log is empty".to_owned());
+    };
+    if record.seq != last_event.seq {
+        return Err(format!(
+            "embedded did:webvh document seq {} does not match log tail seq {}",
+            record.seq, last_event.seq
+        ));
+    }
+    if record.key_log_head.as_deref() != Some(last_event.event_digest.as_str()) {
+        return Err("embedded did:webvh document head does not match log tail".to_owned());
+    }
+
+    let log: Vec<WebvhLogEntry> = events
+        .iter()
+        .map(|event| WebvhLogEntry::new(event.operation.clone()))
+        .collect();
+    validate_log_chain(&log).map_err(|error| error.to_string())?;
+    verify_scid_against_did(did.as_str(), &log[0]).map_err(|error| error.to_string())?;
+    validate_witness_policy_for_log(&log, chrono::Utc::now().timestamp())
+        .map_err(|error| error.to_string())?;
+
+    state
+        .persistence
+        .webvh()
+        .put_document(record.clone())
+        .await
+        .map_err(|error| format!("DID document refresh write failed: {error}"))
 }
 
 /// High-risk variant of [`resolve_ed25519_verification_key_for_did`]: enforce

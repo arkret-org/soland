@@ -20,7 +20,7 @@ mod profile;
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
 pub(crate) mod recovery;
-pub(super) mod webvh_validation;
+pub(crate) mod webvh_validation;
 
 use super::system::describe;
 use super::{
