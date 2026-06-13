@@ -84,19 +84,16 @@ impl Handler for MetricsMiddleware {
 fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
     match PROMETHEUS_HANDLE.get_or_init(|| {
         let handle = PrometheusBuilder::new()
-            .set_buckets_for_metric(Matcher::Full(REQUEST_DURATION.to_owned()), &DURATION_BUCKETS)
+            .set_buckets_for_metric(
+                Matcher::Full(REQUEST_DURATION.to_owned()),
+                &DURATION_BUCKETS,
+            )
             .map_err(|err| err.to_string())?
             .install_recorder()
             .map_err(|err| err.to_string())?;
 
-        describe_counter!(
-            REQUEST_COUNTER,
-            "HTTP requests by operation and status."
-        );
-        describe_histogram!(
-            REQUEST_DURATION,
-            "HTTP request duration by operation."
-        );
+        describe_counter!(REQUEST_COUNTER, "HTTP requests by operation and status.");
+        describe_histogram!(REQUEST_DURATION, "HTTP request duration by operation.");
         describe_counter!(
             AUDIT_APPEND_FAILURES,
             "Audit-log append failures (spec C.3.7)."
@@ -363,6 +360,10 @@ mod tests {
 
     #[test]
     fn metrics_render_required_http_series() {
+        // Recorder must be installed before any record, else metrics land in
+        // the global no-op recorder (production installs it at startup via
+        // `spawn_metrics_server`).
+        let _ = prometheus_handle();
         let op = "GET /_cokret/self/events/{event_id}";
         record_http_request(op, 200, Duration::from_millis(25));
         let rendered = render();
@@ -381,6 +382,7 @@ mod tests {
 
     #[test]
     fn metrics_render_operational_counters() {
+        let _ = prometheus_handle();
         record_egress_denied("blocked address", "federation outbox");
         record_digest_mismatch("blob upload");
         record_federation_retry_state("retry scheduled");

@@ -911,4 +911,3 @@ pub async fn typing_ephemeral_for_realm(
         })
         .collect()
 }
-

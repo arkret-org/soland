@@ -1192,7 +1192,6 @@ mod presign_block_tests {
             None
         );
     }
-
 }
 
 #[cfg(test)]
