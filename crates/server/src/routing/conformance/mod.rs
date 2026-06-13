@@ -38,7 +38,7 @@ pub(crate) mod util;
 
 use crate::error::{AppError, ErrorCode};
 
-/// Build the `/conformance/*` sub-router. Mounted under `/_cokret/self`.
+/// Build the `/conformance/*` sub-router. Mounted under `/_soland/self`.
 pub fn router() -> Router {
     Router::with_path("conformance")
         .push(Router::with_path("encode").post(handlers::encode))
