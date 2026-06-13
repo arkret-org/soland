@@ -59,11 +59,11 @@ pub(crate) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.list",
+    operation_id = "ck.self.organization.query.list",
     tags("organizations"),
     summary = "List locally known organizations"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.query.list"))]
 async fn list_organizations(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -92,11 +92,11 @@ async fn list_organizations(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.upsert",
+    operation_id = "ck.self.organization.command.upsert",
     tags("organizations"),
     summary = "Create or update a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.upsert"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.command.upsert"))]
 async fn upsert_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -145,11 +145,11 @@ async fn upsert_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.get",
+    operation_id = "ck.self.organization.resource.get",
     tags("organizations"),
     summary = "Read a local organization registry row"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.resource.get"))]
 async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -170,11 +170,11 @@ async fn get_organization(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.policy.get",
+    operation_id = "ck.self.organization.policy.resource.get",
     tags("organizations", "policy"),
     summary = "Read the current organization moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.resource.get"))]
 async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -195,11 +195,11 @@ async fn get_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.policy.set",
+    operation_id = "ck.self.organization.policy.resource.replace",
     tags("organizations", "policy"),
     summary = "Publish an organization moderation policy"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.set"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.policy.resource.replace"))]
 async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -269,11 +269,11 @@ async fn upsert_organization_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.organization.realm.link",
+    operation_id = "ck.self.organization.realm.command.link",
     tags("organizations", "realms"),
     summary = "Link a Realm to an organization policy source"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.organization.realm.link"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.organization.realm.command.link"))]
 async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,

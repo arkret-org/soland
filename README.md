@@ -43,8 +43,8 @@ Operator-visible highlights:
 - **`trust_domain` is now immutable on a Realm** — captured by
   `ck.realm.create` and locked thereafter. Cross-domain replays reject
   with `cross_domain_replay_rejected`.
-- **`ServiceDescribe` v2** — `ck.server.describe` / `ck.self.account.describe` /
-  `ck.self.events.describe` / `ck.edge.applet.describe` return the 17-field
+- **`ServiceDescribe` v2** — `ck.server.query.describe` / `ck.self.account.query.describe` /
+  `ck.self.events.query.describe` / `ck.edge.applet.query.describe` return the 17-field
   canonical envelope, including `trust_domain` / `plaintext_visibility` /
   `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
 - **`/events/frontier` split by role** — `peer_role` query param routes

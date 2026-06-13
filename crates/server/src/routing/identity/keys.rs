@@ -30,11 +30,11 @@ pub(super) fn router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.upload",
+    operation_id = "ck.self.keys.upload.create",
     tags("keys"),
     summary = "Upload device + one-time keys for the current session device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.upload"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.upload.create"))]
 async fn keys_upload(
     aa: AuthArgs,
     body: JsonBody<KeysUploadRequestBody>,
@@ -153,11 +153,11 @@ async fn keys_upload(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.query",
+    operation_id = "ck.self.keys.query.lookup",
     tags("keys"),
     summary = "Fetch device key bundles for a peer set"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.query"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.query.lookup"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryRequestBody>,
@@ -189,11 +189,11 @@ async fn keys_query(
 }
 
 #[endpoint(
-    operation_id = "ck.self.keys.claim",
+    operation_id = "ck.self.keys.command.claim",
     tags("keys"),
     summary = "Claim one-time keys, draining the per-device pool"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.keys.claim"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.keys.command.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
     body: JsonBody<KeysClaimRequestBody>,

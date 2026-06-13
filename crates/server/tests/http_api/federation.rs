@@ -19,13 +19,29 @@ async fn peer_events_describe_advertises_formal_surface() {
 
     assert_eq!(describe["primary_write_path"], "/_cokret/peer/events");
     let operations = describe["supported_operations"].as_array().unwrap();
-    assert!(operations.iter().any(|op| op == "ck.peer.events.submit"));
-    assert!(operations.iter().any(|op| op == "ck.peer.events.query"));
-    assert!(operations.iter().any(|op| op == "ck.peer.events.frontier"));
-    // `ck.peer.snapshot.head` MUST NOT be declared while soland cannot
+    assert!(
+        operations
+            .iter()
+            .any(|op| op == "ck.peer.events.command.submit")
+    );
+    assert!(
+        operations
+            .iter()
+            .any(|op| op == "ck.peer.events.query.scan")
+    );
+    assert!(
+        operations
+            .iter()
+            .any(|op| op == "ck.peer.events.query.frontier")
+    );
+    // `ck.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ck.schema.snapshot.v1 manifest; the endpoint
     // answers `not_implemented` instead (service-surface.md §5.2).
-    assert!(!operations.iter().any(|op| op == "ck.peer.snapshot.head"));
+    assert!(
+        !operations
+            .iter()
+            .any(|op| op == "ck.peer.snapshot.query.manifest_head")
+    );
 }
 
 #[tokio::test]
@@ -204,7 +220,7 @@ fn peer_submit_body(event: &Value) -> Value {
     let event_id = event["event_id"].as_str().unwrap();
     let event_digest = event["canonical_digest"].as_str().unwrap();
     let binding_payload = serde_json::json!({
-        "domain": "ck.peer.events.submit.service_binding.v1",
+        "domain": "ck.peer.events.command.submit.service_binding.v1",
         "realm_id": TEST_REALM_ID,
         "event_id": event_id,
         "canonical_digest": event_digest,

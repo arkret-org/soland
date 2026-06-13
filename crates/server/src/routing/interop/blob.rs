@@ -548,11 +548,11 @@ async fn try_recover_profile_avatar_blob(
 }
 
 #[endpoint(
-    operation_id = "ck.self.blob.presign",
+    operation_id = "ck.self.blob.command.presign",
     tags("blob"),
     summary = "Issue a short-lived presigned blob download URL"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.blob.presign"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.blob.command.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
     body: JsonBody<Value>,

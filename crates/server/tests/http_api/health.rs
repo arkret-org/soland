@@ -119,28 +119,28 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.open.mimi.submit_message")
+            .any(|operation| operation == "ck.open.mimi.command.submit_message")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.events.submit")
+            .any(|operation| operation == "ck.self.events.command.submit")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.blob.upload")
+            .any(|operation| operation == "ck.self.blob.upload.create")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.self.keys.backups.put")
+            .any(|operation| operation == "ck.self.keys.backups.resource.replace")
     );
     for operation in describe["supported_operations"].as_array().unwrap() {
         let operation = operation.as_str().expect("operation id string");

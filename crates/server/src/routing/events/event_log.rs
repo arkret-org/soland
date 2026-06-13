@@ -132,7 +132,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.self.events.submit batch/federation request uses events[], not envelopes[]",
+            "ck.self.events.command.submit batch/federation request uses events[], not envelopes[]",
         );
         return;
     }
@@ -219,11 +219,11 @@ fn envelope_operation_id(envelope: &Value) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.get",
+    operation_id = "ck.self.events.resource.get",
     tags("events"),
     summary = "Fetch one canonical Event Envelope by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.resource.get"))]
 async fn get_event(
     aa: AuthArgs,
     event_id: PathParam<String>,
@@ -248,11 +248,11 @@ async fn get_event(
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.resolve",
+    operation_id = "ck.self.events.query.resolve",
     tags("events"),
     summary = "Resolve up to MAX_EVENT_RESOLVE canonical Event Envelopes by event_id"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -290,7 +290,7 @@ async fn resolve_events(
 /// Internal durable-Event-store reader, kept for actor-scoped audit reads
 /// that bypass the projection layer. Not wired to a public route in the
 /// current API shape —
-/// the canonical `ck.self.events.query` path at `GET /_cokret/self/events` goes to the
+/// the canonical `ck.self.events.query.scan` path at `GET /_cokret/self/events` goes to the
 /// projection-aware handler in `routing/sync.rs::events_query` so message
 /// timeline reads work through `POST /_cokret/self/events` → `events_query`
 /// round-trips.
@@ -447,11 +447,11 @@ async fn events_query_durable_scope(
 }
 
 #[endpoint(
-    operation_id = "ck.self.events.frontier",
+    operation_id = "ck.self.events.query.frontier",
     tags("events"),
     summary = "Actor frontier or Realm Seal view (registered seal_basis / seal_ref sourcing)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.events.frontier"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.events.query.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -695,7 +695,7 @@ pub(super) async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "ck.peer.events.submit body must be an object",
+            "ck.peer.events.command.submit body must be an object",
         );
         return;
     };
@@ -708,7 +708,7 @@ pub(super) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "ck.peer.events.submit permits only service_binding_ref, events, and idempotency_key",
+                "ck.peer.events.command.submit permits only service_binding_ref, events, and idempotency_key",
             );
             return;
         }
@@ -761,7 +761,7 @@ pub(super) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("ck.peer.events.submit body is not canonical-hashable: {error}"),
+                &format!("ck.peer.events.command.submit body is not canonical-hashable: {error}"),
             );
             return;
         }
@@ -784,7 +784,7 @@ pub(super) async fn submit_federation_events(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                &format!("invalid ck.peer.events.submit shape: {error}"),
+                &format!("invalid ck.peer.events.command.submit shape: {error}"),
             );
             return;
         }
@@ -800,7 +800,7 @@ pub(super) async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "missing_param",
-            "ck.peer.events.submit must contain at least one event",
+            "ck.peer.events.command.submit must contain at least one event",
         );
         return;
     }
@@ -809,7 +809,7 @@ pub(super) async fn submit_federation_events(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
-            "ck.peer.events.submit exceeds max batch size",
+            "ck.peer.events.command.submit exceeds max batch size",
         );
         return;
     }
@@ -1360,7 +1360,7 @@ async fn enqueue_peer_event_fanout(
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
-        "domain": "ck.peer.events.submit.service_binding.v1",
+        "domain": "ck.peer.events.command.submit.service_binding.v1",
         "realm_id": parsed.realm_id,
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
@@ -1391,7 +1391,10 @@ async fn enqueue_peer_event_fanout(
     {
         Some(payload) => payload,
         None => {
-            tracing::warn!(event_id, "failed to encode ck.peer.events.submit body");
+            tracing::warn!(
+                event_id,
+                "failed to encode ck.peer.events.command.submit body"
+            );
             return;
         }
     };
@@ -1414,7 +1417,7 @@ async fn enqueue_peer_event_fanout(
                 event_id,
                 peer = %peer_url,
                 peer_did = %peer_did,
-                "failed to enqueue ck.peer.events.submit fanout"
+                "failed to enqueue ck.peer.events.command.submit fanout"
             );
         }
     }
@@ -4586,7 +4589,7 @@ impl SolandEventsSubmitRequestBody {
 }
 
 /// Reject any event kind that is ephemeral or receipt-object-only at the
-/// `ck.self.events.submit` entrypoint. Spec T02 + T23.
+/// `ck.self.events.command.submit` entrypoint. Spec T02 + T23.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the
@@ -4597,7 +4600,7 @@ pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static 
             ErrorCode::SchemaViolation,
             "ephemeral kind MUST be carried via ck.schema.ephemeral_envelope.v1 \
              (broadcast forms) or ck.schema.device_message.v1 \
-             (ck.key.verification.* to-device); not durable ck.self.events.submit",
+             (ck.key.verification.* to-device); not durable ck.self.events.command.submit",
         ));
     }
     if cokret_sdk::events::is_receipt_object_only(kind) {

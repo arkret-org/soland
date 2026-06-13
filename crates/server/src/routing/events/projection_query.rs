@@ -353,11 +353,11 @@ fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<
 // ── Handlers ───────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ck.self.projection.spaces",
+    operation_id = "ck.self.projection.spaces.query.list",
     tags("projection"),
     summary = "List Space lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.projection.spaces.query.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -428,11 +428,11 @@ async fn list_space_container_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.flows",
+    operation_id = "ck.self.projection.flows.query.list",
     tags("projection"),
     summary = "List Flow lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.flows"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.projection.flows.query.list"))]
 async fn list_flow_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -504,11 +504,11 @@ async fn list_flow_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.morphs",
+    operation_id = "ck.self.projection.morphs.query.list",
     tags("projection"),
     summary = "List Morph lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.morphs"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.projection.morphs.query.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

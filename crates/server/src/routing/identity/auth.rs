@@ -5,7 +5,8 @@
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
 //!   `/oauth/introspect`
 //! - `POST /_cokret/gate/account/session-grants` — legacy coauth session-grant bridge
-//! - `POST /_cokret/gate/account/session-grants/revoke` — spec `ck.gate.account.session_revoke`
+//! - `POST /_cokret/gate/account/session-grants/revoke` — spec
+//!   `ck.gate.account.command.revoke_session`
 //! - `POST /_soland/gate/auth/logout` — revoke the bearer + the bound device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
@@ -60,7 +61,7 @@ pub(super) fn protocol_account_router() -> Router {
         .push(
             Router::with_path("session-grants")
             .post(exchange_session_grant)
-            // Spec `account_auth` surface group: `ck.gate.account.session_revoke`
+            // Spec `account_auth` surface group: `ck.gate.account.command.revoke_session`
             // binds to `POST /_cokret/gate/account/session-grants/revoke`.
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
@@ -76,12 +77,12 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.gate.account.device_pair",
+    operation_id = "ck.gate.account.command.pair_device",
     tags("auth"),
     summary = "Pair a new device with approval from the authenticated existing device",
     status_codes(200, 400, 401, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.device_pair"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.pair_device"))]
 async fn account_device_pair(
     aa: super::AuthArgs,
     depot: &mut Depot,
@@ -858,11 +859,11 @@ async fn dev_login(
 }
 
 #[endpoint(
-    operation_id = "ck.gate.account.issue_session_grant",
+    operation_id = "ck.gate.account.command.issue_session_grant",
     tags("auth"),
     summary = "Issue a principal bearer session from a coauth session-grant proof"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.issue_session_grant"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.issue_session_grant"))]
 async fn exchange_session_grant(
     depot: &mut Depot,
     body: JsonBody<SessionGrantExchangeRequestBody>,
@@ -1217,7 +1218,7 @@ async fn logout(
 }
 
 /// `POST /_cokret/gate/account/session-grants/revoke` — spec
-/// `ck.gate.account.session_revoke` (surface group `account_auth`).
+/// `ck.gate.account.command.revoke_session` (surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — the body MAY be omitted (revoke the
 /// calling session); `target_grant_id` / `target_device_id` /
@@ -1229,12 +1230,12 @@ async fn logout(
 /// proof is future work (cf. the device-pairing scaffolds), presence is
 /// enforced here.
 #[endpoint(
-    operation_id = "ck.gate.account.session_revoke",
+    operation_id = "ck.gate.account.command.revoke_session",
     tags("auth"),
     summary = "Revoke session grants / bearer sessions for the calling principal",
     status_codes(200, 400, 401, 403, 404, 422, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.session_revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.revoke_session"))]
 async fn session_revoke(
     aa: super::AuthArgs,
     depot: &mut Depot,

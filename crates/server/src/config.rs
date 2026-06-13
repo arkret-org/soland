@@ -123,7 +123,7 @@ pub struct AppConfig {
     ///
     /// Behavior when `use_keystore=false`: only the env-loaded seed is honored.
     pub use_keystore: bool,
-    /// Federation routing policy. The on-the-wire shape is `ck.peer.events.submit`
+    /// Federation routing policy. The on-the-wire shape is `ck.peer.events.command.submit`
     /// under `/_cokret/peer/events`; the policy only changes which peer set
     /// receives accepted Event fanout.
     ///

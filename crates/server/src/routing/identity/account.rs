@@ -97,7 +97,7 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("account")
                 .push(Router::with_path("viewer").get(account_viewer))
                 // spec `events_sync` surface group (core tier) binds
-                // `ck.self.account.update_profile` to POST /_cokret/self/account/profile;
+                // `ck.self.account.command.update_profile` to POST /_cokret/self/account/profile;
                 // describe advertises it, so it MUST resolve on the protocol surface.
                 .push(Router::with_path("profile").post(update_profile)),
         )
@@ -146,12 +146,12 @@ fn direct_conversation_routes() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.account.viewer",
+    operation_id = "ck.self.account.query.viewer",
     tags("account"),
     summary = "Get the authenticated principal's account viewer projection",
     status_codes(200, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.account.viewer"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.account.query.viewer"))]
 async fn account_viewer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -276,7 +276,7 @@ async fn account_register(
 }
 
 /// `POST /_cokret/gate/account/register` — spec-canonical registration
-/// binding (`ck.gate.account.register`, surface group `account_auth`).
+/// binding (`ck.gate.account.command.register`, surface group `account_auth`).
 ///
 /// Spec: sync/service-http-binding.md — request is
 /// `AccountRegisterRequestBody {principal_id, display_name?, device_id?,
@@ -288,12 +288,12 @@ async fn account_register(
 /// that proof is future work (cf. the device-pairing scaffolds), the field
 /// is currently accepted without cryptographic validation.
 #[endpoint(
-    operation_id = "ck.gate.account.register",
+    operation_id = "ck.gate.account.command.register",
     tags("account"),
     summary = "Register an account (spec account_auth binding)",
     status_codes(200, 400, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.register"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.register"))]
 async fn gate_account_register(
     depot: &mut Depot,
     body: JsonBody<AccountRegisterRequestBody>,
@@ -1932,12 +1932,12 @@ async fn notifications_mark_all_read(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.request",
+    operation_id = "ck.self.contact.command.request",
     tags("contacts"),
     summary = "Open a pending contact relationship",
     status_codes(200, 201, 400, 401, 404, 409, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.request"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.request"))]
 async fn contact_request(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2126,11 +2126,11 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.respond",
+    operation_id = "ck.self.contact.command.respond",
     tags("contacts"),
     summary = "Accept or reject a pending contact request"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.respond"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.respond"))]
 async fn contact_respond(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2230,12 +2230,12 @@ async fn contact_respond(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.tombstone",
+    operation_id = "ck.self.contact.command.tombstone",
     tags("contacts"),
     summary = "Tombstone a contact and revoke contact-managed consent",
     status_codes(200, 400, 401, 404, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.tombstone"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.command.tombstone"))]
 async fn contact_tombstone(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2414,12 +2414,12 @@ fn block_peer_in_invite_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.invite_receive_policy.get",
+    operation_id = "ck.self.invite_receive_policy.resource.get",
     tags("contacts"),
     summary = "Get the authenticated subject's invite-receive policy",
     status_codes(200, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.invite_receive_policy.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.invite_receive_policy.resource.get"))]
 async fn get_invite_receive_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2427,7 +2427,7 @@ async fn get_invite_receive_policy(
 ) -> JsonResult<InviteReceivePolicy> {
     // Spec invite-addressing.md §5 — return the subject's private override
     // from the shared in-memory store (the same store
-    // `ck.self.contact.tombstone(block_peer)` writes `blocked_subjects` to),
+    // `ck.self.contact.command.tombstone(block_peer)` writes `blocked_subjects` to),
     // falling back to the recommended default when none is set.
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -2442,12 +2442,15 @@ async fn get_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.invite_receive_policy.set",
+    operation_id = "ck.self.invite_receive_policy.resource.replace",
     tags("contacts"),
     summary = "Replace the authenticated subject's invite-receive policy",
     status_codes(200, 400, 401, 500)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.invite_receive_policy.set"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.self.invite_receive_policy.resource.replace")
+)]
 async fn set_invite_receive_policy(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2485,11 +2488,11 @@ async fn set_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ck.self.contact.list",
+    operation_id = "ck.self.contact.query.list",
     tags("contacts"),
     summary = "List contacts visible to the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.contact.list"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.contact.query.list"))]
 async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -2512,11 +2515,11 @@ async fn list_contacts(
 }
 
 #[endpoint(
-    operation_id = "ck.self.direct_conversation.resolve",
+    operation_id = "ck.self.direct_conversation.command.resolve",
     tags("contacts"),
     summary = "Resolve or create the canonical 1:1 direct conversation binding"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.direct_conversation.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.direct_conversation.command.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,

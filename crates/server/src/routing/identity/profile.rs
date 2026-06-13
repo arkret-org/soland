@@ -1,6 +1,6 @@
 //! Legacy profile / presence compatibility handler.
 //!
-//! Protocol clients use `ck.self.account.subscribe?set_presence=...` and read
+//! Protocol clients use `ck.self.account.stream.subscribe?set_presence=...` and read
 //! presence from the account aggregate. This module is mounted only under the
 //! `/_soland/self/profile/presence` path.
 //!

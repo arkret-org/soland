@@ -65,7 +65,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(key_material["ok"], true);
     assert_eq!(
         key_material["receipt"]["operation_id"],
-        "ck.open.mimi.key_material"
+        "ck.open.mimi.exchange.request_key_material"
     );
 
     let room_binding: Value =
@@ -131,7 +131,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(mapped["ok"], true);
     assert_eq!(
         mapped["receipt"]["operation_id"],
-        "ck.open.mimi.submit_message"
+        "ck.open.mimi.command.submit_message"
     );
     assert_eq!(
         mapped["receipt"]["extra"]["target_format"],

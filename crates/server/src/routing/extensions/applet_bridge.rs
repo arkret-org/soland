@@ -147,11 +147,11 @@ pub(super) fn protocol_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.ping",
+    operation_id = "ck.edge.applet.query.ping",
     tags("applet"),
     summary = "Applet service liveness probe"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.ping"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint() -> JsonResult<Value> {
     json_ok(json!({
         "ok": true,
@@ -161,11 +161,11 @@ async fn protocol_ping_endpoint() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.describe",
+    operation_id = "ck.edge.applet.query.describe",
     tags("applet"),
     summary = "Describe soland's applet protocol support"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.describe"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<Value> {
     json_ok(json!({
         "contract": "ck.applet.v1",
@@ -181,12 +181,12 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.install.preview",
+    operation_id = "ck.self.applet.install.command.preview",
     tags("applet"),
     summary = "Preview a canonical applet install plan",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.preview"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -212,12 +212,12 @@ async fn install_preview_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.install",
+    operation_id = "ck.self.applet.command.install",
     tags("applet"),
     summary = "Commit a canonical applet install",
     status_codes(200, 201, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.install"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -268,12 +268,12 @@ async fn install_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.self.applet.revoke",
+    operation_id = "ck.self.applet.command.revoke",
     tags("applet"),
     summary = "Revoke a canonical applet install",
     status_codes(200, 400, 401, 403, 404, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.applet.revoke"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -401,12 +401,12 @@ async fn provision_ghost_actor_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.transaction",
+    operation_id = "ck.edge.applet.command.transaction",
     tags("applet"),
     summary = "Receive an applet transaction",
     status_codes(200, 400, 401, 403, 409)
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.transaction"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
     aa: AuthArgs,
     body: JsonBody<Value>,
@@ -464,11 +464,11 @@ async fn transaction_endpoint(
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.resolve_actor",
+    operation_id = "ck.edge.applet.actor.query.resolve",
     tags("applet"),
     summary = "Resolve an applet actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.resolve_actor"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.actor.query.resolve"))]
 async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
     let actor_id = req
         .param::<String>("actor_id")
@@ -488,11 +488,11 @@ async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.resolve_realm",
+    operation_id = "ck.edge.applet.realm.query.resolve",
     tags("applet"),
     summary = "Resolve an applet realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.resolve_realm"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.realm.query.resolve"))]
 async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
     let realm_id_or_alias = req
         .param::<String>("realm_id_or_alias")
@@ -519,11 +519,11 @@ async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.protocol_metadata",
+    operation_id = "ck.edge.applet.query.protocol_metadata",
     tags("applet"),
     summary = "Read applet protocol metadata"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.protocol_metadata"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.protocol_metadata"))]
 async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
     let protocol = req
         .param::<String>("protocol")
@@ -551,11 +551,11 @@ async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.third_party_users",
+    operation_id = "ck.edge.applet.third_party_users.query.list",
     tags("applet"),
     summary = "Resolve a third-party applet user"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_users"))]
+#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_users.query.list"))]
 async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
     let external_id = query_value(req, "user")
         .or_else(|| query_value(req, "user_id"))
@@ -582,11 +582,14 @@ async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
 }
 
 #[endpoint(
-    operation_id = "ck.edge.applet.third_party_locations",
+    operation_id = "ck.edge.applet.third_party_locations.query.list",
     tags("applet"),
     summary = "Resolve a third-party applet location"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_locations"))]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ck.edge.applet.third_party_locations.query.list")
+)]
 async fn third_party_locations_endpoint(req: &mut Request) -> JsonResult<Value> {
     let location = query_value(req, "location")
         .or_else(|| query_value(req, "channel"))

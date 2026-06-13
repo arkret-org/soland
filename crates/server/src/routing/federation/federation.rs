@@ -716,7 +716,7 @@ pub(super) async fn federation_pull_operations(
                 "service_type": "principal_server",
                 "role": "primary",
                 "endpoint": state.config.public_base_url.clone(),
-                "operations": ["ck.self.events.submit"],
+                "operations": ["ck.self.events.command.submit"],
                 "join_methods": ["invite_accept", "member_join", "knock", "application"],
                 "priority": 0,
                 "source": "directory_ingest",

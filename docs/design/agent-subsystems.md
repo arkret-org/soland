@@ -154,7 +154,7 @@ pub(crate) async fn dispatch_message_notifications(
 `routing/events/projection.rs` 处理 `ProjectionEffect::MessageCreated`(及 revise 的新增 mention)处,`spawn` 调 `dispatch_message_notifications`(或推入轻量队列 worker)。同一处也覆盖 `ck.message.revise` 仅对"新增 mention"派生(spec §9.4)。
 
 ### 读取 API
-`GET /_cokret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ck.self.events.subscribe` 投影获得被允许的 mention。
+`GET /_cokret/self/notifications`(新 operation,后续补)读 `NotificationStore` 返回 recipient 的 inbox;agent runtime 经此 + `ck.self.events.stream.subscribe` 投影获得被允许的 mention。
 
 ### 验收
 - alice @bob(普通)→ bob 收到 notification + push。

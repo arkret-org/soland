@@ -60,11 +60,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.put",
+    operation_id = "ck.self.device_messages.command.send",
     tags("device_messages"),
     summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.put"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.command.send"))]
 async fn send_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesPutRequestBody>,
@@ -237,11 +237,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.get",
+    operation_id = "ck.self.device_messages.query.list",
     tags("device_messages"),
     summary = "Pull pending to-device messages for the bound session/device"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.get"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.query.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
     from: QueryParam<String, false>,
@@ -359,11 +359,11 @@ async fn get_device_messages(
 }
 
 #[endpoint(
-    operation_id = "ck.self.device_messages.ack",
+    operation_id = "ck.self.device_messages.command.ack",
     tags("device_messages"),
     summary = "Acknowledge a delivered to-device batch by bearer token"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.ack"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.command.ack"))]
 async fn ack_device_messages(
     aa: AuthArgs,
     body: JsonBody<DeviceMessagesAckRequestBody>,

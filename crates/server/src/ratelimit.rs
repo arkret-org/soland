@@ -44,7 +44,7 @@ pub struct RateLimiterConfig {
 impl Default for RateLimiterConfig {
     fn default() -> Self {
         // Match the `per_minute: 600` quota soland advertises in its
-        // `ck.server.describe` response (`wire::describe`). Wire +
+        // `ck.server.query.describe` response (`wire::describe`). Wire +
         // enforcement MUST agree, otherwise clients budget under the
         // advertised quota and trip 429 in normal long-poll loops.
         Self {

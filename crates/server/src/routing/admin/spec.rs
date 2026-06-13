@@ -1,12 +1,12 @@
-//! Canonical `ck.admin.*` endpoints from the public service spec.
+//! Product-local soland operator endpoints.
 //!
-//! Per cokret-spec `service-http-binding.md` §2.1 the admin surface is a
-//! deployment-local namespace served at the bare `/admin/*` path (NOT under
-//! the `/_cokret/...` protocol prefix). These canonical operations share that
-//! `/admin/*` namespace with the soland operator infrastructure (seal DAG,
-//! bottom-cell repair, multisig — see [`super::seal`]) and the admin
-//! collection snapshot (see [`super::collection`]); salvo router fallthrough
-//! keeps the three sub-trees from colliding.
+//! The public Cokret protocol namespace does not define `ck.admin.*`
+//! operations. soland serves operator-only controls under `/_soland/admin/*`
+//! with local `org.cokret.soland.*` operation IDs. These endpoints share that
+//! namespace with the soland operator infrastructure (seal DAG, bottom-cell
+//! repair, multisig -- see [`super::seal`]) and the admin collection snapshot
+//! (see [`super::collection`]); salvo router fallthrough keeps the three
+//! sub-trees from colliding.
 
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -31,19 +31,19 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
         .push(Router::with_path("devices/{device_id}/revoke").post(revoke_device))
-        // `GET /_soland/admin/moderation/queue` (`ck.admin.get_moderation_queue`)
-        // is the canonical queue read. The operator moderation suite in
+        // `GET /_soland/admin/moderation/queue` is the local queue read.
+        // The operator moderation suite in
         // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
         // sub-paths (queue/{id}/assign, decision, appeals) and
         // deliberately does NOT re-bind the bare `queue` GET to avoid
-        // double-binding the single canonical URL.
+        // double-binding the single URL.
         .push(Router::with_path("moderation/queue").get(get_moderation_queue))
 }
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.get_server_status",
     tags("admin"),
-    summary = "Read canonical service-admin status",
+    summary = "Read operator admin status",
     status_codes(200, 401, 403, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_status"))]

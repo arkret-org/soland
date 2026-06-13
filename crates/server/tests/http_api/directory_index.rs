@@ -172,7 +172,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ck.find.directory.list_handles_for_subject")
+            .any(|operation| operation == "ck.find.directory.query.list_handles_for_subject")
     );
 
     let subject_handles: Value =

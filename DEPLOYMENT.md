@@ -623,7 +623,7 @@ deployments don't carry that cell. Migration
 `20260523_agent_fsm_cell_upgrade.sql`:
 
 1. Iterates the existing `agent_principals` projection.
-2. For each row, inserts a synthetic `ck.self.agent.provision`-equivalent state
+2. For each row, inserts a synthetic `ck.self.agent.command.provision`-equivalent state
    marker into the cell store with state = `Active` and source =
    `migration:r3`.
 3. Sets `lattice = fsm, bottom = reject` on the cell metadata.

@@ -49,11 +49,11 @@ pub(super) fn legacy_router() -> Router {
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.check",
+    operation_id = "ck.self.authz.query.check",
     tags("authz"),
     summary = "Evaluate one (actor, action, resource) authorization decision"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.check"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.query.check"))]
 async fn authz_check(
     aa: AuthArgs,
     body: JsonBody<AuthzCheckRequestBody>,
@@ -210,11 +210,11 @@ fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.get_effective_grants",
+    operation_id = "ck.self.authz.grants.query.effective",
     tags("authz"),
     summary = "List effective authorization grants for a subject"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.get_effective_grants"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.grants.query.effective"))]
 async fn effective_grants(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -573,11 +573,11 @@ async fn revoke_grant(
 }
 
 #[endpoint(
-    operation_id = "ck.self.authz.get_invites",
+    operation_id = "ck.self.authz.invites.query.list",
     tags("authz"),
     summary = "List pending invites for the authenticated actor"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.authz.get_invites"))]
+#[tracing::instrument(skip_all, fields(op = "ck.self.authz.invites.query.list"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
