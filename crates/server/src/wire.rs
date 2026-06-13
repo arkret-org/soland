@@ -512,14 +512,6 @@ pub struct IndexSpaceHierarchyOutcome {
     pub frontier: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SolandBackfillOutcome {
-    pub events: Vec<Value>,
-    pub prev_cursor: Option<String>,
-    pub next_cursor: Option<String>,
-    pub limited: bool,
-}
-
 /// Spec-shape `ck.self.events.frontier` account-client response
 /// (`service-operation-dtos.schema.json#/$defs/EventsFrontierAccountClientState`).
 /// `frontier` is a single object whose shape follows the selector: actor

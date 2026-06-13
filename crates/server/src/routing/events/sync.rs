@@ -58,9 +58,7 @@ use crate::state::{
     AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, PresenceRecord,
     ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord, TypingRecord,
 };
-use crate::wire::{
-    EventsQueryPostRequestBody, SolandBackfillOutcome, SyncDescription, SyncRequestBody,
-};
+use crate::wire::{EventsQueryPostRequestBody, SyncDescription, SyncRequestBody};
 
 const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
@@ -3024,15 +3022,18 @@ async fn events_query_impl(
                     }
                     None => Some(sync_token_for_state(state).await),
                 };
+                let events = full_events_from_projection_json(state, &events).await;
                 return crate::result::json_ok(
-                    serde_json::to_value(SolandBackfillOutcome {
+                    serde_json::to_value(EventsQueryOutcome {
                         events,
+                        snapshot_bootstrap: None,
                         prev_cursor: cursor.clone(),
                         next_cursor: match page.next_cursor {
                             Some(next_cursor) => Some(next_cursor),
                             None => terminal_cursor,
                         },
-                        limited: page.has_more,
+                        has_more: page.has_more,
+                        range_completeness: Value::Null,
                     })
                     .unwrap_or(json!({})),
                 );
@@ -3047,11 +3048,13 @@ async fn events_query_impl(
             }
         }
         return crate::result::json_ok(
-            serde_json::to_value(SolandBackfillOutcome {
+            serde_json::to_value(EventsQueryOutcome {
                 events: Vec::new(),
+                snapshot_bootstrap: None,
                 prev_cursor: cursor.clone(),
                 next_cursor: Some(sync_token_for_state(state).await),
-                limited: false,
+                has_more: false,
+                range_completeness: Value::Null,
             })
             .unwrap_or(json!({})),
         );
@@ -3110,15 +3113,43 @@ async fn events_query_impl(
         Some(next_cursor) => Some(next_cursor),
         None => Some(sync_token_for_state(state).await),
     };
+    let events = full_events_from_projection_json(state, &page_events).await;
     crate::result::json_ok(
-        serde_json::to_value(SolandBackfillOutcome {
-            events: page_events,
+        serde_json::to_value(EventsQueryOutcome {
+            events,
+            snapshot_bootstrap: None,
             prev_cursor: cursor.clone(),
             next_cursor,
-            limited,
+            has_more: limited,
+            range_completeness: Value::Null,
         })
         .unwrap_or(json!({})),
     )
+}
+
+/// Enrich visible projection rows to full spec `Event` envelopes by fetching
+/// each event's canonical record from the durable Event store, so the
+/// Realm-scoped `ck.self.events.query` path returns the spec
+/// `EventsQueryOutcome { events: Vec<Event> }` shape uniformly with the
+/// actor-scoped durable reader (SOL-05-003). Rows whose canonical record is
+/// absent (e.g. fully redacted / tombstoned) are dropped. Visibility and
+/// pagination are already applied to `projection_rows` by the caller.
+async fn full_events_from_projection_json(
+    state: &AppState,
+    projection_rows: &[Value],
+) -> Vec<cokret_sdk::Event> {
+    let mut events = Vec::with_capacity(projection_rows.len());
+    for row in projection_rows {
+        let Some(event_id) = row.get("event_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Ok(Some(record)) = state.persistence.events().get(event_id).await
+            && let Ok(event) = super::event_log::sdk_event_for_state(state, &record)
+        {
+            events.push(event);
+        }
+    }
+    events
 }
 
 async fn durable_events_query_from_parts(
