@@ -11,7 +11,8 @@ pub use cokret_sdk::{
     KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
     KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome, PushNotifyRequestBody,
     RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
-    RealmJoinCandidateSource, RealmJoinMethod,
+    RealmJoinCandidateSource, RealmJoinMethod, SessionGrantExchangeRequestBody,
+    SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -695,31 +696,6 @@ pub struct DevLoginRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SessionGrantExchangeRequestBody {
-    pub grant_jwt: String,
-    pub principal_id: String,
-    pub device_id: String,
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub introspection_proof: Option<SessionGrantIntrospectionProof>,
-}
-
-#[derive(Debug, Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
-pub struct SessionGrantIntrospectionProof {
-    pub challenge: String,
-    pub proof_jwt: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DevLoginOutcome {
-    pub access_token: String,
-    pub token_type: String,
-    pub actor: String,
-    pub device_id: String,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct DevicePairingRequestCreateBody {
     pub pairing_code: String,
     pub new_device_pubkey: Value,
@@ -927,13 +903,6 @@ pub struct SolandKeysBackupsList {
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /
 // `AgentProvisionOutcome` were already SDK-backed.
-pub use cokret_sdk::model::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome, AgentRotateKeyRequestBody,
-    AgentSidecarThreadEnsureOutcome, AgentSidecarThreadEnsureRequestBody, AgentView,
-};
-
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
 // token exchange wire shapes. Both the request body and the response types
 // come straight from the SDK (`CallMediaTokenExchangeRequestBody` carries
@@ -942,6 +911,13 @@ pub use cokret_sdk::model::{
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
 pub use cokret_sdk::model::CallMediaTokenExchangeRequestBody;
+pub use cokret_sdk::model::{
+    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
+    AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
+    AgentSidecarThreadEnsureRequestBody, AgentView,
+};
 pub use cokret_sdk::{CallMediaParticipantBinding, CallMediaTokenExchangeOutcome};
 
 // Recovery policy / receipt endpoints (`recovery_policy_put` /
