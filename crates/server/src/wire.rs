@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-pub use cokret_sdk::api::ops::HardeningStatus;
+pub use cokret_sdk::ops_api::HardeningStatus;
 use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 pub use cokret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
