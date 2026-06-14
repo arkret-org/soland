@@ -839,20 +839,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "list encrypted key backups",
     ),
     (
-        "/_soland/self/devices/pairing-challenge",
-        PathItemType::Post,
-        "devices",
-        "org.cokret.soland.devices.pairing_challenge",
-        "create device pairing challenge",
-    ),
-    (
-        "/_soland/self/devices/authorize-pairing",
-        PathItemType::Post,
-        "devices",
-        "org.cokret.soland.devices.authorize_pairing",
-        "authorize device pairing",
-    ),
-    (
         "/_cokret/edge/push/unregister-device",
         PathItemType::Post,
         "push",

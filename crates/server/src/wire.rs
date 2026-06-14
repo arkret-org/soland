@@ -668,61 +668,6 @@ pub struct DevLoginRequestBody {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DevicePairingRequestCreateBody {
-    pub pairing_code: String,
-    pub new_device_pubkey: Value,
-    pub challenge_signature: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub device_metadata: Value,
-    #[serde(default)]
-    pub expires_in_ms: Option<u64>,
-}
-
-#[derive(Debug, Serialize, Clone, salvo::oapi::ToSchema)]
-pub struct DevicePairingRequestView {
-    pub pairing_request_id: String,
-    pub state: String,
-    pub requesting_device_id: String,
-    pub pairing_code: String,
-    pub new_device_pubkey: Value,
-    pub challenge_signature: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub device_metadata: Value,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approved_by_device_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorized_event_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rejected_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rejected_by_device_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DevicePairingRequestCreateOutcome {
-    pub pairing_request_id: String,
-    pub state: String,
-    pub requesting_device_id: String,
-    pub pairing_code: String,
-    pub expires_at: DateTime<Utc>,
-    pub request: DevicePairingRequestView,
-    pub notified_devices: usize,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DevicePairingRequestListOutcome {
-    pub requests: Vec<DevicePairingRequestView>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct LogoutOutcome {
     pub ok: bool,
@@ -1073,17 +1018,10 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "account_auth.device_pair",
-            "status": "standard_gate_supported_with_legacy_scaffold",
+            "status": "standard_gate_supported",
             "spec_operation": "ck.gate.account.command.pair_device",
             "canonical_path": "/_cokret/gate/account/device-pair",
-            "product_paths": [
-                "/_soland/self/devices/pairing-challenge",
-                "/_soland/self/devices/authorize-pairing",
-                "/_soland/self/devices/pairing-requests",
-                "/_soland/self/devices/pairing-requests/{pairing_request_id}/approve",
-                "/_soland/self/devices/pairing-requests/{pairing_request_id}/reject"
-            ],
-            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration; the older two-step /_soland device paths remain local scaffold compatibility only. The /_soland/self/devices/pairing-requests* approval family (operation ids org.cokret.soland.devices.pairing_request.*) is a soland product-face deployment extension; v1 core does not define /_cokret/self/devices/pairing-requests* as a canonical approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
+            "reason": "ck.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ck.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
             "area": "federation.private_inbound_rail",

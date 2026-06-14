@@ -7,7 +7,6 @@ pub(crate) mod auth;
 pub(crate) mod consent;
 pub(crate) mod contact_federation;
 pub(crate) mod cross_signing;
-mod device;
 pub(super) mod device_messages;
 pub(super) mod did;
 mod identity_link;
@@ -28,11 +27,10 @@ pub(crate) mod webvh_validation;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, bearer_token, classify_handle,
-    device_inventory_to_json, handle_for_did, is_device_revoked, is_valid_handle, normalize_handle,
-    normalize_localpart, now, parse_and_validate_sync_cursor, query_param, render_error,
-    sha256_hex, sync_token_for_client_sync, validate_device_id, validate_device_message_target,
-    validate_did,
+    AuthArgs, SyncCursorError, append_audit_log, bearer_token, classify_handle, handle_for_did,
+    is_device_revoked, is_valid_handle, normalize_handle, normalize_localpart, now,
+    parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
+    sync_token_for_client_sync, validate_device_id, validate_device_message_target, validate_did,
 };
 
 pub fn router() -> Router {
@@ -73,9 +71,6 @@ pub fn protocol_router() -> Router {
                 .push(account_data::router())
                 // Spec `consent` group (`ck.self.consent.*`).
                 .push(consent::router())
-                // SOL-01-012: device management (list/revoke/rename) is a soland
-                // product capability and is mounted on the product face
-                // (/_soland/self/devices*) via `device::router()`, NOT here.
                 .push(keys::router())
                 .push(key_backup::protocol_router())
                 .push(device_messages::protocol_router())
@@ -114,12 +109,11 @@ pub fn legacy_router() -> Router {
         )
         .push(Router::with_path("root").push(recovery::router()))
         // `self` — the principal's own authenticated session surface:
-        // account, contacts, device inventory, keys, key backups, device
-        // messages, presence, personal agents.
+        // account, contacts, keys, key backups, device messages, presence,
+        // personal agents.
         .push(
             Router::with_path("self")
                 .push(account::router())
-                .push(device::router())
                 .push(keys::router())
                 .push(key_backup::legacy_router())
                 .push(device_messages::legacy_router())

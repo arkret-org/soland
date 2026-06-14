@@ -627,8 +627,7 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
 /// `ck.device.revoke` Control Move. v1 scaffold scope: only the principal
 /// may revoke its own sibling devices (recovery-service revocation lands
 /// with the recovery flows), and a device MUST NOT revoke itself
-/// (`device-lifecycle.md` §2.2 self-lockout rule, mirrored from the
-/// `/_soland/self/devices/{id}/revoke` scaffold). The principal-control
+/// (`device-lifecycle.md` §2.2 self-lockout rule). The principal-control
 /// realm binding itself is enforced by
 /// `validate_principal_control_realm_binding`; payload field presence by
 /// the registry payload schema.

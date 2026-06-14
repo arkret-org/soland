@@ -888,7 +888,6 @@ pub struct AppState {
     pub hlc: ServerHlc,
     pub projection: Arc<Mutex<ProjectionState>>,
     pub authz: SolandAuthzEngine,
-    pub device_pairing_requests: Arc<Mutex<BTreeMap<String, DevicePairingRequestRecord>>>,
     pub realms: Arc<Mutex<RealmDirectoryIndex>>,
     /// Cross-signing state machine (PSK→SSK/USK publishes + device trust
     /// chains), per spec crypto-media/device-lifecycle.md §5. Fed by the
@@ -1108,25 +1107,6 @@ pub struct DeviceInventoryRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DevicePairingRequestRecord {
-    pub pairing_request_id: String,
-    pub actor: String,
-    pub requesting_device_id: String,
-    pub pairing_code: String,
-    pub new_device_pubkey: Value,
-    pub challenge_signature: String,
-    pub display_name: Option<String>,
-    pub device_metadata: Value,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub approved_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub approved_by_device_id: Option<String>,
-    pub authorized_event_ref: Option<String>,
-    pub rejected_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub rejected_by_device_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2192,7 +2172,6 @@ impl AppState {
             hlc: ServerHlc::new(&service_did),
             projection: Arc::new(Mutex::new(hydrated)),
             authz: SolandAuthzEngine::new(),
-            device_pairing_requests: Arc::new(Mutex::new(BTreeMap::new())),
             db,
             persistence,
             object_storage,

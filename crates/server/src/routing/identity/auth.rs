@@ -36,12 +36,10 @@ use super::{
     normalize_localpart, now, render_error, validate_device_id, validate_did,
 };
 use crate::error::{AppError, ErrorCode};
-use crate::state::{
-    AccountRecord, AppState, DeviceInventoryRecord, DevicePairingRequestRecord, SessionRecord,
-};
+use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
 use crate::wire::{
-    DevLoginRequestBody, DevicePairingRequestListOutcome, DevicePairingRequestView, LogoutOutcome,
-    SessionGrantExchangeRequestBody, SessionGrantIntrospectionProof, SessionLoginOutcome,
+    DevLoginRequestBody, LogoutOutcome, SessionGrantExchangeRequestBody,
+    SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 
@@ -88,129 +86,6 @@ async fn account_device_pair(
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     json_ok(authorize_account_device_pair(state, &session, body.into_inner()).await?)
-}
-
-pub(super) async fn approve_device_pairing_request(
-    state: &AppState,
-    session: &SessionRecord,
-    pairing_request_id: &str,
-) -> Result<AccountDevicePairOutcome, AppError> {
-    let record = state
-        .device_pairing_requests
-        .lock()
-        .expect("device pairing requests lock")
-        .get(pairing_request_id)
-        .cloned()
-        .ok_or_else(|| AppError::not_found("device pairing request not found"))?;
-    if record.actor != session.actor {
-        return Err(AppError::not_found("device pairing request not found"));
-    }
-    let current_state = device_pairing_request_state(&record, now());
-    if current_state != "pending" {
-        return Err(
-            AppError::conflict(format!("device pairing request is {current_state}"))
-                .with_wire_code("device_pairing_request_not_pending"),
-        );
-    }
-    if record.requesting_device_id == session.device_id {
-        return Err(
-            AppError::conflict("a device cannot approve its own pairing request")
-                .with_wire_code("cannot_pair_current_device"),
-        );
-    }
-    let outcome = authorize_account_device_pair(
-        state,
-        session,
-        AccountDevicePairRequestBody {
-            pairing_code: record.pairing_code.clone(),
-            new_device_pubkey: record.new_device_pubkey.clone(),
-            challenge_signature: record.challenge_signature.clone(),
-            display_name: record.display_name.clone(),
-            device_metadata: record.device_metadata.clone(),
-        },
-    )
-    .await?;
-    let approved_at = now();
-    let authorized_event_ref = serde_json::to_value(&outcome.authorized_event_ref)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned));
-    if let Some(record) = state
-        .device_pairing_requests
-        .lock()
-        .expect("device pairing requests lock")
-        .get_mut(pairing_request_id)
-    {
-        record.approved_at = Some(approved_at);
-        record.approved_by_device_id = Some(session.device_id.clone());
-        record.authorized_event_ref = authorized_event_ref;
-    }
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "account.device_pairing_request.approve",
-        json!({
-            "pairing_request_id": pairing_request_id,
-            "approving_device_id": session.device_id,
-            "requesting_device_id": record.requesting_device_id,
-        }),
-        "accepted",
-    )
-    .await;
-    Ok(outcome)
-}
-
-pub(super) fn list_pending_device_pairing_requests(
-    state: &AppState,
-    actor: &str,
-    current_device_id: &str,
-) -> Vec<DevicePairingRequestView> {
-    let now = now();
-    state
-        .device_pairing_requests
-        .lock()
-        .expect("device pairing requests lock")
-        .values()
-        .filter(|record| record.actor == actor)
-        .filter(|record| record.requesting_device_id != current_device_id)
-        .filter(|record| device_pairing_request_state(record, now) == "pending")
-        .map(|record| device_pairing_request_view(record, now))
-        .collect()
-}
-
-pub(super) fn reject_device_pairing_request(
-    state: &AppState,
-    session: &SessionRecord,
-    pairing_request_id: &str,
-) -> Result<DevicePairingRequestListOutcome, AppError> {
-    let mut requests = state
-        .device_pairing_requests
-        .lock()
-        .expect("device pairing requests lock");
-    {
-        let record = requests
-            .get_mut(pairing_request_id)
-            .ok_or_else(|| AppError::not_found("device pairing request not found"))?;
-        if record.actor != session.actor {
-            return Err(AppError::not_found("device pairing request not found"));
-        }
-        if record.requesting_device_id == session.device_id {
-            return Err(
-                AppError::conflict("a device cannot reject its own pairing request")
-                    .with_wire_code("cannot_pair_current_device"),
-            );
-        }
-        record.rejected_at = Some(now());
-        record.rejected_by_device_id = Some(session.device_id.clone());
-    }
-    let current_time = now();
-    let pending = requests
-        .values()
-        .filter(|record| record.actor == session.actor)
-        .filter(|record| record.requesting_device_id != session.device_id)
-        .filter(|record| device_pairing_request_state(record, current_time) == "pending")
-        .map(|record| device_pairing_request_view(record, current_time))
-        .collect();
-    Ok(DevicePairingRequestListOutcome { requests: pending })
 }
 
 async fn authorize_account_device_pair(
@@ -368,44 +243,6 @@ async fn ensure_authorizing_device_verified(
         );
     }
     Ok(())
-}
-
-fn device_pairing_request_state(
-    record: &DevicePairingRequestRecord,
-    now: DateTime<Utc>,
-) -> &'static str {
-    if record.approved_at.is_some() {
-        "approved"
-    } else if record.rejected_at.is_some() {
-        "rejected"
-    } else if record.expires_at <= now {
-        "expired"
-    } else {
-        "pending"
-    }
-}
-
-fn device_pairing_request_view(
-    record: &DevicePairingRequestRecord,
-    now: DateTime<Utc>,
-) -> DevicePairingRequestView {
-    DevicePairingRequestView {
-        pairing_request_id: record.pairing_request_id.clone(),
-        state: device_pairing_request_state(record, now).to_owned(),
-        requesting_device_id: record.requesting_device_id.clone(),
-        pairing_code: record.pairing_code.clone(),
-        new_device_pubkey: record.new_device_pubkey.clone(),
-        challenge_signature: record.challenge_signature.clone(),
-        display_name: record.display_name.clone(),
-        device_metadata: record.device_metadata.clone(),
-        created_at: record.created_at,
-        expires_at: record.expires_at,
-        approved_at: record.approved_at,
-        approved_by_device_id: record.approved_by_device_id.clone(),
-        authorized_event_ref: record.authorized_event_ref.clone(),
-        rejected_at: record.rejected_at,
-        rejected_by_device_id: record.rejected_by_device_id.clone(),
-    }
 }
 
 fn device_id_from_pair_pubkey(new_device_pubkey: &Value) -> Result<String, AppError> {
