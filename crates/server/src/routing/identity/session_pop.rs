@@ -137,6 +137,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
             Component::TargetUri,
             Component::Authority,
         ])
+        .require_content_digest(false)
     } else {
         SignatureVerificationPolicy::service_ingest().require_content_digest(true)
     }
