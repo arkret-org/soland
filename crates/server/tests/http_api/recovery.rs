@@ -1411,6 +1411,60 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
     assert_eq!(body["error"]["code"], "recovery_policy_mismatch");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn key_backup_delete_rejects_active_did_recovery_backup() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[122u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+
+    let policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
+    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c6";
+    let backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
+    put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
+
+    let body = delete_key_backup(
+        state,
+        &token,
+        &principal_id,
+        backup_id,
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(body["error"]["code"], "key_backup_delete_not_retired");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn key_backup_delete_allows_stale_did_recovery_backup() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[123u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+
+    let v1_policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
+    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c7";
+    let backup = did_recovery_backup_body(&principal_id, backup_id, &v1_policy_id);
+    put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
+
+    seed_recovery_policy(&state, &principal_id, &vm, 2, Some(&v1_policy_id)).await;
+
+    let body = delete_key_backup(state, &token, &principal_id, backup_id, StatusCode::OK).await;
+    assert_eq!(body["deleted"], true);
+    assert_eq!(body["backup_id"], backup_id);
+}
+
 async fn put_key_backup(
     state: AppState,
     token: &str,
@@ -1423,6 +1477,27 @@ async fn put_key_backup(
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(body)
+    .send(&app_from_state(state))
+    .await;
+    let status = response.status_code.unwrap();
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, expected_status, "response body: {body}");
+    body
+}
+
+async fn delete_key_backup(
+    state: AppState,
+    token: &str,
+    principal_id: &str,
+    backup_id: &str,
+    expected_status: StatusCode,
+) -> Value {
+    let proof = format!("dev-ssk-delete:v1:{principal_id}:{backup_id}");
+    let mut response = TestClient::delete(format!(
+        "http://server/_cokret/self/keys/backups/{backup_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({ "proof": proof }))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.unwrap();

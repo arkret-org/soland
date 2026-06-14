@@ -490,8 +490,8 @@ async fn emit_capability_grant_event(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let grant_body =
-        serde_json::to_value(grant).map_err(|e| AppError::internal(format!("grant encode: {e}")))?;
+    let grant_body = serde_json::to_value(grant)
+        .map_err(|e| AppError::internal(format!("grant encode: {e}")))?;
     let payload = json!({
         "grant_id": grant.grant_id,
         "grant": grant_body,
@@ -500,7 +500,10 @@ async fn emit_capability_grant_event(
     accept_local_operations(state, actor, std::slice::from_ref(&operation))
         .await
         .map_err(|reason| {
-            AppError::new(crate::error::ErrorCode::FailedPrecondition, reason.to_owned())
+            AppError::new(
+                crate::error::ErrorCode::FailedPrecondition,
+                reason.to_owned(),
+            )
         })
 }
 
@@ -522,7 +525,10 @@ async fn emit_capability_revoke_event(
     accept_local_operations(state, actor, std::slice::from_ref(&operation))
         .await
         .map_err(|reason| {
-            AppError::new(crate::error::ErrorCode::FailedPrecondition, reason.to_owned())
+            AppError::new(
+                crate::error::ErrorCode::FailedPrecondition,
+                reason.to_owned(),
+            )
         })
 }
 

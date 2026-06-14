@@ -4,22 +4,19 @@
 //! `ck.capability.delegate` into the canonical cells declared by
 //! `event-kind-registry.json`:
 //!
-//! - grant / revoke → `ck.component.capability.grant.v1` (or_set, one cell
-//!   per `payload.grant_id`).
-//! - delegate → `ck.component.capability.delegate.v1` (or_set, one cell per
-//!   `payload.grant_id`) plus a `parent_grant_id` chain reference.
+//! - grant / revoke → `ck.component.capability.grant.v1` (or_set, one cell per `payload.grant_id`).
+//! - delegate → `ck.component.capability.delegate.v1` (or_set, one cell per `payload.grant_id`)
+//!   plus a `parent_grant_id` chain reference.
 //!
 //! Convergence rules (capabilities.md §12.1):
 //! - **grant** = or_set **add**. The add dot is the reducer-deterministic
-//!   `ck:operation:<operation_id>` (the soland reducer's per-event handle;
-//!   the spec's `ck:event:<event_id>:<effect_index>` is the wire form, but
-//!   the legacy `Operation` boundary carries only `operation_id`). value =
-//!   the canonical grant snapshot.
-//! - **revoke** = or_set **observed-remove** on the *same* grant cell. We
-//!   mark the surviving add(s) `revoked` (the read path filters `revoked*`).
-//!   Terminal: a later re-add of the same `grant_id` MUST NOT revive a
-//!   removed add — once a cell holds a revoked entry for the grant, every
-//!   add carries the revoked tombstone forward.
+//!   `ck:operation:<operation_id>` (the soland reducer's per-event handle; the spec's
+//!   `ck:event:<event_id>:<effect_index>` is the wire form, but the legacy `Operation` boundary
+//!   carries only `operation_id`). value = the canonical grant snapshot.
+//! - **revoke** = or_set **observed-remove** on the *same* grant cell. We mark the surviving add(s)
+//!   `revoked` (the read path filters `revoked*`). Terminal: a later re-add of the same `grant_id`
+//!   MUST NOT revive a removed add — once a cell holds a revoked entry for the grant, every add
+//!   carries the revoked tombstone forward.
 //! - `bottom` is **inert** for or_set: we never produce a Bottom cell here.
 //!
 //! Acceptance / fail-closed: the envelope-level `seal_basis` discipline
@@ -285,7 +282,8 @@ impl ProjectionState {
             "tag": capability_add_dot(operation),
             "value": value,
         }));
-        self.cells.insert(cell_ref, CellState::Value(Value::Array(items)));
+        self.cells
+            .insert(cell_ref, CellState::Value(Value::Array(items)));
 
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
     }
@@ -349,7 +347,8 @@ impl ProjectionState {
                 }
             }
         }
-        self.cells.insert(cell_ref, CellState::Value(Value::Array(items)));
+        self.cells
+            .insert(cell_ref, CellState::Value(Value::Array(items)));
 
         ProjectionEffect::CapabilityRevokeProjected { grant_id, realm_id }
     }
@@ -377,7 +376,12 @@ impl ProjectionState {
         let parent_grant_id = body
             .get("parent_grant_id")
             .and_then(Value::as_str)
-            .or_else(|| operation.payload.get("parent_grant_id").and_then(Value::as_str))
+            .or_else(|| {
+                operation
+                    .payload
+                    .get("parent_grant_id")
+                    .and_then(Value::as_str)
+            })
             .map(ToOwned::to_owned);
         let Some(parent) = parent_grant_id.clone() else {
             return ProjectionEffect::Rejected {
@@ -400,10 +404,7 @@ impl ProjectionState {
         let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
         let mut value = grant_item_value(operation, &grant_id, terminal_revoked, now);
         if let Value::Object(map) = &mut value {
-            map.insert(
-                "parent_grant_id".to_owned(),
-                Value::String(parent.clone()),
-            );
+            map.insert("parent_grant_id".to_owned(), Value::String(parent.clone()));
         }
         items.push(serde_json::json!({
             "tag": capability_add_dot(operation),
@@ -411,7 +412,8 @@ impl ProjectionState {
             // refs[role="parent_grant"] — delegation chain anchor (§10).
             "refs": [{ "role": "parent_grant", "id": parent }],
         }));
-        self.cells.insert(cell_ref, CellState::Value(Value::Array(items)));
+        self.cells
+            .insert(cell_ref, CellState::Value(Value::Array(items)));
 
         ProjectionEffect::CapabilityDelegateProjected {
             grant_id,
