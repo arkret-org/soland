@@ -536,6 +536,17 @@ pub struct AppError {
     /// doc on the response: clients MUST NOT parse this value, only
     /// log/display it.
     pub reason_detail: Option<String>,
+    /// When set, render a top-level `reason` field on the error envelope.
+    ///
+    /// Unlike [`Self::reason_detail`] (an opaque diagnostic at
+    /// `error.details.reason_detail`), this is a **stable, normative**
+    /// discriminator that the wire contract pins independently of the generic
+    /// `error.code`. COT-03-001 / `applet-integration.md` §7.3.1 uses it for the
+    /// inbound transaction-push signature failure codes
+    /// (`http_signature_required` / `http_signature_invalid` /
+    /// `signature_window_invalid`), where `error.code` stays the generic
+    /// `unauthenticated` and the discriminator travels in `reason`.
+    pub top_level_reason: Option<String>,
 }
 
 impl AppError {
@@ -546,6 +557,7 @@ impl AppError {
             status: None,
             wire_code_override: None,
             reason_detail: None,
+            top_level_reason: None,
         }
     }
 
@@ -568,6 +580,15 @@ impl AppError {
     /// it as unstable / opaque.
     pub fn with_reason_detail(mut self, reason_detail: impl Into<String>) -> Self {
         self.reason_detail = Some(reason_detail.into());
+        self
+    }
+
+    /// Attach a stable, normative top-level `reason` discriminator. See
+    /// [`AppError::top_level_reason`]. Used by the COT-03-001 inbound
+    /// transaction-push signature path so the `reason` carries the §7.3.1
+    /// failure code while `error.code` stays generic.
+    pub fn with_top_level_reason(mut self, reason: impl Into<String>) -> Self {
+        self.top_level_reason = Some(reason.into());
         self
     }
 
@@ -636,7 +657,16 @@ impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         let status = self.http_status();
         let wire = self.wire_code().to_owned();
-        if let Some(reason_detail) = self.reason_detail.as_deref() {
+        if let Some(reason) = self.top_level_reason.as_deref() {
+            crate::routing::system::util::render_error_with_top_level_reason(
+                res,
+                status,
+                &wire,
+                &self.message,
+                reason,
+                self.reason_detail.as_deref(),
+            );
+        } else if let Some(reason_detail) = self.reason_detail.as_deref() {
             crate::routing::system::util::render_error_with_detail(
                 res,
                 status,

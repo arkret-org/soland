@@ -2,9 +2,11 @@
 //!
 //! Each handler is intentionally thin: it pulls the request body, runs the
 //! forked conformance primitive in [`super::util`], and serializes the
-//! result. The handlers are gated behind [`super::endpoints_enabled`] so
-//! production builds don't carry the conformance surface unless the operator
-//! explicitly opts in via `SOLAND_ENABLE_CONFORMANCE_ENDPOINTS=1`.
+//! result. The handlers are gated behind the `ck.profile.conformance_harness.v1`
+//! build profile: the `/_cokret/_conformance/*` namespace is only mounted when
+//! that profile is active (development_mode=true), and [`super::ensure_enabled`]
+//! is the defense-in-depth handler guard. See [`super`] and
+//! `service-http-binding.md` §2.1.2.
 //!
 //! Wire shapes mirror `cotest/e2e/scenarios/conformance/encoding-vectors.md`
 //! Pre-conditions §:

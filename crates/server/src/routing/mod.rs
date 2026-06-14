@@ -40,16 +40,16 @@ pub(crate) mod realm_policy;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
-use events::strand::{
-    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
-    strand_id_from_realm_id, strand_projection_for_realm,
-};
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
 use events::operations::{validate_canonical_json_value, validate_device_message_target};
 use events::projection::{
     accept_local_operations, ingest_federation_operations, operation_is_visible,
     projection_event_from_operation, redaction_targets_from_operations,
+};
+use events::strand::{
+    default_discussion_track, discussion_track_for_projection_event,
+    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
@@ -110,6 +110,13 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // `Service` level (see `crate::service`), where salvo runs it even when no
     // route matches — so it can never be missed.
     let rate_limiter = RateLimiter::new(rate_limiter_config);
+    // COT-06-002 / service-http-binding.md §2.1.2: decide whether to expose the
+    // test-only `/_cokret/_conformance/*` namespace before `state` is moved into
+    // the affix hoop. The namespace is mounted only when the
+    // `ck.profile.conformance_harness.v1` profile is active; otherwise the
+    // segment stays unknown and falls through to `api_not_found` (404
+    // `unrecognized_endpoint`), exactly as §2.1.2 requires.
+    let conformance_harness_enabled = conformance::harness_profile_enabled(&state.config);
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
@@ -154,7 +161,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(federation::admin_seal_sign_router())
                 .push(soland_local_router()),
         )
-        .push(api_v1_router());
+        .push(api_v1_router(conformance_harness_enabled));
     let doc = cached_cokret_openapi_doc(&router);
     router
         .unshift(
@@ -178,8 +185,8 @@ pub fn router_with_rate_limiter_and_request_size_config(
 /// Each module's `router()` declares its own trust segment in the paths it
 /// pushes (e.g. `events::router()` returns `self/events/...`), so the parent
 /// here only supplies the shared `_cokret` root.
-fn api_v1_router() -> Router {
-    Router::with_path("_cokret")
+fn api_v1_router(conformance_harness_enabled: bool) -> Router {
+    let mut router = Router::with_path("_cokret")
         .oapi_tag("api")
         .hoop(wait_for_sync_token)
         // `/_cokret/describe` (root meta). Integration describe is mounted
@@ -228,26 +235,35 @@ fn api_v1_router() -> Router {
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
         // self/moderation/*, open/mimi/* — `interop::router()` declares its
         // own trust segments.
-        .push(interop::router())
-        // Applet install/package and applet-service interop operations.
-        .push(extensions::protocol_router())
-        // Catch-all so that anything under `/_cokret/...` that the typed
-        // routers above don't match returns the canonical Cokret JSON
-        // error envelope. `cors_preflight` is registered as an OPTIONS
-        // child so CORS preflight stays 204; every other method falls
-        // through to `api_not_found`, which itself decides between 404
-        // (`unrecognized_endpoint`) and 405 (`method_not_allowed` + the
-        // mandatory `Allow` header) based on whether the request path
-        // pattern is registered in the OpenAPI route map. Using `.goal()`
-        // (rather than per-method `.get/.post/...`) is what lets us
-        // distinguish "unknown path, any method" from "known path, wrong
-        // method" centrally instead of leaning on salvo's default 405
-        // logic which has no way to populate the `Allow` header.
-        .push(
-            Router::with_path("{**rest}")
-                .options(cors_preflight)
-                .goal(api_not_found),
-        )
+        .push(interop::router());
+    // Applet install/package and applet-service interop operations.
+    router = router.push(extensions::protocol_router());
+    // COT-06-002 / service-http-binding.md §2.1.2: the test-only
+    // `/_cokret/_conformance/*` namespace is mounted ONLY when the
+    // `ck.profile.conformance_harness.v1` profile is active. In production it is
+    // never pushed, so the segment stays unknown and the catch-all below returns
+    // `404 unrecognized_endpoint` — no business logic, not advertised in
+    // describe / OpenAPI production binding.
+    if conformance_harness_enabled {
+        router = router.push(conformance::router());
+    }
+    // Catch-all so that anything under `/_cokret/...` that the typed
+    // routers above don't match returns the canonical Cokret JSON
+    // error envelope. `cors_preflight` is registered as an OPTIONS
+    // child so CORS preflight stays 204; every other method falls
+    // through to `api_not_found`, which itself decides between 404
+    // (`unrecognized_endpoint`) and 405 (`method_not_allowed` + the
+    // mandatory `Allow` header) based on whether the request path
+    // pattern is registered in the OpenAPI route map. Using `.goal()`
+    // (rather than per-method `.get/.post/...`) is what lets us
+    // distinguish "unknown path, any method" from "known path, wrong
+    // method" centrally instead of leaning on salvo's default 405
+    // logic which has no way to populate the `Allow` header.
+    router.push(
+        Router::with_path("{**rest}")
+            .options(cors_preflight)
+            .goal(api_not_found),
+    )
 }
 
 fn soland_local_router() -> Router {
@@ -272,7 +288,10 @@ fn soland_local_router() -> Router {
                 .push(events::legacy_router())
                 .push(access::legacy_router())
                 .push(admin::audit_router())
-                .push(conformance::router())
+                // COT-06-002 / service-http-binding.md §2.1.2: the conformance
+                // harness surface moved to the reserved `/_cokret/_conformance/*`
+                // namespace (profile-gated in `api_v1_router`). It is no longer
+                // mounted on the `/_soland/self` compat mirror.
                 .push(mls::legacy_router()),
         )
         // `/_soland/find/directory/*` legacy mirror retired — directory

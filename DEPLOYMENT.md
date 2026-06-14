@@ -83,7 +83,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS` | `true` | Restrict pruning to singleton-successor seal chains. |
 | `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` | `50` | Maximum pruning candidates examined per realm walk. |
 | `SOLAND_DID_RESOLVER_ALLOW_METHODS` | `web,key,uuid` | Comma-separated DID methods accepted by outbound DID resolution. |
-| `SOLAND_ENABLE_CONFORMANCE_ENDPOINTS` | unset | Enables local conformance helper endpoints; keep unset in production. |
 | `SOLAND_ERASURE_PROPAGATION_WINDOW_MS` | `604800000` | Erasure receipt propagation window. |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_SERVICE_DID` | unset | Expected service DID when probing `SOLAND_EXTERNAL_WEBVH_PROVIDER_URL`. |
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
