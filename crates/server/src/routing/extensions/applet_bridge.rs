@@ -255,6 +255,13 @@ async fn install_endpoint(
         );
     }
 
+    // Governance gate (P2 — 收口簇1): the canonical install write projects a
+    // `ck.realm.admin`-scoped registration onto the effective_scope realm.
+    // Authentication alone is insufficient — the actor MUST hold realm admin
+    // over that realm. P1 projected capability grants into the authz index, so
+    // `state.authz.check` is authoritative here. fail-closed.
+    require_realm_admin(state, &session.actor, &commit.effective_scope).await?;
+
     let response = register_package_install(
         state,
         &session.actor,
@@ -304,6 +311,10 @@ async fn revoke_install_endpoint(
                 .with_wire_code("applet_effective_scope_mismatch"),
         );
     }
+    // Governance gate (P2 — 收口簇1): revoking a canonical install mutates the
+    // realm-scoped registration; require `ck.realm.admin` over the install's
+    // realm. fail-closed.
+    require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
     json_ok(revoke_applet_record(state, &session.actor, &applet_id).await?)
 }
 
@@ -1998,6 +2009,75 @@ fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
             realm_id.to_string()
         }
     }
+}
+
+/// Governance gate for canonical applet install/revoke (P2 — 收口簇1).
+///
+/// An authenticated session is not enough to register or revoke a realm-scoped
+/// applet install: the actor MUST hold `ck.realm.admin` over the install's
+/// effective_scope realm. P1 projected capability grants into the authz index,
+/// so [`SolandAuthzEngine::check`] is authoritative here. Mirrors the ban gate
+/// in `routing/events/operations/policy.rs::validate_member_state_policy`.
+/// fail-closed: anything other than an explicit allow is rejected with
+/// `applet_registration_unauthorized`.
+async fn require_realm_admin(
+    state: &AppState,
+    actor: &str,
+    scope: &EffectiveScope,
+) -> Result<(), AppError> {
+    let realm_id = effective_scope_realm_id(scope);
+    let (owner, members) = realm_owner_and_members(state, &realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            "ck.realm.admin",
+            &realm_id,
+            &realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err(
+        AppError::capability_denied("actor lacks ck.realm.admin over the applet install realm")
+            .with_wire_code("applet_registration_unauthorized"),
+    )
+}
+
+/// Resolve the realm owner and member set, matching
+/// `routing/events/operations.rs::realm_owner_and_members` (which is module
+/// private). Both feed the authz check's owner/member implicit-grant logic.
+async fn realm_owner_and_members(
+    state: &AppState,
+    realm_id: &str,
+) -> (Option<String>, Vec<String>) {
+    let owner = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| meta.owner);
+    let members = state
+        .realms
+        .lock()
+        .ok()
+        .map(|realms| {
+            if let Some(realm) = RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id))
+            {
+                return realm.members.iter().map(ToString::to_string).collect();
+            }
+            Vec::new()
+        })
+        .unwrap_or_default();
+    (owner, members)
 }
 
 fn manifest_from_package(package: &AppletPackage) -> AppletManifest {
