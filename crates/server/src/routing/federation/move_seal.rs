@@ -208,6 +208,7 @@ async fn submit_move(
     body: JsonBody<Move>,
 ) -> JsonResult<SubmitMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    super::federation::ensure_private_inbound_write_rail_local(state)?;
     let _session = aa.authenticated_session(state, req).await?;
     let move_obj = body.into_inner();
 
@@ -289,6 +290,7 @@ async fn submit_seal(
     body: JsonBody<Seal>,
 ) -> JsonResult<SubmitSealOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    super::federation::ensure_private_inbound_write_rail_local(state)?;
     let _session = aa.authenticated_session(state, req).await?;
     let seal = body.into_inner();
 

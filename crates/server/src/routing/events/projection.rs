@@ -31,9 +31,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
-    strand_id_from_realm_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
-    validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
+    default_discussion_track, discussion_track_for_projection_event, is_valid_discoverability,
+    message_id_from_event_id, now, strand_id_for_projection_event, strand_id_from_realm_id,
+    touch_realm, validate_content_encryption_floor, validate_operation_policy,
+    validate_operation_semantics,
 };
 use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
 use crate::reducer::MlsWelcomeQueueKey;
@@ -1257,7 +1258,7 @@ async fn mirror_mls_effect_to_persistence(
 async fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
     use crate::persistence::{
-        StrandProjectionRecord, MorphProjectionRecord, SpaceContainerProjectionRecord,
+        MorphProjectionRecord, SpaceContainerProjectionRecord, StrandProjectionRecord,
     };
     use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 
@@ -2357,6 +2358,29 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         );
         return;
     }
+    // SPEC-CR-010 / SOL-05-008 — the effective-set / replaces / R3.2 digest id
+    // space is the typed `ck:event:` id (event-payload.schema.json
+    // `event_ref`, client-sync.md R3.2 `effective_events[].event_id`), NOT the
+    // `ck:operation:` id. `projection_operation_from_event` already threads the
+    // canonical Event id through `payload.event_id`, so prefer it; fall back to
+    // deriving `ck:event:<uuid>` from the operation id's UUID suffix (same
+    // suffix as the matching `ck:operation:<uuid>`) so projection never stores
+    // an operation id that a spec-compliant client's `replaces[].event_id`
+    // (which is `ck:event:`) can never match.
+    let canonical_event_id = payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .filter(|value| value.starts_with("ck:event:"))
+        .map(str::to_owned)
+        .or_else(|| {
+            operation
+                .operation_id
+                .as_str()
+                .strip_prefix("ck:operation:")
+                .map(|suffix| format!("ck:event:{suffix}"))
+        })
+        .unwrap_or_else(|| operation.operation_id.to_string());
+
     // MID-2/MID-5: canonical digest over the full `identity_payload`
     // carrier object as received. soland MUST NOT rewrite the envelope —
     // the digest goes on every subsequent event's
@@ -2431,6 +2455,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     // Operation wrapper inside the durable Event; the inner payload (and
     // its `actor_id` field) round-trip verbatim through `payload`.
     let raw_event = json!({
+        "event_id": canonical_event_id,
         "operation_id": operation.operation_id.to_string(),
         "event_kind": kinds::CK_MEMBER_IDENTITY_UPDATE,
         "realm_id": operation.realm_id.as_str(),
@@ -2438,7 +2463,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         "payload": operation.payload.clone(),
     });
     let record = MemberIdentityEventRecord {
-        event_id: operation.operation_id.to_string(),
+        event_id: canonical_event_id,
         subject: MemberIdentitySubjectKey {
             realm_id,
             actor_id,

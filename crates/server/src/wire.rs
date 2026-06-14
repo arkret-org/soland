@@ -1030,7 +1030,39 @@ fn profile_limitations() -> Vec<Value> {
                 "/_soland/peer/moves",
                 "/_soland/peer/seals"
             ],
-            "reason": "the /_soland/peer/* inbound federation surface (transactions, operations push/pull/backfill/frontier, moves/seals direct ingest, realm-members, verify-actor) is a deployment-local test/ops rail only; it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop — the protocol S2S entry point is the /_cokret/peer/* surface group"
+            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_cokret/peer/events (ck.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
+        }),
+        json!({
+            "area": "consent.scope_any_cross_service_cascade",
+            "status": "partial_local_only",
+            "spec": "T17",
+            "implemented": "a holder `ck.consent.revoke` with scope=any is honored on read: every child-scope grant resolution folds the `any` cell (see has_active_consent / has_active_consent_grant_evidence), so an any-revoke withdraws all child scopes for local consent decisions",
+            "unsupported": "the cross-service cache-invalidation broadcast to downstream consumers (directory_reachability / mimi_consent / push_contact_psi / invite_gate / in_flight_invite on teabay / floria / coauth) and the per-child-scope `superseded_by_any_revoke` durable marker are not emitted; this deployment has no production cross-service consent-invalidation fanout path",
+            "reason": "the local any-revoke effect is complete; the cross-service invalidation channels require a fanout transport soland does not implement"
+        }),
+        json!({
+            "area": "identity.resolver_health_signal",
+            "status": "verifier_only_unwired",
+            "spec": "SEC-01 / identity-did.md §3.4",
+            "implemented": "a signed resolver degraded/health signal verifier (ResolverHealthSignal canonical transcript, ed25519 signature verification, fail-closed consumer verdict that rounds missing/unauthorized/stale/degraded toward FailClosed for high-risk writes) exists as a reference contract",
+            "unsupported": "no inbound channel feeds signed resolver-health signals to this deployment and high-risk-write paths (grant/revoke, recovery, device-authorization, key-rotation, MLS commit, realm-join, invite-accept) do not yet consult the verdict",
+            "reason": "soland is a relying party; wiring the verdict requires a resolver-health signal feed and per-write gate that are not present"
+        }),
+        json!({
+            "area": "federation.delivery_binding_handover_emit",
+            "status": "emit_shape_only_unwired",
+            "spec": "B1.9 / federation.md service-binding handover",
+            "implemented": "the 409 emit shapes for `delivery_binding_stale` and `delivery_binding_handed_over` are defined as reference contracts",
+            "unsupported": "the protocol receive track does not yet detect a stale/handed-over delivery binding and therefore never emits these 409s; doing so requires the B1.7/B1.8 service-binding handover state machine (current recipient tracking + handover frontier) which is not implemented",
+            "reason": "delivery-binding handover detection needs binding-state tracking soland does not maintain"
+        }),
+        json!({
+            "area": "audit.policy_receipt_emit",
+            "status": "builder_only_unwired",
+            "spec": "B1.12 / B1.16",
+            "implemented": "typed builders for the audit policy version hash and the late-key-recovery `ck.audit.policy_access` payload exist as reference contracts for out-of-tree signers",
+            "unsupported": "soland does not emit signed audit policy receipts on any production route; the builders are not invoked by a server emission path",
+            "reason": "no production audit-receipt emission path is wired in this deployment"
         }),
     ]
 }

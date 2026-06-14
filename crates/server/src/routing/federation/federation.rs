@@ -36,6 +36,31 @@ use crate::state::{AppState, FederationTransactionRecord};
 
 const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
+/// SPEC-CR-008 (federation.md §4.0) — the cross-deployment federation Event
+/// receive rail is converged onto a single track: `POST /_cokret/peer/events`
+/// (`ck.peer.events.command.submit`). The legacy `/_soland/peer/*` inbound
+/// *write* surface (transactions, operations push/backfill, seals push) is a
+/// deployment-local test/ops rail only and MUST NOT serve as a cross-vendor
+/// interop entry point: it MUST NOT accept Move/Anchor/Operation pushes from a
+/// remote federation peer.
+///
+/// This guard fail-closes those write tracks outside deployment-local mode so
+/// the only inbound interop posture is the protocol track. Read-only debug
+/// tracks (pull/frontier/realm-members/actor-events/seals-pull) are not gated:
+/// they expose no interop write surface. When the rail is disabled the error
+/// points callers at the canonical receive track.
+pub(super) fn ensure_private_inbound_write_rail_local(state: &AppState) -> Result<(), AppError> {
+    if state.config.development_mode {
+        return Ok(());
+    }
+    Err(AppError::unsupported_feature(
+        "the /_soland/peer/* inbound write rail is a deployment-local test/ops affordance and is \
+         not a cross-deployment federation interop entry point; submit sealed Event Envelopes to \
+         the protocol track POST /_cokret/peer/events (ck.peer.events.command.submit) instead",
+    )
+    .with_wire_code("federation_interop_track_only"))
+}
+
 /// Placeholder status stamped by `try_begin` while an inbound federation
 /// transaction is being ingested. A row in this state means some worker
 /// claimed the `(origin, txn_id)` idempotency slot but has not yet written
@@ -117,6 +142,7 @@ pub(super) async fn federation_transaction(
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::FederationTransactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_write_rail_local(state)?;
     let txn_id = txn_id.into_inner();
     if !is_valid_federation_txn_id(&txn_id) {
         return Err(AppError::invalid_param("invalid federation transaction id"));
@@ -364,6 +390,7 @@ pub(super) async fn federation_push_operations(
     req: &mut Request,
 ) -> JsonResult<cokret_sdk::FederationPushOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     if !verify_federation_origin(body.origin.as_str()) {
         return Err(AppError::unauthenticated(
@@ -822,6 +849,7 @@ pub(super) async fn federation_backfill_operations(
     depot: &mut Depot,
 ) -> JsonResult<FederationBackfillOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     let realm_id = body.realm_id.trim().to_owned();
     if realm_id.is_empty() {
@@ -2068,6 +2096,7 @@ pub(super) async fn federation_seals_push(
     body: JsonBody<FederationSealsPushRequestBody>,
 ) -> JsonResult<FederationSealsPushOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
+    ensure_private_inbound_write_rail_local(state)?;
     let body = body.into_inner();
     if !verify_federation_origin(&body.origin) {
         return Err(AppError::new(
