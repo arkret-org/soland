@@ -3,7 +3,8 @@
 //! Surfaces:
 //! - `GET /_soland/admin/{resource}` — paginated dev snapshot of one of the builtin admin
 //!   collections (`actors`, `realms`, `spaces`, `devices`, `capabilities`, `federation`, `applets`,
-//!   `agents`, `reports`, `invite-tokens`, `audit`, `policy`, `media`). `realms` are security
+//!   `agents`, `reports`, `invite-tokens`, `audit`, `policy`, `media`, `handles`). `realms` are
+//!   security
 //!   boundaries; `spaces` are authorization-transparent navigation containers.
 //!
 //! Authorization is enforced by the shared `RequireAdmin` middleware with
@@ -271,6 +272,14 @@ pub(super) async fn admin_collection(
         ),
         "policy" => ("policy", admin_policy_items(state).await),
         "media" => ("media", admin_media_items(state).await),
+        "handles" => (
+            "handles",
+            super::handles::admin_handle_items(state)
+                .await
+                .into_iter()
+                .map(|item| json!(item))
+                .collect(),
+        ),
         _ => {
             return Err(AppError::not_found("admin resource not found"));
         }

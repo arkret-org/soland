@@ -76,7 +76,7 @@ fn handle_in_grace_period(state: &AppState, localpart: &str) -> bool {
     elapsed < chrono::Duration::seconds(HANDLE_GRACE_PERIOD_SECONDS)
 }
 
-fn record_handle_release(state: &AppState, localpart: &str) {
+pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
     releases.insert(localpart.to_owned(), chrono::Utc::now());
 }

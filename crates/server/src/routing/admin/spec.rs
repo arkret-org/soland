@@ -40,6 +40,43 @@ struct AdminServerStatusOutcome {
     counts: AdminServerStatusCounts,
 }
 
+/// `GET /_soland/admin/server/info` response. Mirrors sodmin's
+/// `ServerInfo` DTO (`sodmin/src/types/server.rs`). Node version / build /
+/// key config the operator dashboard surfaces at a glance.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminServerInfoOutcome {
+    server_version: String,
+    protocol_version: Option<String>,
+    server_name: Option<String>,
+    uptime: Option<u64>,
+    service_did: String,
+    trust_domain: String,
+    development_mode: bool,
+    /// Whether the deployment accepts public self-registration. soland
+    /// does not gate registration on a dedicated flag yet, so this tracks
+    /// `development_mode` (open in dev, closed otherwise) until the
+    /// registration-policy cell lands.
+    allow_public_registration: bool,
+}
+
+/// `GET /_soland/admin/server/stats` response. Mirrors sodmin's
+/// `ServerStats` DTO. Counts are best-effort snapshots off the live
+/// persistence / projection stores; unavailable counters fall back to 0.
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminServerStatsOutcome {
+    actor_count: u64,
+    active_actor_count: u64,
+    realm_count: u64,
+    device_count: u64,
+    report_count: u64,
+    federation_peer_count: u64,
+    applet_count: u64,
+    agent_count: u64,
+    blob_count: u64,
+    blob_total_size: u64,
+    generated_at: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminAccountStatusRequestBody {
     status: String,
@@ -97,6 +134,8 @@ struct AdminModerationQueueOutcome {
 pub(super) fn router() -> Router {
     Router::with_path("admin")
         .push(Router::with_path("server/status").get(get_server_status))
+        .push(Router::with_path("server/info").get(get_server_info))
+        .push(Router::with_path("server/stats").get(get_server_stats))
         .push(Router::with_path("accounts/{account_id}/status").post(update_account_status))
         .push(Router::with_path("accounts/{account_id}/lock").post(lock_account))
         .push(Router::with_path("accounts/{account_id}/unlock").post(unlock_account))
@@ -160,6 +199,110 @@ async fn get_server_status(
             devices: device_count,
             realms: realm_count,
         },
+    })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.admin.get_server_info",
+    tags("admin"),
+    summary = "Read operator node info (version / build / key config)",
+    status_codes(200, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_info"))]
+async fn get_server_info(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServerInfoOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let _ = require_admin_principal(state, session)?;
+    json_ok(AdminServerInfoOutcome {
+        server_version: env!("CARGO_PKG_VERSION").to_owned(),
+        protocol_version: Some(cokret_sdk::PROTOCOL_VERSION.to_owned()),
+        server_name: Some(state.config.service_did.clone()),
+        uptime: None,
+        service_did: state.config.service_did.clone(),
+        trust_domain: state.config.trust_domain.clone(),
+        development_mode: state.config.development_mode,
+        allow_public_registration: state.config.development_mode,
+    })
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.admin.get_server_stats",
+    tags("admin"),
+    summary = "Read operator node counters (accounts / realms / devices / storage)",
+    status_codes(200, 401, 403, 500)
+)]
+#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.admin.get_server_stats"))]
+async fn get_server_stats(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AdminServerStatsOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let _ = require_admin_principal(state, session)?;
+
+    let accounts = state
+        .persistence
+        .accounts()
+        .list()
+        .await
+        .unwrap_or_default();
+    let actor_count = accounts.len() as u64;
+    let active_actor_count = accounts
+        .iter()
+        .filter(|account| state.account_lifecycle_state(&account.did) == "active")
+        .count() as u64;
+    let realm_count = state
+        .realms
+        .lock()
+        .expect("realms lock")
+        .search(Default::default())
+        .len() as u64;
+    let device_count = state
+        .persistence
+        .devices()
+        .list()
+        .await
+        .map(|items| items.len() as u64)
+        .unwrap_or(0);
+    let report_count = state
+        .persistence
+        .moderation()
+        .list_queue_items()
+        .await
+        .map(|items| items.len() as u64)
+        .unwrap_or(0);
+    let federation_peer_count = state.config.federation_peers.len() as u64;
+    let (applet_count, agent_count) = state
+        .projection
+        .lock()
+        .map(|proj| (proj.applets.len() as u64, proj.agents.len() as u64))
+        .unwrap_or((0, 0));
+    let blobs = state
+        .persistence
+        .blobs()
+        .snapshot_all()
+        .await
+        .unwrap_or_default();
+    let blob_count = blobs.len() as u64;
+    let blob_total_size = blobs.iter().map(|blob| blob.size_bytes as u64).sum();
+
+    json_ok(AdminServerStatsOutcome {
+        actor_count,
+        active_actor_count,
+        realm_count,
+        device_count,
+        report_count,
+        federation_peer_count,
+        applet_count,
+        agent_count,
+        blob_count,
+        blob_total_size,
+        generated_at: super::now().to_rfc3339(),
     })
 }
 

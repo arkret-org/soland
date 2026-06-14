@@ -633,6 +633,17 @@ impl MemberIdentityRegistry {
             .unwrap_or_default()
     }
 
+    /// Snapshot every locally-cached handle-claim evidence record keyed by
+    /// claim `subject`. Drives the operator handles admin surface
+    /// (`GET /_soland/admin/handles`); the durable handle CRDT projection
+    /// is not yet wired, so this local evidence cache is the authoritative
+    /// read source until it lands.
+    pub fn snapshot_handle_claims(
+        &self,
+    ) -> std::collections::BTreeMap<String, Vec<HandleClaimEvidenceRecord>> {
+        self.handle_claims_by_subject.clone()
+    }
+
     /// MIU-SOL-3 (R3.2) — compute the current writer-observed
     /// effective-set digest for `(realm_id, actor_id)` across all stored
     /// segments. This is the value an incoming event's
