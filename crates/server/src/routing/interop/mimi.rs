@@ -18,11 +18,17 @@
 //! the receiving Cokret consumer can prove the message arrived
 //! through the MIMI facade rather than as a native signed Move.
 
+use std::collections::BTreeMap;
+
 use chrono::Duration;
 use cokret_sdk::{
-    MimiIdentifierQueryRequestBody, MimiKeyMaterialRequestBody, MimiNotifyRequestBody,
-    MimiProxyDownloadRequestBody, MimiReportAbuseRequestBody, MimiRequestConsentRequestBody,
-    MimiRoomUpdateRequestBody, MimiSubmitMessageRequestBody, MimiUpdateConsentRequestBody, RealmId,
+    Did, EventId, MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
+    MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,
+    MimiProxyDownloadOutcome, MimiProxyDownloadRequestBody, MimiReportAbuseOutcome,
+    MimiReportAbuseRequestBody, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
+    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
+    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, RealmId,
+    ReportId,
 };
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -81,7 +87,7 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
 async fn mimi_key_material(
     body: JsonBody<MimiKeyMaterialRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiKeyMaterialOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -94,16 +100,21 @@ async fn mimi_key_material(
         .or_else(|| body.get("flow_id"))
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
-    json_ok(json!({
-        "ok": true,
-        "key_packages": [],
-        "failures": {},
-        "receipt": mimi_receipt(state, "ck.open.mimi.exchange.request_key_material", &body, json!({
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.exchange.request_key_material",
+        &body,
+        json!({
             "target": target,
             "keypackage_claim_lifecycle": "single_use_required",
             "production_gap": "full_mls_keypackage_claim_not_implemented"
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiKeyMaterialOutcome {
+        key_packages: Vec::new(),
+        group_info: Value::Null,
+        failures: json!([]),
+    })
 }
 
 #[endpoint(
@@ -116,7 +127,7 @@ async fn mimi_room_update(
     flow_id: PathParam<String>,
     body: JsonBody<MimiRoomUpdateRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiRoomUpdateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
@@ -157,17 +168,27 @@ async fn mimi_room_update(
         _ => None,
     };
 
-    json_ok(json!({
-        "ok": true,
-        "room_id": room_id,
-        "binding_event_id": binding_event_id,
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.update_room", &body, json!({
+    let room_state_ref = binding_event_id
+        .as_deref()
+        .map(EventId::new)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("MIMI room state ref: {error}")))?;
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.update_room",
+        &body,
+        json!({
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "truth_source": "cokret_signed_event_reducer",
             "status": "projected",
             "binding_emitted": binding_event_id.is_some(),
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiRoomUpdateOutcome {
+        accepted: true,
+        room_state_ref,
+        rejected: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -180,7 +201,7 @@ async fn mimi_notify(
     flow_id: PathParam<String>,
     body: JsonBody<MimiNotifyRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiNotifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
@@ -222,19 +243,21 @@ async fn mimi_notify(
         crate::routing::events::projection::projection_event_json(&notify_record),
     ));
 
-    // Note: response semantics shift from 202 Accepted to 200 OK with the
-    // typed conversion; salvo-oapi typed handlers default to 200 and the
-    // status-code distinction wasn't load-bearing for any caller.
-    json_ok(json!({
-        "ok": true,
-        "accepted": [room_id],
-        "broadcast_event_id": event_id,
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.notify", &body, json!({
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.notify",
+        &body,
+        json!({
             "delivery": "queued",
             "mimi_room_uri": mimi_room_uri(state, &room_id),
             "broadcast_emitted": true,
-        }))
-    }))
+            "broadcast_event_id": event_id,
+        }),
+    );
+    json_ok(MimiNotifyOutcome {
+        accepted: true,
+        retry_after_ms: None,
+    })
 }
 
 #[endpoint(
@@ -247,7 +270,7 @@ async fn mimi_room_message(
     flow_id: PathParam<String>,
     body: JsonBody<MimiSubmitMessageRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiSubmitMessageOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
@@ -366,7 +389,7 @@ async fn mimi_room_message(
         tracing::error!(%error, "mimi: failed to mirror message into projection_events");
     }
 
-    let receipt = mimi_receipt(
+    let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.command.submit_message",
         &body,
@@ -404,15 +427,15 @@ async fn mimi_room_message(
         mapped_content.status,
     )
     .await;
-    json_ok(json!({
-        "ok": true,
-        "status": mapped_content.status,
-        "mimi_message_id": mimi_message_id,
-        "mapped_operation_id": operation_id,
-        "cokret_event_id": event_id,
-        "realm_id": realm_id,
-        "receipt": receipt
-    }))
+    let event_ref = EventId::new(event_id)
+        .map_err(|error| AppError::internal(format!("MIMI mapped event ref: {error}")))?;
+    json_ok(MimiSubmitMessageOutcome {
+        event_ref: Some(event_ref),
+        delivery: json!({
+            "status": "accepted",
+        }),
+        rejected: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -421,7 +444,10 @@ async fn mimi_room_message(
     summary = "Read a MIMI room's group info / projection"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.group_info"))]
-async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_group_info(
+    flow_id: PathParam<String>,
+    depot: &mut Depot,
+) -> JsonResult<MimiGroupInfoOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
@@ -432,16 +458,20 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
             .with_wire_code("mimi_governance_binding_missing")
     })?;
     let projection = mimi_room_projection(state, &room_id, &realm_id);
-    json_ok(json!({
-        "room_id": room_id,
-        "mimi_room_uri": projection["mimi_room_uri"].clone(),
-        "group_info": projection,
-        "participants": mimi_room_participants(state, &realm_id),
-        "receipt": mimi_receipt(state, "ck.open.mimi.query.group_info", &json!({"room_id": room_id}), json!({
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.query.group_info",
+        &json!({"room_id": room_id}),
+        json!({
             "truth_source": "cokret_signed_event_reducer",
             "projection_only": true
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiGroupInfoOutcome {
+        group_info: projection,
+        room_binding_ref: None,
+        proofs: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -453,22 +483,27 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
 async fn mimi_consent_request(
     body: JsonBody<MimiRequestConsentRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiRequestConsentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent request")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let consent_id = ids::generate("mimi_consent");
-    json_ok(json!({
-        "ok": true,
-        "consent_id": consent_id,
-        "state": "requested",
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.request_consent", &body, json!({
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.request_consent",
+        &body,
+        json!({
             "consent_grants_space_capability": false,
             "privacy_state": "holder_private"
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiRequestConsentOutcome {
+        consent_id,
+        status: "requested".to_owned(),
+        challenge: None,
+    })
 }
 
 #[endpoint(
@@ -480,31 +515,32 @@ async fn mimi_consent_request(
 async fn mimi_consent_update(
     body: JsonBody<MimiUpdateConsentRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiUpdateConsentOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi consent update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let consent_id = body
-        .get("consent_id")
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| ids::generate("mimi_consent"));
     let state_value = body
         .get("state")
         .or_else(|| body.get("decision"))
         .and_then(|value| value.as_str())
         .unwrap_or("accepted");
-    json_ok(json!({
-        "ok": true,
-        "consent_id": consent_id,
-        "state": state_value,
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.update_consent", &body, json!({
+    let updated_at = now();
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.update_consent",
+        &body,
+        json!({
             "consent_grants_space_capability": false,
             "membership_still_required": true
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiUpdateConsentOutcome {
+        status: state_value.to_owned(),
+        updated_at,
+        event_ref: None,
+    })
 }
 
 #[endpoint(
@@ -516,7 +552,7 @@ async fn mimi_consent_update(
 async fn mimi_identifiers_query(
     body: JsonBody<MimiIdentifierQueryRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiIdentifierQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -545,15 +581,20 @@ async fn mimi_identifiers_query(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        return json_ok(json!({
-            "matches": matches,
-            "proofs": [],
-            "has_more": false,
-            "receipt": mimi_receipt(state, "ck.open.mimi.query.identifiers", &body, json!({
+        let _receipt = mimi_receipt(
+            state,
+            "ck.open.mimi.query.identifiers",
+            &body,
+            json!({
                 "contact_graph_exposed": false,
                 "connection_identifier_separated": true
-            }))
-        }));
+            }),
+        );
+        return json_ok(MimiIdentifierQueryOutcome {
+            matches,
+            proofs: Vec::new(),
+            has_more: false,
+        });
     }
     if !(query.starts_with("mimi://") || query.starts_with("did:")) {
         return Err(AppError::invalid_param(
@@ -563,21 +604,30 @@ async fn mimi_identifiers_query(
     let mapped_did = query
         .contains("alice")
         .then(|| "did:web:alice.example".to_owned());
-    json_ok(json!({
-        "query": query,
-        "reachable": mapped_did.is_some(),
-        "mapped_did": mapped_did,
-        "provider_id": mimi_provider_id(state),
-        "proofs": [{
+    let proof = json!({
             "type": "time_bound_reachability",
             "privacy_mode": "private_contact_discovery",
             "expires_at": now() + Duration::minutes(5)
-        }],
-        "receipt": mimi_receipt(state, "ck.open.mimi.query.identifiers", &body, json!({
+    });
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.query.identifiers",
+        &body,
+        json!({
             "contact_graph_exposed": false,
             "connection_identifier_separated": true
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiIdentifierQueryOutcome {
+        matches: vec![json!({
+            "identifier": query,
+            "reachable": mapped_did.is_some(),
+            "mapped_did": mapped_did,
+            "provider_id": mimi_provider_id(state),
+        })],
+        proofs: vec![proof],
+        has_more: false,
+    })
 }
 
 #[endpoint(
@@ -589,7 +639,7 @@ async fn mimi_identifiers_query(
 async fn mimi_report_abuse(
     body: JsonBody<MimiReportAbuseRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -692,19 +742,31 @@ async fn mimi_report_abuse(
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
-    // Note: response semantics shift from 202 Accepted to 200 OK with the
-    // typed conversion; no caller asserted on the specific status code.
-    json_ok(json!({
-        "ok": true,
-        "report_id": report_id,
-        "report_event_id": report_event_id,
-        "status": "queued",
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.report_abuse", &body, json!({
+    let routed_to = Did::new(state.config.service_did.clone()).map_or_else(
+        |error| {
+            tracing::warn!(%error, "mimi: service DID could not be represented in report outcome");
+            Vec::new()
+        },
+        |did| vec![did],
+    );
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.report_abuse",
+        &body,
+        json!({
             "e2ee_evidence_plaintext_required": false,
             "routed_to": [format!("{}#moderation", state.config.service_did)],
             "moderation_event_emitted": true,
-        }))
-    }))
+            "report_event_id": report_event_id,
+        }),
+    );
+    let report_id = ReportId::new(report_id)
+        .map_err(|error| AppError::internal(format!("MIMI report id: {error}")))?;
+    json_ok(MimiReportAbuseOutcome {
+        report_id,
+        status: "queued".to_owned(),
+        routed_to,
+    })
 }
 
 #[endpoint(
@@ -716,7 +778,7 @@ async fn mimi_report_abuse(
 async fn mimi_proxy_download(
     body: JsonBody<MimiProxyDownloadRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<MimiProxyDownloadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
@@ -733,22 +795,35 @@ async fn mimi_proxy_download(
         .unwrap_or("provider_proxy");
     let blob = state.persistence.blobs().get(blob_ref).await.ok().flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
-    json_ok(json!({
-        "ok": true,
-        "blob_ref": blob_ref,
-        "media_type": blob.as_ref().map(|blob| blob.media_type.clone()),
-        "size": blob.as_ref().map(|blob| blob.size_bytes),
-        "proxy_url": if proxy_required {
-            Some(format!("{}/proxy-download?blob_ref={}", mimi_base_url(state), blob_ref))
-        } else {
-            None
-        },
-        "receipt": mimi_receipt(state, "ck.open.mimi.command.proxy_download", &body, json!({
+    let download_ref = if proxy_required {
+        format!(
+            "{}/proxy-download?blob_ref={}",
+            mimi_base_url(state),
+            blob_ref
+        )
+    } else {
+        blob_ref.to_owned()
+    };
+    let mut headers = BTreeMap::new();
+    if let Some(blob) = blob.as_ref() {
+        headers.insert("content-type".to_owned(), blob.media_type.clone());
+        headers.insert("content-length".to_owned(), blob.size_bytes.to_string());
+    }
+    let _receipt = mimi_receipt(
+        state,
+        "ck.open.mimi.command.proxy_download",
+        &body,
+        json!({
             "asset_privacy_policy": asset_policy,
             "direct_object_store_url_returned": false,
             "client_must_verify_content_hash": true
-        }))
-    }))
+        }),
+    );
+    json_ok(MimiProxyDownloadOutcome {
+        download_ref,
+        headers,
+        expires_at: Some(now() + Duration::minutes(5)),
+    })
 }
 
 fn typed_body_value<T: Serialize>(body: T, context: &'static str) -> Result<Value, AppError> {

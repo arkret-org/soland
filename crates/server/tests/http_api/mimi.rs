@@ -168,8 +168,8 @@ async fn mimi_provider_facade_contracts_work() {
         }))
         .send(&service)
         .await;
-    // Round 15ab — mimi handlers converted to typed `JsonResult<Value>`
-    // signatures; Salvo's typed Writer defaults to 200 OK. Status-code
+    // Round 15ab — mimi handlers converted to typed result signatures;
+    // Salvo's typed Writer defaults to 200 OK. Status-code
     // distinction was never load-bearing (no caller branched on 202 vs
     // 200), but the wire body still carries `ok=true` + `status="queued"`.
     assert_eq!(report.status_code.unwrap().as_u16(), 200);

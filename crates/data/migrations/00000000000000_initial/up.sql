@@ -97,6 +97,30 @@ CREATE TABLE public.agent_sessions (
     CONSTRAINT agent_sessions_state_check CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text])))
 );
 
+CREATE TABLE public.applet_registrations (
+    id text NOT NULL,
+    namespace text NOT NULL,
+    owner_actor_id text NOT NULL,
+    registry_did text NOT NULL,
+    bot_actor_id text NOT NULL,
+    portal_realm_id text NOT NULL,
+    capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
+    manifest jsonb NOT NULL,
+    package jsonb,
+    namespaces jsonb,
+    allow_ghost_actors boolean DEFAULT false NOT NULL,
+    status text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    idempotency_key text,
+    install_body_digest text,
+    install_id text,
+    install_response jsonb,
+    ghosts jsonb DEFAULT '[]'::jsonb NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT applet_registrations_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
+);
+
 CREATE TABLE public.audit_logs (
     id uuid NOT NULL,
     actor_id text,
@@ -798,6 +822,9 @@ ALTER TABLE ONLY public.agent_principals
 ALTER TABLE ONLY public.agent_sessions
     ADD CONSTRAINT agent_sessions_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.applet_registrations
+    ADD CONSTRAINT applet_registrations_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
 
@@ -1009,6 +1036,12 @@ CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (
 CREATE INDEX agent_sessions_principal_idx ON public.agent_sessions USING btree (agent_principal_id);
 
 CREATE INDEX agent_sessions_state_idx ON public.agent_sessions USING btree (state);
+
+CREATE UNIQUE INDEX applet_registrations_active_namespace_idx ON public.applet_registrations USING btree (namespace) WHERE (revoked_at IS NULL);
+
+CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree (owner_actor_id);
+
+CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USING btree (status);
 
 CREATE INDEX audit_logs_action_idx ON public.audit_logs USING btree (action);
 

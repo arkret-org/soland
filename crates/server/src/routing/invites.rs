@@ -47,7 +47,10 @@ pub(crate) fn open_router() -> Router {
     summary = "Private Principal Server invite delivery"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.invites.command.submit"))]
-async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_invites_submit(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<InviteDeliveryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let delivery = req
         .parse_json::<InviteDeliveryRequest>()
@@ -120,9 +123,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
             received_at: Some(now()),
             retry_after_ms: None,
         };
-        return json_ok(serde_json::to_value(outcome).map_err(|error| {
-            AppError::internal(format!("invite delivery outcome serialize: {error}"))
-        })?);
+        return json_ok(outcome);
     }
 
     let source_service_did = required_header(req, HEADER_SOURCE_SERVICE_DID)?;
@@ -192,9 +193,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
         received_at: Some(now()),
         retry_after_ms: None,
     };
-    json_ok(serde_json::to_value(outcome).map_err(|error| {
-        AppError::internal(format!("invite delivery outcome serialize: {error}"))
-    })?)
+    json_ok(outcome)
 }
 
 #[endpoint(
@@ -203,7 +202,10 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
     summary = "Resolve an online invite locator token"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.invite_locator.query.resolve"))]
-async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn resolve_invite_locator(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PrincipalLocator> {
     if locator_token_appears_in_url(req) {
         return Err(AppError::invalid_param(
             "locator_token must be sent in the JSON body, never in URL path or query",
@@ -307,10 +309,7 @@ async fn resolve_invite_locator(depot: &mut Depot, req: &mut Request) -> JsonRes
     locator.validate_minimal().map_err(|error| {
         AppError::internal(format!("principal locator validation failed: {error}"))
     })?;
-    json_ok(
-        serde_json::to_value(locator)
-            .map_err(|error| AppError::internal(format!("principal locator serialize: {error}")))?,
-    )
+    json_ok(locator)
 }
 
 /// Spec invite-addressing.md §2 — introduction-evidence trust tiers.

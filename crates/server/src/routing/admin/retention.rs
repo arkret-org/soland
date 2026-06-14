@@ -8,6 +8,7 @@
 use chrono::{DateTime, Duration, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::audit::append_audit_log;
@@ -20,6 +21,59 @@ use crate::state::{
     AppState, EventNotification, EventNotificationKind, RetentionPolicyRecord,
     RetentionTombstoneRecord,
 };
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct ConfigureRetentionPolicyRequestBody {
+    #[serde(default)]
+    realm_id: Option<String>,
+    #[serde(default)]
+    ttl_seconds: Option<i64>,
+    #[serde(default)]
+    ttl_days: Option<i64>,
+    #[serde(default)]
+    ttl: Option<String>,
+    #[serde(default)]
+    retention_policy: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct SweepRetentionPolicyRequestBody {
+    #[serde(default)]
+    realm_id: Option<String>,
+    #[serde(default)]
+    now: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct RetentionPolicyOutcome {
+    realm_id: String,
+    ttl_seconds: i64,
+    updated_by: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct RetentionTombstoneItem {
+    event_id: String,
+    realm_id: String,
+    retention_state: String,
+    reason: String,
+    policy_ttl_seconds: i64,
+    expired_at: String,
+    tombstoned_at: String,
+    sealed: bool,
+    physical_delete: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct RetentionSweepOutcome {
+    realm_id: String,
+    policy: RetentionPolicyOutcome,
+    examined: usize,
+    tombstoned_count: usize,
+    physical_delete_count: u64,
+    tombstoned: Vec<RetentionTombstoneItem>,
+}
 
 pub(super) fn router() -> Router {
     Router::with_path("admin/retention")
@@ -40,13 +94,13 @@ async fn configure_retention_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<ConfigureRetentionPolicyRequestBody>,
+) -> JsonResult<RetentionPolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_id = required_string(&body, "realm_id")?;
-    let ttl_seconds = ttl_seconds_from_body(&body)?;
+    let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
+    let ttl_seconds = ttl_seconds_from_configure_body(&body)?;
     let now = Utc::now();
     let record = RetentionPolicyRecord {
         realm_id: realm_id.clone(),
@@ -70,7 +124,7 @@ async fn configure_retention_policy(
         "accepted",
     )
     .await;
-    json_ok(policy_json(&record))
+    json_ok(policy_outcome(&record))
 }
 
 #[endpoint(
@@ -83,13 +137,13 @@ async fn sweep_retention_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<SweepRetentionPolicyRequestBody>,
+) -> JsonResult<RetentionSweepOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_id = required_string(&body, "realm_id")?;
-    let now = optional_now(&body)?.unwrap_or_else(Utc::now);
+    let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
+    let now = optional_now(body.now.as_deref())?.unwrap_or_else(Utc::now);
     let policy = state
         .retention_policies
         .lock()
@@ -173,37 +227,43 @@ async fn sweep_retention_policy(
         "accepted",
     )
     .await;
-    json_ok(json!({
-        "realm_id": realm_id,
-        "policy": policy_json(&policy),
-        "examined": examined,
-        "tombstoned_count": created.len(),
-        "physical_delete_count": 0,
-        "tombstoned": created.iter().map(tombstone_json).collect::<Vec<_>>(),
-    }))
+    json_ok(RetentionSweepOutcome {
+        realm_id,
+        policy: policy_outcome(&policy),
+        examined,
+        tombstoned_count: created.len(),
+        physical_delete_count: 0,
+        tombstoned: created.iter().map(tombstone_item).collect(),
+    })
 }
 
-fn required_string(body: &Value, field: &str) -> Result<String, AppError> {
-    body.get(field)
-        .and_then(Value::as_str)
+fn required_string(value: Option<&str>, field: &str) -> Result<String, AppError> {
+    value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| AppError::missing_param(format!("{field} is required")))
 }
 
-fn ttl_seconds_from_body(body: &Value) -> Result<i64, AppError> {
-    if let Some(policy) = body.get("retention_policy")
+fn ttl_seconds_from_configure_body(
+    body: &ConfigureRetentionPolicyRequestBody,
+) -> Result<i64, AppError> {
+    if let Some(policy) = body.retention_policy.as_ref()
         && let Some(seconds) = retention_ttl_seconds_from_value(policy)
     {
         return Ok(seconds);
     }
-    retention_ttl_seconds_from_value(body)
+    let body_value = json!({
+        "ttl_seconds": body.ttl_seconds,
+        "ttl_days": body.ttl_days,
+        "ttl": body.ttl.as_deref(),
+    });
+    retention_ttl_seconds_from_value(&body_value)
         .ok_or_else(|| AppError::missing_param("retention ttl is required"))
 }
 
-fn optional_now(body: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
-    let Some(value) = body.get("now").and_then(Value::as_str) else {
+fn optional_now(value: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError> {
+    let Some(value) = value else {
         return Ok(None);
     };
     let parsed = DateTime::parse_from_rfc3339(value)
@@ -212,25 +272,25 @@ fn optional_now(body: &Value) -> Result<Option<DateTime<Utc>>, AppError> {
     Ok(Some(parsed))
 }
 
-fn policy_json(record: &RetentionPolicyRecord) -> Value {
-    json!({
-        "realm_id": record.realm_id.as_str(),
-        "ttl_seconds": record.ttl_seconds,
-        "updated_by": record.updated_by.as_str(),
-        "updated_at": record.updated_at.to_rfc3339(),
-    })
+fn policy_outcome(record: &RetentionPolicyRecord) -> RetentionPolicyOutcome {
+    RetentionPolicyOutcome {
+        realm_id: record.realm_id.clone(),
+        ttl_seconds: record.ttl_seconds,
+        updated_by: record.updated_by.clone(),
+        updated_at: record.updated_at.to_rfc3339(),
+    }
 }
 
-fn tombstone_json(record: &RetentionTombstoneRecord) -> Value {
-    json!({
-        "event_id": record.event_id.as_str(),
-        "realm_id": record.realm_id.as_str(),
-        "retention_state": "tombstoned",
-        "reason": record.reason.as_str(),
-        "policy_ttl_seconds": record.policy_ttl_seconds,
-        "expired_at": record.expired_at.to_rfc3339(),
-        "tombstoned_at": record.tombstoned_at.to_rfc3339(),
-        "sealed": record.sealed,
-        "physical_delete": false,
-    })
+fn tombstone_item(record: &RetentionTombstoneRecord) -> RetentionTombstoneItem {
+    RetentionTombstoneItem {
+        event_id: record.event_id.clone(),
+        realm_id: record.realm_id.clone(),
+        retention_state: "tombstoned".to_owned(),
+        reason: record.reason.clone(),
+        policy_ttl_seconds: record.policy_ttl_seconds,
+        expired_at: record.expired_at.to_rfc3339(),
+        tombstoned_at: record.tombstoned_at.to_rfc3339(),
+        sealed: record.sealed,
+        physical_delete: false,
+    }
 }

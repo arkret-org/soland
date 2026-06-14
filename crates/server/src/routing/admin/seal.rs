@@ -1632,7 +1632,6 @@ pub(super) async fn admin_rotate_signing_key(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    _body: JsonBody<serde_json::Value>,
 ) -> JsonResult<RotateSigningKeyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

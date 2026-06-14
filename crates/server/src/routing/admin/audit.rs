@@ -7,8 +7,11 @@
 //!
 //! Both back onto `state.persistence.audit()`.
 
+use std::collections::BTreeMap;
+
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{now, realm_has_member};
@@ -18,6 +21,78 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::query_param;
 use crate::state::AppState;
+use crate::wire::OkOutcome;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct FrankingProofVerifyRequestBody {
+    #[serde(default)]
+    proof_digest: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    target_event_id: Option<String>,
+    #[serde(default)]
+    sender_did: Option<String>,
+    #[serde(default)]
+    receiving_service_did: Option<String>,
+    #[serde(default)]
+    ciphertext_digest: Option<String>,
+    #[serde(default)]
+    event_canonical_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct FrankingProofVerifyOutcome {
+    ok: bool,
+    proof_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AuditErasureReceiptsOutcome {
+    receipts: Vec<AuditErasureReceiptItem>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AuditErasureReceiptItem {
+    receipt_id: Option<String>,
+    issuer: Option<String>,
+    subject_kind: Option<String>,
+    subject_ref: Option<String>,
+    outcome: String,
+    storage_boundary: Option<String>,
+    scope_realm_id: Option<String>,
+    fanout_status: String,
+    peer_status: BTreeMap<String, AuditErasureReceiptPeerStatus>,
+    recorded_at: String,
+    payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AuditErasureReceiptPeerStatus {
+    sent_at: Option<String>,
+    acked_at: Option<String>,
+    outcome: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AuditUserActionRequestBody {
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    outcome: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    recorded_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AuditEventsOutcome {
+    events: Vec<Value>,
+    next_cursor: Option<String>,
+}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -35,26 +110,28 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.franking.verify"))]
 async fn verify_franking_proof(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<FrankingProofVerifyRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<FrankingProofVerifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let proof = body.into_inner();
     let declared = proof
-        .get("proof_digest")
-        .and_then(Value::as_str)
+        .proof_digest
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::invalid_param("proof_digest is required"))?;
     let expected = franking_proof_digest(&proof);
     if declared != expected {
         return Err(AppError::conflict("franking proof digest mismatch")
             .with_wire_code("franking_tampered"));
     }
-    json_ok(json!({
-        "ok": true,
-        "proof_digest": expected,
-    }))
+    json_ok(FrankingProofVerifyOutcome {
+        ok: true,
+        proof_digest: expected,
+    })
 }
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
@@ -77,52 +154,50 @@ async fn audit_erasure_receipts(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AuditErasureReceiptsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // Authenticate the session so the endpoint isn't usable
     // unauthenticated; we don't restrict cross-actor reads because the
     // receipt list is the auditable surface (see method doc above).
     let _session = aa.authenticated_session(state, req).await?;
-    let receipts: Vec<Value> = {
+    let receipts: Vec<AuditErasureReceiptItem> = {
         let Ok(proj) = state.projection.lock() else {
             return Err(AppError::internal("projection lock poisoned"));
         };
         proj.erasure_receipts
             .iter()
             .map(|r| {
-                let peer_status_map: serde_json::Map<String, Value> = r
+                let peer_status = r
                     .peer_status
                     .iter()
                     .map(|(peer, status)| {
                         (
                             peer.clone(),
-                            json!({
-                                "sent_at": status.sent_at.map(|t| t.to_rfc3339()),
-                                "acked_at": status.acked_at.map(|t| t.to_rfc3339()),
-                                "outcome": status.outcome,
-                            }),
+                            AuditErasureReceiptPeerStatus {
+                                sent_at: status.sent_at.as_ref().map(|time| time.to_rfc3339()),
+                                acked_at: status.acked_at.as_ref().map(|time| time.to_rfc3339()),
+                                outcome: status.outcome.clone(),
+                            },
                         )
                     })
                     .collect();
-                json!({
-                    "receipt_id": r.receipt_id,
-                    "issuer": r.issuer,
-                    "subject_kind": r.subject_kind,
-                    "subject_ref": r.subject_ref,
-                    "outcome": r.outcome,
-                    "storage_boundary": r.storage_boundary,
-                    "scope_realm_id": r.scope_realm_id,
-                    "fanout_status": r.fanout_status,
-                    "peer_status": peer_status_map,
-                    "recorded_at": r.recorded_at.to_rfc3339(),
-                    "payload": r.payload,
-                })
+                AuditErasureReceiptItem {
+                    receipt_id: r.receipt_id.clone(),
+                    issuer: r.issuer.clone(),
+                    subject_kind: r.subject_kind.clone(),
+                    subject_ref: r.subject_ref.clone(),
+                    outcome: r.outcome.clone(),
+                    storage_boundary: r.storage_boundary.clone(),
+                    scope_realm_id: r.scope_realm_id.clone(),
+                    fanout_status: r.fanout_status.clone(),
+                    peer_status,
+                    recorded_at: r.recorded_at.to_rfc3339(),
+                    payload: r.payload.clone(),
+                }
             })
             .collect()
     };
-    json_ok(json!({
-        "receipts": receipts,
-    }))
+    json_ok(AuditErasureReceiptsOutcome { receipts })
 }
 
 /// Client-side telemetry sink.
@@ -144,18 +219,20 @@ async fn audit_erasure_receipts(
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.audit.user_action"))]
 async fn post_user_action(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AuditUserActionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<OkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let actor = body
-        .get("actor")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
+        .actor
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
     if actor.is_empty() {
         return Err(AppError::invalid_param("actor is required"));
     }
@@ -165,25 +242,23 @@ async fn post_user_action(
         ));
     }
     let action = body
-        .get("action")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
+        .action
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
     if action.is_empty() {
         return Err(AppError::invalid_param("action is required"));
     }
-    let outcome = body.get("outcome").and_then(|v| v.as_str()).unwrap_or("ok");
-    let note = body
-        .get("note")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned);
+    let outcome = body.outcome.as_deref().unwrap_or("ok");
     let target = json!({
         "kind": "user_action",
-        "note": note,
-        "recorded_at": body.get("recorded_at").cloned().unwrap_or(Value::Null),
+        "note": body.note,
+        "recorded_at": body.recorded_at,
     });
     append_audit_log(state, Some(&actor), &action, target, outcome).await;
-    json_ok(json!({"ok": true}))
+    json_ok(OkOutcome { ok: true })
 }
 
 #[endpoint(
@@ -199,7 +274,7 @@ async fn audit_events(
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AuditEventsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id_filter = query_param(req, "realm_id");
@@ -268,10 +343,10 @@ async fn audit_events(
                 .map(ToOwned::to_owned)
         })
         .flatten();
-    json_ok(json!({
-        "events": events,
-        "next_cursor": next_cursor,
-    }))
+    json_ok(AuditEventsOutcome {
+        events,
+        next_cursor,
+    })
 }
 
 fn audit_event_matches_realm(event: &Value, realm_id: &str) -> bool {
@@ -293,14 +368,14 @@ fn audit_event_matches_kind(event: &Value, kind: &str) -> bool {
     .any(|value| value.as_str() == Some(kind))
 }
 
-fn franking_proof_digest(proof: &Value) -> String {
+fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
     let material = json!({
-        "kind": proof.get("kind").and_then(Value::as_str).unwrap_or("ck.moderation.franking_proof"),
-        "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
-        "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
-        "receiving_service_did": proof.get("receiving_service_did").and_then(Value::as_str).unwrap_or_default(),
-        "ciphertext_digest": proof.get("ciphertext_digest").and_then(Value::as_str).unwrap_or_default(),
-        "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
+        "kind": proof.kind.as_deref().unwrap_or("ck.moderation.franking_proof"),
+        "target_event_id": proof.target_event_id.as_deref().unwrap_or_default(),
+        "sender_did": proof.sender_did.as_deref().unwrap_or_default(),
+        "receiving_service_did": proof.receiving_service_did.as_deref().unwrap_or_default(),
+        "ciphertext_digest": proof.ciphertext_digest.as_deref().unwrap_or_default(),
+        "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
     cokret_sdk::canonical::sha256_digest(&bytes)

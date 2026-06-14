@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use cokret_sdk::{Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
@@ -29,6 +29,161 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry, RealmInviteRecord, RealmMetaRecord};
 use crate::{ids, kinds};
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminCollectionOutcome {
+    resource: String,
+    data: Vec<Value>,
+    items: Vec<Value>,
+    #[serde(flatten)]
+    #[salvo(schema(value_type = serde_json::Value))]
+    resource_items: BTreeMap<String, Value>,
+    total: usize,
+    next_cursor: Option<String>,
+    production_gap: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminActorProjection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actor_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_row_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    #[serde(flatten)]
+    #[salvo(schema(value_type = serde_json::Value))]
+    extra: BTreeMap<String, Value>,
+}
+
+impl AdminActorProjection {
+    fn from_projection_value(value: Value) -> Self {
+        let mut fields = match value {
+            Value::Object(fields) => fields,
+            value => {
+                let mut extra = BTreeMap::new();
+                extra.insert("value".to_owned(), value);
+                return Self {
+                    kind: None,
+                    id: None,
+                    actor_id: None,
+                    did: None,
+                    account_id: None,
+                    account_row_id: None,
+                    status: None,
+                    created_at: None,
+                    extra,
+                };
+            }
+        };
+
+        Self {
+            kind: remove_string_field(&mut fields, "kind"),
+            id: remove_string_field(&mut fields, "id"),
+            actor_id: remove_string_field(&mut fields, "actor_id"),
+            did: remove_string_field(&mut fields, "did"),
+            account_id: remove_string_field(&mut fields, "account_id"),
+            account_row_id: remove_string_field(&mut fields, "account_row_id"),
+            status: remove_string_field(&mut fields, "status"),
+            created_at: remove_string_field(&mut fields, "created_at"),
+            extra: fields.into_iter().collect(),
+        }
+    }
+
+    pub(super) fn matches_actor_id(&self, actor_id: &str) -> bool {
+        [
+            self.id.as_deref(),
+            self.actor_id.as_deref(),
+            self.did.as_deref(),
+            self.account_id.as_deref(),
+            self.account_row_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|candidate| candidate == actor_id)
+    }
+}
+
+fn remove_string_field(fields: &mut serde_json::Map<String, Value>, field: &str) -> Option<String> {
+    match fields.remove(field) {
+        Some(Value::String(value)) => Some(value),
+        Some(value) => {
+            fields.insert(field.to_owned(), value);
+            None
+        }
+        None => None,
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminRealmItem {
+    kind: String,
+    id: String,
+    flow: Value,
+    flow_id: String,
+    realm_id: String,
+    title: String,
+    topic: Option<String>,
+    category: Option<String>,
+    tags: Vec<String>,
+    public: bool,
+    member_count: usize,
+    members: Vec<String>,
+    created_by: Option<String>,
+    discoverability: Option<String>,
+    history_visibility: Option<String>,
+    is_encrypted: bool,
+    is_blocked: bool,
+    plaintext_visible_services: Vec<String>,
+    deleted: bool,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminRealmDeleteOutcome {
+    realm_id: String,
+    deleted: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminRealmMemberItem {
+    actor_id: String,
+    membership: String,
+    role: String,
+    joined_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct AdminInviteTokenItem {
+    kind: String,
+    id: String,
+    invite_id: String,
+    token: String,
+    realm_id: String,
+    inviter: String,
+    created_by: String,
+    invitee: Option<String>,
+    invite_delivery_target: Option<Value>,
+    introduction_evidence_digest: Option<String>,
+    token_hash: String,
+    status: String,
+    uses_allowed: u64,
+    uses_completed: u64,
+    uses_pending: u64,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
 
 #[endpoint(
     operation_id = "org.cokret.soland.admin.collection",
@@ -43,7 +198,7 @@ pub(super) async fn admin_collection(
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminCollectionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     if !state.config.development_mode && !state.config.is_admin_principal(&session.actor) {
@@ -73,7 +228,14 @@ pub(super) async fn admin_collection(
     let cursor = cursor.into_inner();
 
     let (field, mut items) = match resource.as_str() {
-        "actors" => ("actors", admin_actor_items(state).await),
+        "actors" => (
+            "actors",
+            admin_actor_items(state)
+                .await
+                .into_iter()
+                .map(|item| json!(item))
+                .collect(),
+        ),
         "realms" => ("realms", admin_realm_items(state).await),
         "spaces" => ("spaces", admin_space_container_items(state)),
         "devices" => ("devices", admin_device_items(state).await),
@@ -90,7 +252,14 @@ pub(super) async fn admin_collection(
             )
             .await,
         ),
-        "invite-tokens" => ("invite_tokens", admin_invite_items(state).await),
+        "invite-tokens" => (
+            "invite_tokens",
+            admin_invite_items(state)
+                .await
+                .into_iter()
+                .map(|item| json!(item))
+                .collect(),
+        ),
         "audit" => (
             "audit",
             state
@@ -134,21 +303,20 @@ pub(super) async fn admin_collection(
     )
     .await;
 
-    let mut body = serde_json::Map::new();
-    body.insert("resource".to_owned(), json!(resource));
-    body.insert("data".to_owned(), json!(page.clone()));
-    body.insert("items".to_owned(), json!(page.clone()));
-    body.insert(field.to_owned(), json!(page));
-    body.insert("total".to_owned(), json!(total));
-    body.insert("next_cursor".to_owned(), json!(next_cursor));
-    body.insert(
-        "production_gap".to_owned(),
-        json!("admin_authorization_and_durable_pagination"),
-    );
-    json_ok(Value::Object(body))
+    let mut resource_items = BTreeMap::new();
+    resource_items.insert(field.to_owned(), json!(page.clone()));
+    json_ok(AdminCollectionOutcome {
+        resource,
+        data: page.clone(),
+        items: page,
+        resource_items,
+        total,
+        next_cursor,
+        production_gap: "admin_authorization_and_durable_pagination".to_owned(),
+    })
 }
 
-#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     title: String,
@@ -174,7 +342,7 @@ pub(super) async fn admin_create_realm(
     body: JsonBody<AdminCreateRealmRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminRealmItem> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -236,7 +404,7 @@ pub(super) async fn admin_create_realm(
 pub(super) async fn admin_get_realm(
     realm_id: PathParam<String>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminRealmItem> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     json_ok(admin_get_realm_item(state, &realm_id).await?)
@@ -253,7 +421,7 @@ pub(super) async fn admin_delete_realm(
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminRealmDeleteOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -269,7 +437,10 @@ pub(super) async fn admin_delete_realm(
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(|reason| AppError::new(ErrorCode::FailedPrecondition, reason.to_owned()))?;
-    json_ok(json!({ "realm_id": realm_id, "deleted": true }))
+    json_ok(AdminRealmDeleteOutcome {
+        realm_id,
+        deleted: true,
+    })
 }
 
 #[endpoint(
@@ -281,13 +452,13 @@ pub(super) async fn admin_delete_realm(
 pub(super) async fn admin_list_realm_members(
     realm_id: PathParam<String>,
     depot: &mut Depot,
-) -> JsonResult<Vec<Value>> {
+) -> JsonResult<Vec<AdminRealmMemberItem>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     json_ok(admin_realm_member_items(state, &realm_id).await?)
 }
 
-pub(super) async fn admin_actor_items(state: &AppState) -> Vec<Value> {
+pub(super) async fn admin_actor_items(state: &AppState) -> Vec<AdminActorProjection> {
     let account_rows: BTreeMap<String, _> = state
         .persistence
         .accounts()
@@ -318,7 +489,7 @@ pub(super) async fn admin_actor_items(state: &AppState) -> Vec<Value> {
                 }
                 object.insert("kind".to_owned(), json!("actor"));
             }
-            actor
+            AdminActorProjection::from_projection_value(actor)
         })
         .collect()
 }
@@ -347,7 +518,9 @@ async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     let mut items = Vec::new();
     for realm in realm_snapshot {
         let realm_id = realm.realm_id.as_str().to_owned();
-        items.push(admin_realm_item_value(state, realm, meta.get(&realm_id).cloned()).await);
+        items.push(json!(
+            admin_realm_item_value(state, realm, meta.get(&realm_id).cloned()).await
+        ));
     }
     items
 }
@@ -355,7 +528,7 @@ async fn admin_realm_items(state: &AppState) -> Vec<Value> {
 pub(super) async fn admin_get_realm_item(
     state: &AppState,
     realm_id: &str,
-) -> Result<Value, AppError> {
+) -> Result<AdminRealmItem, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let realm = {
@@ -375,7 +548,7 @@ pub(super) async fn admin_get_realm_item(
 pub(super) async fn admin_realm_member_items(
     state: &AppState,
     realm_id: &str,
-) -> Result<Vec<Value>, AppError> {
+) -> Result<Vec<AdminRealmMemberItem>, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let members = {
@@ -399,13 +572,15 @@ pub(super) async fn admin_realm_member_items(
     let joined_at = realm_meta.as_ref().map(|meta| meta.created_at.to_rfc3339());
     Ok(members
         .into_iter()
-        .map(|actor_id| {
-            json!({
-                "actor_id": actor_id,
-                "membership": "join",
-                "role": if owner == Some(actor_id.as_str()) { "owner" } else { "member" },
-                "joined_at": joined_at,
-            })
+        .map(|actor_id| AdminRealmMemberItem {
+            role: if owner == Some(actor_id.as_str()) {
+                "owner".to_owned()
+            } else {
+                "member".to_owned()
+            },
+            actor_id,
+            membership: "join".to_owned(),
+            joined_at: joined_at.clone(),
         })
         .collect())
 }
@@ -414,40 +589,47 @@ async fn admin_realm_item_value(
     state: &AppState,
     realm: RealmDirectoryEntry,
     realm_meta: Option<RealmMetaRecord>,
-) -> Value {
+) -> AdminRealmItem {
     let realm_id = realm.realm_id.as_str().to_owned();
     let flow =
         flow_projection_for_realm(state, &realm_id, &realm.title, realm.description.as_deref())
             .await;
-    json!({
-        "kind": "realm",
-        "id": realm_id,
-        "flow": flow,
-        "flow_id": flow_id_from_realm_id(&realm_id),
-        "realm_id": realm_id,
-        "title": realm.title,
-        "topic": realm.description,
-        "category": realm.category,
-        "tags": realm.tags,
-        "public": realm.public,
-        "member_count": realm.members.len(),
-        "members": realm.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        "created_by": realm_meta.as_ref().map(|meta| meta.owner.clone()),
-        "discoverability": realm_meta.as_ref().map(|meta| meta.discoverability.clone()),
-        "history_visibility": realm_meta.as_ref().map(|meta| meta.history_visibility.clone()),
-        "is_encrypted": realm_meta
+    AdminRealmItem {
+        kind: "realm".to_owned(),
+        id: realm_id.clone(),
+        flow,
+        flow_id: flow_id_from_realm_id(&realm_id),
+        realm_id,
+        title: realm.title,
+        topic: realm.description,
+        category: realm.category,
+        tags: realm.tags.into_iter().collect(),
+        public: realm.public,
+        member_count: realm.members.len(),
+        members: realm.members.iter().map(ToString::to_string).collect(),
+        created_by: realm_meta.as_ref().map(|meta| meta.owner.clone()),
+        discoverability: realm_meta.as_ref().map(|meta| meta.discoverability.clone()),
+        history_visibility: realm_meta
+            .as_ref()
+            .map(|meta| meta.history_visibility.clone()),
+        is_encrypted: realm_meta
             .as_ref()
             .and_then(|meta| meta.encryption_profile.as_deref())
             .is_some_and(|profile| profile != "plaintext"),
-        "is_blocked": realm_meta.as_ref().is_some_and(|meta| meta.deleted),
-        "plaintext_visible_services": realm_meta
+        is_blocked: realm_meta.as_ref().is_some_and(|meta| meta.deleted),
+        plaintext_visible_services: realm_meta
             .as_ref()
-            .map(|meta| meta.plaintext_visible_services.iter().cloned().collect::<Vec<_>>())
+            .map(|meta| {
+                meta.plaintext_visible_services
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default(),
-        "deleted": realm_meta.as_ref().is_some_and(|meta| meta.deleted),
-        "created_at": realm_meta.as_ref().map(|meta| meta.created_at),
-        "updated_at": realm_meta.as_ref().map(|meta| meta.updated_at),
-    })
+        deleted: realm_meta.as_ref().is_some_and(|meta| meta.deleted),
+        created_at: realm_meta.as_ref().map(|meta| meta.created_at.clone()),
+        updated_at: realm_meta.as_ref().map(|meta| meta.updated_at.clone()),
+    }
 }
 
 fn admin_space_container_items(state: &AppState) -> Vec<Value> {
@@ -610,7 +792,7 @@ fn admin_agent_items(state: &AppState) -> Vec<Value> {
         .collect()
 }
 
-pub(super) async fn admin_invite_items(state: &AppState) -> Vec<Value> {
+pub(super) async fn admin_invite_items(state: &AppState) -> Vec<AdminInviteTokenItem> {
     state
         .persistence
         .realm_invites()
@@ -618,30 +800,30 @@ pub(super) async fn admin_invite_items(state: &AppState) -> Vec<Value> {
         .await
         .unwrap_or_default()
         .iter()
-        .map(admin_invite_item_value)
+        .map(admin_invite_item)
         .collect()
 }
 
-pub(super) fn admin_invite_item_value(invite: &RealmInviteRecord) -> Value {
-    json!({
-        "kind": "invite_token",
-        "id": invite.invite_id,
-        "invite_id": invite.invite_id,
-        "token": invite.invite_token,
-        "realm_id": invite.realm_id,
-        "inviter": invite.inviter,
-        "created_by": invite.inviter,
-        "invitee": invite.invitee,
-        "invite_delivery_target": invite.invite_delivery_target,
-        "introduction_evidence_digest": invite.introduction_evidence_digest,
-        "token_hash": cokret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
-        "status": invite.status,
-        "uses_allowed": 1,
-        "uses_completed": if invite.status == "accepted" { 1 } else { 0 },
-        "uses_pending": if invite.status == "pending" { 1 } else { 0 },
-        "expires_at": invite.expires_at,
-        "created_at": invite.created_at,
-    })
+pub(super) fn admin_invite_item(invite: &RealmInviteRecord) -> AdminInviteTokenItem {
+    AdminInviteTokenItem {
+        kind: "invite_token".to_owned(),
+        id: invite.invite_id.clone(),
+        invite_id: invite.invite_id.clone(),
+        token: invite.invite_token.clone(),
+        realm_id: invite.realm_id.clone(),
+        inviter: invite.inviter.clone(),
+        created_by: invite.inviter.clone(),
+        invitee: invite.invitee.clone(),
+        invite_delivery_target: invite.invite_delivery_target.clone(),
+        introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
+        token_hash: cokret_sdk::canonical::sha256_digest(invite.invite_token.as_bytes()),
+        status: invite.status.clone(),
+        uses_allowed: 1,
+        uses_completed: if invite.status == "accepted" { 1 } else { 0 },
+        uses_pending: if invite.status == "pending" { 1 } else { 0 },
+        expires_at: invite.expires_at.clone(),
+        created_at: invite.created_at.clone(),
+    }
 }
 
 async fn admin_policy_items(state: &AppState) -> Vec<Value> {

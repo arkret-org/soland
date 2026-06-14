@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 
 /// Registered applet capabilities recognised by the verifier. Anything
@@ -56,7 +56,7 @@ pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
 /// On-wire applet manifest envelope. The bot/ghost actor registration
 /// flow in `applet-integration.md` Section 4 takes one of these, verifies it,
 /// and (if accepted) mints a `bot_actor_id` bound to the manifest.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct AppletManifest {
     pub id: String,
     pub version: String,
@@ -82,13 +82,35 @@ pub struct AppletManifest {
 
 /// Verified manifest - same fields as the input plus a recompute of the
 /// schema-hash for the audit trail.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct VerifiedAppletManifest {
     pub id: String,
     pub signer_did: String,
     pub capabilities: Vec<String>,
     pub schema_hash: String,
     pub metadata: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct AppletManifestVerifyRequestBody {
+    pub manifest_json: AppletManifest,
+    pub trusted_registry_did: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct AppletManifestVerifyErrorView {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct AppletManifestVerifyOutcome {
+    pub verified: bool,
+    pub signer_did: String,
+    pub capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_hash: Option<String>,
+    pub errors: Vec<AppletManifestVerifyErrorView>,
 }
 
 /// Verifier errors. Variant names mirror the wire `error.code` strings
@@ -263,36 +285,31 @@ pub(super) fn router() -> Router {
     summary = "Verify a signed applet manifest"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.manifest.verify"))]
-async fn verify_endpoint(body: JsonBody<Value>) -> JsonResult<Value> {
+async fn verify_endpoint(
+    body: JsonBody<AppletManifestVerifyRequestBody>,
+) -> JsonResult<AppletManifestVerifyOutcome> {
     let body = body.into_inner();
-    let manifest_value = body
-        .get("manifest_json")
-        .cloned()
-        .ok_or_else(|| AppError::missing_param("manifest_json is required"))?;
-    let trusted_registry_did = body
-        .get("trusted_registry_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("trusted_registry_did is required"))?
-        .to_owned();
-    let manifest: AppletManifest = serde_json::from_value(manifest_value)
-        .map_err(|err| AppError::new(ErrorCode::BadJson, format!("manifest_json parse: {err}")))?;
-    match verify_manifest(&manifest, &trusted_registry_did) {
-        Ok(verified) => json_ok(json!({
-            "verified": true,
-            "signer_did": verified.signer_did,
-            "capabilities": verified.capabilities,
-            "schema_hash": verified.schema_hash,
-            "errors": Vec::<String>::new(),
-        })),
-        Err(err) => json_ok(json!({
-            "verified": false,
-            "signer_did": manifest.signer_did,
-            "capabilities": manifest.requested_capabilities,
-            "errors": [{
-                "code": err.code(),
-                "message": err.to_string(),
+    if body.trusted_registry_did.trim().is_empty() {
+        return Err(AppError::missing_param("trusted_registry_did is required"));
+    }
+    match verify_manifest(&body.manifest_json, &body.trusted_registry_did) {
+        Ok(verified) => json_ok(AppletManifestVerifyOutcome {
+            verified: true,
+            signer_did: verified.signer_did,
+            capabilities: verified.capabilities,
+            schema_hash: Some(verified.schema_hash),
+            errors: Vec::new(),
+        }),
+        Err(err) => json_ok(AppletManifestVerifyOutcome {
+            verified: false,
+            signer_did: body.manifest_json.signer_did,
+            capabilities: body.manifest_json.requested_capabilities,
+            schema_hash: None,
+            errors: vec![AppletManifestVerifyErrorView {
+                code: err.code().to_owned(),
+                message: err.to_string(),
             }],
-        })),
+        }),
     }
 }
 

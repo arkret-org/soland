@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use cokret_sdk::{Did, RealmId, RealmModerationPolicyReplaceRequestBody, SpaceId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::AuthArgs;
@@ -47,6 +48,50 @@ pub(super) fn protocol_router() -> Router {
 pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct SpaceCellOutcome {
+    cell_id: String,
+    cell_family: String,
+    space_id: String,
+    state: String,
+    lattice: String,
+    value: Value,
+    total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct RealmExportEvent {
+    event_id: String,
+    realm_id: String,
+    event_kind: String,
+    operation_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sender: Option<String>,
+    payload: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct RealmExportOperation {
+    operation_id: String,
+    realm_id: String,
+    object_type: String,
+    operation_type: String,
+    payload: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct RealmExportOutcome {
+    schema: String,
+    realm_id: String,
+    generated_at: DateTime<Utc>,
+    operations: Vec<RealmExportOperation>,
+    events: Vec<RealmExportEvent>,
 }
 
 #[endpoint(
@@ -83,7 +128,7 @@ async fn get_realm_effective_moderation_policy(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<organizations::RealmEffectiveModerationPolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -91,9 +136,7 @@ async fn get_realm_effective_moderation_policy(
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
-    json_ok(organizations::effective_policy_for_realm_json(
-        state, &realm_id,
-    ))
+    json_ok(organizations::effective_policy_for_realm(state, &realm_id))
 }
 
 #[endpoint(
@@ -111,7 +154,7 @@ async fn upsert_realm_moderation_policy(
     req: &mut Request,
     realm_id: PathParam<String>,
     body: JsonBody<RealmModerationPolicyReplaceRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<organizations::RealmModerationPolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -136,13 +179,7 @@ async fn upsert_realm_moderation_policy(
     }
     let policy =
         organizations::persist_realm_moderation_policy(state, &realm_id, payload, &session.actor);
-    json_ok(json!({
-        "kind": "ck.realm.moderation_policy",
-        "realm_id": policy.realm_id,
-        "policy": policy.payload,
-        "updated_by": policy.updated_by,
-        "updated_at": policy.updated_at.to_rfc3339(),
-    }))
+    json_ok(organizations::realm_policy_record_outcome(&policy))
 }
 
 #[endpoint(
@@ -157,7 +194,7 @@ async fn get_space_cell(
     req: &mut Request,
     space_id: PathParam<String>,
     cell_family: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<SpaceCellOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let space_id = space_id.into_inner();
@@ -191,15 +228,15 @@ async fn get_space_cell(
         .map(Vec::len)
         .unwrap_or_default();
 
-    json_ok(json!({
-        "cell_id": format!("ck:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
-        "cell_family": CHILD_ORDER_CELL_FAMILY,
-        "space_id": space_id,
-        "state": "value",
-        "lattice": "ordered-log",
-        "value": value,
-        "total": total,
-    }))
+    json_ok(SpaceCellOutcome {
+        cell_id: format!("ck:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
+        cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
+        space_id,
+        state: "value".to_owned(),
+        lattice: "ordered-log".to_owned(),
+        value,
+        total,
+    })
 }
 
 #[endpoint(
@@ -213,7 +250,7 @@ async fn export_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<RealmExportOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -229,40 +266,40 @@ async fn export_realm(
         .unwrap_or_default()
         .into_iter()
         .filter(|event| event.realm_id == realm_id)
-        .map(|event| {
-            json!({
-                "event_id": event.event_id,
-                "realm_id": event.realm_id,
-                "event_kind": event.event_kind,
-                "operation_type": event.operation_type,
-                "operation_id": event.operation_id,
-                "sender": event.sender,
-                "payload": event.payload,
-                "created_at": event.created_at,
-            })
+        .map(|event| RealmExportEvent {
+            event_id: event.event_id,
+            realm_id: event.realm_id,
+            event_kind: event.event_kind,
+            operation_type: event.operation_type,
+            operation_id: event.operation_id,
+            sender: event.sender,
+            payload: event.payload,
+            created_at: event.created_at,
         })
         .collect::<Vec<_>>();
     let operations = events
         .iter()
-        .filter(|event| event["operation_id"].is_string())
-        .map(|event| {
-            json!({
-                "operation_id": event["operation_id"],
-                "realm_id": event["realm_id"],
-                "object_type": event["event_kind"],
-                "operation_type": event["operation_type"],
-                "payload": event["payload"],
-                "created_at": event["created_at"],
-            })
+        .filter_map(|event| {
+            event
+                .operation_id
+                .as_ref()
+                .map(|operation_id| RealmExportOperation {
+                    operation_id: operation_id.clone(),
+                    realm_id: event.realm_id.clone(),
+                    object_type: event.event_kind.clone(),
+                    operation_type: event.operation_type.clone(),
+                    payload: event.payload.clone(),
+                    created_at: event.created_at.clone(),
+                })
         })
         .collect::<Vec<_>>();
-    json_ok(json!({
-        "schema": "ck.export.realm.v1",
-        "realm_id": realm_id,
-        "generated_at": now(),
-        "operations": operations,
-        "events": events,
-    }))
+    json_ok(RealmExportOutcome {
+        schema: "ck.export.realm.v1".to_owned(),
+        realm_id,
+        generated_at: now(),
+        operations,
+        events,
+    })
 }
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {

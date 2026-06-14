@@ -28,6 +28,7 @@ pub(crate) use crate::state::*;
 
 mod accounts;
 mod agents;
+mod applets;
 mod audit;
 mod blobs;
 mod contacts;
@@ -51,6 +52,7 @@ mod webrtc;
 mod webvh;
 pub use accounts::*;
 pub use agents::*;
+pub use applets::*;
 pub use audit::*;
 pub use blobs::*;
 pub use contacts::*;
@@ -202,6 +204,7 @@ pub trait PersistenceStore: Send + Sync {
     fn realm_invites(&self) -> &dyn RealmInviteStore;
     fn events(&self) -> &dyn EventStore;
     fn projection_events(&self) -> &dyn ProjectionEventStore;
+    fn applets(&self) -> &dyn AppletStore;
     fn device_messages(&self) -> &dyn DeviceMessageStore;
     fn device_keys(&self) -> &dyn DeviceKeyStore;
     fn one_time_keys(&self) -> &dyn OneTimeKeyStore;
@@ -255,6 +258,7 @@ pub struct SolandMemoryPersistenceStore {
     realm_invites: MemoryRealmInviteStore,
     events: MemoryEventStore,
     projection_events: MemoryProjectionEventStore,
+    applets: MemoryAppletStore,
     device_messages: MemoryDeviceMessageStore,
     device_keys: MemoryDeviceKeyStore,
     one_time_keys: MemoryOneTimeKeyStore,
@@ -306,6 +310,7 @@ impl SolandMemoryPersistenceStore {
             realm_invites: MemoryRealmInviteStore::new(),
             events: MemoryEventStore::new(),
             projection_events: MemoryProjectionEventStore::new(),
+            applets: MemoryAppletStore::new(),
             device_messages: MemoryDeviceMessageStore::new(),
             device_keys: MemoryDeviceKeyStore::new(),
             one_time_keys: MemoryOneTimeKeyStore::new(),
@@ -453,6 +458,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.projection_events
     }
 
+    fn applets(&self) -> &dyn AppletStore {
+        &self.applets
+    }
+
     fn device_messages(&self) -> &dyn DeviceMessageStore {
         &self.device_messages
     }
@@ -551,6 +560,7 @@ pub struct PgPersistenceStore {
     flow_projections: PgFlowProjectionStore,
     morph_projections: PgMorphProjectionStore,
     projection_events: PgProjectionEventStore,
+    applets: PgAppletStore,
     device_messages: PgDeviceMessageStore,
     mls_key_packages: PgMlsKeyPackageStore,
     mls_welcomes: PgMlsWelcomeStore,
@@ -596,6 +606,7 @@ impl PgPersistenceStore {
             flow_projections: PgFlowProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             projection_events: PgProjectionEventStore { pool: pool.clone() },
+            applets: PgAppletStore { pool: pool.clone() },
             device_messages: PgDeviceMessageStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
             mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
@@ -728,6 +739,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn projection_events(&self) -> &dyn ProjectionEventStore {
         &self.projection_events
+    }
+
+    fn applets(&self) -> &dyn AppletStore {
+        &self.applets
     }
 
     fn device_messages(&self) -> &dyn DeviceMessageStore {

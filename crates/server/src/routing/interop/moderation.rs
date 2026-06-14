@@ -36,6 +36,14 @@ pub(super) fn legacy_router() -> Router {
         .push(Router::with_path("moderation/appeal").post(moderation_appeal_submit))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct ModerationReportsOutcome {
+    reports: Vec<Value>,
+    items: Vec<Value>,
+    total: usize,
+    visibility: String,
+}
+
 #[endpoint(
     operation_id = "ck.self.moderation.command.report",
     tags("moderation"),
@@ -169,7 +177,7 @@ async fn moderation_reports(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<ModerationReportsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = query_param(req, "realm_id");
@@ -180,12 +188,12 @@ async fn moderation_reports(
     }
     let reports = visible_reports_for_actor(state, &session.actor, realm_id.as_deref()).await;
     let total = reports.len();
-    json_ok(json!({
-        "reports": reports.clone(),
-        "items": reports,
-        "total": total,
-        "visibility": "reporter_owner_admin",
-    }))
+    json_ok(ModerationReportsOutcome {
+        reports: reports.clone(),
+        items: reports,
+        total,
+        visibility: "reporter_owner_admin".to_owned(),
+    })
 }
 
 pub(crate) async fn visible_reports_for_actor(

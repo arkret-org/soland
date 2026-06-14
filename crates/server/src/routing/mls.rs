@@ -41,11 +41,13 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use cokret_sdk::{
-    KeyPackagesClaimRequestBody, KeyPackagesConsumeRequestBody, KeyPackagesRevokeRequestBody,
-    KeyPackagesUploadRequestBody, Operation, OperationId, RealmId,
+    KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody, KeyPackagesConsumeOutcome,
+    KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome, KeyPackagesRevokeRequestBody,
+    KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody, Operation, OperationId, RealmId,
 };
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::{AppError, ErrorCode};
@@ -96,6 +98,24 @@ pub fn legacy_router() -> Router {
 /// starve other sync surfaces.
 pub const MAX_WELCOMES_PER_POLL: usize = 50;
 
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct PendingWelcome {
+    welcome_id: String,
+    mls_group_ref: String,
+    recipient_actor_id: String,
+    recipient_device_id: String,
+    welcome_bytes_b64: String,
+    key_package_id: String,
+    enqueued_at: i64,
+    delivered_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct PendingWelcomesOutcome {
+    welcomes: Vec<PendingWelcome>,
+    limit: usize,
+}
+
 // ── publish ───────────────────────────────────────────────────────────
 
 #[endpoint(
@@ -109,7 +129,7 @@ async fn upload_keypackage(
     body: JsonBody<KeyPackagesUploadRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
@@ -221,12 +241,11 @@ async fn upload_keypackage(
         key_package_refs.push(keypackage_ref);
     }
 
-    json_ok(json!({
-        "accepted": accepted,
-        "rejected": rejected,
-        "key_package_refs": key_package_refs,
-        "available_count": available_keypackage_count(state, &actor_id, Some(&device_id)),
-    }))
+    json_ok(KeyPackagesUploadOutcome {
+        accepted,
+        rejected,
+        key_package_refs,
+    })
 }
 
 // ── claim ─────────────────────────────────────────────────────────────
@@ -242,7 +261,7 @@ async fn claim_keypackage(
     body: JsonBody<KeyPackagesClaimRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<KeyPackagesClaimOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
@@ -292,14 +311,14 @@ async fn claim_keypackage(
             .map(|kp| kp.id.clone())
     };
     let Some(keypackage_id) = keypackage_id else {
-        return json_ok(json!({
-            "claims": [],
-            "failures": [{
+        return json_ok(KeyPackagesClaimOutcome {
+            claims: Vec::new(),
+            failures: vec![json!({
                 "device_id": target_device_ids.iter().next().cloned().unwrap_or_default(),
                 "reason_code": reducer::mls::REASON_KEYPACKAGE_NOT_FOUND,
-            }],
-            "available_count": available_before,
-        }));
+            })],
+            available_count: Some(available_before),
+        });
     };
     let mls_group_ref = body
         .mls_group_id
@@ -378,13 +397,15 @@ async fn claim_keypackage(
         return Err(AppError::internal("claimed KeyPackage row missing"));
     };
 
-    json_ok(json!({
-        "claims": [keypackage_claim_record(&claimed_record, &body.claim_nonce)],
-        "failures": [],
-        "available_count": available_keypackage_count(state, &target_principal_id, None),
-        "mls_group_ref": claimed_group_id,
-        "claimed_at": consumed_at,
-    }))
+    json_ok(KeyPackagesClaimOutcome {
+        claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)],
+        failures: Vec::new(),
+        available_count: Some(available_keypackage_count(
+            state,
+            &target_principal_id,
+            None,
+        )),
+    })
 }
 
 #[endpoint(
@@ -398,7 +419,7 @@ async fn consume_keypackages(
     body: JsonBody<KeyPackagesConsumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<KeyPackagesConsumeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -431,12 +452,10 @@ async fn consume_keypackages(
             }
         }
     }
-    json_ok(json!({
-        "consumed": consumed,
-        "failures": failures,
-        "consumer_device_id": session.device_id,
-        "consumed_at": consumed_at,
-    }))
+    json_ok(KeyPackagesConsumeOutcome {
+        consumed,
+        failures: json!(failures),
+    })
 }
 
 #[endpoint(
@@ -450,7 +469,7 @@ async fn revoke_keypackages(
     body: JsonBody<KeyPackagesRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<KeyPackagesRevokeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -504,13 +523,10 @@ async fn revoke_keypackages(
             }
         }
     }
-    json_ok(json!({
-        "revoked": revoked,
-        "failures": failures,
-        "device_id": session.device_id,
-        "reason": body.reason,
-        "revoked_at": revoked_at,
-    }))
+    json_ok(KeyPackagesRevokeOutcome {
+        revoked,
+        failures: json!(failures),
+    })
 }
 
 // ── welcomes/pending ──────────────────────────────────────────────────
@@ -526,7 +542,7 @@ async fn pending_welcomes(
     limit: QueryParam<usize, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<PendingWelcomesOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
 
@@ -561,26 +577,24 @@ async fn pending_welcomes(
         }
     }
 
-    let welcomes: Vec<Value> = drained
+    let welcomes: Vec<PendingWelcome> = drained
         .into_iter()
-        .map(|row| {
-            json!({
-                "welcome_id": row.id,
-                "mls_group_ref": row.group_id,
-                "recipient_actor_id": row.recipient_actor_id,
-                "recipient_device_id": row.recipient_device_id,
-                "welcome_bytes_b64": URL_SAFE_NO_PAD.encode(&row.welcome_bytes),
-                "key_package_id": row.key_package_id,
-                "enqueued_at": row.enqueued_at,
-                "delivered_at": row.delivered_at,
-            })
+        .map(|row| PendingWelcome {
+            welcome_id: row.id,
+            mls_group_ref: row.group_id,
+            recipient_actor_id: row.recipient_actor_id,
+            recipient_device_id: row.recipient_device_id,
+            welcome_bytes_b64: URL_SAFE_NO_PAD.encode(&row.welcome_bytes),
+            key_package_id: row.key_package_id,
+            enqueued_at: row.enqueued_at,
+            delivered_at: row.delivered_at,
         })
         .collect();
 
-    json_ok(json!({
-        "welcomes": welcomes,
-        "limit": cap,
-    }))
+    json_ok(PendingWelcomesOutcome {
+        welcomes,
+        limit: cap,
+    })
 }
 
 // ── commits ───────────────────────────────────────────────────────────

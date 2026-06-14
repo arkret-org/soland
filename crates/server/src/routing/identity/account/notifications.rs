@@ -1,5 +1,56 @@
 use super::*;
 
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(crate) struct NotificationsListOutcome {
+    pub items: Vec<NotificationItem>,
+    pub unread_count: usize,
+    pub last_read_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(crate) struct NotificationItem {
+    pub id: String,
+    pub notification_id: String,
+    pub event_id: String,
+    pub event_kind: String,
+    pub notification_type: String,
+    pub notification_kind: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    pub realm_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
+    pub sender_did: String,
+    pub thread_id: String,
+    pub timestamp: String,
+    pub created_at: String,
+    pub read: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentions_actor: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority_override: Option<bool>,
+    pub encrypted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wakeup_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_decrypted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_sidecar_hash: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(crate) struct NotificationsMarkAllReadOutcome {
+    pub marked_at: String,
+    pub actor: String,
+}
+
 #[endpoint(
     operation_id = "org.cokret.soland.notifications.list",
     tags("notifications"),
@@ -10,7 +61,7 @@ pub(crate) async fn list_notifications(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<NotificationsListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_handle = state
@@ -59,26 +110,13 @@ pub(crate) async fn list_notifications(
             ));
         }
     }
-    items.sort_by(|left, right| {
-        right
-            .get("timestamp")
-            .and_then(serde_json::Value::as_str)
-            .cmp(&left.get("timestamp").and_then(serde_json::Value::as_str))
-    });
-    let unread_count = items
-        .iter()
-        .filter(|item| {
-            !item
-                .get("read")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        })
-        .count();
-    json_ok(json!({
-        "items": items,
-        "unread_count": unread_count,
-        "last_read_at": last_read_at.map(|dt| dt.to_rfc3339()),
-    }))
+    items.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+    let unread_count = items.iter().filter(|item| !item.read).count();
+    json_ok(NotificationsListOutcome {
+        items,
+        unread_count,
+        last_read_at: last_read_at.map(|dt| dt.to_rfc3339()),
+    })
 }
 
 async fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
@@ -156,67 +194,88 @@ fn notification_from_message(
     message: &crate::reducer::MessageState,
     last_read_at: Option<&chrono::DateTime<chrono::Utc>>,
     mentions_actor: bool,
-) -> serde_json::Value {
+) -> NotificationItem {
     let priority = notification_priority(&message.content);
     let notification_kind = if mentions_actor { "mention" } else { "message" };
     let read = last_read_at.is_some_and(|marker| message.created_at <= *marker);
     if message.encrypted {
         return encrypted_notification_from_message(message, notification_kind, read);
     }
-    json!({
-        "id": format!("ck:notification:{}", message.event_id),
-        "notification_id": format!("ck:notification:{}", message.event_id),
-        "event_id": message.event_id,
-        "event_kind": "ck.message.create",
-        "notification_type": notification_kind,
-        "notification_kind": notification_kind,
-        "kind": notification_kind,
-        "title": if mentions_actor { "You were mentioned" } else { "New message" },
-        "body": notification_body(&message.content),
-        "realm_id": message.realm_id,
-        "sender": message.sender,
-        "sender_did": message.sender,
-        "thread_id": message.thread_id,
-        "timestamp": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "created_at": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "read": read,
-        "mentions_actor": mentions_actor,
-        "priority": priority,
-        "priority_override": priority.as_deref().is_some_and(notification_priority_overrides),
-        "encrypted": message.encrypted,
-    })
+    let notification_id = format!("ck:notification:{}", message.event_id);
+    let created_at = message
+        .created_at
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    NotificationItem {
+        id: notification_id.clone(),
+        notification_id,
+        event_id: message.event_id.clone(),
+        event_kind: "ck.message.create".to_owned(),
+        notification_type: notification_kind.to_owned(),
+        notification_kind: notification_kind.to_owned(),
+        kind: notification_kind.to_owned(),
+        title: Some(if mentions_actor {
+            "You were mentioned".to_owned()
+        } else {
+            "New message".to_owned()
+        }),
+        body: Some(notification_body(&message.content)),
+        realm_id: message.realm_id.clone(),
+        sender: Some(message.sender.clone()),
+        sender_did: message.sender.clone(),
+        thread_id: message.thread_id.clone(),
+        timestamp: created_at.clone(),
+        created_at,
+        read,
+        mentions_actor: Some(mentions_actor),
+        priority_override: Some(
+            priority
+                .as_deref()
+                .is_some_and(notification_priority_overrides),
+        ),
+        priority,
+        encrypted: message.encrypted,
+        privacy_mode: None,
+        wakeup_kind: None,
+        local_decrypted: None,
+        mention_sidecar_hash: None,
+    }
 }
 
 fn encrypted_notification_from_message(
     message: &crate::reducer::MessageState,
     notification_kind: &str,
     read: bool,
-) -> serde_json::Value {
-    let mut item = json!({
-        "id": format!("ck:notification:{}", message.event_id),
-        "notification_id": format!("ck:notification:{}", message.event_id),
-        "event_id": message.event_id,
-        "event_kind": "ck.message.create",
-        "notification_type": "blind_wakeup",
-        "notification_kind": notification_kind,
-        "kind": "blind_wakeup",
-        "realm_id": message.realm_id,
-        "sender_did": message.sender,
-        "thread_id": message.thread_id,
-        "timestamp": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "created_at": message.created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "read": read,
-        "encrypted": true,
-        "privacy_mode": "blind_wakeup",
-        "wakeup_kind": "encrypted_message",
-        "local_decrypted": false,
-    });
-    if let Some(sidecar) = message.content.get("mention_sidecar_hash")
-        && let Some(object) = item.as_object_mut()
-    {
-        object.insert("mention_sidecar_hash".to_owned(), sidecar.clone());
+) -> NotificationItem {
+    let notification_id = format!("ck:notification:{}", message.event_id);
+    let created_at = message
+        .created_at
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    NotificationItem {
+        id: notification_id.clone(),
+        notification_id,
+        event_id: message.event_id.clone(),
+        event_kind: "ck.message.create".to_owned(),
+        notification_type: "blind_wakeup".to_owned(),
+        notification_kind: notification_kind.to_owned(),
+        kind: "blind_wakeup".to_owned(),
+        title: None,
+        body: None,
+        realm_id: message.realm_id.clone(),
+        sender: None,
+        sender_did: message.sender.clone(),
+        thread_id: message.thread_id.clone(),
+        timestamp: created_at.clone(),
+        created_at,
+        read,
+        mentions_actor: None,
+        priority: None,
+        priority_override: None,
+        encrypted: true,
+        privacy_mode: Some("blind_wakeup".to_owned()),
+        wakeup_kind: Some("encrypted_message".to_owned()),
+        local_decrypted: Some(false),
+        mention_sidecar_hash: message.content.get("mention_sidecar_hash").cloned(),
     }
-    item
 }
 
 fn notification_body(content: &serde_json::Value) -> String {
@@ -495,7 +554,7 @@ pub(crate) async fn notifications_mark_all_read(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<NotificationsMarkAllReadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let marked_at = chrono::Utc::now();
@@ -524,8 +583,8 @@ pub(crate) async fn notifications_mark_all_read(
         }),
     )
     .await;
-    json_ok(json!({
-        "marked_at": marked_at.to_rfc3339(),
-        "actor": session.actor,
-    }))
+    json_ok(NotificationsMarkAllReadOutcome {
+        marked_at: marked_at.to_rfc3339(),
+        actor: session.actor,
+    })
 }

@@ -19,10 +19,11 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::{MediaIceConfigRequestBody, MediaIceMode, RealmId};
+use cokret_sdk::{DeviceId, Did, MediaIceConfigRequestBody, MediaIceMode, RealmId};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
@@ -72,6 +73,136 @@ pub(super) fn legacy_router() -> Router {
         .push(Router::with_path("webrtc/sessions/{session_id}").delete(delete_webrtc_session))
 }
 
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+struct SolandIceConfigRequestBody {
+    pub realm_id: RealmId,
+    #[serde(default)]
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub actor_id: Option<Did>,
+    #[serde(default)]
+    pub device_id: Option<DeviceId>,
+    #[serde(default)]
+    pub force_turn: bool,
+}
+
+#[derive(Clone, Debug)]
+struct IceConfigRequestContext {
+    pub realm_id: RealmId,
+    pub call_id: String,
+    pub actor_id: Did,
+    pub device_id: DeviceId,
+    pub force_turn: bool,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IceServerDescriptor {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct UnsignedIceConfigOutcome {
+    pub realm_id: RealmId,
+    pub call_id: String,
+    pub actor_id: Did,
+    pub device_id: DeviceId,
+    pub ice_servers: Vec<IceServerDescriptor>,
+    pub turn_servers: Vec<IceServerDescriptor>,
+    pub ttl_seconds: u32,
+    pub refresh_lead_seconds: u32,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub force_turn: bool,
+    pub pairwise_pseudonym: String,
+    pub refreshed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IceConfigSignature {
+    pub alg: String,
+    pub kid: String,
+    pub payload_digest: String,
+    pub sig: String,
+    pub signature_input: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct SolandIceConfigOutcome {
+    pub realm_id: RealmId,
+    pub call_id: String,
+    pub actor_id: Did,
+    pub device_id: DeviceId,
+    pub ice_servers: Vec<IceServerDescriptor>,
+    pub turn_servers: Vec<IceServerDescriptor>,
+    pub ttl_seconds: u32,
+    pub refresh_lead_seconds: u32,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub force_turn: bool,
+    pub pairwise_pseudonym: String,
+    pub refreshed: bool,
+    pub signature: IceConfigSignature,
+}
+
+impl SolandIceConfigOutcome {
+    fn signed(
+        state: &AppState,
+        unsigned: UnsignedIceConfigOutcome,
+    ) -> Result<SolandIceConfigOutcome, AppError> {
+        let payload_digest = ice_config_payload_digest(&unsigned);
+        let sig = ice_config_signature(state, &unsigned);
+        Ok(SolandIceConfigOutcome {
+            realm_id: unsigned.realm_id,
+            call_id: unsigned.call_id,
+            actor_id: unsigned.actor_id,
+            device_id: unsigned.device_id,
+            ice_servers: unsigned.ice_servers,
+            turn_servers: unsigned.turn_servers,
+            ttl_seconds: unsigned.ttl_seconds,
+            refresh_lead_seconds: unsigned.refresh_lead_seconds,
+            issued_at: unsigned.issued_at,
+            expires_at: unsigned.expires_at,
+            force_turn: unsigned.force_turn,
+            pairwise_pseudonym: unsigned.pairwise_pseudonym,
+            refreshed: unsigned.refreshed,
+            signature: IceConfigSignature {
+                alg: "EdDSA".to_owned(),
+                kid: format!("{}#media-ice", state.config.service_did),
+                payload_digest,
+                sig,
+                signature_input: "soland-media-ice-config-v1".to_owned(),
+            },
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+struct StartRecordingRequestBody {
+    #[serde(default)]
+    pub realm_id: Option<RealmId>,
+    #[serde(default)]
+    pub recording_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct StartRecordingOutcome {
+    pub ok: bool,
+    pub call_id: String,
+    pub realm_id: String,
+    pub recording_policy: String,
+    pub recording_id: String,
+    pub recording_started_by: String,
+    pub recording_blob_ref: String,
+}
+
 #[endpoint(
     operation_id = "ck.self.media.query.ice_config",
     tags("media"),
@@ -83,20 +214,20 @@ async fn cokret_ice_config(
     body: JsonBody<MediaIceConfigRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandIceConfigOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     issue_ice_config(
         state,
         &session,
-        json!({
-            "realm_id": body.realm_id.as_str(),
-            "call_id": body.call_id,
-            "actor_id": body.actor_id.as_str(),
-            "device_id": body.device_id.as_str(),
-            "force_turn": matches!(body.mode, MediaIceMode::Turn),
-        }),
+        IceConfigRequestContext {
+            realm_id: body.realm_id,
+            call_id: body.call_id,
+            actor_id: body.actor_id,
+            device_id: body.device_id,
+            force_turn: matches!(body.mode, MediaIceMode::Turn),
+        },
         None,
         false,
     )
@@ -111,13 +242,37 @@ async fn cokret_ice_config(
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.calls.ice_config"))]
 async fn api_ice_config(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<SolandIceConfigRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandIceConfigOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    issue_ice_config(state, &session, body.into_inner(), None, false).await
+    let body = body.into_inner();
+    issue_ice_config(
+        state,
+        &session,
+        IceConfigRequestContext {
+            realm_id: body.realm_id,
+            call_id: body
+                .call_id
+                .ok_or_else(|| AppError::missing_param("call_id is required"))?,
+            actor_id: match body.actor_id {
+                Some(actor_id) => actor_id,
+                None => Did::new(session.actor.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            },
+            device_id: match body.device_id {
+                Some(device_id) => device_id,
+                None => DeviceId::new(session.device_id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            },
+            force_turn: body.force_turn,
+        },
+        None,
+        false,
+    )
+    .await
 }
 
 #[endpoint(
@@ -129,16 +284,31 @@ async fn api_ice_config(
 async fn refresh_ice_config(
     aa: AuthArgs,
     call_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<SolandIceConfigRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandIceConfigOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
     issue_ice_config(
         state,
         &session,
-        body.into_inner(),
+        IceConfigRequestContext {
+            realm_id: body.realm_id,
+            call_id: body.call_id.unwrap_or_default(),
+            actor_id: match body.actor_id {
+                Some(actor_id) => actor_id,
+                None => Did::new(session.actor.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            },
+            device_id: match body.device_id {
+                Some(device_id) => device_id,
+                None => DeviceId::new(session.device_id.clone())
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            },
+            force_turn: body.force_turn,
+        },
         Some(call_id.into_inner()),
         true,
     )
@@ -148,30 +318,19 @@ async fn refresh_ice_config(
 async fn issue_ice_config(
     state: &AppState,
     session: &SessionRecord,
-    body: Value,
+    body: IceConfigRequestContext,
     path_call_id: Option<String>,
     refresh: bool,
-) -> JsonResult<Value> {
-    let realm_id = body
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
+) -> JsonResult<SolandIceConfigOutcome> {
+    let realm_id = body.realm_id.as_str();
     let call_id = path_call_id
         .as_deref()
-        .or_else(|| body.get("call_id").and_then(Value::as_str))
+        .or(Some(body.call_id.as_str()))
+        .filter(|call_id| !call_id.is_empty())
         .ok_or_else(|| AppError::missing_param("call_id is required"))?;
-    let actor_id = body
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .unwrap_or(session.actor.as_str());
-    let device_id = body
-        .get("device_id")
-        .and_then(Value::as_str)
-        .unwrap_or(session.device_id.as_str());
+    let actor_id = body.actor_id.as_str();
+    let device_id = body.device_id.as_str();
 
-    if RealmId::new(realm_id.to_owned()).is_err() {
-        return Err(AppError::invalid_param("invalid realm_id"));
-    }
     if !is_valid_webrtc_session_id(call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
     }
@@ -206,59 +365,48 @@ async fn issue_ice_config(
     }
 
     let issued_at = now();
-    let ttl_seconds = 300;
-    let refresh_lead_seconds = 75;
-    let expires_at = issued_at + Duration::seconds(ttl_seconds);
-    let force_turn = body
-        .get("force_turn")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let ttl_seconds: u32 = 300;
+    let refresh_lead_seconds: u32 = 75;
+    let expires_at = issued_at + Duration::seconds(i64::from(ttl_seconds));
+    let force_turn = body.force_turn;
     let turn_username = pairwise_turn_username(state, realm_id, call_id, actor_id, device_id);
     let turn_credential = turn_credential(
         state, realm_id, call_id, actor_id, device_id, &issued_at, refresh,
     );
-    let turn_server = json!({
-        "urls": ["turn:turn.soland.local:3478?transport=udp"],
-        "username": turn_username.clone(),
-        "credential": turn_credential,
-        "credential_type": "password",
-        "expires_at": expires_at,
-    });
-    let mut ice_servers = vec![json!({"urls": ["stun:stun.l.google.com:19302"]})];
+    let turn_server = IceServerDescriptor {
+        urls: vec!["turn:turn.soland.local:3478?transport=udp".to_owned()],
+        username: Some(turn_username.clone()),
+        credential: Some(turn_credential),
+        credential_type: Some("password".to_owned()),
+        expires_at: Some(expires_at),
+    };
+    let mut ice_servers = vec![IceServerDescriptor {
+        urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+        username: None,
+        credential: None,
+        credential_type: None,
+        expires_at: None,
+    }];
     ice_servers.push(turn_server.clone());
     if force_turn {
         ice_servers = vec![turn_server.clone()];
     }
-    let mut response = json!({
-        "realm_id": realm_id,
-        "call_id": call_id,
-        "actor_id": actor_id,
-        "device_id": device_id,
-        "ice_servers": ice_servers,
-        "turn_servers": [turn_server],
-        "ttl_seconds": ttl_seconds,
-        "refresh_lead_seconds": refresh_lead_seconds,
-        "issued_at": issued_at,
-        "expires_at": expires_at,
-        "force_turn": force_turn,
-        "pairwise_pseudonym": turn_username,
-        "refreshed": refresh,
-    });
-    let payload_digest = ice_config_payload_digest(&response);
-    let signature = ice_config_signature(state, &response);
-    if let Some(object) = response.as_object_mut() {
-        object.insert(
-            "signature".to_owned(),
-            json!({
-                "alg": "EdDSA",
-                "kid": format!("{}#media-ice", state.config.service_did),
-                "payload_digest": payload_digest,
-                "sig": signature,
-                "signature_input": "soland-media-ice-config-v1"
-            }),
-        );
-    }
-    json_ok(response)
+    let response = UnsignedIceConfigOutcome {
+        realm_id: body.realm_id,
+        call_id: call_id.to_owned(),
+        actor_id: body.actor_id,
+        device_id: body.device_id,
+        ice_servers,
+        turn_servers: vec![turn_server],
+        ttl_seconds,
+        refresh_lead_seconds,
+        issued_at,
+        expires_at,
+        force_turn,
+        pairwise_pseudonym: turn_username,
+        refreshed: refresh,
+    };
+    json_ok(SolandIceConfigOutcome::signed(state, response)?)
 }
 
 fn pairwise_turn_username(
@@ -292,15 +440,15 @@ fn turn_credential(
     URL_SAFE_NO_PAD.encode(sha256_hex(material.as_bytes()))
 }
 
-fn ice_config_payload_digest(payload: &Value) -> String {
+fn ice_config_payload_digest<T: Serialize>(payload: &T) -> String {
     let bytes = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| payload.to_string().into_bytes());
+        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
     cokret_sdk::canonical::sha256_digest(&bytes)
 }
 
-fn ice_config_signature(state: &AppState, payload: &Value) -> String {
+fn ice_config_signature<T: Serialize>(state: &AppState, payload: &T) -> String {
     let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
-        .unwrap_or_else(|_| payload.to_string().into_bytes());
+        .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
     let mut signing_input = Vec::with_capacity(
         b"soland-media-ice-config-v1".len() + state.config.service_did.len() + payload.len() + 2,
     );
@@ -616,10 +764,10 @@ async fn delete_webrtc_session(
 async fn start_recording(
     aa: AuthArgs,
     call_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<StartRecordingRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<StartRecordingOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let call_id = call_id.into_inner();
@@ -640,8 +788,8 @@ async fn start_recording(
         ));
     }
     let body = body.into_inner();
-    if let Some(realm_id) = body.get("realm_id").and_then(Value::as_str)
-        && realm_id != record.realm_id
+    if let Some(realm_id) = body.realm_id.as_ref()
+        && realm_id.as_str() != record.realm_id
     {
         return Err(AppError::invalid_param(
             "realm_id does not match the call session",
@@ -655,10 +803,8 @@ async fn start_recording(
         );
     }
     let recording_id = body
-        .get("recording_id")
-        .and_then(Value::as_str)
+        .recording_id
         .filter(|id| id.starts_with("ck:recording:"))
-        .map(ToOwned::to_owned)
         .unwrap_or_else(|| ids::generate("recording"));
     let blob_digest =
         sha256_hex(format!("{}:{}:{}", record.session_id, recording_id, session.actor).as_bytes());
@@ -671,15 +817,15 @@ async fn start_recording(
         .put(record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(json!({
-        "ok": true,
-        "call_id": call_id,
-        "realm_id": record.realm_id,
-        "recording_policy": record.recording_policy,
-        "recording_id": recording_id,
-        "recording_started_by": session.actor,
-        "recording_blob_ref": recording_blob_ref,
-    }))
+    json_ok(StartRecordingOutcome {
+        ok: true,
+        call_id,
+        realm_id: record.realm_id,
+        recording_policy: record.recording_policy,
+        recording_id,
+        recording_started_by: session.actor,
+        recording_blob_ref,
+    })
 }
 
 // ── CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media

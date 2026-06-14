@@ -31,8 +31,8 @@
 use chrono::SecondsFormat;
 use cokret_sdk::model::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleState,
-    AgentList, AgentParticipation, AgentParticipationEntry,
+    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
+    AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,
     AgentParticipationOutcome as AgentParticipationResBody, AgentParticipationScope,
     AgentParticipationSetRequestBody as AgentParticipationSetReqBody, AgentPauseRequestBody,
     AgentProvisionOutcome, AgentProvisionRequestBody, AgentResumeRequestBody,
@@ -666,7 +666,7 @@ async fn lifecycle_transition(
     new_state: AgentLifecycleState,
     event_kind: &str,
     reason: Option<String>,
-) -> Result<Value, AppError> {
+) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
     // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
@@ -718,16 +718,18 @@ async fn lifecycle_transition(
     // Persist the lifecycle state transition on the agent_principal row. The
     // persisted `state` column carries the `agent_status` enum value; the
     // lifecycle transitions land at `active` / `paused` / `deactivated`.
-    let new_status = new_state.as_wire_str();
     let _ = state
         .persistence
         .agents()
-        .set_state(&agent_id, new_status, &status_changed_at)
+        .set_state(&agent_id, new_state.as_wire_str(), &status_changed_at)
         .await;
     append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{ok: true, status}` (status is the post-transition `agent_status`).
-    Ok(json!({ "ok": true, "status": new_status }))
+    Ok(AgentLifecycleOutcome {
+        ok: true,
+        status: new_state,
+    })
 }
 
 #[endpoint(
@@ -743,7 +745,7 @@ async fn pause_agent(
     body: JsonBody<AgentPauseRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(
@@ -773,7 +775,7 @@ async fn resume_agent(
     body: JsonBody<AgentResumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     // spec `agent_resume_request_body` carries an optional
     // `sidecar_exposure_ack`, not a `reason`. P2-impl: thread the ack into the
@@ -806,7 +808,7 @@ async fn deactivate_agent(
     body: JsonBody<AgentDeactivateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     json_ok(

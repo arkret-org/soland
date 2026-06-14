@@ -30,7 +30,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::config::AppConfig;
@@ -201,7 +201,7 @@ struct StoreForwardMessageRequestBody {
 #[derive(Debug, Deserialize, ToSchema)]
 struct IngestStoreForwardRequestBody {
     #[serde(default)]
-    operations: Vec<Value>,
+    operations: Vec<StoreForwardOperationBody>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -209,6 +209,212 @@ struct EnclaveProxyRequestBody {
     target: String,
     path: String,
     actor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct TrustedEnclaveBody {
+    server_id: String,
+    base_url: String,
+    trust_chain: Vec<String>,
+    registered_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct StoreAndForwardStatusBody {
+    upstream_available: bool,
+    queue_depth: usize,
+    received: usize,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct DeploymentInfoResponseBody {
+    profile: String,
+    server_id: String,
+    service_did: String,
+    upstream_main: Option<String>,
+    trust_roots: Vec<String>,
+    allow_external_via_enclave: bool,
+    trusted_enclaves: Vec<TrustedEnclaveBody>,
+    store_and_forward: StoreAndForwardStatusBody,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ConfigureDeploymentResponseBody {
+    ok: bool,
+    profile: String,
+    trust_roots: Vec<String>,
+    upstream_main: Option<String>,
+    allow_external_via_enclave: bool,
+    upstream_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct RegisterEnclaveResponseBody {
+    ok: bool,
+    server_id: String,
+    trusted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct RealmCreateResponseBody {
+    ok: bool,
+    realm_id: String,
+    deployment_profile: String,
+    hosted_on: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct RealmFrontierBody {
+    enclave: i64,
+    main: i64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct RealmInfoResponseBody {
+    realm_id: String,
+    profile: String,
+    deployment_profile: String,
+    hosted_on: String,
+    external_invite_policy: String,
+    created_by: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    frontier: RealmFrontierBody,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ExternalInviteResponseBody {
+    ok: bool,
+    invite_token: String,
+    target_realm: String,
+    target_host: String,
+    invitee: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct SessionMetadataBody {
+    realm: String,
+    bound_node: String,
+    trust_chain_profile: String,
+    actor: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct AcceptExternalInviteResponseBody {
+    ok: bool,
+    session_metadata: SessionMetadataBody,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ExternalAccountStatusResponseBody {
+    did: String,
+    external_via_enclave: bool,
+    realm: String,
+    bound_node: String,
+    active: bool,
+    trust_chain_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct GuardRealmAccessResponseBody {
+    realm_id: String,
+    visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct DirectoryRealmBody {
+    realm_id: String,
+    profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct DirectoryRealmsResponseBody {
+    results: Vec<DirectoryRealmBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boundary: Option<String>,
+    query: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct EnclaveProxyResponseBody {
+    ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct NetworkLinkResponseBody {
+    ok: bool,
+    upstream_available: bool,
+    store_and_forward: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct StoreForwardMessageResponseBody {
+    ok: bool,
+    operation_id: String,
+    state: String,
+    delivery: String,
+    pending_sync: bool,
+    queue_depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct StoreForwardOperationBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    realm_id: String,
+    #[serde(default = "unknown_did")]
+    actor: String,
+    #[serde(default)]
+    content: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forwarded_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct DrainStoreForwardResponseBody {
+    ok: bool,
+    operations: Vec<StoreForwardOperationBody>,
+    queue_depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct IngestStoreForwardResponseBody {
+    ok: bool,
+    ingested: i64,
+    converged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct EnclaveFrontierResponseBody {
+    realm_id: String,
+    main_frontier: i64,
+    enclave_frontier: i64,
+    lagging: bool,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct AuditEntryBody {
+    subject: String,
+    action: String,
+    realm_id: Option<String>,
+    status: String,
+    detail: Value,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct DeploymentAuditResponseBody {
+    entries: Vec<AuditEntryBody>,
+}
+
+fn unknown_did() -> String {
+    "did:web:unknown".to_owned()
 }
 
 pub(super) fn router() -> Router {
@@ -237,38 +443,40 @@ pub(super) fn router() -> Router {
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.info"))]
-async fn deployment_info(depot: &mut Depot) -> JsonResult<Value> {
+async fn deployment_info(depot: &mut Depot) -> JsonResult<DeploymentInfoResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let guard = state
         .sovereign_deployment
         .lock()
         .expect("sovereign deployment lock");
-    let trusted_enclaves: Vec<Value> = guard
+    let trusted_enclaves = guard
         .trusted_enclaves
         .values()
-        .map(|record| {
-            json!({
-                "server_id": record.server_id,
-                "base_url": record.base_url,
-                "trust_chain": record.trust_chain,
-                "registered_at": record.registered_at,
-            })
+        .map(|record| TrustedEnclaveBody {
+            server_id: record.server_id.clone(),
+            base_url: record.base_url.clone(),
+            trust_chain: record.trust_chain.clone(),
+            registered_at: record.registered_at,
         })
         .collect();
-    json_ok(json!({
-        "profile": deployment_profile(state, &guard),
-        "server_id": state.config.service_did,
-        "service_did": state.config.service_did,
-        "upstream_main": guard.upstream_main,
-        "trust_roots": guard.trust_roots,
-        "allow_external_via_enclave": guard.allow_external_via_enclave,
-        "trusted_enclaves": trusted_enclaves,
-        "store_and_forward": {
-            "upstream_available": guard.upstream_available,
-            "queue_depth": guard.store_forward_queue.iter().filter(|record| record.forwarded_at.is_none()).count(),
-            "received": guard.received_store_forward.len(),
+    json_ok(DeploymentInfoResponseBody {
+        profile: deployment_profile(state, &guard),
+        server_id: state.config.service_did.clone(),
+        service_did: state.config.service_did.clone(),
+        upstream_main: guard.upstream_main.clone(),
+        trust_roots: guard.trust_roots.clone(),
+        allow_external_via_enclave: guard.allow_external_via_enclave,
+        trusted_enclaves,
+        store_and_forward: StoreAndForwardStatusBody {
+            upstream_available: guard.upstream_available,
+            queue_depth: guard
+                .store_forward_queue
+                .iter()
+                .filter(|record| record.forwarded_at.is_none())
+                .count(),
+            received: guard.received_store_forward.len(),
         },
-    }))
+    })
 }
 
 #[endpoint]
@@ -276,7 +484,7 @@ async fn deployment_info(depot: &mut Depot) -> JsonResult<Value> {
 async fn configure_deployment(
     depot: &mut Depot,
     body: JsonBody<ConfigureDeploymentRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<ConfigureDeploymentResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let mut guard = state
@@ -303,14 +511,14 @@ async fn configure_deployment(
     if let Some(upstream_available) = body.upstream_available {
         guard.upstream_available = upstream_available;
     }
-    json_ok(json!({
-        "ok": true,
-        "profile": deployment_profile(state, &guard),
-        "trust_roots": guard.trust_roots,
-        "upstream_main": guard.upstream_main,
-        "allow_external_via_enclave": guard.allow_external_via_enclave,
-        "upstream_available": guard.upstream_available,
-    }))
+    json_ok(ConfigureDeploymentResponseBody {
+        ok: true,
+        profile: deployment_profile(state, &guard),
+        trust_roots: guard.trust_roots.clone(),
+        upstream_main: guard.upstream_main.clone(),
+        allow_external_via_enclave: guard.allow_external_via_enclave,
+        upstream_available: guard.upstream_available,
+    })
 }
 
 #[endpoint]
@@ -318,7 +526,7 @@ async fn configure_deployment(
 async fn register_enclave(
     depot: &mut Depot,
     body: JsonBody<RegisterEnclaveRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<RegisterEnclaveResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.server_id.trim().is_empty() || body.base_url.trim().is_empty() {
@@ -348,11 +556,11 @@ async fn register_enclave(
         "accepted",
         json!({"base_url": body.base_url, "trust_chain": body.trust_chain}),
     );
-    json_ok(json!({
-        "ok": true,
-        "server_id": body.server_id,
-        "trusted": true,
-    }))
+    json_ok(RegisterEnclaveResponseBody {
+        ok: true,
+        server_id: body.server_id,
+        trusted: true,
+    })
 }
 
 #[endpoint]
@@ -360,7 +568,7 @@ async fn register_enclave(
 async fn realm_create(
     depot: &mut Depot,
     body: JsonBody<RealmCreateRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<RealmCreateResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
@@ -399,17 +607,20 @@ async fn realm_create(
         "accepted",
         json!({"hosted_on": body.hosted_on}),
     );
-    json_ok(json!({
-        "ok": true,
-        "realm_id": realm_id,
-        "deployment_profile": "enclave",
-        "hosted_on": body.hosted_on,
-    }))
+    json_ok(RealmCreateResponseBody {
+        ok: true,
+        realm_id,
+        deployment_profile: "enclave".to_owned(),
+        hosted_on: body.hosted_on,
+    })
 }
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_info"))]
-async fn realm_info(depot: &mut Depot, realm_id: PathParam<String>) -> JsonResult<Value> {
+async fn realm_info(
+    depot: &mut Depot,
+    realm_id: PathParam<String>,
+) -> JsonResult<RealmInfoResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     let guard = state
@@ -419,19 +630,19 @@ async fn realm_info(depot: &mut Depot, realm_id: PathParam<String>) -> JsonResul
     let Some(record) = guard.enclave_realms.get(&realm_id) else {
         return Err(AppError::not_found("realm not found"));
     };
-    json_ok(json!({
-        "realm_id": record.realm_id,
-        "profile": record.deployment_profile,
-        "deployment_profile": record.deployment_profile,
-        "hosted_on": record.hosted_on,
-        "external_invite_policy": record.external_invite_policy,
-        "created_by": record.created_by,
-        "created_at": record.created_at,
-        "frontier": {
-            "enclave": record.enclave_frontier,
-            "main": record.main_frontier,
+    json_ok(RealmInfoResponseBody {
+        realm_id: record.realm_id.clone(),
+        profile: record.deployment_profile.clone(),
+        deployment_profile: record.deployment_profile.clone(),
+        hosted_on: record.hosted_on.clone(),
+        external_invite_policy: record.external_invite_policy.clone(),
+        created_by: record.created_by.clone(),
+        created_at: record.created_at,
+        frontier: RealmFrontierBody {
+            enclave: record.enclave_frontier,
+            main: record.main_frontier,
         },
-    }))
+    })
 }
 
 #[endpoint]
@@ -439,7 +650,7 @@ async fn realm_info(depot: &mut Depot, realm_id: PathParam<String>) -> JsonResul
 async fn external_invite(
     depot: &mut Depot,
     body: JsonBody<ExternalInviteRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<ExternalInviteResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
@@ -485,13 +696,13 @@ async fn external_invite(
         "accepted",
         json!({"target_host": target_host, "inviter": body.inviter}),
     );
-    json_ok(json!({
-        "ok": true,
-        "invite_token": invite_token,
-        "target_realm": body.target_realm,
-        "target_host": target_host,
-        "invitee": body.invitee,
-    }))
+    json_ok(ExternalInviteResponseBody {
+        ok: true,
+        invite_token,
+        target_realm: body.target_realm,
+        target_host,
+        invitee: body.invitee,
+    })
 }
 
 #[endpoint]
@@ -499,7 +710,7 @@ async fn external_invite(
 async fn accept_external_invite(
     depot: &mut Depot,
     body: JsonBody<AcceptExternalInviteRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<AcceptExternalInviteResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor_id, Some("enclave"))?;
@@ -548,20 +759,23 @@ async fn accept_external_invite(
         "accepted",
         json!({"bound_node": target_host, "trust_chain_profile": "enclave"}),
     );
-    json_ok(json!({
-        "ok": true,
-        "session_metadata": {
-            "realm": target_realm,
-            "bound_node": target_host,
-            "trust_chain_profile": "enclave",
-            "actor": body.actor_id,
+    json_ok(AcceptExternalInviteResponseBody {
+        ok: true,
+        session_metadata: SessionMetadataBody {
+            realm: target_realm,
+            bound_node: target_host,
+            trust_chain_profile: "enclave".to_owned(),
+            actor: body.actor_id,
         },
-    }))
+    })
 }
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.external_account_status"))]
-async fn external_account_status(depot: &mut Depot, did: PathParam<String>) -> JsonResult<Value> {
+async fn external_account_status(
+    depot: &mut Depot,
+    did: PathParam<String>,
+) -> JsonResult<ExternalAccountStatusResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = did.into_inner();
     let guard = state
@@ -571,14 +785,14 @@ async fn external_account_status(depot: &mut Depot, did: PathParam<String>) -> J
     let Some(record) = guard.external_accounts.get(&did) else {
         return Err(AppError::not_found("account not found"));
     };
-    json_ok(json!({
-        "did": record.did,
-        "external_via_enclave": true,
-        "realm": record.realm_id,
-        "bound_node": record.bound_node,
-        "active": record.active,
-        "trust_chain_profile": record.trust_chain_profile,
-    }))
+    json_ok(ExternalAccountStatusResponseBody {
+        did: record.did.clone(),
+        external_via_enclave: true,
+        realm: record.realm_id.clone(),
+        bound_node: record.bound_node.clone(),
+        active: record.active,
+        trust_chain_profile: record.trust_chain_profile.clone(),
+    })
 }
 
 #[endpoint]
@@ -587,7 +801,7 @@ async fn guard_realm_access(
     depot: &mut Depot,
     realm_id: PathParam<String>,
     actor: QueryParam<String, false>,
-) -> JsonResult<Value> {
+) -> JsonResult<GuardRealmAccessResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let realm_id = realm_id.into_inner();
@@ -608,7 +822,10 @@ async fn guard_realm_access(
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("external_user_no_main_access"));
     }
-    json_ok(json!({"realm_id": realm_id, "visible": true}))
+    json_ok(GuardRealmAccessResponseBody {
+        realm_id,
+        visible: true,
+    })
 }
 
 #[endpoint]
@@ -617,7 +834,7 @@ async fn directory_realms(
     depot: &mut Depot,
     actor: QueryParam<String, false>,
     q: QueryParam<String, false>,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryRealmsResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
     let q = q.into_inner().unwrap_or_default();
@@ -626,19 +843,26 @@ async fn directory_realms(
         .lock()
         .expect("sovereign deployment lock");
     if guard.external_accounts.contains_key(&actor) {
-        return json_ok(json!({
-            "results": [],
-            "boundary": "external_via_enclave",
-            "query": q,
-        }));
+        return json_ok(DirectoryRealmsResponseBody {
+            results: Vec::new(),
+            boundary: Some("external_via_enclave".to_owned()),
+            query: q,
+        });
     }
-    let results: Vec<Value> = guard
+    let results = guard
         .enclave_realms
         .values()
         .filter(|realm| q.is_empty() || realm.realm_id.contains(&q))
-        .map(|realm| json!({"realm_id": realm.realm_id, "profile": realm.deployment_profile}))
+        .map(|realm| DirectoryRealmBody {
+            realm_id: realm.realm_id.clone(),
+            profile: realm.deployment_profile.clone(),
+        })
         .collect();
-    json_ok(json!({"results": results, "query": q}))
+    json_ok(DirectoryRealmsResponseBody {
+        results,
+        boundary: None,
+        query: q,
+    })
 }
 
 #[endpoint]
@@ -646,7 +870,7 @@ async fn directory_realms(
 async fn enclave_proxy(
     depot: &mut Depot,
     body: JsonBody<EnclaveProxyRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<EnclaveProxyResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let mut guard = state
@@ -679,7 +903,7 @@ async fn enclave_proxy(
 async fn set_network_link(
     depot: &mut Depot,
     body: JsonBody<NetworkLinkRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<NetworkLinkResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let mut guard = state
@@ -687,11 +911,11 @@ async fn set_network_link(
         .lock()
         .expect("sovereign deployment lock");
     guard.upstream_available = body.upstream_available;
-    json_ok(json!({
-        "ok": true,
-        "upstream_available": guard.upstream_available,
-        "store_and_forward": !guard.upstream_available,
-    }))
+    json_ok(NetworkLinkResponseBody {
+        ok: true,
+        upstream_available: guard.upstream_available,
+        store_and_forward: !guard.upstream_available,
+    })
 }
 
 #[endpoint]
@@ -699,7 +923,7 @@ async fn set_network_link(
 async fn store_forward_message(
     depot: &mut Depot,
     body: JsonBody<StoreForwardMessageRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<StoreForwardMessageResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor, Some("enclave"))?;
@@ -739,19 +963,23 @@ async fn store_forward_message(
         "accepted",
         json!({"operation_id": id, "upstream_available": upstream_available}),
     );
-    json_ok(json!({
-        "ok": true,
-        "operation_id": id,
-        "state": "accepted",
-        "delivery": if upstream_available { "forwarded" } else { "store_forward" },
-        "pending_sync": false,
-        "queue_depth": queue_depth,
-    }))
+    json_ok(StoreForwardMessageResponseBody {
+        ok: true,
+        operation_id: id,
+        state: "accepted".to_owned(),
+        delivery: if upstream_available {
+            "forwarded".to_owned()
+        } else {
+            "store_forward".to_owned()
+        },
+        pending_sync: false,
+        queue_depth,
+    })
 }
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_drain"))]
-async fn drain_store_forward(depot: &mut Depot) -> JsonResult<Value> {
+async fn drain_store_forward(depot: &mut Depot) -> JsonResult<DrainStoreForwardResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let mut guard = state
         .sovereign_deployment
@@ -770,11 +998,15 @@ async fn drain_store_forward(depot: &mut Depot) -> JsonResult<Value> {
             drained.push(store_forward_json(record));
         }
     }
-    json_ok(json!({
-        "ok": true,
-        "operations": drained,
-        "queue_depth": guard.store_forward_queue.iter().filter(|record| record.forwarded_at.is_none()).count(),
-    }))
+    json_ok(DrainStoreForwardResponseBody {
+        ok: true,
+        operations: drained,
+        queue_depth: guard
+            .store_forward_queue
+            .iter()
+            .filter(|record| record.forwarded_at.is_none())
+            .count(),
+    })
 }
 
 #[endpoint]
@@ -782,7 +1014,7 @@ async fn drain_store_forward(depot: &mut Depot) -> JsonResult<Value> {
 async fn ingest_store_forward(
     depot: &mut Depot,
     body: JsonBody<IngestStoreForwardRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<IngestStoreForwardResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let mut guard = state
@@ -791,28 +1023,18 @@ async fn ingest_store_forward(
         .expect("sovereign deployment lock");
     let mut ingested = 0_i64;
     for operation in body.operations {
-        let realm_id = operation
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if realm_id.is_empty() {
+        if operation.realm_id.is_empty() {
             continue;
         }
+        let realm_id = operation.realm_id.clone();
         let record = SovereignStoreForwardRecord {
             id: operation
-                .get("id")
-                .or_else(|| operation.get("operation_id"))
-                .and_then(Value::as_str)
-                .unwrap_or("ck:operation:unknown")
-                .to_owned(),
+                .id
+                .or(operation.operation_id)
+                .unwrap_or_else(|| "ck:operation:unknown".to_owned()),
             realm_id: realm_id.clone(),
-            actor: operation
-                .get("actor")
-                .and_then(Value::as_str)
-                .unwrap_or("did:web:unknown")
-                .to_owned(),
-            content: operation.get("content").cloned().unwrap_or(Value::Null),
+            actor: operation.actor,
+            content: operation.content,
             state: "accepted".to_owned(),
             created_at: chrono::Utc::now(),
             forwarded_at: Some(chrono::Utc::now()),
@@ -834,11 +1056,11 @@ async fn ingest_store_forward(
         realm.main_frontier += 1;
         ingested += 1;
     }
-    json_ok(json!({
-        "ok": true,
-        "ingested": ingested,
-        "converged": true,
-    }))
+    json_ok(IngestStoreForwardResponseBody {
+        ok: true,
+        ingested,
+        converged: true,
+    })
 }
 
 #[endpoint]
@@ -846,7 +1068,7 @@ async fn ingest_store_forward(
 async fn enclave_frontier(
     depot: &mut Depot,
     realm_id: QueryParam<String, true>,
-) -> JsonResult<Value> {
+) -> JsonResult<EnclaveFrontierResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     let guard = state
@@ -865,13 +1087,17 @@ async fn enclave_frontier(
                 .count() as i64;
             (received, received)
         });
-    json_ok(json!({
-        "realm_id": realm_id,
-        "main_frontier": main_frontier,
-        "enclave_frontier": enclave_pos,
-        "lagging": main_frontier < enclave_pos,
-        "status": if main_frontier < enclave_pos { "enclave_sync_lag" } else { "converged" },
-    }))
+    json_ok(EnclaveFrontierResponseBody {
+        realm_id,
+        main_frontier,
+        enclave_frontier: enclave_pos,
+        lagging: main_frontier < enclave_pos,
+        status: if main_frontier < enclave_pos {
+            "enclave_sync_lag".to_owned()
+        } else {
+            "converged".to_owned()
+        },
+    })
 }
 
 #[endpoint]
@@ -879,14 +1105,14 @@ async fn enclave_frontier(
 async fn deployment_audit(
     depot: &mut Depot,
     subject: QueryParam<String, false>,
-) -> JsonResult<Value> {
+) -> JsonResult<DeploymentAuditResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let subject = subject.into_inner();
     let guard = state
         .sovereign_deployment
         .lock()
         .expect("sovereign deployment lock");
-    let entries: Vec<Value> = guard
+    let entries = guard
         .audit_log
         .iter()
         .filter(|entry| {
@@ -894,18 +1120,16 @@ async fn deployment_audit(
                 .as_ref()
                 .is_none_or(|subject| &entry.subject == subject)
         })
-        .map(|entry| {
-            json!({
-                "subject": entry.subject,
-                "action": entry.action,
-                "realm_id": entry.realm_id,
-                "status": entry.status,
-                "detail": entry.detail,
-                "created_at": entry.created_at,
-            })
+        .map(|entry| AuditEntryBody {
+            subject: entry.subject.clone(),
+            action: entry.action.clone(),
+            realm_id: entry.realm_id.clone(),
+            status: entry.status.clone(),
+            detail: entry.detail.clone(),
+            created_at: entry.created_at,
         })
         .collect();
-    json_ok(json!({"entries": entries}))
+    json_ok(DeploymentAuditResponseBody { entries })
 }
 
 pub fn validate_sovereign_did_registration(state: &AppState, did: &str) -> Result<(), AppError> {
@@ -992,17 +1216,17 @@ fn audit(
     });
 }
 
-fn store_forward_json(record: &SovereignStoreForwardRecord) -> Value {
-    json!({
-        "id": record.id,
-        "operation_id": record.id,
-        "realm_id": record.realm_id,
-        "actor": record.actor,
-        "content": record.content,
-        "state": record.state,
-        "created_at": record.created_at,
-        "forwarded_at": record.forwarded_at,
-    })
+fn store_forward_json(record: &SovereignStoreForwardRecord) -> StoreForwardOperationBody {
+    StoreForwardOperationBody {
+        id: Some(record.id.clone()),
+        operation_id: Some(record.id.clone()),
+        realm_id: record.realm_id.clone(),
+        actor: record.actor.clone(),
+        content: record.content.clone(),
+        state: Some(record.state.clone()),
+        created_at: Some(record.created_at),
+        forwarded_at: record.forwarded_at,
+    }
 }
 
 #[cfg(test)]

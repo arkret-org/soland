@@ -48,7 +48,7 @@ async fn create_invite_token(
     body: JsonBody<CreateInviteTokenRequest>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<super::collection::AdminInviteTokenItem> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -106,7 +106,7 @@ async fn create_invite_token(
     )
     .await;
 
-    json_ok(super::collection::admin_invite_item_value(&invite))
+    json_ok(super::collection::admin_invite_item(&invite))
 }
 
 #[endpoint(
@@ -120,7 +120,7 @@ async fn revoke_invite_token(
     invite_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<super::collection::AdminInviteTokenItem> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -152,7 +152,7 @@ async fn revoke_invite_token(
     )
     .await;
 
-    json_ok(super::collection::admin_invite_item_value(&invite))
+    json_ok(super::collection::admin_invite_item(&invite))
 }
 
 fn default_invite_realm_id(state: &AppState) -> Option<String> {

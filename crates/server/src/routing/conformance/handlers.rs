@@ -34,6 +34,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -65,13 +66,196 @@ const SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
     "created_at",
 ];
 
-/// Pull `vector_id` from a body — used by every endpoint to detect the
-/// `reject_*` / `logical_overflow` test paths and to surface an explicit
-/// code when the field is missing.
-fn vector_id(body: &Value) -> Result<&str, AppError> {
-    body.get("vector_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("missing vector_id"))
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EncodeVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    input: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CanonicalJsonDigestOutcome {
+    canonical_json: String,
+    digest: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SignVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    event: Value,
+    signing_key_ref: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SignVectorOutcome {
+    canonical_bytes: String,
+    digest: String,
+    signature: String,
+    public_key: String,
+    algorithm: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HlcClockVectorItem {
+    actor: String,
+    hlc: String,
+    #[serde(default)]
+    #[salvo(schema(value_type = serde_json::Value))]
+    payload_hint: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct HlcMergeVectorRequest {
+    vector_id: String,
+    clocks: Vec<HlcClockVectorItem>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HlcMergeVectorOutcome {
+    ordered: Vec<HlcClockVectorItem>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CursorVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    events: Vec<Value>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CursorVectorOutcome {
+    cursor: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EnvelopeVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    envelope: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CanonicalBytesDigestOutcome {
+    canonical_bytes: String,
+    digest: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RedactVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    event: Value,
+    #[salvo(schema(value_type = serde_json::Value))]
+    redaction: Value,
+    viewer_did: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RedactVectorOutcome {
+    #[salvo(schema(value_type = serde_json::Value))]
+    projected_event: Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SnapshotVectorRequest {
+    vector_id: String,
+    #[salvo(schema(value_type = serde_json::Value))]
+    manifest: Value,
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    chunks: Vec<Value>,
+    #[serde(default)]
+    #[salvo(schema(value_type = serde_json::Value))]
+    signature: Option<Value>,
+    #[serde(default)]
+    revoked_signer_dids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SnapshotVectorOutcome {
+    vector_id: String,
+    manifest_digest: String,
+    chunk_hashes: Vec<String>,
+    expected_chunk_count: usize,
+    state_digest: String,
+    event_set_commitment: String,
+    signature_valid: bool,
+    signer_did: String,
+    signed_transcript_fields: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct QueryVectorRequest {
+    vector_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = serde_json::Value))]
+    query: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    rows: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    dataset: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unauthorized_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    events: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    chunks: Option<Vec<Value>>,
+    #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    #[salvo(schema(value_type = serde_json::Value))]
+    extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QueryVectorFrontier {
+    barrier_cursor: String,
+    row_count: usize,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct QueryVectorOutcome {
+    vector_id: String,
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    items: Vec<Value>,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+    frontier: QueryVectorFrontier,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ChaosOperationOutcome {
+    operation_id: String,
+    canonical_event: Option<CanonicalEventDiagnostic>,
+    projection_event: Option<ProjectionEventDiagnostic>,
+    consistent: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct CanonicalEventDiagnostic {
+    event_id: String,
+    actor_id: String,
+    actor_seq: u64,
+    realm_id: Option<String>,
+    kind: String,
+    canonical_digest: String,
+    received_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct ProjectionEventDiagnostic {
+    event_id: String,
+    realm_id: String,
+    event_kind: String,
+    operation_type: String,
+    operation_id: Option<String>,
+    sender: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Errors that mean "the vector_id encodes a deliberate reject path" — used
@@ -101,23 +285,20 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     summary = "Run a canonical-JSON / digest conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.encode"))]
-pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<CanonicalJsonDigestOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let vector = vector_id(&body)?;
+    let vector = body.vector_id.as_str();
     if let Some((code, message)) = encode_reject_for_vector(vector) {
         return Err(AppError::new(code, message));
     }
-    let input = body
-        .get("input")
-        .ok_or_else(|| AppError::missing_param("missing input"))?;
-    let canonical = canonical_json(input)
+    let canonical = canonical_json(&body.input)
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
-    json_ok(json!({
-        "canonical_json": canonical,
-        "digest": digest,
-    }))
+    json_ok(CanonicalJsonDigestOutcome {
+        canonical_json: canonical,
+        digest,
+    })
 }
 
 #[endpoint(
@@ -126,17 +307,12 @@ pub async fn encode(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run a signature-binding conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.sign"))]
-pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let _vector = vector_id(&body)?;
-    let event = body
-        .get("event")
-        .ok_or_else(|| AppError::missing_param("missing event"))?;
-    let signing_key_ref = body
-        .get("signing_key_ref")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("missing signing_key_ref"))?;
+    let _vector = body.vector_id.as_str();
+    let event = &body.event;
+    let signing_key_ref = body.signing_key_ref.as_str();
 
     // Deterministic conformance signing key: derive seed from the
     // `signing_key_ref` string. This is intentionally not a real account /
@@ -168,13 +344,13 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     let digest = sha256_digest(canonical.as_bytes());
     let signature = signing_key.sign(canonical.as_bytes());
 
-    json_ok(json!({
-        "canonical_bytes": canonical,
-        "digest": digest,
-        "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
-        "public_key": URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
-        "algorithm": "ed25519",
-    }))
+    json_ok(SignVectorOutcome {
+        canonical_bytes: canonical,
+        digest,
+        signature: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        public_key: URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
+        algorithm: "ed25519".to_owned(),
+    })
 }
 
 #[endpoint(
@@ -183,10 +359,10 @@ pub async fn sign(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run an HLC ordering conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.hlc_merge"))]
-pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcMergeVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let vector = vector_id(&body)?;
+    let vector = body.vector_id.as_str();
     if vector.contains("logical_overflow") {
         return Err(AppError::new(
             ErrorCode::HlcLogicalOverflow,
@@ -194,37 +370,27 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
         )
         .with_status(StatusCode::UNPROCESSABLE_ENTITY));
     }
-    let clocks_value = body
-        .get("clocks")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::missing_param("missing clocks array"))?;
-    let mut clocks: Vec<(String, String, Value)> = Vec::with_capacity(clocks_value.len());
-    for clock in clocks_value {
-        let actor = clock
-            .get("actor")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("clock missing actor"))?
-            .to_owned();
-        let hlc = clock
-            .get("hlc")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("clock missing hlc"))?
-            .to_owned();
-        let payload_hint = clock.get("payload_hint").cloned().unwrap_or(Value::Null);
-        clocks.push((hlc, actor, payload_hint));
-    }
-    let ordered = order_hlc_clocks(&clocks);
-    let ordered_json: Vec<Value> = ordered
-        .into_iter()
-        .map(|(hlc, actor, payload_hint)| {
-            json!({
-                "actor": actor,
-                "hlc": hlc,
-                "payload_hint": payload_hint,
-            })
+    let clocks: Vec<(String, String, Value)> = body
+        .clocks
+        .iter()
+        .map(|clock| {
+            (
+                clock.hlc.clone(),
+                clock.actor.clone(),
+                clock.payload_hint.clone(),
+            )
         })
         .collect();
-    json_ok(json!({ "ordered": ordered_json }))
+    let ordered = order_hlc_clocks(&clocks);
+    let ordered = ordered
+        .into_iter()
+        .map(|(hlc, actor, payload_hint)| HlcClockVectorItem {
+            actor,
+            hlc,
+            payload_hint,
+        })
+        .collect();
+    json_ok(HlcMergeVectorOutcome { ordered })
 }
 
 #[endpoint(
@@ -233,14 +399,11 @@ pub async fn hlc_merge(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run an opaque-cursor conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.cursor"))]
-pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let _vector = vector_id(&body)?;
-    let events = body
-        .get("events")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::missing_param("missing events"))?;
+    let _vector = body.vector_id.as_str();
+    let events = &body.events;
 
     // The cursor must be stable under re-reduce — i.e. independent of the
     // input event order. Encode the *count* of events plus the canonical
@@ -271,7 +434,9 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     };
     let cursor_token = encode_cursor_shape(&shape)
         .map_err(|err| AppError::new(ErrorCode::InternalError, format!("encode cursor: {err}")))?;
-    json_ok(json!({ "cursor": cursor_token }))
+    json_ok(CursorVectorOutcome {
+        cursor: cursor_token,
+    })
 }
 
 #[endpoint(
@@ -280,20 +445,19 @@ pub async fn cursor(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run an encrypted-envelope canonical-digest conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.envelope"))]
-pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn envelope(
+    body: JsonBody<EnvelopeVectorRequest>,
+) -> JsonResult<CanonicalBytesDigestOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let _vector = vector_id(&body)?;
-    let envelope_value = body
-        .get("envelope")
-        .ok_or_else(|| AppError::missing_param("missing envelope"))?;
-    let canonical = canonical_json(envelope_value)
+    let _vector = body.vector_id.as_str();
+    let canonical = canonical_json(&body.envelope)
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
-    json_ok(json!({
-        "canonical_bytes": canonical,
-        "digest": digest,
-    }))
+    json_ok(CanonicalBytesDigestOutcome {
+        canonical_bytes: canonical,
+        digest,
+    })
 }
 
 #[endpoint(
@@ -302,20 +466,13 @@ pub async fn envelope(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run a redaction visibility / projection conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.redact"))]
-pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let _vector = vector_id(&body)?;
-    let event = body
-        .get("event")
-        .ok_or_else(|| AppError::missing_param("missing event"))?;
-    let redaction = body
-        .get("redaction")
-        .ok_or_else(|| AppError::missing_param("missing redaction"))?;
-    let viewer_did = body
-        .get("viewer_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("missing viewer_did"))?;
+    let _vector = body.vector_id.as_str();
+    let event = &body.event;
+    let redaction = &body.redaction;
+    let viewer_did = body.viewer_did.as_str();
 
     // Spec §3.2 — redaction strips the fields listed in `redaction.fields`
     // (default: `["content", "payload.content"]`) unless the viewer is the
@@ -353,7 +510,9 @@ pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
         }
     }
 
-    json_ok(json!({ "projected_event": projected }))
+    json_ok(RedactVectorOutcome {
+        projected_event: projected,
+    })
 }
 
 #[endpoint(
@@ -362,17 +521,12 @@ pub async fn redact(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run a snapshot manifest / chunk integrity conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.snapshot"))]
-pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<SnapshotVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let vector = vector_id(&body)?;
-    let manifest = body
-        .get("manifest")
-        .ok_or_else(|| AppError::missing_param("missing manifest"))?;
-    let chunks = body
-        .get("chunks")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AppError::missing_param("missing chunks array"))?;
+    let vector = body.vector_id.as_str();
+    let manifest = &body.manifest;
+    let chunks = &body.chunks;
     if chunks.len() > MAX_CONFORMANCE_BATCH || vector.contains("batch_size_over_max") {
         return Err(limit_error(
             "snapshot chunks exceed the 1,000 item wire limit",
@@ -422,7 +576,7 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
             }))
         });
 
-    let signature = manifest.get("signature").or_else(|| body.get("signature"));
+    let signature = manifest.get("signature").or(body.signature.as_ref());
     let signer_did = signature
         .and_then(|sig| sig.get("signer_did"))
         .and_then(Value::as_str)
@@ -433,7 +587,7 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
             .and_then(|sig| sig.get("revoked"))
             .and_then(Value::as_bool)
             == Some(true)
-        || string_array(body.get("revoked_signer_dids")).any(|did| did == signer_did)
+        || body.revoked_signer_dids.iter().any(|did| did == signer_did)
     {
         return Err(
             AppError::new(ErrorCode::CapabilityDenied, "snapshot issuer is revoked")
@@ -442,17 +596,20 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
         );
     }
 
-    json_ok(json!({
-        "vector_id": vector,
-        "manifest_digest": manifest_digest,
-        "chunk_hashes": chunk_hashes,
-        "expected_chunk_count": chunks.len(),
-        "state_digest": state_digest,
-        "event_set_commitment": event_set_commitment,
-        "signature_valid": signature.is_some(),
-        "signer_did": signer_did,
-        "signed_transcript_fields": SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS,
-    }))
+    json_ok(SnapshotVectorOutcome {
+        vector_id: vector.to_owned(),
+        manifest_digest,
+        chunk_hashes,
+        expected_chunk_count: chunks.len(),
+        state_digest,
+        event_set_commitment,
+        signature_valid: signature.is_some(),
+        signer_did: signer_did.to_owned(),
+        signed_transcript_fields: SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+    })
 }
 
 #[endpoint(
@@ -461,17 +618,19 @@ pub async fn snapshot(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Run a query filter / sort / pagination conformance vector"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.query"))]
-pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
+pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVectorOutcome> {
     super::ensure_enabled()?;
     let body = body.into_inner();
-    let vector = vector_id(&body)?;
-    let query_value = body.get("query").unwrap_or(&body);
-    validate_query_limits(vector, &body, query_value)?;
-    validate_query_shape(vector, &body, query_value)?;
+    let body_value = serde_json::to_value(&body)
+        .map_err(|error| AppError::internal(format!("conformance query body encode: {error}")))?;
+    let vector = body.vector_id.as_str();
+    let query_value = body_value.get("query").unwrap_or(&body_value);
+    validate_query_limits(vector, &body_value, query_value)?;
+    validate_query_shape(vector, &body_value, query_value)?;
 
-    let mut rows = body
+    let mut rows = body_value
         .get("rows")
-        .or_else(|| body.get("dataset"))
+        .or_else(|| body_value.get("dataset"))
         .or_else(|| query_value.get("rows"))
         .and_then(Value::as_array)
         .cloned()
@@ -483,7 +642,7 @@ pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
     let query_digest = digest_json(&query_digest_shape);
     let offset = query_value
         .get("cursor")
-        .or_else(|| body.get("cursor"))
+        .or_else(|| body_value.get("cursor"))
         .and_then(Value::as_str)
         .map(|cursor_token| decode_query_cursor(cursor_token, &query_digest))
         .transpose()?
@@ -509,16 +668,16 @@ pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
     };
     let barrier_cursor = encode_query_cursor(rows.len(), &query_digest)?;
 
-    json_ok(json!({
-        "vector_id": vector,
-        "items": page,
-        "has_more": next_cursor.is_some(),
-        "next_cursor": next_cursor,
-        "frontier": {
-            "barrier_cursor": barrier_cursor,
-            "row_count": rows.len(),
+    json_ok(QueryVectorOutcome {
+        vector_id: vector.to_owned(),
+        items: page,
+        has_more: next_cursor.is_some(),
+        next_cursor,
+        frontier: QueryVectorFrontier {
+            barrier_cursor,
+            row_count: rows.len(),
         },
-    }))
+    })
 }
 
 #[endpoint(
@@ -527,7 +686,10 @@ pub async fn query(body: JsonBody<Value>) -> JsonResult<Value> {
     summary = "Inspect a committed operation during local chaos testing"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.conformance.chaos_operation"))]
-pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Value> {
+pub async fn chaos_operation(
+    depot: &mut Depot,
+    req: &Request,
+) -> JsonResult<ChaosOperationOutcome> {
     super::ensure_enabled()?;
     let state = depot.obtain::<AppState>().expect("state injected");
     if !state.config.development_mode {
@@ -562,12 +724,12 @@ pub async fn chaos_operation(depot: &mut Depot, req: &Request) -> JsonResult<Val
     let canonical_json = canonical_event.as_ref().map(canonical_event_diagnostic);
     let projection_json = projection_event.as_ref().map(projection_event_diagnostic);
 
-    json_ok(json!({
-        "operation_id": operation_id,
-        "canonical_event": canonical_json,
-        "projection_event": projection_json,
-        "consistent": canonical_event.is_some() == projection_event.is_some(),
-    }))
+    json_ok(ChaosOperationOutcome {
+        operation_id,
+        canonical_event: canonical_json,
+        projection_event: projection_json,
+        consistent: canonical_event.is_some() == projection_event.is_some(),
+    })
 }
 
 /// Drop `path` from `object`, supporting dotted paths like `"payload.content"`.
@@ -968,28 +1130,28 @@ fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String>
         })
 }
 
-fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> Value {
-    json!({
-        "event_id": &record.event_id,
-        "actor_id": &record.actor_id,
-        "actor_seq": record.actor_seq,
-        "realm_id": &record.realm_id,
-        "kind": &record.kind,
-        "canonical_digest": &record.canonical_digest,
-        "received_at": record.received_at,
-    })
+fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> CanonicalEventDiagnostic {
+    CanonicalEventDiagnostic {
+        event_id: record.event_id.clone(),
+        actor_id: record.actor_id.clone(),
+        actor_seq: record.actor_seq,
+        realm_id: record.realm_id.clone(),
+        kind: record.kind.clone(),
+        canonical_digest: record.canonical_digest.clone(),
+        received_at: record.received_at,
+    }
 }
 
-fn projection_event_diagnostic(record: &ProjectionEventRecord) -> Value {
-    json!({
-        "event_id": &record.event_id,
-        "realm_id": &record.realm_id,
-        "event_kind": &record.event_kind,
-        "operation_type": &record.operation_type,
-        "operation_id": &record.operation_id,
-        "sender": &record.sender,
-        "created_at": record.created_at,
-    })
+fn projection_event_diagnostic(record: &ProjectionEventRecord) -> ProjectionEventDiagnostic {
+    ProjectionEventDiagnostic {
+        event_id: record.event_id.clone(),
+        realm_id: record.realm_id.clone(),
+        event_kind: record.event_kind.clone(),
+        operation_type: record.operation_type.clone(),
+        operation_id: record.operation_id.clone(),
+        sender: record.sender.clone(),
+        created_at: record.created_at,
+    }
 }
 
 #[cfg(test)]

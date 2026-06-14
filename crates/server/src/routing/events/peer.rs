@@ -3,11 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::SecondsFormat;
 use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
 use cokret_sdk::{
-    Did, EventsQueryPostRequestBody, EventsSubmitFederationRequestBody, RealmId, canonical,
+    Did, EventId, EventsQueryPostRequestBody, EventsSubmitFederationRequestBody, Hash, RealmId,
+    canonical,
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use super::{
     is_realm_deleted, is_valid_sha256_digest, now, query_param, query_param_all, render_error,
@@ -21,6 +23,41 @@ const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 const HEADER_DESTINATION_SERVICE_DID: &str = "destination-service-did";
 const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 100;
+
+#[derive(Debug, Serialize, ToSchema)]
+struct PeerEventsDescribeOutcome {
+    service_did: Did,
+    protocol_version: String,
+    primary_write_path: String,
+    supported_operations: Vec<String>,
+    supported_profiles: Vec<String>,
+    supported_bindings: Vec<String>,
+    limits: PeerEventsDescribeLimits,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct PeerEventsDescribeLimits {
+    max_batch_size: usize,
+    max_query_limit: usize,
+    max_resolve: usize,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct PeerEventsFrontierOutcome {
+    realm_id: RealmId,
+    heads: Vec<EventId>,
+    frontier_root: Hash,
+    actor_seq_upper_bounds: BTreeMap<Did, u64>,
+    witness_receipts: Vec<Value>,
+    observed_at: String,
+    issuer: Did,
+    signature: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_hlc: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct PeerSnapshotHeadOutcome {}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -42,43 +79,38 @@ pub(super) fn router() -> Router {
     summary = "Describe the federation peer Events API"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.describe"))]
-async fn peer_events_describe(depot: &mut Depot) -> JsonResult<Value> {
+async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    json_ok(json!({
-        "service_did": state.config.service_did.clone(),
-        "protocol_version": "1.0",
-        "primary_write_path": "/_cokret/peer/events",
-        // `ck.peer.snapshot.query.manifest_head` is intentionally NOT declared: soland
-        // cannot produce a real signed `ck.schema.snapshot.v1` manifest yet,
-        // and spec service-surface.md §5.2 / service-http-binding.md §6.1
-        // forbid declaring (or stub-serving) the operation in that state —
-        // the endpoint returns `not_implemented` instead.
-        "supported_operations": [
-            "ck.peer.events.query.describe",
-            "ck.peer.events.command.submit",
-            "ck.peer.events.query.scan",
-            "ck.peer.events.query.scan_body",
-            "ck.peer.events.query.resolve",
-            "ck.peer.events.query.frontier",
-            "ck.peer.invites.command.submit"
+    let service_did = Did::new(state.config.service_did.clone())
+        .map_err(|_| AppError::internal("service_did is invalid"))?;
+    json_ok(PeerEventsDescribeOutcome {
+        service_did,
+        protocol_version: "1.0".to_owned(),
+        primary_write_path: "/_cokret/peer/events".to_owned(),
+        supported_operations: vec![
+            "ck.peer.events.query.describe".to_owned(),
+            "ck.peer.events.command.submit".to_owned(),
+            "ck.peer.events.query.scan".to_owned(),
+            "ck.peer.events.query.scan_body".to_owned(),
+            "ck.peer.events.query.resolve".to_owned(),
+            "ck.peer.events.query.frontier".to_owned(),
+            "ck.peer.invites.command.submit".to_owned(),
         ],
-        "supported_profiles": [
-            "ck.profile.federation_minimal.v1"
+        supported_profiles: vec!["ck.profile.federation_minimal.v1".to_owned()],
+        supported_bindings: vec![
+            "http-message-signature".to_owned(),
+            "source-service-did".to_owned(),
+            "destination-service-did".to_owned(),
+            "source-trust-domain".to_owned(),
+            "destination-trust-domain".to_owned(),
+            "request-canonical-digest".to_owned(),
         ],
-        "supported_bindings": [
-            "http-message-signature",
-            "source-service-did",
-            "destination-service-did",
-            "source-trust-domain",
-            "destination-trust-domain",
-            "request-canonical-digest"
-        ],
-        "limits": {
-            "max_batch_size": 100,
-            "max_query_limit": MAX_PEER_EVENTS_QUERY_LIMIT,
-            "max_resolve": MAX_PEER_EVENTS_RESOLVE
-        }
-    }))
+        limits: PeerEventsDescribeLimits {
+            max_batch_size: 100,
+            max_query_limit: MAX_PEER_EVENTS_QUERY_LIMIT,
+            max_resolve: MAX_PEER_EVENTS_RESOLVE,
+        },
+    })
 }
 
 #[handler]
@@ -244,7 +276,10 @@ async fn peer_events_resolve(
     summary = "Read a signed federation peer frontier"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.query.frontier"))]
-async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_events_frontier(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerEventsFrontierOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None)?;
     let realm_id = query_param(req, "realm_id")
@@ -303,6 +338,23 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
         .values()
         .map(|(_, _, event_id)| event_id.clone())
         .collect::<Vec<_>>();
+    let typed_heads = heads
+        .iter()
+        .map(|event_id| {
+            EventId::new(event_id.clone())
+                .map_err(|_| AppError::internal("stored frontier event_id is invalid"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let typed_actor_frontier = actor_frontier
+        .iter()
+        .map(|(actor_id, seq)| {
+            Ok((
+                Did::new(actor_id.clone())
+                    .map_err(|_| AppError::internal("stored frontier actor_id is invalid"))?,
+                *seq,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, AppError>>()?;
     let typed_realm_frontier =
         super::frontier::typed_realm_frontier([(realm_id.as_str().to_owned(), heads.clone())]);
     let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
@@ -319,22 +371,17 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
         state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(format!("frontier signature: {error}")))?;
-    let mut response = json!({
-        "realm_id": realm_id.as_str(),
-        "heads": heads,
-        "frontier_root": frontier_root.as_str(),
-        "actor_seq_upper_bounds": actor_frontier,
-        "witness_receipts": [],
-        "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "issuer": service_did.as_str(),
-        "signature": signature,
-    });
-    if let Some(max_hlc) = max_hlc
-        && let Some(object) = response.as_object_mut()
-    {
-        object.insert("max_hlc".to_owned(), Value::String(max_hlc));
-    }
-    json_ok(response)
+    json_ok(PeerEventsFrontierOutcome {
+        realm_id,
+        heads: typed_heads,
+        frontier_root,
+        actor_seq_upper_bounds: typed_actor_frontier,
+        witness_receipts: Vec::new(),
+        observed_at: observed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        issuer: service_did,
+        signature,
+        max_hlc,
+    })
 }
 
 /// Spec resolution (2026-06-11): `ck.peer.snapshot.query.manifest_head` returns the full
@@ -352,7 +399,10 @@ async fn peer_events_frontier(depot: &mut Depot, req: &mut Request) -> JsonResul
     summary = "Read a federation peer snapshot head (not implemented)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.snapshot.query.manifest_head"))]
-async fn peer_snapshot_head(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_snapshot_head(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerSnapshotHeadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     validate_peer_request(state, req, None)?;
     Err(AppError::new(

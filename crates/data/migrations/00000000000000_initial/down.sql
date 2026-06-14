@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS agent_participation CASCADE;
 DROP TABLE IF EXISTS agent_participation_ceiling CASCADE;
 DROP TABLE IF EXISTS agent_principals CASCADE;
 DROP TABLE IF EXISTS agent_sessions CASCADE;
+DROP TABLE IF EXISTS applet_registrations CASCADE;
 DROP TABLE IF EXISTS audit_logs CASCADE;
 DROP TABLE IF EXISTS backup_series CASCADE;
 DROP TABLE IF EXISTS blobs CASCADE;

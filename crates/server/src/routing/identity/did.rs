@@ -18,8 +18,8 @@
 use cokret_sdk::http::{IdentityDescribeOutcome, IdentityDocumentViewOutcome};
 use cokret_sdk::identity::DidResolver;
 use cokret_sdk::{
-    Did, DidDocumentRef, DidOperationSubmitRequestBody, IdentityDescription, IdentityDocumentView,
-    IdentityResolveOutcome,
+    Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
+    IdentityDescription, IdentityDocumentView, IdentityResolveOutcome,
 };
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
@@ -41,6 +41,12 @@ use crate::wire::{IdentityLogOutcome, IdentityReceiptsOutcome, IdentityResolveRe
 const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
 const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[serde(transparent)]
+pub struct RawDidDocumentJson(
+    #[salvo(schema(value_type = serde_json::Value))] pub serde_json::Value,
+);
 
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "identity_describe"))]
@@ -491,7 +497,7 @@ fn identity_resolve_outcome(
 pub(super) async fn identity_did_document(
     req: &mut Request,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<RawDidDocumentJson> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = req
         .param::<String>("did")
@@ -500,12 +506,13 @@ pub(super) async fn identity_did_document(
         return Err(AppError::invalid_param("invalid did"));
     }
     if let Some(document) =
-        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(&did)
+        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, &did)
+            .await?
     {
-        return json_ok(document);
+        return json_ok(RawDidDocumentJson(document));
     }
     let record = identity_document_record(state, &did).await;
-    json_ok(record.did_document)
+    json_ok(RawDidDocumentJson(record.did_document))
 }
 
 #[endpoint(
@@ -595,7 +602,7 @@ pub(super) async fn identity_receipts(
 pub(super) async fn identity_submit_did_operation(
     depot: &mut Depot,
     body: JsonBody<DidOperationSubmitRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<DidOperationSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = serde_json::to_value(body.into_inner())
         .map_err(|error| AppError::internal(format!("DID operation serialize: {error}")))?;
@@ -621,6 +628,7 @@ pub(super) async fn identity_submit_did_operation(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
+    let typed_did = Did::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
 
     let existing = state
         .persistence
@@ -706,20 +714,25 @@ pub(super) async fn identity_submit_did_operation(
         "accepted",
     )
     .await;
-    json_ok(json!({
-        "status": "accepted",
-        "did": did.clone(),
-        "seq": next_seq,
-        "head_event_digest": event_digest.clone(),
-        "did_document": document,
-        "receipts": [{
+    let head_event_digest = Hash::new(event_digest.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "DID operation digest failed SDK type validation: {error}"
+        ))
+    })?;
+    json_ok(DidOperationSubmitOutcome {
+        status: "accepted".to_owned(),
+        did: typed_did,
+        seq: Some(next_seq),
+        head_event_digest: Some(head_event_digest),
+        operation_ref: None,
+        receipts: vec![json!({
             "service_did": state.config.service_did.clone(),
             "did": did,
             "head_event_digest": event_digest,
             "seq": next_seq,
             "issued_at": submitted_at,
-        }],
-    }))
+        })],
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -1220,7 +1233,14 @@ async fn run_webvh_resolution_checks(state: &AppState, did: &str) -> Result<(), 
 
 async fn identity_document_record(state: &AppState, did: &str) -> WebvhDocumentRecord {
     if let Some(did_document) =
-        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(did)
+        crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, did)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %did, "failed to read applet extension DID document");
+                error
+            })
+            .ok()
+            .flatten()
     {
         return WebvhDocumentRecord {
             did: did.to_owned(),

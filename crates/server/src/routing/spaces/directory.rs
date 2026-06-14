@@ -32,21 +32,23 @@ use cokret_sdk::model::{
 };
 use cokret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, DeliveryBindingHint, Did,
-    DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
+    DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
     DirectoryAnnounceRequestBody, DirectoryDescription, DirectoryHandleResolutionOutcome,
     DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
-    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryRequestBody,
+    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryOutcome,
+    DirectoryPrivateContactDiscoveryRequestBody, DirectoryPushRegisterOutcome,
     DirectoryPushRegisterRequestBody, DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
-    DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryUserSearchOutcome,
-    DirectoryWithdrawRequestBody, Ed25519MoveSigner, JoinRule, LinkType, MoveSigner,
-    OrganizationPreview, RealmId, RealmJoinCandidate, RealmJoinCandidateRole,
-    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
-    RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef, TargetDescriptor,
-    UserSearchOutcome, canonical, parse_address, target_digest, validate_agent_slug,
+    DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
+    DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
+    Ed25519MoveSigner, JoinRule, LinkType, MoveSigner, OrganizationPreview, RealmId,
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
+    RealmJoinCandidateSource, RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel,
+    RealmPreview, RealmRef, TargetDescriptor, TargetKind, UserSearchOutcome, canonical,
+    parse_address, target_digest, validate_agent_slug,
 };
 use ed25519_dalek::{Signature, Verifier};
 use salvo::oapi::extract::JsonBody;
@@ -271,7 +273,7 @@ async fn resolve_target(
     body: JsonBody<DirectoryResolveTargetRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryTargetResolutionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let address = body.address.trim();
@@ -340,19 +342,9 @@ async fn resolve_target(
     }
 
     let discoverability = realm_discoverability(state, realm_entry.realm_id.as_str()).await;
-    let join_rule = join_rule_for_discoverability(&discoverability);
     let target_kind = target_kind_for_address(&parsed);
-    let realm_preview = realm_preview_for_policy(state, &realm_entry).await;
-    let mut response = serde_json::Map::new();
-    response.insert("target_kind".to_owned(), json!(target_kind));
-    response.insert("realm_preview".to_owned(), realm_preview);
-    if let Some(object_preview) = object_preview_for_address(&parsed) {
-        response.insert("object_preview".to_owned(), object_preview);
-    }
-    response.insert("join_rule".to_owned(), json!(join_rule));
-    response.insert("as_of".to_owned(), json!(now()));
-    response.insert("source_refs".to_owned(), json!([]));
-    if parsed.link_type == LinkType::Preview
+    let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
+    let policy_revision = if parsed.link_type == LinkType::Preview
         && let Some(meta) = state
             .persistence
             .realm_meta()
@@ -362,8 +354,10 @@ async fn resolve_target(
             .flatten()
         && let Some(digest) = meta.preview_policy_digest
     {
-        response.insert("policy_revision".to_owned(), json!(digest));
-    }
+        Some(digest)
+    } else {
+        None
+    };
     let join_candidates = if include_join_candidates {
         join_candidates_for_resolved_realm(
             state,
@@ -373,8 +367,18 @@ async fn resolve_target(
     } else {
         Vec::new()
     };
-    response.insert("join_candidates".to_owned(), json!(join_candidates));
-    json_ok(Value::Object(response))
+    json_ok(DirectoryTargetResolutionOutcome {
+        target_kind,
+        realm_preview: Some(realm_preview),
+        object_preview: object_preview_for_address(&parsed),
+        join_rule: Some(join_rule_enum_for_discoverability(&discoverability)),
+        as_of: now(),
+        source_refs: Vec::new(),
+        join_candidates,
+        policy_revision,
+        stale: None,
+        divergent: None,
+    })
 }
 
 async fn resolve_realm_for_address(
@@ -395,13 +399,13 @@ async fn resolve_realm_for_address(
     })
 }
 
-fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> &'static str {
+fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> TargetKind {
     if parsed.message.is_some() {
-        "message"
+        TargetKind::Message
     } else if parsed.flow.is_some() {
-        "flow"
+        TargetKind::Flow
     } else {
-        "realm"
+        TargetKind::Realm
     }
 }
 
@@ -579,6 +583,14 @@ async fn realm_preview_for_policy(state: &AppState, realm_entry: &RealmDirectory
         json!(realm_entry.policy_revision.clone()),
     );
     Value::Object(preview)
+}
+
+async fn realm_preview_for_policy_typed(
+    state: &AppState,
+    realm_entry: &RealmDirectoryEntry,
+) -> Result<RealmPreview, AppError> {
+    serde_json::from_value(realm_preview_for_policy(state, realm_entry).await)
+        .map_err(|error| AppError::internal(format!("realm preview shape invalid: {error}")))
 }
 
 fn member_count_bucket(count: usize) -> RealmMemberCountBucket {
@@ -2077,7 +2089,7 @@ async fn private_contact_discovery(
     body: JsonBody<DirectoryPrivateContactDiscoveryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryPrivateContactDiscoveryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     require_demo_directory_provider(state)?;
     let session = authenticated_session(state, req).await.ok();
@@ -2099,7 +2111,7 @@ async fn private_contact_discovery(
     let mut matches = Vec::new();
     // SEC-09 — max client backoff across all rate-limited (requester, holder)
     // pairs in this batch.
-    let mut retry_after_ms: i64 = 0;
+    let mut retry_after_ms: u64 = 0;
     for contact in contacts {
         let needle = contact
             .get("identifier")
@@ -2150,7 +2162,7 @@ async fn private_contact_discovery(
             // match result (so high-frequency probing cannot read the holder's
             // hit-bit flip timing) and surface a backoff.
             if outcome.rate_limited {
-                retry_after_ms = retry_after_ms.max(outcome.retry_after_ms);
+                retry_after_ms = retry_after_ms.max(outcome.retry_after_ms.max(0) as u64);
                 continue;
             }
             matches.push(json!({
@@ -2167,12 +2179,11 @@ async fn private_contact_discovery(
             }));
         }
     }
-    json_ok(json!({
-        "matches": matches,
-        "proofs": [],
-        "retry_after_ms": if retry_after_ms > 0 { json!(retry_after_ms) } else { Value::Null },
-        "privacy_profile": body.privacy_profile.unwrap_or_else(|| "padded_batch_dev".to_owned()),
-    }))
+    json_ok(DirectoryPrivateContactDiscoveryOutcome {
+        matches,
+        proofs: Vec::new(),
+        retry_after_ms: (retry_after_ms > 0).then_some(retry_after_ms),
+    })
 }
 
 #[endpoint(
@@ -2185,7 +2196,7 @@ async fn directory_announce(
     body: JsonBody<DirectoryAnnounceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryAnnounceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = authenticated_session(state, req)
         .await
@@ -2210,14 +2221,17 @@ async fn directory_announce(
             format!("{}:{}:{}", session.actor, resource_kind, resource_id).as_bytes()
         )
     );
-    json_ok(json!({
-        "ok": true,
-        "announcement_id": announcement_id,
-        "resource_kind": resource_kind,
-        "resource_id": resource_id,
-        "announced_by": session.actor,
-        "expires_at": (now() + chrono::Duration::hours(24)).to_rfc3339(),
-    }))
+    let indexed_at = now();
+    let effective_ttl_seconds = body.ttl_seconds.unwrap_or(86_400);
+    let next_revalidation_after = indexed_at.clone()
+        + chrono::Duration::seconds(effective_ttl_seconds.min(i64::MAX as u64) as i64);
+    json_ok(DirectoryAnnounceOutcome {
+        announce_id: announcement_id,
+        indexed_at,
+        effective_ttl_seconds,
+        next_revalidation_after,
+        warnings: Vec::new(),
+    })
 }
 
 #[endpoint(
@@ -2230,7 +2244,7 @@ async fn directory_withdraw(
     body: JsonBody<DirectoryWithdrawRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryWithdrawOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = authenticated_session(state, req)
         .await
@@ -2240,17 +2254,14 @@ async fn directory_withdraw(
                 .with_wire_code(code)
         })?;
     let body = body.into_inner();
-    let announcement_id = format!(
-        "ck:announcement:{}",
+    let withdrawal_ref = format!(
+        "ck:withdrawal:{}",
         super::sha256_hex(format!("{}:realm:{}", session.actor, body.resource_id).as_bytes())
     );
-    json_ok(json!({
-        "ok": true,
-        "announcement_id": announcement_id,
-        "withdrawn_by": session.actor,
-        "withdrawn_at": now().to_rfc3339(),
-        "reason": body.reason,
-    }))
+    json_ok(DirectoryWithdrawOutcome {
+        withdrawal_ref,
+        acked_at: now(),
+    })
 }
 
 #[endpoint(
@@ -2263,22 +2274,15 @@ async fn directory_subscribe(
     body: JsonBody<DirectoryPushRegisterRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<DirectoryPushRegisterOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let session = authenticated_session(state, req).await.ok();
+    let _session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
-    let resource_kinds =
-        serde_json::to_value(&body.resource_filter.resource_kinds).map_err(|error| {
-            AppError::internal(format!("directory resource_kinds serialize: {error}"))
-        })?;
-    json_ok(json!({
-        "ok": true,
-        "subscription_id": ids::generate("directory_subscription"),
-        "cursor": crate::routing::sync_token(state).await,
-        "subscriber": session.map(|session| session.actor).unwrap_or_else(|| body.subscriber_did.to_string()),
-        "resource_kinds": resource_kinds,
-        "updates": [],
-    }))
+    let _ = body;
+    json_ok(DirectoryPushRegisterOutcome {
+        subscription_id: ids::generate("directory_subscription"),
+        effective_at: now(),
+    })
 }
 
 fn directory_resource_kind_str(kind: DirectoryResourceKind) -> &'static str {

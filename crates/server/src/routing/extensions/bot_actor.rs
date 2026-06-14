@@ -33,10 +33,11 @@
 use std::sync::Mutex;
 
 use cokret_sdk::Operation;
+use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
@@ -48,7 +49,7 @@ pub const KIND_BOT: &str = "bot";
 pub const KIND_GHOST: &str = "ghost";
 
 /// On-wire representation of a bot or ghost actor.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct BotActor {
     pub did: String,
     pub name: String,
@@ -65,6 +66,31 @@ pub struct BotActor {
 /// Process-local registry. See module TODO for the persistence
 /// follow-up.
 static BOT_REGISTRY: Mutex<Vec<BotActor>> = Mutex::new(Vec::new());
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+struct RegisterBotRequestBody {
+    did: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default = "default_bot_kind")]
+    kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ListBotsResponseBody {
+    bots: Vec<BotActor>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct RevokeBotResponseBody {
+    did: String,
+    revoked: bool,
+    revoked_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn default_bot_kind() -> String {
+    KIND_BOT.to_owned()
+}
 
 #[cfg(test)]
 pub(crate) fn reset_registry_for_test() {
@@ -174,42 +200,30 @@ pub(super) fn router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<RegisterBotRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<BotActor> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let did = body
-        .get("did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("did is required"))?
-        .to_owned();
-    let name = body
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let kind = body
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or(KIND_BOT)
-        .to_owned();
-    if !(kind == KIND_BOT || kind == KIND_GHOST) {
+    if body.did.trim().is_empty() {
+        return Err(AppError::invalid_param("did is required"));
+    }
+    if !(body.kind == KIND_BOT || body.kind == KIND_GHOST) {
         return Err(AppError::invalid_param(
             "kind MUST be either \"bot\" or \"ghost\"",
         ));
     }
     let actor = register_bot(BotActor {
-        did,
-        name,
-        kind,
+        did: body.did,
+        name: body.name,
+        kind: body.kind,
         owner_actor_id: session.actor.clone(),
         created_at: chrono::Utc::now(),
         revoked_at: None,
     });
-    json_ok(serde_json::to_value(actor).expect("bot actor serializes"))
+    json_ok(actor)
 }
 
 #[endpoint(
@@ -218,11 +232,15 @@ async fn register_endpoint(
     summary = "List bots / ghost actors owned by the authenticated actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.list"))]
-async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn list_endpoint(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ListBotsResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let bots = list_bots_owned_by(&session.actor);
-    json_ok(json!({ "bots": bots }))
+    json_ok(ListBotsResponseBody { bots })
 }
 
 #[endpoint(
@@ -231,18 +249,22 @@ async fn list_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Js
     summary = "Revoke a bot / ghost actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.bots.revoke"))]
-async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn revoke_endpoint(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RevokeBotResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let did = req
         .param::<String>("did")
         .ok_or_else(|| AppError::missing_param("did path segment required"))?;
     let revoked = revoke_bot(&did);
-    json_ok(json!({
-        "did": did,
-        "revoked": revoked,
-        "revoked_at": chrono::Utc::now(),
-    }))
+    json_ok(RevokeBotResponseBody {
+        did,
+        revoked,
+        revoked_at: chrono::Utc::now(),
+    })
 }
 
 #[cfg(test)]
