@@ -13,7 +13,7 @@ use super::append_audit_log;
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
-use crate::state::{AppState, RecoverySessionRecord};
+use crate::state::{AppState, RecoveryPolicyRecord, RecoverySessionRecord};
 use crate::wire::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
 };
@@ -1441,10 +1441,31 @@ fn key_backup_summary_for_list(
     })
 }
 
-async fn ensure_key_backup_delete_is_series_tail(
+async fn owned_key_backup_snapshot(
     state: &AppState,
     actor_id: &str,
+) -> Result<Vec<Value>, AppError> {
+    // Fail closed on DB read errors: an empty snapshot would silently skip
+    // deletion eligibility checks and could let a useful recovery envelope be
+    // deleted.
+    let snapshot = state
+        .persistence
+        .key_backups()
+        .snapshot_all()
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("key backup snapshot lookup failed: {error}"))
+        })?;
+    Ok(snapshot
+        .into_iter()
+        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(actor_id))
+        .collect())
+}
+
+fn ensure_key_backup_delete_is_series_tail(
+    actor_id: &str,
     backup: &Value,
+    owned_backups: &[Value],
 ) -> Result<(), AppError> {
     let series_id = backup
         .get("series_id")
@@ -1457,18 +1478,7 @@ async fn ensure_key_backup_delete_is_series_tail(
     if series_id.is_empty() {
         return Ok(());
     }
-    // Fail closed on DB read errors: an empty snapshot would silently skip the
-    // tail check and allow deleting a non-tail envelope of an active series,
-    // which key-management.md §7.8 forbids (MUST).
-    let snapshot = state
-        .persistence
-        .key_backups()
-        .snapshot_all()
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("key backup series tail lookup failed: {error}"))
-        })?;
-    for existing in snapshot {
+    for existing in owned_backups {
         if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
             continue;
         }
@@ -1494,6 +1504,104 @@ async fn ensure_key_backup_delete_is_series_tail(
         }
     }
     Ok(())
+}
+
+fn backup_recovery_policy_ref(backup: &Value) -> Option<(&str, u64)> {
+    let policy_ref = backup.get("recovery_policy_ref")?.as_object()?;
+    let policy_id = policy_ref.get("policy_id")?.as_str()?;
+    let policy_version = policy_ref.get("policy_version")?.as_u64()?;
+    Some((policy_id, policy_version))
+}
+
+fn backup_retention_delete_after_passed(backup: &Value) -> bool {
+    let Some(retention) = backup.get("retention").and_then(Value::as_object) else {
+        return false;
+    };
+    if retention
+        .get("legal_hold")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let Some(delete_after) = retention.get("delete_after").and_then(Value::as_str) else {
+        return false;
+    };
+    chrono::DateTime::parse_from_rfc3339(delete_after)
+        .map(|instant| instant.with_timezone(&chrono::Utc) <= chrono::Utc::now())
+        .unwrap_or(false)
+}
+
+fn backup_policy_ref_matches_active(
+    backup: &Value,
+    active_policy: Option<&RecoveryPolicyRecord>,
+) -> Option<bool> {
+    let (policy_id, policy_version) = backup_recovery_policy_ref(backup)?;
+    Some(match active_policy {
+        Some(active) => {
+            policy_id == active.policy_id.as_str() && policy_version == active.version as u64
+        }
+        None => false,
+    })
+}
+
+fn deny_key_backup_delete(message: impl Into<String>) -> AppError {
+    AppError::conflict(message)
+        .with_wire_code("key_backup_delete_not_retired")
+        .with_reason_detail(
+            "only backups stale relative to the active recovery policy, retention-expired backups, or legacy invalid DID recovery backups may be deleted",
+        )
+}
+
+fn ensure_key_backup_delete_is_retired_or_redundant(
+    backup: &Value,
+    active_policy: Option<&RecoveryPolicyRecord>,
+) -> Result<(), AppError> {
+    let backup_class = backup
+        .get("backup_class")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if backup_retention_delete_after_passed(backup) {
+        return Ok(());
+    }
+
+    match backup_policy_ref_matches_active(backup, active_policy) {
+        Some(false) => return Ok(()),
+        Some(true) => {
+            return Err(deny_key_backup_delete(format!(
+                "{backup_class} backup is still bound to the active recovery policy"
+            )));
+        }
+        None => {}
+    }
+
+    if backup_class == "did_recovery" {
+        // v1 did_recovery envelopes are unusable unless they are explicitly
+        // bound to the active recovery policy. A missing policy ref here can
+        // only be legacy/invalid data because PUT validation now rejects it.
+        return Ok(());
+    }
+
+    Err(deny_key_backup_delete(format!(
+        "{backup_class} backup is not provably retired; delete refused"
+    )))
+}
+
+async fn ensure_key_backup_delete_allowed(
+    state: &AppState,
+    actor_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let owned_backups = owned_key_backup_snapshot(state, actor_id).await?;
+    ensure_key_backup_delete_is_series_tail(actor_id, backup, &owned_backups)?;
+    let active_policy = state
+        .persistence
+        .recovery_policies()
+        .get_active_for_principal(actor_id)
+        .await
+        .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?;
+    ensure_key_backup_delete_is_retired_or_redundant(backup, active_policy.as_ref())
 }
 
 #[endpoint(
@@ -1744,7 +1852,7 @@ async fn delete_key_backup(
         return Err(AppError::not_found("key backup not found"));
     };
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
-    ensure_key_backup_delete_is_series_tail(state, &session.actor, &backup).await?;
+    ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
     let deleted = store.delete(&backup_id).await.unwrap_or(false);
     if !deleted {
         return Err(AppError::not_found("key backup not found"));
@@ -2130,6 +2238,127 @@ mod tests {
         assert_eq!(
             cokret_sdk::canonical::sha256_digest(&canonical),
             "sha256:beb1dc1e9867b7414b8ee5a9102dabbda11f0bb5872a867876a568c2e480cc36"
+        );
+    }
+
+    fn active_policy(policy_id: &str, version: u32) -> RecoveryPolicyRecord {
+        let now = chrono::Utc::now();
+        RecoveryPolicyRecord {
+            policy_id: policy_id.to_owned(),
+            principal_id: ACTOR.to_owned(),
+            version,
+            trust_domain: "https://local.host".to_owned(),
+            allowed_proof_kinds: vec!["recovery_key".to_owned()],
+            supersedes: None,
+            expires_at: None,
+            issued_at: now,
+            raw_payload: json!({}),
+            accepted_at: now,
+            verification_method: format!("{ACTOR}#device"),
+        }
+    }
+
+    fn did_recovery_delete_candidate(policy_id: &str, policy_version: u64) -> Value {
+        let mut body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            recovery_public_key_encryption(),
+        );
+        body["recovery_policy_ref"] =
+            json!({ "policy_id": policy_id, "policy_version": policy_version });
+        body["auth_data"] = did_recovery_auth_data();
+        body
+    }
+
+    #[test]
+    fn delete_rejects_current_policy_did_recovery_backup() {
+        let policy = active_policy(POLICY_REF, 1);
+        let body = did_recovery_delete_candidate(POLICY_REF, 1);
+
+        let err = ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
+            .expect_err("current did_recovery backup must be protected");
+
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            err.wire_code_override.as_deref(),
+            Some("key_backup_delete_not_retired")
+        );
+    }
+
+    #[test]
+    fn delete_allows_stale_policy_bound_backup() {
+        let policy = active_policy("ck:policy:01964137-0000-7000-8000-0000000000bb", 2);
+        let body = did_recovery_delete_candidate(POLICY_REF, 1);
+
+        ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
+            .expect("non-active policy backup is provably stale");
+    }
+
+    #[test]
+    fn delete_allows_legacy_did_recovery_without_policy_ref() {
+        let policy = active_policy(POLICY_REF, 1);
+        let body = key_backup_body(
+            "did_recovery",
+            "recovery_key_share",
+            recovery_public_key_encryption(),
+        );
+
+        ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
+            .expect("policy-less did_recovery is not usable under current v1 rules");
+    }
+
+    #[test]
+    fn delete_rejects_unclassified_mls_history_tail() {
+        let body = key_backup_body(
+            "mls_history",
+            "mls_group_state",
+            secret_storage_key_encryption(),
+        );
+
+        let err = ensure_key_backup_delete_is_retired_or_redundant(&body, None)
+            .expect_err("server cannot prove this mls_history backup is useless");
+
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            err.wire_code_override.as_deref(),
+            Some("key_backup_delete_not_retired")
+        );
+    }
+
+    #[test]
+    fn delete_allows_retention_expired_backup() {
+        let mut body = key_backup_body(
+            "mls_history",
+            "mls_group_state",
+            secret_storage_key_encryption(),
+        );
+        body["retention"] = json!({
+            "delete_after": "2020-01-01T00:00:00Z",
+            "legal_hold": false
+        });
+
+        ensure_key_backup_delete_is_retired_or_redundant(&body, None)
+            .expect("expired non-held backup may be deleted");
+    }
+
+    #[test]
+    fn delete_rejects_non_tail_even_when_policy_stale() {
+        let older = did_recovery_delete_candidate(POLICY_REF, 1);
+        let mut newer = older.clone();
+        newer["backup_id"] = json!("ck:backup:01964137-0000-7000-8000-000000000099");
+        newer["series_seq"] = json!(1);
+        newer["supersedes"] = older["backup_id"].clone();
+        newer["supersedes_digest"] =
+            json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        let owned = vec![older.clone(), newer];
+        let err = ensure_key_backup_delete_is_series_tail(ACTOR, &older, &owned)
+            .expect_err("non-tail chain link must not be individually deleted");
+
+        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            err.wire_code_override.as_deref(),
+            Some("failed_precondition")
         );
     }
 
