@@ -101,7 +101,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     let jwk = session.session_public_key.ok_or_else(|| {
         AppError::unauthenticated("session is not bound to a signing key for PoP presentation")
     })?;
-    let (public_key, expected_key_id) = parse_session_jwk(&jwk)?;
+    let (public_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk)?;
 
     let body = req
         .payload()
@@ -170,7 +170,13 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     // keyid MUST point at the session's bound signing key (api-conventions.md
     // §3.2). The cryptographic binding is already enforced above by verifying
     // against the session key bytes; this rejects a mismatched selector.
-    if verified.signature_input.key_id != expected_key_id {
+    // Accept either the JWK's explicit `kid` or its RFC 7638 thumbprint, so a
+    // client that selects by thumbprint and one that echoes the issued kid both
+    // satisfy the binding.
+    let key_id = &verified.signature_input.key_id;
+    let key_id_bound =
+        *key_id == thumbprint || explicit_kid.as_deref() == Some(key_id.as_str());
+    if !key_id_bound {
         return Err(AppError::unauthenticated(
             "PoP signature keyid is not bound to the session signing key",
         ));
@@ -201,9 +207,10 @@ fn is_sensitive_read(path: &str) -> bool {
         .any(|fragment| path.contains(fragment))
 }
 
-/// Parse the stored session signing key JWK into an Ed25519 public key and the
-/// expected `keyid` (explicit JWK `kid`, else its RFC 7638 thumbprint).
-fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, String), AppError> {
+/// Parse the stored session signing key JWK into its Ed25519 public key, the
+/// explicit JWK `kid` (if any), and its RFC 7638 thumbprint. A presented keyid
+/// is accepted if it matches either.
+fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, Option<String>, String), AppError> {
     let value: serde_json::Value = serde_json::from_str(jwk)
         .map_err(|_| AppError::unauthenticated("session signing key is not valid JWK JSON"))?;
     let kty = value.get("kty").and_then(|value| value.as_str()).unwrap_or_default();
@@ -223,11 +230,12 @@ fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, String), AppError> 
     let public_key = public_key_from_bytes(&bytes).map_err(|_| {
         AppError::unauthenticated("session signing key JWK x is not a valid Ed25519 public key")
     })?;
-    let key_id = match value.get("kid").and_then(|value| value.as_str()) {
-        Some(kid) if !kid.is_empty() => kid.to_owned(),
-        _ => jwk_thumbprint(x),
-    };
-    Ok((public_key, key_id))
+    let explicit_kid = value
+        .get("kid")
+        .and_then(|value| value.as_str())
+        .filter(|kid| !kid.is_empty())
+        .map(ToOwned::to_owned);
+    Ok((public_key, explicit_kid, jwk_thumbprint(x)))
 }
 
 /// RFC 7638 JWK thumbprint for an Ed25519 OKP key with base64url `x`.
@@ -251,19 +259,21 @@ mod tests {
     }
 
     #[test]
-    fn jwk_without_kid_yields_thumbprint_key_id() {
+    fn jwk_without_kid_yields_thumbprint_only() {
         let jwk = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{RFC8037_X}\"}}");
-        let (_key, key_id) = parse_session_jwk(&jwk).expect("valid JWK");
-        assert_eq!(key_id, RFC8037_THUMBPRINT);
+        let (_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk).expect("valid JWK");
+        assert_eq!(explicit_kid, None);
+        assert_eq!(thumbprint, RFC8037_THUMBPRINT);
     }
 
     #[test]
-    fn jwk_with_explicit_kid_is_preferred() {
+    fn jwk_with_explicit_kid_is_surfaced_alongside_thumbprint() {
         let jwk = format!(
             "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{RFC8037_X}\",\"kid\":\"session-abc\"}}"
         );
-        let (_key, key_id) = parse_session_jwk(&jwk).expect("valid JWK");
-        assert_eq!(key_id, "session-abc");
+        let (_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk).expect("valid JWK");
+        assert_eq!(explicit_kid.as_deref(), Some("session-abc"));
+        assert_eq!(thumbprint, RFC8037_THUMBPRINT);
     }
 
     #[test]
