@@ -1867,15 +1867,13 @@ async fn effective_audience_mention_policy_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<Value> {
-    let events = state.persistence.events().snapshot_all().await.ok()?;
-    events.into_iter().rev().find_map(|record| {
-        if !record
-            .realm_id
-            .as_deref()
-            .is_some_and(|record_realm_id| record_realm_id == realm_id)
-        {
-            return None;
-        }
+    let events = state
+        .persistence
+        .events()
+        .realm_events_newest_first(realm_id)
+        .await
+        .ok()?;
+    events.into_iter().find_map(|record| {
         record
             .envelope
             .pointer("/payload/object/audience_mention_policy")

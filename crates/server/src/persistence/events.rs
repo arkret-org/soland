@@ -26,6 +26,13 @@ pub trait EventStore: Send + Sync {
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Events for a single Realm, newest first. Pushes the `realm_id` filter
+    /// and `received_at DESC` ordering into the query so hot-path latest-policy
+    /// lookups do not full-scan the whole `canonical_events` table.
+    async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
 }
 
 // In-memory message store
@@ -150,6 +157,27 @@ impl EventStore for MemoryEventStore {
             .cloned()
             .collect())
     }
+
+    async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut events: Vec<CanonicalEventRecord> = self
+            .data
+            .lock()
+            .expect("events lock")
+            .values()
+            .filter(|record| record.realm_id.as_deref() == Some(realm_id))
+            .cloned()
+            .collect();
+        // Newest first: match the Pg `received_at DESC, id DESC` ordering.
+        events.sort_by(|a, b| {
+            b.received_at
+                .cmp(&a.received_at)
+                .then_with(|| b.event_id.cmp(&a.event_id))
+        });
+        Ok(events)
+    }
 }
 
 pub(crate) struct PgEventStore {
@@ -271,6 +299,22 @@ impl EventStore for PgEventStore {
             "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
              FROM canonical_events ORDER BY received_at ASC, id ASC",
         )
+        .load::<CanonicalEventRow>(&mut *conn).await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::from)
+    }
+
+    async fn realm_events_newest_first(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id_uuid = ids::typed_uuid_part_or_panic(realm_id);
+        sql_query(
+            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE realm_id = $1 ORDER BY received_at DESC, id DESC",
+        )
+        .bind::<SqlUuid, _>(realm_id_uuid)
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::from)

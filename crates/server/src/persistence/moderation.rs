@@ -5,8 +5,8 @@ use super::*;
 /// Reports and actions are append-only (back-compat). The newer methods
 /// (decisions, appeals, queue items) form the spec-compliant triage
 /// flow: a report becomes a queue item, a queue item gets a decision,
-/// a decision can be appealed (4-state appeal FSM lives in
-/// `crate::routing::admin::moderation::AppealState`).
+/// a decision can be appealed (4-state appeal FSM lives in the reducer
+/// `crate::reducer::apply_moderation`).
 ///
 /// The Pg backend stubs decisions/appeals/queue items as
 /// `Err(PersistenceError::Internal("not yet wired"))` so production

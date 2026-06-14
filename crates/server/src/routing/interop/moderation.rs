@@ -4,9 +4,9 @@
 //!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
 //!   spec's triage architecture.
 //! - `POST /_cokret/self/moderation/appeal` (`ck.moderation.appeal.submit`) — file an appeal
-//!   against a moderation decision. Validates the four-state FSM via
-//!   `crate::routing::admin::moderation::AppealState` and enforces separation-of-duties when the
-//!   decision is later reviewed by an admin.
+//!   against a moderation decision. The four-state appeal FSM and separation-of-duties enforcement
+//!   are authoritative in the reducer (`crate::reducer::apply_moderation`), surfaced at ingest by
+//!   the moderation projection preflight.
 
 use std::time::Duration;
 

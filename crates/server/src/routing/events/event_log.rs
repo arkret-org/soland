@@ -550,7 +550,7 @@ async fn events_frontier(
 // ── Validator block ─────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-struct ValidatedEventEnvelope {
+pub(in crate::routing) struct ValidatedEventEnvelope {
     event_id: String,
     actor_id: String,
     device_id: String,
@@ -565,7 +565,7 @@ struct ValidatedEventEnvelope {
 }
 
 #[derive(Debug)]
-struct EventValidationError {
+pub(in crate::routing) struct EventValidationError {
     status: StatusCode,
     code: &'static str,
     message: String,
