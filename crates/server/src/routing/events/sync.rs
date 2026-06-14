@@ -34,6 +34,7 @@ use cokret_sdk::{EphemeralSubmitOutcome, PresenceStatus, RealmId};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -68,6 +69,61 @@ const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 
 mod snapshot;
 use snapshot::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SyncGapBackfillOutcome {
+    events: Vec<Value>,
+    from_cursor: Option<String>,
+    to_cursor: Option<String>,
+    prev_cursor: Option<String>,
+    next_cursor: Option<String>,
+    limited: bool,
+    gap_complete: bool,
+    production_gap: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SnapshotDevChunkDescriptor {
+    chunk_id: u32,
+    media_type: String,
+    digest: String,
+    size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SnapshotDevDigest {
+    kid: String,
+    alg: String,
+    digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SnapshotHeadDevOutcome {
+    id: String,
+    state_digest: String,
+    chunks: Vec<SnapshotDevChunkDescriptor>,
+    frontier: Value,
+    dev_digest: SnapshotDevDigest,
+    merkle_root: String,
+    chunk_count: u32,
+    chunk_bytes: u32,
+    total_bytes: u64,
+    generator_proof: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct SnapshotChunkDevOutcome {
+    snapshot_ref: String,
+    chunk_id: u32,
+    media_type: String,
+    encoding: String,
+    digest: String,
+    verified: bool,
+    bytes_base64: String,
+    audit_path: Vec<String>,
+    tree_size: usize,
+    merkle_root: String,
+}
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
@@ -1880,7 +1936,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 pub(super) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let limit = query_param(req, "limit")
         .and_then(|value| value.parse::<usize>().ok())
@@ -1907,7 +1963,7 @@ pub(super) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
     let parts = EventsQueryParts {
@@ -1937,7 +1993,7 @@ async fn events_query_impl(
     state: &AppState,
     req: &Request,
     parts: EventsQueryParts,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<EventsQueryOutcome> {
     validate_events_query_order(&parts.order)?;
     if parts.realms.is_empty() && parts.actors.is_empty() {
         return Err(crate::error::AppError::missing_param(
@@ -1965,7 +2021,7 @@ async fn events_query_impl(
                         .with_wire_code(code)
                 })?;
         let response = durable_events_query_from_parts(state, &session, &parts).await;
-        return crate::result::json_ok(serde_json::to_value(response).unwrap_or(json!({})));
+        return crate::result::json_ok(response);
     }
     let session = authenticated_session(state, req).await.ok();
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
@@ -2010,20 +2066,17 @@ async fn events_query_impl(
                     None => Some(sync_token_for_state(state).await),
                 };
                 let events = full_events_from_projection_json(state, &events).await;
-                return crate::result::json_ok(
-                    serde_json::to_value(EventsQueryOutcome {
-                        events,
-                        snapshot_bootstrap: None,
-                        prev_cursor: cursor.clone(),
-                        next_cursor: match page.next_cursor {
-                            Some(next_cursor) => Some(next_cursor),
-                            None => terminal_cursor,
-                        },
-                        has_more: page.has_more,
-                        range_completeness: Value::Null,
-                    })
-                    .unwrap_or(json!({})),
-                );
+                return crate::result::json_ok(EventsQueryOutcome {
+                    events,
+                    snapshot_bootstrap: None,
+                    prev_cursor: cursor.clone(),
+                    next_cursor: match page.next_cursor {
+                        Some(next_cursor) => Some(next_cursor),
+                        None => terminal_cursor,
+                    },
+                    has_more: page.has_more,
+                    range_completeness: Value::Null,
+                });
             }
             Ok(None) => {}
             Err(error) => {
@@ -2034,17 +2087,14 @@ async fn events_query_impl(
                 return Err(crate::error::AppError::internal(error.to_string()));
             }
         }
-        return crate::result::json_ok(
-            serde_json::to_value(EventsQueryOutcome {
-                events: Vec::new(),
-                snapshot_bootstrap: None,
-                prev_cursor: cursor.clone(),
-                next_cursor: Some(sync_token_for_state(state).await),
-                has_more: false,
-                range_completeness: Value::Null,
-            })
-            .unwrap_or(json!({})),
-        );
+        return crate::result::json_ok(EventsQueryOutcome {
+            events: Vec::new(),
+            snapshot_bootstrap: None,
+            prev_cursor: cursor.clone(),
+            next_cursor: Some(sync_token_for_state(state).await),
+            has_more: false,
+            range_completeness: Value::Null,
+        });
     }
 
     // Multi-Realm merge path: call `projected_event_page` per Realm, merge
@@ -2101,17 +2151,14 @@ async fn events_query_impl(
         None => Some(sync_token_for_state(state).await),
     };
     let events = full_events_from_projection_json(state, &page_events).await;
-    crate::result::json_ok(
-        serde_json::to_value(EventsQueryOutcome {
-            events,
-            snapshot_bootstrap: None,
-            prev_cursor: cursor.clone(),
-            next_cursor,
-            has_more: limited,
-            range_completeness: Value::Null,
-        })
-        .unwrap_or(json!({})),
-    )
+    crate::result::json_ok(EventsQueryOutcome {
+        events,
+        snapshot_bootstrap: None,
+        prev_cursor: cursor.clone(),
+        next_cursor,
+        has_more: limited,
+        range_completeness: Value::Null,
+    })
 }
 
 /// Enrich visible projection rows to full spec `Event` envelopes by fetching
@@ -2230,7 +2277,7 @@ async fn sync_gap_backfill(
     _to_cursor: salvo::oapi::extract::QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<SyncGapBackfillOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = scope_selector_to_realm_id(&realm_id.into_inner())?;
     let session = authenticated_session(state, req).await.ok();
@@ -2273,16 +2320,16 @@ async fn sync_gap_backfill(
     } else {
         next_cursor
     };
-    crate::result::json_ok(json!({
-        "events": events,
-        "from_cursor": from_cursor.clone(),
-        "to_cursor": to_cursor.clone(),
-        "prev_cursor": from_cursor.clone(),
-        "next_cursor": next_cursor,
-        "limited": limited && !gap_complete,
-        "gap_complete": gap_complete || !limited,
-        "production_gap": "durable_sync_position_validation",
-    }))
+    crate::result::json_ok(SyncGapBackfillOutcome {
+        events,
+        from_cursor: from_cursor.clone(),
+        to_cursor: to_cursor.clone(),
+        prev_cursor: from_cursor,
+        next_cursor,
+        limited: limited && !gap_complete,
+        gap_complete: gap_complete || !limited,
+        production_gap: "durable_sync_position_validation".to_owned(),
+    })
 }
 
 #[endpoint(
@@ -2294,7 +2341,7 @@ async fn sync_gap_backfill(
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<cokret_sdk::SnapshotHeadState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
@@ -2325,9 +2372,7 @@ async fn snapshot_head(
                 )
             }
         })?;
-    let value = serde_json::to_value(manifest)
-        .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
-    crate::result::json_ok(value)
+    crate::result::json_ok(manifest)
 }
 
 /// Deployment-local dev snapshot head (`/_soland/self/sync/snapshot-head`).
@@ -2343,7 +2388,7 @@ async fn snapshot_head(
 async fn snapshot_head_dev(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<SnapshotHeadDevOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
@@ -2365,40 +2410,38 @@ async fn snapshot_head_dev(
     // chunks[] is the per-chunk descriptor (id + size + digest) — receivers
     // fetch each chunk via `/sync/snapshot-chunk?chunk_id=N` and check it
     // against `merkle_root` using the chunk's `audit_path`.
-    let chunk_descriptors: Vec<serde_json::Value> = bundle
+    let chunk_descriptors: Vec<SnapshotDevChunkDescriptor> = bundle
         .chunks
         .iter()
-        .map(|c| {
-            json!({
-                "chunk_id": c.chunk_id,
-                "media_type": "application/json",
-                "digest": c.digest.as_str(),
-                "size": c.bytes.len(),
-            })
+        .map(|chunk| SnapshotDevChunkDescriptor {
+            chunk_id: chunk.chunk_id,
+            media_type: "application/json".to_owned(),
+            digest: chunk.digest.as_str().to_owned(),
+            size: chunk.bytes.len(),
         })
         .collect();
     let merkle_root = bundle.tree.root().as_str().to_owned();
     let service_did = state.config.service_did.clone();
     let digest_payload = format!("{}:{}:{}", bundle.id, bundle.state_digest, service_did);
-    crate::result::json_ok(json!({
-        "id": bundle.id,
-        "state_digest": bundle.state_digest,
-        "chunks": chunk_descriptors,
-        "frontier": bundle.frontier,
+    crate::result::json_ok(SnapshotHeadDevOutcome {
+        id: bundle.id,
+        state_digest: bundle.state_digest,
+        chunks: chunk_descriptors,
+        frontier: bundle.frontier,
         // Dev integrity digest over (id, state_digest, service
         // DID). Deliberately NOT named `signature`: the spec forbids
         // fabricating snapshot manifest signatures.
-        "dev_digest": {
-            "kid": format!("{service_did}#snapshot-dev"),
-            "alg": "sha256-dev",
-            "digest": sha256_hex(digest_payload.as_bytes())
+        dev_digest: SnapshotDevDigest {
+            kid: format!("{service_did}#snapshot-dev"),
+            alg: "sha256-dev".to_owned(),
+            digest: sha256_hex(digest_payload.as_bytes()),
         },
-        "merkle_root": merkle_root,
-        "chunk_count": bundle.chunk_count,
-        "chunk_bytes": bundle.chunk_bytes,
-        "total_bytes": bundle.total_bytes,
-        "generator_proof": bundle.generator_proof,
-    }))
+        merkle_root,
+        chunk_count: bundle.chunk_count,
+        chunk_bytes: bundle.chunk_bytes,
+        total_bytes: bundle.total_bytes,
+        generator_proof: bundle.generator_proof,
+    })
 }
 
 #[endpoint(
@@ -2411,7 +2454,7 @@ async fn snapshot_chunk(
     snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
     chunk_id: salvo::oapi::extract::QueryParam<u32, false>,
     depot: &mut Depot,
-) -> crate::result::JsonResult<serde_json::Value> {
+) -> crate::result::JsonResult<SnapshotChunkDevOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let snapshot_ref = snapshot_ref.into_inner();
     let chunk_id = chunk_id.into_inner().unwrap_or(0);
@@ -2443,18 +2486,18 @@ async fn snapshot_chunk(
         .into_iter()
         .map(|h| h.as_str().to_owned())
         .collect::<Vec<_>>();
-    crate::result::json_ok(json!({
-        "snapshot_ref": snapshot_ref,
-        "chunk_id": chunk_id,
-        "media_type": "application/json",
-        "encoding": "base64url",
-        "digest": chunk.digest.as_str(),
-        "verified": cokret_sdk::canonical::sha256_digest(&chunk.bytes) == chunk.digest.as_str(),
-        "bytes_base64": URL_SAFE_NO_PAD.encode(&chunk.bytes),
-        "audit_path": audit_path,
-        "tree_size": tree_size,
-        "merkle_root": bundle.tree.root().as_str(),
-    }))
+    crate::result::json_ok(SnapshotChunkDevOutcome {
+        snapshot_ref,
+        chunk_id,
+        media_type: "application/json".to_owned(),
+        encoding: "base64url".to_owned(),
+        digest: chunk.digest.as_str().to_owned(),
+        verified: cokret_sdk::canonical::sha256_digest(&chunk.bytes) == chunk.digest.as_str(),
+        bytes_base64: URL_SAFE_NO_PAD.encode(&chunk.bytes),
+        audit_path,
+        tree_size,
+        merkle_root: bundle.tree.root().as_str().to_owned(),
+    })
 }
 
 #[cfg(test)]

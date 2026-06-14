@@ -742,9 +742,13 @@ async fn mimi_report_abuse(
         tracing::error!(%error, "mimi: failed to mirror report into projection_events");
     }
 
-    let routed_to = Did::new(state.config.service_did.clone())
-        .map(|did| vec![did])
-        .map_err(|error| AppError::internal(format!("MIMI report route DID: {error}")))?;
+    let routed_to = Did::new(state.config.service_did.clone()).map_or_else(
+        |error| {
+            tracing::warn!(%error, "mimi: service DID could not be represented in report outcome");
+            Vec::new()
+        },
+        |did| vec![did],
+    );
     let _receipt = mimi_receipt(
         state,
         "ck.open.mimi.command.report_abuse",
@@ -792,7 +796,11 @@ async fn mimi_proxy_download(
     let blob = state.persistence.blobs().get(blob_ref).await.ok().flatten();
     let proxy_required = matches!(asset_policy, "provider_proxy" | "ohttp_relay");
     let download_ref = if proxy_required {
-        format!("{}/proxy-download?blob_ref={}", mimi_base_url(state), blob_ref)
+        format!(
+            "{}/proxy-download?blob_ref={}",
+            mimi_base_url(state),
+            blob_ref
+        )
     } else {
         blob_ref.to_owned()
     };

@@ -5,7 +5,7 @@
 
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::state::AppState;
@@ -26,7 +26,7 @@ async fn get_actor(
     actor_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<super::collection::AdminActorProjection> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -34,7 +34,7 @@ async fn get_actor(
     let actor = super::collection::admin_actor_items(state)
         .await
         .into_iter()
-        .find(|actor| actor_matches(actor, &actor_id))
+        .find(|actor| actor.matches_actor_id(&actor_id))
         .ok_or_else(|| crate::error::AppError::not_found("actor not found"))?;
 
     append_audit_log(
@@ -50,10 +50,4 @@ async fn get_actor(
     .await;
 
     json_ok(actor)
-}
-
-fn actor_matches(actor: &Value, actor_id: &str) -> bool {
-    ["id", "actor_id", "did", "account_id", "account_row_id"]
-        .into_iter()
-        .any(|field| actor.get(field).and_then(Value::as_str) == Some(actor_id))
 }

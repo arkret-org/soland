@@ -28,6 +28,8 @@
 //! ([`appeal_decision_overturn_paired_check`] / [`appeal_self_review_check`])
 //! are retained for the reducer-level state-machine unit tests.
 
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -40,6 +42,106 @@ use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub struct ModerationQueueItemOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assigned_to: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<Value>,
+    #[serde(flatten)]
+    #[salvo(schema(value_type = serde_json::Value))]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ModerationQueueItemOutcome {
+    fn from_value(value: Value) -> Self {
+        let Value::Object(mut fields) = value else {
+            let mut extra = BTreeMap::new();
+            extra.insert("value".to_owned(), value);
+            return Self {
+                id: None,
+                status: None,
+                visibility: None,
+                priority: None,
+                assigned_to: None,
+                created_at: None,
+                updated_at: None,
+                extra,
+            };
+        };
+
+        Self {
+            id: remove_string_field(&mut fields, "id"),
+            status: remove_string_field(&mut fields, "status"),
+            visibility: remove_string_field(&mut fields, "visibility"),
+            priority: remove_string_field(&mut fields, "priority"),
+            assigned_to: remove_string_vec_field(&mut fields, "assigned_to"),
+            created_at: fields.remove("created_at"),
+            updated_at: fields.remove("updated_at"),
+            extra: fields.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct ModerationAppealsOutcome {
+    items: Vec<Value>,
+    total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct ModerationAppealHistoryOutcome {
+    appeal_id: String,
+    history: Vec<Value>,
+}
+
+fn remove_string_field(fields: &mut serde_json::Map<String, Value>, field: &str) -> Option<String> {
+    match fields.remove(field) {
+        Some(Value::String(value)) => Some(value),
+        Some(value) => {
+            fields.insert(field.to_owned(), value);
+            None
+        }
+        None => None,
+    }
+}
+
+fn remove_string_vec_field(
+    fields: &mut serde_json::Map<String, Value>,
+    field: &str,
+) -> Option<Vec<String>> {
+    match fields.remove(field) {
+        Some(Value::Array(values))
+            if values.iter().all(|value| matches!(value, Value::String(_))) =>
+        {
+            Some(
+                values
+                    .into_iter()
+                    .filter_map(|value| match value {
+                        Value::String(value) => Some(value),
+                        _ => None,
+                    })
+                    .collect(),
+            )
+        }
+        Some(value) => {
+            fields.insert(field.to_owned(), value);
+            None
+        }
+        None => None,
+    }
+}
 
 pub(super) fn router() -> Router {
     Router::with_path("moderation")
@@ -80,7 +182,7 @@ async fn assign_queue_item(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<AssignReviewerReq>,
-) -> JsonResult<Value> {
+) -> JsonResult<ModerationQueueItemOutcome> {
     let item_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
@@ -114,7 +216,7 @@ async fn assign_queue_item(
         "ok",
     )
     .await;
-    json_ok(item)
+    json_ok(ModerationQueueItemOutcome::from_value(item))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -137,7 +239,7 @@ async fn prioritise_queue_item(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<PrioritiseReq>,
-) -> JsonResult<Value> {
+) -> JsonResult<ModerationQueueItemOutcome> {
     let item_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::invalid_param("id required"))?;
@@ -176,7 +278,7 @@ async fn prioritise_queue_item(
         "ok",
     )
     .await;
-    json_ok(item)
+    json_ok(ModerationQueueItemOutcome::from_value(item))
 }
 
 // ── Appeals ──────────────────────────────────────────────────────────
@@ -190,7 +292,11 @@ async fn prioritise_queue_item(
     skip_all,
     fields(op = "org.cokret.soland.admin.moderation.appeals.list")
 )]
-async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn list_appeals(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ModerationAppealsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
@@ -200,7 +306,10 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
         .list_appeals()
         .await
         .unwrap_or_default();
-    json_ok(json!({ "items": items, "total": items.len() }))
+    json_ok(ModerationAppealsOutcome {
+        total: items.len(),
+        items,
+    })
 }
 
 #[endpoint(
@@ -212,7 +321,11 @@ async fn list_appeals(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Jso
     skip_all,
     fields(op = "org.cokret.soland.admin.moderation.appeals.get")
 )]
-async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn get_appeal(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<ModerationAppealHistoryOutcome> {
     let appeal_id = req
         .param::<String>("appeal_id")
         .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
@@ -228,5 +341,5 @@ async fn get_appeal(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonR
     if history.is_empty() {
         return Err(AppError::not_found("appeal"));
     }
-    json_ok(json!({ "appeal_id": appeal_id, "history": history }))
+    json_ok(ModerationAppealHistoryOutcome { appeal_id, history })
 }

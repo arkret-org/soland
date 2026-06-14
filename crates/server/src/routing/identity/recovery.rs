@@ -19,13 +19,17 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
 use cokret_sdk::{
-    Did, RecoveryPolicy, RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody,
-    RecoverySessionProofSubmitRequestBody,
+    DeviceId, Did, PolicyId, ProofSummary, ReceiptId, RecoveryPolicy, RecoveryPolicyActiveOutcome,
+    RecoveryPolicyPublishOutcome, RecoveryPolicyRef, RecoveryPolicySummary, RecoveryReceiptOutcome,
+    RecoverySessionCompleteOutcome, RecoverySessionCompleteRequestBody,
+    RecoverySessionCreateRequestBody, RecoverySessionId, RecoverySessionProofSubmitOutcome,
+    RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState, TypedTrustDomainId,
 };
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -117,6 +121,50 @@ const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct SolandRecoveryPoliciesOutcome {
+    policies: Vec<RecoveryPolicySummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct SolandRecoveryReceiptsOutcome {
+    receipts: Vec<SolandRecoveryReceiptItem>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct SolandRecoveryReceiptItem {
+    receipt_id: ReceiptId,
+    principal_id: Did,
+    recovery_session_id: RecoverySessionId,
+    policy_id: PolicyId,
+    policy_version: u64,
+    trust_domain: TypedTrustDomainId,
+    new_device_id: DeviceId,
+    outcome: RecoveryReceiptOutcome,
+    completed_at: chrono::DateTime<chrono::Utc>,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+    #[salvo(schema(value_type = serde_json::Value))]
+    receipt: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct SolandRecoveryReceiptPutOutcome {
+    ok: bool,
+    receipt_id: ReceiptId,
+    principal_id: Did,
+    recovery_session_id: RecoverySessionId,
+    outcome: RecoveryReceiptOutcome,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
+#[serde(transparent)]
+struct SignedRecoveryReceiptRequestBody(#[salvo(schema(value_type = serde_json::Value))] Value);
+
 /// Spec-canonical recovery surface mounted under `/_cokret/root/identity`.
 ///
 /// The standard surface exposes recovery policy read/publish plus recovery
@@ -206,6 +254,27 @@ fn recovery_policy_summary(record: &RecoveryPolicyRecord) -> Value {
     })
 }
 
+fn stored_recovery_type_error(context: &str, error: impl std::fmt::Display) -> AppError {
+    AppError::internal(format!("stored recovery {context} invalid: {error}"))
+}
+
+fn typed_recovery_policy_summary(
+    record: &RecoveryPolicyRecord,
+) -> Result<RecoveryPolicySummary, AppError> {
+    serde_json::from_value(recovery_policy_summary(record))
+        .map_err(|error| stored_recovery_type_error("policy summary", error))
+}
+
+fn recovery_policy_ref_from_summary(summary: &RecoveryPolicySummary) -> RecoveryPolicyRef {
+    summary
+        .recovery_policy_ref
+        .clone()
+        .unwrap_or_else(|| RecoveryPolicyRef {
+            policy_id: summary.policy_id.clone(),
+            policy_version: summary.version,
+        })
+}
+
 #[endpoint(
     operation_id = "ck.root.identity.recovery_policy.resource.get",
     tags("identity", "recovery"),
@@ -218,7 +287,7 @@ async fn recovery_policy_get(
     principal_id: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoveryPolicyActiveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
@@ -228,7 +297,21 @@ async fn recovery_policy_get(
         .get_active_for_principal(&principal)
         .await
         .map_err(recovery_store_error)?;
-    json_ok(json!({ "active_policy": active.as_ref().map(recovery_policy_summary) }))
+    let active_policy = active
+        .as_ref()
+        .map(typed_recovery_policy_summary)
+        .transpose()?;
+    let recovery_policy_ref = active_policy.as_ref().map(recovery_policy_ref_from_summary);
+    json_ok(RecoveryPolicyActiveOutcome {
+        principal_id: Some(
+            Did::new(principal)
+                .map_err(|error| stored_recovery_type_error("principal_id", error))?,
+        ),
+        active_policy,
+        recovery_policy_ref,
+        as_of: active.as_ref().map(|record| record.accepted_at),
+        control_frontier: None,
+    })
 }
 
 #[endpoint(
@@ -246,7 +329,7 @@ async fn recovery_policies_get(
     principal_id: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandRecoveryPoliciesOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
@@ -256,8 +339,11 @@ async fn recovery_policies_get(
         .list_for_principal(&principal)
         .await
         .map_err(recovery_store_error)?;
-    let items: Vec<Value> = policies.iter().map(recovery_policy_summary).collect();
-    json_ok(json!({ "policies": items }))
+    let policies = policies
+        .iter()
+        .map(typed_recovery_policy_summary)
+        .collect::<Result<Vec<_>, _>>()?;
+    json_ok(SolandRecoveryPoliciesOutcome { policies })
 }
 
 #[endpoint(
@@ -275,7 +361,7 @@ async fn recovery_receipts_get(
     principal_id: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandRecoveryReceiptsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
@@ -285,24 +371,11 @@ async fn recovery_receipts_get(
         .list_for_principal(&principal)
         .await
         .map_err(recovery_store_error)?;
-    let items: Vec<Value> = receipts
+    let receipts = receipts
         .iter()
-        .map(|r| {
-            json!({
-                "receipt_id": r.receipt_id,
-                "recovery_session_id": r.recovery_session_id,
-                "policy_id": r.policy_id,
-                "policy_version": r.policy_version,
-                "trust_domain": r.trust_domain,
-                "new_device_id": r.new_device_id,
-                "outcome": r.outcome,
-                "completed_at": r.completed_at,
-                "accepted_at": r.accepted_at,
-                "receipt": r.raw_payload,
-            })
-        })
-        .collect();
-    json_ok(json!({ "receipts": items }))
+        .map(recovery_receipt_item)
+        .collect::<Result<Vec<_>, _>>()?;
+    json_ok(SolandRecoveryReceiptsOutcome { receipts })
 }
 
 // ── C-P2 (REC-1) recovery session lifecycle ──────────────────────────────
@@ -380,6 +453,50 @@ fn recovery_proof_summary(record: &RecoverySessionRecord) -> Option<Value> {
     Some(summary)
 }
 
+fn typed_recovery_session_state(
+    record: &RecoverySessionRecord,
+) -> Result<RecoverySessionState, AppError> {
+    serde_json::from_value(recovery_session_summary(record))
+        .map_err(|error| stored_recovery_type_error("session state", error))
+}
+
+fn typed_recovery_proof_summary(
+    record: &RecoverySessionRecord,
+) -> Result<Option<ProofSummary>, AppError> {
+    recovery_proof_summary(record)
+        .map(|value| {
+            serde_json::from_value(value)
+                .map_err(|error| stored_recovery_type_error("proof summary", error))
+        })
+        .transpose()
+}
+
+fn recovery_session_state_from_record(
+    record: &RecoverySessionRecord,
+) -> Result<SessionState, AppError> {
+    serde_json::from_value(Value::String(record.state.clone()))
+        .map_err(|error| stored_recovery_type_error("session state enum", error))
+}
+
+fn recovery_receipt_item(
+    record: &RecoveryReceiptRecord,
+) -> Result<SolandRecoveryReceiptItem, AppError> {
+    serde_json::from_value(json!({
+        "receipt_id": record.receipt_id,
+        "principal_id": record.principal_id,
+        "recovery_session_id": record.recovery_session_id,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "trust_domain": record.trust_domain,
+        "new_device_id": record.new_device_id,
+        "outcome": record.outcome,
+        "completed_at": record.completed_at,
+        "accepted_at": record.accepted_at,
+        "receipt": record.raw_payload,
+    }))
+    .map_err(|error| stored_recovery_type_error("receipt item", error))
+}
+
 /// Load a session and enforce principal isolation: only the authenticated
 /// principal (== `session.actor`) may read or act on its own recovery sessions.
 async fn load_owned_recovery_session(
@@ -428,7 +545,7 @@ async fn recovery_session_create(
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoverySessionState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let principal = session.actor.clone();
@@ -550,7 +667,7 @@ async fn recovery_session_create(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    json_ok(recovery_session_summary(&record))
+    json_ok(typed_recovery_session_state(&record)?)
 }
 
 #[endpoint(
@@ -568,12 +685,12 @@ async fn recovery_session_get(
     recovery_session_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoverySessionState> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let mut record =
         load_owned_recovery_session(&aa, state, req, &recovery_session_id.into_inner()).await?;
     record = expire_if_elapsed(state, record).await?;
-    json_ok(recovery_session_summary(&record))
+    json_ok(typed_recovery_session_state(&record)?)
 }
 
 #[endpoint(
@@ -592,7 +709,7 @@ async fn recovery_session_proof_submit(
     body: JsonBody<RecoverySessionProofSubmitRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoverySessionProofSubmitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session_id = recovery_session_id.into_inner();
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
@@ -682,16 +799,13 @@ async fn recovery_session_proof_submit(
         .await
         .map_err(recovery_session_store_error)?;
 
-    // recovery-session.schema.json $defs/proof_submit_response (additionalProperties:false).
-    let mut response = json!({
-        "recovery_session_id": updated.recovery_session_id,
-        "state": "verified",
-        "verification": "verified",
-    });
-    if let Some(summary) = recovery_proof_summary(&updated) {
-        response["proof_summary"] = summary;
-    }
-    json_ok(response)
+    json_ok(RecoverySessionProofSubmitOutcome {
+        recovery_session_id: RecoverySessionId::new(updated.recovery_session_id.clone())
+            .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
+        state: recovery_session_state_from_record(&updated)?,
+        verification: "verified".to_owned(),
+        proof_summary: typed_recovery_proof_summary(&updated)?,
+    })
 }
 
 /// C-P3 — verify a `principal_signing` recovery proof.
@@ -805,10 +919,12 @@ async fn recovery_session_complete(
     body: JsonBody<RecoverySessionCompleteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoverySessionCompleteOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session_id = recovery_session_id.into_inner();
     let complete_request = body.into_inner();
+    let authorization_event_id_typed = complete_request.authorization_event_id.clone();
+    let device_list_update_event_id_typed = complete_request.device_list_update_event_id.clone();
     let record = load_owned_recovery_session(&aa, state, req, &session_id).await?;
     let record = expire_if_elapsed(state, record).await?;
 
@@ -833,11 +949,8 @@ async fn recovery_session_complete(
     // Envelope carrying the next actor_seq. Completion REFERENCES those durable
     // event ids and verifies they are the right events bound to this session —
     // the server never authors/signs control events on the principal's behalf.
-    let authorization_event_id = complete_request.authorization_event_id.as_str().to_owned();
-    let device_list_update_event_id = complete_request
-        .device_list_update_event_id
-        .as_str()
-        .to_owned();
+    let authorization_event_id = authorization_event_id_typed.as_str().to_owned();
+    let device_list_update_event_id = device_list_update_event_id_typed.as_str().to_owned();
 
     // Resolve + verify the referenced ck.device.authorize.
     let authorize_payload =
@@ -989,15 +1102,16 @@ async fn recovery_session_complete(
     )
     .await;
 
-    // recovery-session.schema.json $defs/complete_response (additionalProperties:false).
-    json_ok(json!({
-        "ok": true,
-        "recovery_session_id": completed.recovery_session_id,
-        "state": "completed",
-        "device_id": completed.requesting_device_id,
-        "authorization_event_id": authorization_event_id,
-        "device_list_update_event_id": device_list_update_event_id,
-    }))
+    json_ok(RecoverySessionCompleteOutcome {
+        ok: true,
+        recovery_session_id: RecoverySessionId::new(completed.recovery_session_id.clone())
+            .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
+        state: recovery_session_state_from_record(&completed)?,
+        device_id: DeviceId::new(completed.requesting_device_id.clone())
+            .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
+        authorization_event_id: authorization_event_id_typed,
+        device_list_update_event_id: device_list_update_event_id_typed,
+    })
 }
 
 /// Deterministic principal control realm id for a principal DID
@@ -1123,7 +1237,7 @@ async fn recovery_policy_put(
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<RecoveryPolicyPublishOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let payload = serde_json::to_value(body.into_inner())
@@ -1201,13 +1315,15 @@ async fn recovery_policy_put(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    json_ok(json!({
+    let outcome = serde_json::from_value(json!({
         "ok": true,
         "policy_id": record.policy_id,
         "principal_id": record.principal_id,
         "version": record.version,
         "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     }))
+    .map_err(|error| stored_recovery_type_error("policy publish outcome", error))?;
+    json_ok(outcome)
 }
 
 #[endpoint(
@@ -1222,14 +1338,14 @@ async fn recovery_policy_put(
 )]
 async fn recovery_receipt_put(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<SignedRecoveryReceiptRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<SolandRecoveryReceiptPutOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body.into_inner();
+    let payload = body.into_inner().0;
 
     let mut record = validate_recovery_receipt(&payload)?;
 
@@ -1330,7 +1446,7 @@ async fn recovery_receipt_put(
     .await;
 
     res.status_code(StatusCode::CREATED);
-    json_ok(json!({
+    let outcome = serde_json::from_value(json!({
         "ok": true,
         "receipt_id": record.receipt_id,
         "principal_id": record.principal_id,
@@ -1338,6 +1454,8 @@ async fn recovery_receipt_put(
         "outcome": record.outcome,
         "accepted_at": accepted_at.to_rfc3339_opts(SecondsFormat::Millis, true),
     }))
+    .map_err(|error| stored_recovery_type_error("receipt put outcome", error))?;
+    json_ok(outcome)
 }
 
 fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, AppError> {

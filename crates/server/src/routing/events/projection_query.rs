@@ -38,6 +38,7 @@ use cokret_sdk::{
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::realm_id_accessible;
@@ -147,6 +148,55 @@ fn flow_position_relation<'a>(
 }
 
 type FlowPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DocumentProjectionOutcome {
+    document: DocumentProjectionDocument,
+    versions: Vec<DocumentProjectionVersion>,
+    relations: Vec<DocumentProjectionRelation>,
+    comments: Vec<Value>,
+    cursor_presence: Vec<Value>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DocumentProjectionDocument {
+    morph_id: String,
+    realm_id: String,
+    morph_type: String,
+    title: Option<String>,
+    state: String,
+    fields: std::collections::BTreeMap<String, Value>,
+    body: Value,
+    schema_refs: Vec<String>,
+    facets: Vec<String>,
+    created_by: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_by: Option<String>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DocumentProjectionVersion {
+    version_id: String,
+    event_id: String,
+    author: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    body_digest: String,
+    body: Value,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DocumentProjectionRelation {
+    relation_id: String,
+    realm_id: String,
+    relation_kind: String,
+    from: Option<String>,
+    to: Option<String>,
+    fields: std::collections::BTreeMap<String, Value>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
 
 fn flow_position_fields(
     projection: &ProjectionState,
@@ -326,7 +376,10 @@ fn document_comments_json(
     roots
 }
 
-fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<Value> {
+fn document_relations_json(
+    projection: &ProjectionState,
+    morph_id: &str,
+) -> Vec<DocumentProjectionRelation> {
     projection
         .relations
         .values()
@@ -335,17 +388,15 @@ fn document_relations_json(projection: &ProjectionState, morph_id: &str) -> Vec<
             relation.from_ref.as_deref() == Some(morph_id)
                 || relation.to_ref.as_deref() == Some(morph_id)
         })
-        .map(|relation| {
-            json!({
-                "relation_id": relation.relation_id,
-                "realm_id": relation.realm_id,
-                "relation_kind": relation.relation_kind,
-                "from": relation.from_ref,
-                "to": relation.to_ref,
-                "fields": relation.fields,
-                "created_at": relation.created_at,
-                "updated_at": relation.updated_at,
-            })
+        .map(|relation| DocumentProjectionRelation {
+            relation_id: relation.relation_id.clone(),
+            realm_id: relation.realm_id.clone(),
+            relation_kind: relation.relation_kind.clone(),
+            from: relation.from_ref.clone(),
+            to: relation.to_ref.clone(),
+            fields: relation.fields.clone(),
+            created_at: relation.created_at,
+            updated_at: relation.updated_at,
         })
         .collect()
 }
@@ -577,7 +628,7 @@ async fn read_document_projection(
     depot: &mut Depot,
     req: &mut Request,
     morph_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<DocumentProjectionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let morph_id = morph_id.into_inner();
@@ -614,38 +665,36 @@ async fn read_document_projection(
     let versions = morph
         .versions
         .iter()
-        .map(|version| {
-            json!({
-                "version_id": version.version_id,
-                "event_id": version.event_id,
-                "author": version.author,
-                "created_at": version.created_at,
-                "body_digest": version.body_digest,
-                "body": version.body,
-            })
+        .map(|version| DocumentProjectionVersion {
+            version_id: version.version_id.clone(),
+            event_id: version.event_id.clone(),
+            author: version.author.clone(),
+            created_at: version.created_at,
+            body_digest: version.body_digest.clone(),
+            body: version.body.clone(),
         })
         .collect::<Vec<_>>();
-    let response = json!({
-        "document": {
-            "morph_id": morph.morph_id,
-            "realm_id": morph.realm_id,
-            "morph_type": morph.morph_type,
-            "title": morph.title,
-            "state": morph.state.as_str(),
-            "fields": morph.fields,
-            "body": body,
-            "schema_refs": morph.schema_refs,
-            "facets": morph.facets,
-            "created_by": morph.created_by,
-            "created_at": morph.created_at,
-            "updated_by": morph.updated_by,
-            "updated_at": morph.updated_at,
-            "state_changed_at": morph.state_changed_at,
+    let response = DocumentProjectionOutcome {
+        document: DocumentProjectionDocument {
+            morph_id: morph.morph_id,
+            realm_id: morph.realm_id,
+            morph_type: morph.morph_type,
+            title: morph.title,
+            state: morph.state.as_str().to_owned(),
+            fields: morph.fields,
+            body,
+            schema_refs: morph.schema_refs,
+            facets: morph.facets,
+            created_by: morph.created_by,
+            created_at: morph.created_at,
+            updated_by: morph.updated_by,
+            updated_at: morph.updated_at,
+            state_changed_at: morph.state_changed_at,
         },
-        "versions": versions,
-        "relations": relations,
-        "comments": comments,
-        "cursor_presence": [],
-    });
+        versions,
+        relations,
+        comments,
+        cursor_presence: Vec::new(),
+    };
     json_ok(response)
 }

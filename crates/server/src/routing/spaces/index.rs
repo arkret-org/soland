@@ -310,7 +310,7 @@ async fn index_thread(
         .list_for_thread(&thread_id, 100)
         .await
         .unwrap_or_default();
-    let events = messages
+    let events: Vec<IndexThreadEvent> = messages
         .iter()
         .map(|message| IndexThreadEvent {
             event_id: message.event_id.clone(),
@@ -873,7 +873,7 @@ async fn index_debug_reducer(
         .list_for_realm(&realm_id, limit)
         .await
         .unwrap_or_default();
-    let projection_events = messages
+    let projection_events: Vec<IndexDebugReducerEvent> = messages
         .iter()
         .map(|message| IndexDebugReducerEvent {
             event_id: message.event_id.clone(),

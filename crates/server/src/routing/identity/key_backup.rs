@@ -1758,7 +1758,7 @@ async fn unlock_key_backup(
     body: JsonBody<KeysBackupsUnlockRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<KeyBackup> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
@@ -1827,6 +1827,8 @@ async fn unlock_key_backup(
             quota.retry_after_ms
         )));
     }
+    let backup = serde_json::from_value(backup)
+        .map_err(|error| AppError::internal(format!("stored key backup invalid: {error}")))?;
     json_ok(backup)
 }
 

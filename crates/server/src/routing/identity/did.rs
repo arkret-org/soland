@@ -42,6 +42,12 @@ const WEBVH_SCID_PLACEHOLDER: &str = "{SCID}";
 const WEBVH_METHOD_VERSION: &str = "did:webvh:1.0";
 const ED25519_MULTICODEC_PREFIX: [u8; 2] = [0xed, 0x01];
 
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[serde(transparent)]
+pub struct RawDidDocumentJson(
+    #[salvo(schema(value_type = serde_json::Value))] pub serde_json::Value,
+);
+
 #[endpoint]
 #[tracing::instrument(skip_all, fields(op = "identity_describe"))]
 pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
@@ -491,7 +497,7 @@ fn identity_resolve_outcome(
 pub(super) async fn identity_did_document(
     req: &mut Request,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<RawDidDocumentJson> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did = req
         .param::<String>("did")
@@ -503,10 +509,10 @@ pub(super) async fn identity_did_document(
         crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, &did)
             .await?
     {
-        return json_ok(document);
+        return json_ok(RawDidDocumentJson(document));
     }
     let record = identity_document_record(state, &did).await;
-    json_ok(record.did_document)
+    json_ok(RawDidDocumentJson(record.did_document))
 }
 
 #[endpoint(

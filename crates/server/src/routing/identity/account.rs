@@ -674,7 +674,7 @@ async fn export_account(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<AccountExportOutcome> {
     // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
     // include account / profile / realms / messages / devices / audit_log
     // facets. We assemble each from the existing persistence stores; the
@@ -691,12 +691,10 @@ async fn export_account(
         .get(&actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let profile = account.as_ref().map(|account| {
-        json!({
-            "display_name": account.display_name,
-            "bio": account.bio,
-            "avatar_url": account.avatar_url,
-        })
+    let profile = account.as_ref().map(|account| AccountExportProfile {
+        display_name: account.display_name.clone(),
+        bio: account.bio.clone(),
+        avatar_url: account.avatar_url.clone(),
     });
     let account_payload = account.map(|account| account_response(account, state));
 
@@ -708,18 +706,16 @@ async fn export_account(
         .unwrap_or_default()
         .into_iter()
         .filter(|device| device.actor == actor)
-        .map(|device| {
-            json!({
-                "device_id": device.device_id,
-                "display_name": device.display_name,
-                "verification_state": device.verification_state,
-                "created_at": device.created_at.to_rfc3339(),
-                "revoked_at": device.revoked_at.map(|dt| dt.to_rfc3339()),
-            })
+        .map(|device| AccountExportDevice {
+            device_id: device.device_id,
+            display_name: device.display_name,
+            verification_state: device.verification_state,
+            created_at: device.created_at.to_rfc3339(),
+            revoked_at: device.revoked_at.map(|dt| dt.to_rfc3339()),
         })
         .collect::<Vec<_>>();
 
-    let realms: Vec<serde_json::Value> = state
+    let realms = state
         .persistence
         .realm_meta()
         .list()
@@ -727,13 +723,11 @@ async fn export_account(
         .unwrap_or_default()
         .into_iter()
         .filter(|(_realm_id, meta)| meta.owner == actor)
-        .map(|(realm_id, meta)| {
-            json!({
-                "realm_id": realm_id,
-                "discoverability": meta.discoverability,
-                "history_visibility": meta.history_visibility,
-                "created_at": meta.created_at.to_rfc3339(),
-            })
+        .map(|(realm_id, meta)| AccountExportRealm {
+            realm_id,
+            discoverability: meta.discoverability,
+            history_visibility: meta.history_visibility,
+            created_at: meta.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -756,33 +750,66 @@ async fn export_account(
         .await
         .unwrap_or_default();
 
-    let bundle = json!({
-        "did": actor,
-        "exported_at": now(),
-        "account": account_payload,
-        "profile": profile,
-        "realms": realms,
-        "devices": devices,
+    json_ok(AccountExportOutcome {
+        did: actor,
+        exported_at: now().to_rfc3339(),
+        account: account_payload,
+        profile,
+        realms,
+        devices,
         // Messages — plaintext for own events, ciphertext-only for E2EE
         // peers — lands when the projection event read API exposes a
         // per-actor filter. v1 bundle keeps the slot for forward-compat.
-        "messages": serde_json::Value::Array(Vec::new()),
-        "audit_log": audit_log,
-        // ── v1 forward-compat stub fields (round 2) ─────────────────
-        //
+        messages: Vec::new(),
+        audit_log,
         // The export bundle's v1 scope is `{ account, devices,
         // audit_log }` plus the always-empty `messages` and `realms`
-        // collections; conversation history, contacts, and key
-        // backup state will land in a later round once the underlying
-        // stores expose per-actor extracts. The three keys below are
-        // reserved now so downstream tooling can write its
-        // deserializer without a follow-up wire bump — see
-        // `docs/account-lifecycle.md` "v1 export scope".
-        "conversation_history": serde_json::Value::Null,
-        "contacts": Vec::<String>::new(),
-        "key_backup_state": serde_json::Value::Null,
-    });
-    json_ok(bundle)
+        // collections; conversation history, contacts, and key backup
+        // state are reserved as explicit nulls for forward-compatible
+        // downstream deserializers.
+        conversation_history: None,
+        contacts: Vec::new(),
+        key_backup_state: None,
+    })
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountExportOutcome {
+    pub did: String,
+    pub exported_at: String,
+    pub account: Option<SolandAccountRegisterOutcome>,
+    pub profile: Option<AccountExportProfile>,
+    pub realms: Vec<AccountExportRealm>,
+    pub devices: Vec<AccountExportDevice>,
+    pub messages: Vec<Value>,
+    pub audit_log: Vec<Value>,
+    pub conversation_history: Option<Value>,
+    pub contacts: Vec<String>,
+    pub key_backup_state: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountExportProfile {
+    pub display_name: Option<String>,
+    pub bio: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountExportRealm {
+    pub realm_id: String,
+    pub discoverability: String,
+    pub history_visibility: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountExportDevice {
+    pub device_id: String,
+    pub display_name: Option<String>,
+    pub verification_state: String,
+    pub created_at: String,
+    pub revoked_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -948,7 +975,7 @@ async fn deactivate_account(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<AccountDeactivateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
@@ -960,14 +987,26 @@ async fn deactivate_account(
         Some("user_deactivate".to_owned()),
     )
     .await?;
-    json_ok(json!({
-        "did": change.did,
-        "previous_state": change.previous_state,
-        "state": change.state,
-        "deactivated_at": change.changed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "sessions_revoked": change.sessions_revoked,
-        "devices_revoked": change.devices_revoked,
-    }))
+    json_ok(AccountDeactivateOutcome {
+        did: change.did,
+        previous_state: change.previous_state,
+        state: change.state,
+        deactivated_at: change
+            .changed_at
+            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        sessions_revoked: change.sessions_revoked,
+        devices_revoked: change.devices_revoked,
+    })
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountDeactivateOutcome {
+    pub did: String,
+    pub previous_state: String,
+    pub state: String,
+    pub deactivated_at: String,
+    pub sessions_revoked: usize,
+    pub devices_revoked: usize,
 }
 
 #[endpoint(
@@ -981,7 +1020,7 @@ async fn erase_account(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<AccountEraseOutcome> {
     // Spec: identity/account-lifecycle.md §3 — erasure pseudonymizes
     // PII, revokes device records, and flips the actor into a permanent
     // `erased` state so subsequent authenticated requests return 401
@@ -1189,17 +1228,30 @@ async fn erase_account(
         .list_for_actor(&actor)
         .await
         .unwrap_or_default();
-    json_ok(json!({
-        "did": actor,
-        "state": "erased",
-        "erased_at": completed_at_wire,
-        "erasure_receipt": erasure_receipt,
-        "realm_erasure_receipts": realm_erasure_receipts,
-        "audit_log": audit_log,
-        "memberships_removed": memberships_removed,
-        "sessions_revoked": sessions_revoked,
-        "devices_revoked": devices_revoked,
-    }))
+    json_ok(AccountEraseOutcome {
+        did: actor,
+        state: "erased".to_owned(),
+        erased_at: completed_at_wire,
+        erasure_receipt,
+        realm_erasure_receipts,
+        audit_log,
+        memberships_removed,
+        sessions_revoked,
+        devices_revoked,
+    })
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountEraseOutcome {
+    pub did: String,
+    pub state: String,
+    pub erased_at: String,
+    pub erasure_receipt: Value,
+    pub realm_erasure_receipts: Vec<Value>,
+    pub audit_log: Vec<Value>,
+    pub memberships_removed: usize,
+    pub sessions_revoked: usize,
+    pub devices_revoked: usize,
 }
 
 /// Remove the erased actor from every in-memory Realm membership set.

@@ -21,10 +21,11 @@
 use std::sync::Mutex;
 
 use cokret_sdk::Operation;
+use salvo::oapi::ToSchema;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
@@ -33,7 +34,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 /// A TSP transport an actor publishes for inbound relationships.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct TspTransport {
     pub transport_id: String,
     /// `"https-jwe"`, `"mls-dm"`, `"tsp-pairwise"`, etc.
@@ -48,7 +49,7 @@ pub struct TspTransport {
 /// A TSP route between two actors. `via_transports` lists the
 /// transport ids the route traverses in order; for direct pairwise
 /// channels this is a single-entry vector.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct TspRoute {
     pub route_id: String,
     pub source_actor_id: String,
@@ -58,7 +59,7 @@ pub struct TspRoute {
 }
 
 /// One entry in a TSP route's audit chain.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct TspAuditEntry {
     pub route_id: String,
     /// `"route_established"`, `"envelope_sent"`, `"envelope_received"`,
@@ -83,6 +84,40 @@ static REGISTRY: Mutex<TspRegistry> = Mutex::new(TspRegistry {
     routes: Vec::new(),
     audit: Vec::new(),
 });
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+struct DeclareTransportRequestBody {
+    transport_id: String,
+    #[serde(default = "default_tsp_transport_type")]
+    transport_type: String,
+    #[serde(default)]
+    endpoint_url: String,
+    #[serde(default)]
+    supported_protocols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ListTransportsResponseBody {
+    transports: Vec<TspTransport>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+struct EstablishRouteRequestBody {
+    route_id: String,
+    destination_actor_id: String,
+    #[serde(default)]
+    via_transports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct AuditRouteResponseBody {
+    route_id: String,
+    entries: Vec<TspAuditEntry>,
+}
+
+fn default_tsp_transport_type() -> String {
+    "tsp-pairwise".to_owned()
+}
 
 #[cfg(test)]
 pub(crate) fn reset_registry_for_test() {
@@ -284,46 +319,25 @@ pub(super) fn router() -> Router {
 )]
 async fn declare_transport_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<DeclareTransportRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<TspTransport> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let transport_id = body
-        .get("transport_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("transport_id is required"))?
-        .to_owned();
-    let transport_type = body
-        .get("transport_type")
-        .and_then(Value::as_str)
-        .unwrap_or("tsp-pairwise")
-        .to_owned();
-    let endpoint_url = body
-        .get("endpoint_url")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let supported_protocols = body
-        .get("supported_protocols")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+    if body.transport_id.trim().is_empty() {
+        return Err(AppError::invalid_param("transport_id is required"));
+    }
     let transport = declare_transport(TspTransport {
-        transport_id,
-        transport_type,
-        endpoint_url,
-        supported_protocols,
+        transport_id: body.transport_id,
+        transport_type: body.transport_type,
+        endpoint_url: body.endpoint_url,
+        supported_protocols: body.supported_protocols,
         created_at: chrono::Utc::now(),
         owner_actor_id: session.actor.clone(),
     });
-    json_ok(serde_json::to_value(transport).expect("transport serializes"))
+    json_ok(transport)
 }
 
 #[endpoint(
@@ -339,11 +353,11 @@ async fn list_transports_endpoint(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<ListTransportsResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let transports = list_transports(Some(&session.actor));
-    json_ok(json!({ "transports": transports }))
+    json_ok(ListTransportsResponseBody { transports })
 }
 
 #[endpoint(
@@ -357,45 +371,32 @@ async fn list_transports_endpoint(
 )]
 async fn establish_route_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<EstablishRouteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<TspRoute> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let route_id = body
-        .get("route_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("route_id is required"))?
-        .to_owned();
-    let destination_actor_id = body
-        .get("destination_actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("destination_actor_id is required"))?
-        .to_owned();
-    let via_transports: Vec<String> = body
-        .get("via_transports")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    if via_transports.is_empty() {
+    if body.route_id.trim().is_empty() {
+        return Err(AppError::invalid_param("route_id is required"));
+    }
+    if body.destination_actor_id.trim().is_empty() {
+        return Err(AppError::invalid_param("destination_actor_id is required"));
+    }
+    if body.via_transports.is_empty() {
         return Err(AppError::invalid_param(
             "via_transports MUST contain at least one transport_id",
         ));
     }
     let route = establish_route(TspRoute {
-        route_id,
+        route_id: body.route_id,
         source_actor_id: session.actor.clone(),
-        destination_actor_id,
-        via_transports,
+        destination_actor_id: body.destination_actor_id,
+        via_transports: body.via_transports,
         established_at: chrono::Utc::now(),
     });
-    json_ok(serde_json::to_value(route).expect("route serializes"))
+    json_ok(route)
 }
 
 #[endpoint(
@@ -404,17 +405,18 @@ async fn establish_route_endpoint(
     summary = "Fetch the audit chain for a TSP route"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.extensions.tsp.routes.audit"))]
-async fn audit_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn audit_endpoint(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AuditRouteResponseBody> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let route_id = req
         .param::<String>("id")
         .ok_or_else(|| AppError::missing_param("route_id path segment required"))?;
     let entries = audit_for_route(&route_id);
-    json_ok(json!({
-        "route_id": route_id,
-        "entries": entries,
-    }))
+    json_ok(AuditRouteResponseBody { route_id, entries })
 }
 
 #[cfg(test)]

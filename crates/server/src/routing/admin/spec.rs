@@ -10,6 +10,7 @@
 
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::audit::append_audit_log;
@@ -20,6 +21,78 @@ use crate::routing::identity::account::{AccountLifecycleChange, set_account_life
 use crate::routing::identity::auth::revoke_device_record;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminServerStatusCounts {
+    accounts: Option<usize>,
+    devices: Option<usize>,
+    realms: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminServerStatusOutcome {
+    status: String,
+    service_did: String,
+    storage: String,
+    development_mode: bool,
+    checked_by: String,
+    generated_at: String,
+    counts: AdminServerStatusCounts,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminAccountStatusRequestBody {
+    status: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminAccountStateActionRequestBody {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminAccountLifecycleOutcome {
+    account_id: String,
+    did: String,
+    previous_state: String,
+    state: String,
+    status: String,
+    reason: Option<String>,
+    updated_by: String,
+    changed_by: String,
+    updated_at: String,
+    changed_at: String,
+    sessions_revoked: usize,
+    devices_revoked: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminRevokeDeviceRequestBody {
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminRevokeDeviceOutcome {
+    actor: String,
+    device_id: String,
+    revoked_by: String,
+    revoked_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct AdminModerationQueueOutcome {
+    items: Vec<Value>,
+    total: usize,
+    generated_at: String,
+}
 
 pub(super) fn router() -> Router {
     Router::with_path("admin")
@@ -51,7 +124,7 @@ async fn get_server_status(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminServerStatusOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -75,19 +148,19 @@ async fn get_server_status(
         .expect("realms lock")
         .search(Default::default())
         .len();
-    json_ok(json!({
-        "status": "ok",
-        "service_did": state.config.service_did.clone(),
-        "storage": state.db.mode(),
-        "development_mode": state.config.development_mode,
-        "checked_by": session.actor,
-        "generated_at": super::now().to_rfc3339(),
-        "counts": {
-            "accounts": account_count,
-            "devices": device_count,
-            "realms": realm_count,
+    json_ok(AdminServerStatusOutcome {
+        status: "ok".to_owned(),
+        service_did: state.config.service_did.clone(),
+        storage: state.db.mode().to_owned(),
+        development_mode: state.config.development_mode,
+        checked_by: session.actor,
+        generated_at: super::now().to_rfc3339(),
+        counts: AdminServerStatusCounts {
+            accounts: account_count,
+            devices: device_count,
+            realms: realm_count,
         },
-    }))
+    })
 }
 
 #[endpoint(
@@ -102,21 +175,19 @@ async fn update_account_status(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStatusRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_id = account_id.into_inner();
     let body = body.into_inner();
-    let status = body
-        .get("status")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| AppError::invalid_param("status is required"))?;
-    admin_set_account_status(state, &session.actor, &account_id, &status, body).await
+    let status = body.status.trim();
+    if status.is_empty() {
+        return Err(AppError::invalid_param("status is required"));
+    }
+    let status = status.to_owned();
+    admin_set_account_status(state, &session.actor, &account_id, &status, body.reason).await
 }
 
 #[endpoint(
@@ -131,8 +202,8 @@ async fn lock_account(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStateActionRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     admin_account_state_action(aa, depot, req, account_id, body, "locked").await
 }
 
@@ -148,8 +219,8 @@ async fn unlock_account(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStateActionRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     admin_account_state_action(aa, depot, req, account_id, body, "active").await
 }
 
@@ -165,8 +236,8 @@ async fn suspend_account(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStateActionRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     admin_account_state_action(aa, depot, req, account_id, body, "suspended").await
 }
 
@@ -182,8 +253,8 @@ async fn unsuspend_account(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStateActionRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     admin_account_state_action(aa, depot, req, account_id, body, "active").await
 }
 
@@ -199,8 +270,8 @@ async fn deactivate_account(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminAccountStateActionRequestBody>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     admin_account_state_action(aa, depot, req, account_id, body, "deactivated").await
 }
 
@@ -209,9 +280,9 @@ async fn admin_account_state_action(
     depot: &mut Depot,
     req: &mut Request,
     account_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<AdminAccountStateActionRequestBody>,
     next_state: &str,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminAccountLifecycleOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -220,7 +291,7 @@ async fn admin_account_state_action(
         &session.actor,
         &account_id.into_inner(),
         next_state,
-        body.into_inner(),
+        body.into_inner().reason,
     )
     .await
 }
@@ -230,11 +301,10 @@ async fn admin_set_account_status(
     admin_actor: &str,
     account_id: &str,
     next_state: &str,
-    body: Value,
-) -> JsonResult<Value> {
-    let reason = body
-        .get("reason")
-        .and_then(Value::as_str)
+    reason: Option<String>,
+) -> JsonResult<AdminAccountLifecycleOutcome> {
+    let reason = reason
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
@@ -256,25 +326,27 @@ async fn admin_set_account_status(
     json_ok(account_lifecycle_change_response(change))
 }
 
-fn account_lifecycle_change_response(change: AccountLifecycleChange) -> Value {
+fn account_lifecycle_change_response(
+    change: AccountLifecycleChange,
+) -> AdminAccountLifecycleOutcome {
     let did = change.did;
     let state = change.state;
     let changed_by = change.changed_by;
     let changed_at = change.changed_at.to_rfc3339();
-    json!({
-        "account_id": did.clone(),
-        "did": did,
-        "previous_state": change.previous_state,
-        "state": state.clone(),
-        "status": state,
-        "reason": change.reason,
-        "updated_by": changed_by.clone(),
-        "changed_by": changed_by,
-        "updated_at": changed_at.clone(),
-        "changed_at": changed_at,
-        "sessions_revoked": change.sessions_revoked,
-        "devices_revoked": change.devices_revoked,
-    })
+    AdminAccountLifecycleOutcome {
+        account_id: did.clone(),
+        did,
+        previous_state: change.previous_state,
+        state: state.clone(),
+        status: state,
+        reason: change.reason,
+        updated_by: changed_by.clone(),
+        changed_by,
+        updated_at: changed_at.clone(),
+        changed_at,
+        sessions_revoked: change.sessions_revoked,
+        devices_revoked: change.devices_revoked,
+    }
 }
 
 #[endpoint(
@@ -289,18 +361,14 @@ async fn revoke_device(
     depot: &mut Depot,
     req: &mut Request,
     device_id: PathParam<String>,
-    body: JsonBody<Value>,
-) -> JsonResult<Value> {
+    body: JsonBody<AdminRevokeDeviceRequestBody>,
+) -> JsonResult<AdminRevokeDeviceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let device_id = device_id.into_inner();
     let body = body.into_inner();
-    let mut target_actor = body
-        .get("actor")
-        .or_else(|| body.get("account_id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+    let mut target_actor = body.actor.or(body.account_id);
     if target_actor.is_none() {
         target_actor = state
             .persistence
@@ -326,17 +394,17 @@ async fn revoke_device(
         json!({
             "actor": target_actor.clone(),
             "device_id": device_id.clone(),
-            "reason": body.get("reason").cloned(),
+            "reason": body.reason,
         }),
         "accepted",
     )
     .await;
-    json_ok(json!({
-        "actor": target_actor,
-        "device_id": device_id,
-        "revoked_by": session.actor,
-        "revoked_at": super::now().to_rfc3339(),
-    }))
+    json_ok(AdminRevokeDeviceOutcome {
+        actor: target_actor,
+        device_id,
+        revoked_by: session.actor,
+        revoked_at: super::now().to_rfc3339(),
+    })
 }
 
 #[endpoint(
@@ -350,7 +418,7 @@ async fn get_moderation_queue(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AdminModerationQueueOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
@@ -361,9 +429,9 @@ async fn get_moderation_queue(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let total = items.len();
-    json_ok(json!({
-        "items": items,
-        "total": total,
-        "generated_at": super::now().to_rfc3339(),
-    }))
+    json_ok(AdminModerationQueueOutcome {
+        items,
+        total,
+        generated_at: super::now().to_rfc3339(),
+    })
 }
