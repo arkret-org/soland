@@ -25,6 +25,7 @@
 
 // SOL-07-005: flow/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
+mod apply_capability;
 mod apply_messages;
 mod apply_objects;
 mod apply_realm_lifecycle;
@@ -1339,6 +1340,30 @@ pub enum ProjectionEffect {
         capability_id: String,
         realm_id: String,
     },
+    /// P1 — `ck.capability.grant` event was projected into the
+    /// `ck.component.capability.grant.v1` or_set cell (one cell per
+    /// `grant_id`). `revived_terminal=false` always; a re-grant of a
+    /// `grant_id` whose add was already observed-removed stays revoked
+    /// (capabilities.md §12.1 terminal rule).
+    CapabilityGrantProjected {
+        grant_id: String,
+        realm_id: String,
+    },
+    /// P1 — `ck.capability.revoke` event was projected as an or_set
+    /// observed-remove on the target grant cell (capabilities.md §12 /
+    /// §12.1). Terminal: the add dot stays removed under re-add.
+    CapabilityRevokeProjected {
+        grant_id: String,
+        realm_id: String,
+    },
+    /// P1 — `ck.capability.delegate` event was projected into the
+    /// `ck.component.capability.delegate.v1` or_set cell plus the parent
+    /// grant chain reference (capabilities.md §10 / §12.1).
+    CapabilityDelegateProjected {
+        grant_id: String,
+        realm_id: String,
+        parent_grant_id: Option<String>,
+    },
     /// Agent registry projection updated (endpoint). Keyed by the
     /// agent's `agent_id`.
     AgentProjectionUpdated {
@@ -2575,6 +2600,37 @@ fn apply_capability_derived_dispatch(
     s.apply_capability_derived(op, op.created_at)
 }
 
+/// P1 — dispatch for `ck.capability.grant`. Projects the grant snapshot as
+/// an or_set add into the `ck.component.capability.grant.v1` cell keyed by
+/// `payload.grant_id`.
+fn apply_capability_grant_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_capability_grant(op, op.created_at)
+}
+
+/// P1 — dispatch for `ck.capability.revoke`. Projects an observed-remove on
+/// the target grant cell (capabilities.md §12 / §12.1).
+fn apply_capability_revoke_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_capability_revoke(op, op.created_at)
+}
+
+/// P1 — dispatch for `ck.capability.delegate`. Projects into the delegate
+/// cell + parent grant chain.
+fn apply_capability_delegate_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_capability_delegate(op, op.created_at)
+}
+
 // ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
 //
 // Each adapter forwards to the free function in `reducer::mls`. The
@@ -2993,6 +3049,13 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_inheritance_policy_dispatch,
     );
     m.insert(CK_CAPABILITY_DERIVED, apply_capability_derived_dispatch);
+    // P1 — capability control-plane projection (grant / revoke / delegate).
+    // grant + revoke share the `ck.component.capability.grant.v1` or_set
+    // cell; delegate writes `ck.component.capability.delegate.v1` + parent
+    // chain. Acceptance fail-closed lives in `apply_capability.rs`.
+    m.insert(CK_CAPABILITY_GRANT, apply_capability_grant_dispatch);
+    m.insert(CK_CAPABILITY_REVOKE, apply_capability_revoke_dispatch);
+    m.insert(CK_CAPABILITY_DELEGATE, apply_capability_delegate_dispatch);
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
     // governance covered_seals accumulation.

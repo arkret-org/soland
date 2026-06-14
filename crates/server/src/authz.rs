@@ -214,6 +214,34 @@ impl SolandAuthzEngine {
         (true, cascade)
     }
 
+    /// P1 — projection-driven index maintenance.
+    ///
+    /// The capability grant cell (`ck.component.capability.grant.v1`) is the
+    /// source of truth; this engine's in-memory map is a read-side index over
+    /// it (`SolandAuthzEngine::check` still reads the map). The reducer
+    /// projects grant / revoke / delegate into cells, then the projection
+    /// driver calls this to fold the cell-derived effective `Grant` back into
+    /// the index. Upsert by `grant_id` (a re-projection of the same grant_id
+    /// replaces the prior row); a `revoked` grant stays in the map with
+    /// `revoked = true` so the check filters it and the cascade helpers can
+    /// still see the tombstone.
+    pub fn upsert_projected_grant(&self, grant: Grant) {
+        self.grants
+            .lock()
+            .expect("grants lock")
+            .insert(grant.grant_id.clone(), grant);
+    }
+
+    /// P1 — mark a projected grant revoked in the read index (idempotent).
+    /// Mirrors a `ck.capability.revoke` cell observed-remove. No-op if the
+    /// grant_id is unknown to the index (the cell tombstone is authoritative;
+    /// the index simply has nothing to filter yet).
+    pub fn mark_projected_grant_revoked(&self, grant_id: &str) {
+        if let Some(grant) = self.grants.lock().expect("grants lock").get_mut(grant_id) {
+            grant.revoked = true;
+        }
+    }
+
     /// Look up a grant by id. Returns `None` if unknown.
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.grants

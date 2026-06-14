@@ -1560,6 +1560,11 @@ async fn project_accepted_operations_inner(
         if let Some(effect) = reducer_effect {
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, operation, &effect).await;
+            // P1 — fold the projected capability grant cell back into the
+            // SolandAuthzEngine read index. The cell is the source of truth;
+            // the engine map is a read-side index maintained by projection
+            // (no longer written directly by the legacy HTTP handlers).
+            refresh_authz_index_from_capability_effect(state, &effect);
         }
         // Write through Space-container/Flow/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
@@ -1623,6 +1628,36 @@ async fn project_accepted_operations_inner(
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
         super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation)
             .await;
+    }
+}
+
+/// P1 — fold a projected capability grant cell back into the
+/// `SolandAuthzEngine` read index after the reducer wrote it. Called per
+/// accepted capability event. The grant cell
+/// (`ck.component.capability.grant.v1`) is the source of truth; this keeps
+/// the engine's in-memory index (read by `SolandAuthzEngine::check`) in sync
+/// with the projection without the legacy HTTP handlers writing it directly.
+fn refresh_authz_index_from_capability_effect(
+    state: &AppState,
+    effect: &crate::reducer::ProjectionEffect,
+) {
+    use crate::reducer::ProjectionEffect;
+    let grant_id = match effect {
+        ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
+        | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
+        | ProjectionEffect::CapabilityDelegateProjected { grant_id, .. } => grant_id.clone(),
+        _ => return,
+    };
+    let derived = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|proj| proj.effective_engine_grant(&grant_id));
+    match derived {
+        Some(grant) => state.authz.upsert_projected_grant(grant),
+        // Cell present only as a revoke-before-grant tombstone (no resolvable
+        // body / no actions): mark the index entry revoked if we hold one.
+        None => state.authz.mark_projected_grant_revoked(&grant_id),
     }
 }
 
