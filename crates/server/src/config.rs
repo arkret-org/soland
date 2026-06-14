@@ -457,7 +457,7 @@ impl AppConfig {
         let session_grant_introspection_bearer =
             env_non_empty_or_file("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER")?;
         let did_resolver_allow_methods = env_csv("SOLAND_DID_RESOLVER_ALLOW_METHODS")
-            .unwrap_or_else(|| vec!["web".to_owned(), "key".to_owned(), "uuid".to_owned()]);
+            .unwrap_or_else(default_did_resolver_allow_methods);
         let embedded_webvh_provider_enabled =
             env_bool("SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
         let embedded_webvh_registration_bearer =
@@ -982,6 +982,15 @@ fn env_csv(name: &str) -> Option<Vec<String>> {
     }
 }
 
+fn default_did_resolver_allow_methods() -> Vec<String> {
+    vec![
+        "webvh".to_owned(),
+        "web".to_owned(),
+        "key".to_owned(),
+        "uuid".to_owned(),
+    ]
+}
+
 fn env_non_empty(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -1056,6 +1065,14 @@ fn arg_value(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_did_resolver_allow_methods_include_webvh() {
+        assert_eq!(
+            default_did_resolver_allow_methods(),
+            vec!["webvh", "web", "key", "uuid"]
+        );
+    }
 
     /// Guard that scopes env-var mutation to a single test. The Rust
     /// 2024 edition marks `set_var`/`remove_var` `unsafe`; this wrapper

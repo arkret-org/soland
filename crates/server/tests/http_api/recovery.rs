@@ -121,6 +121,34 @@ async fn recovery_policy_production_accepts_verified_payload() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_policy_accepts_genesis_session_device_signature() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let principal_signing = SigningKey::from_bytes(&[82u8; 32]);
+    let device_signing = SigningKey::from_bytes(&[83u8; 32]);
+    let (principal_id, _vm) = did_key_principal(&principal_signing);
+    let token = "device_signed_policy_token";
+    seed_bearer_session_with_device_public_key(
+        &state,
+        token,
+        &principal_id,
+        &test_ed25519_multibase_public(&device_signing),
+    )
+    .await;
+    let verification_method = format!("{principal_id}#{RECOVERY_TEST_DEVICE}");
+    let policy = signed_recovery_policy(
+        &device_signing,
+        &principal_id,
+        &verification_method,
+        1,
+        None,
+        POLICY_FIELDS,
+    );
+
+    let body = post_recovery_policy(state, token, &policy, StatusCode::CREATED).await;
+    assert_eq!(body["ok"], true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_missing_signed_field_coverage() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[73u8; 32]);
@@ -1533,6 +1561,33 @@ async fn ingest_fresh_recovery_did_document(state: &AppState, did: &str) {
 }
 
 async fn seed_bearer_session(state: &AppState, token: &str, actor: &str) {
+    seed_bearer_session_with_device_payload(state, token, actor, "verified", serde_json::json!({}))
+        .await;
+}
+
+async fn seed_bearer_session_with_device_public_key(
+    state: &AppState,
+    token: &str,
+    actor: &str,
+    device_public_key: &str,
+) {
+    seed_bearer_session_with_device_payload(
+        state,
+        token,
+        actor,
+        "unverified",
+        serde_json::json!({ "device_public_key": device_public_key }),
+    )
+    .await;
+}
+
+async fn seed_bearer_session_with_device_payload(
+    state: &AppState,
+    token: &str,
+    actor: &str,
+    verification_state: &str,
+    device_payload: Value,
+) {
     let now = chrono::Utc::now();
     let device_id = RECOVERY_TEST_DEVICE;
     state
@@ -1556,8 +1611,8 @@ async fn seed_bearer_session(state: &AppState, token: &str, actor: &str) {
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),
             display_name: Some("Production Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({}),
+            verification_state: verification_state.to_owned(),
+            payload: device_payload,
             created_at: now,
             updated_at: now,
             revoked_at: None,

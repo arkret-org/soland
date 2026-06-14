@@ -333,6 +333,20 @@ fn initial_session_device_verification_state<'a>(
     }
 }
 
+fn validated_session_device_public_key(value: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    crate::routing::identity::cross_signing::decode_ed25519_key(value, "multibase").map_err(
+        |error| {
+            AppError::invalid_param(format!(
+                "device_public_key must be an Ed25519 multibase key: {error}"
+            ))
+        },
+    )?;
+    Ok(Some(value.to_owned()))
+}
+
 async fn ensure_authorizing_device_verified(
     state: &AppState,
     session: &SessionRecord,
@@ -807,13 +821,17 @@ async fn exchange_session_grant(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let verification_state =
         initial_session_device_verification_state(&existing_devices, device_id_str);
-    let device_payload = json!({
+    let device_public_key = validated_session_device_public_key(body.device_public_key.as_deref())?;
+    let mut device_payload = json!({
         "device_id": device_id_str,
         "display_name": body.display_name.clone(),
         "verification": verification_state,
         "last_seen_at": seen_at,
         "session_grant_bridge": true,
     });
+    if let Some(device_public_key) = device_public_key {
+        device_payload["device_public_key"] = Value::String(device_public_key);
+    }
     let device = DeviceInventoryRecord {
         actor: principal_id_str.to_owned(),
         device_id: device_id_str.to_owned(),
