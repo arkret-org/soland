@@ -10,8 +10,8 @@ pub fn router() -> Router {
     describe::protocol_router()
 }
 
-pub fn legacy_router() -> Router {
-    describe::legacy_router()
+pub fn local_router() -> Router {
+    describe::local_router()
 }
 
 pub fn health_router() -> Router {

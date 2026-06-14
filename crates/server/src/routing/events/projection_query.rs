@@ -58,7 +58,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
         .push(Router::with_path("projection/strands").get(list_strand_projections))

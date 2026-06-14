@@ -1,10 +1,10 @@
 //! WebRTC session + signaling handlers.
 //!
 //! Surfaces:
-//! - Protocol face (dual-mounted, `protocol_router` + `legacy_router`):
+//! - Protocol face (dual-mounted, `protocol_router` + `local_router`):
 //!   - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list — currently empty)
 //!   - `POST /_cokret/self/rtc/token` (media token exchange, CKP-0010)
-//! - Deployment face (soland-local, `legacy_router` only → `/_soland/...`):
+//! - Deployment face (soland-local, `local_router` only → `/_soland/...`):
 //!   - `POST /_soland/self/webrtc/sessions` create
 //!   - `PUT/GET /_soland/self/webrtc/sessions/{session_id}/signals`
 //!   - `DELETE /_soland/self/webrtc/sessions/{session_id}` close
@@ -54,7 +54,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("rtc/token").post(cokret_rtc_token))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
         .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
@@ -1330,7 +1330,6 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .unwrap_or(cokret_sdk::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
-            .or_else(|| focus_value.get("sfu_endpoint"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1388,32 +1387,9 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
 }
 
 fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, AppError> {
+    let _ = realm_id;
     if let Some(foci) = config.get("foci").and_then(Value::as_array) {
         return Ok(foci.clone());
-    }
-    if let Some(endpoint) = config.get("sfu_endpoint").and_then(Value::as_str) {
-        let backend = config
-            .get("backend")
-            .or_else(|| config.get("type"))
-            .and_then(Value::as_str)
-            .unwrap_or("cokret-native");
-        let issuer_kid = config.get("issuer_kid").cloned().unwrap_or_else(|| {
-            let service_id = config
-                .get("service_id")
-                .or_else(|| config.get("service_did"))
-                .and_then(Value::as_str)
-                .unwrap_or("did:web:media.local");
-            json!(format!("{service_id}#media-token"))
-        });
-        return Ok(vec![json!({
-            "focus_id": legacy_focus_id(realm_id, endpoint),
-            "backend": backend,
-            "connect_url": endpoint,
-            "issuer_kid": issuer_kid,
-            "audience": config.get("audience").cloned().unwrap_or(Value::Null),
-            "ttl_seconds": config.get("ttl_seconds").cloned().unwrap_or(Value::Null),
-            "e2ee_key_source": config.get("e2ee_key_source").cloned().unwrap_or(Value::Null),
-        })]);
     }
     Err(focus_unavailable_error(
         "realm media_service epoch must contain foci[]",
@@ -1511,20 +1487,6 @@ fn required_json_string(value: &Value, field: &str) -> Result<String, AppError> 
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| AppError::invalid_param(format!("{field} is required")))
-}
-
-fn legacy_focus_id(realm_id: &str, endpoint: &str) -> String {
-    let realm_short = realm_id
-        .rsplit(':')
-        .next()
-        .unwrap_or("realm")
-        .chars()
-        .take(8)
-        .collect::<String>();
-    format!(
-        "ck:focus:legacy:{realm_short}:{}",
-        &sha256_hex(endpoint.as_bytes())[..8]
-    )
 }
 
 fn service_id_from_issuer_kid(issuer_kid: &str) -> Option<String> {

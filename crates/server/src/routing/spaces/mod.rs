@@ -36,9 +36,9 @@ pub fn protocol_router() -> Router {
         )
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
-        .push(space::legacy_router())
+        .push(space::local_router())
         .push(reaction::router())
         .push(relation::router())
         .push(index::router())

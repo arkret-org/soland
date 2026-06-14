@@ -277,29 +277,29 @@ fn soland_local_router() -> Router {
         // protocol-duplicate mounts are removed module by module); until then
         // the two trees must stay behaviourally equivalent.
         .hoop(wait_for_sync_token)
-        .push(system::legacy_router())
-        .push(identity::legacy_router())
+        .push(system::local_router())
+        .push(identity::local_router())
         .push(
             Router::with_path("self")
                 // SPEC-CR-001 — the `/_soland/self` compat mirror must carry the
                 // same PoP verification as the canonical `/_cokret/self` tree.
                 .hoop(identity::session_pop::verify_session_pop)
-                .push(spaces::legacy_router())
-                .push(events::legacy_router())
-                .push(access::legacy_router())
+                .push(spaces::local_router())
+                .push(events::local_router())
+                .push(access::local_router())
                 .push(admin::audit_router())
                 // COT-06-002 / service-http-binding.md §2.1.2: the conformance
                 // harness surface moved to the reserved `/_cokret/_conformance/*`
                 // namespace (profile-gated in `api_v1_router`). It is no longer
                 // mounted on the `/_soland/self` compat mirror.
-                .push(mls::legacy_router()),
+                .push(mls::local_router()),
         )
         // `/_soland/find/directory/*` legacy mirror retired — directory
         // discovery is served only from the canonical `/_cokret/find/...`
         // protocol tree (see `api_v1_router`).
         .push(Router::with_path("peer").push(federation::router()))
-        .push(interop::legacy_router())
-        .push(extensions::legacy_router())
+        .push(interop::local_router())
+        .push(extensions::local_router())
         // Catch-all for the `/_soland/...` tree, mirroring the `/_cokret/`
         // one: unmatched paths/methods get the canonical Cokret JSON error
         // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`

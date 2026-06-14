@@ -237,45 +237,10 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-5 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
-        // `ck.realm.media_service` legacy single `sfu_endpoint` shape.
-        // Default in v1 is to NORMALIZE the legacy shape into the
-        // canonical `foci=[{focus_id:"legacy", type:"cokret-native",
-        // connect_url: <old sfu_endpoint>, service_did: <issuer>}]`
-        // form + emit an audit-log note. Setting
-        // `SOLAND_MEDIA_SERVICE_LEGACY_REJECT=1` (v1.1 deployments)
-        // flips this to a hard reject with the canonical reason code
-        // `legacy_single_endpoint_media_service`.
-        //
-        // The normalization step is best-effort at the wire layer (we
-        // can only validate shape — actual rewrite happens in the
-        // reducer's project_realm_media_service path); when the legacy
-        // shape passes through here we accept it so the reducer can
-        // emit the canonical `foci[]` projection downstream.
-        //
-        // TODO(R4): wire reducer-side rewrite + audit-log emission
-        // through `apply_realm_media_service`.
         "ck.realm.media_service" => {
-            if operation.payload.get("sfu_endpoint").is_some()
-                && operation.payload.get("foci").is_none()
-            {
-                let reject_legacy = matches!(
-                    std::env::var("SOLAND_MEDIA_SERVICE_LEGACY_REJECT").as_deref(),
-                    Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
-                );
-                if reject_legacy {
-                    return Err(
-                        "legacy_single_endpoint_media_service: ck.realm.media_service must use \
-                         multi-focus foci[] shape",
-                    );
-                }
-                // Default normalize-and-accept path. Reducer projection
-                // will rewrite the legacy `sfu_endpoint` into the
-                // canonical `foci=[{focus_id:"legacy", ...}]` shape.
-                tracing::warn!(
-                    op = "ck.realm.media_service",
-                    "legacy_single_endpoint_media_service: \
-                     normalizing legacy sfu_endpoint into foci[]"
+            if operation.payload.get("sfu_endpoint").is_some() {
+                return Err(
+                    "realm_media_service_requires_foci: ck.realm.media_service must use foci[]",
                 );
             }
             Ok(())
@@ -302,8 +267,6 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 crate::error::reasons::SESSION_FOCUS_ALREADY_COMMITTED;
             const _PARTICIPANT_BINDING_REASON: &str =
                 crate::error::reasons::PARTICIPANT_BINDING_INVALID;
-            const _LEGACY_MEDIA_SERVICE_REASON: &str =
-                crate::error::reasons::LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE;
             if let Some(revision) = operation
                 .payload
                 .get("session_focus_revision")

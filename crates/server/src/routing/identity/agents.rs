@@ -80,7 +80,7 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::with_path("agents")
         .post(provision_agent)
         .get(list_agents)

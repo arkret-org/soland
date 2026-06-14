@@ -47,7 +47,7 @@ pub fn protocol_router() -> Router {
     applet_bridge::protocol_router()
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
         // `edge` — applet bridge + manifest verifier
         // (`/_soland/edge/applets/...`).
@@ -60,7 +60,7 @@ pub fn legacy_router() -> Router {
         // sovereign enclave surfaces.
         .push(
             Router::with_path("self")
-                .push(applet_bridge::legacy_self_router())
+                .push(applet_bridge::local_self_router())
                 .push(
                     Router::with_path("extensions")
                         .push(bot_actor::router())

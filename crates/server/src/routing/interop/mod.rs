@@ -47,7 +47,7 @@ pub fn protocol_router() -> Router {
         .push(Router::with_path("open").push(mimi::router()))
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
         // `edge` — push / bridge gateway (`/_soland/edge/push/*`).
         .push(
@@ -68,9 +68,9 @@ pub fn legacy_router() -> Router {
         // `self` — RTC/WebRTC, blob, moderation (authenticated session surface).
         .push(
             Router::with_path("self")
-                .push(webrtc::legacy_router())
+                .push(webrtc::local_router())
                 .push(blob::router())
-                .push(moderation::legacy_router()),
+                .push(moderation::local_router()),
         )
         // `open` — non-Cokret external vendor interop (MIMI).
         .push(Router::with_path("open").push(mimi::router()))

@@ -15,8 +15,8 @@ pub fn router() -> Router {
         .push(policy::protocol_router())
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
-        .push(authz::legacy_router())
-        .push(policy::legacy_router())
+        .push(authz::local_router())
+        .push(policy::local_router())
 }

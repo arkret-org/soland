@@ -663,61 +663,6 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 }
 
 #[tokio::test]
-async fn stateful_cursor_accepts_legacy_positions_without_account_realms() {
-    let state = test_state();
-    let session = roster_session(&state, "did:web:alice.example");
-    let issued_at = chrono::Utc::now();
-    let expires_at = issued_at + ChronoDuration::hours(1);
-    let handle = derive_cursor_handle(&state.sync_cursor_hmac_key, b"legacy-account-cursor");
-    upsert_sync_cursor_record(
-        &state,
-        SyncCursorRecord {
-            handle: handle.clone(),
-            principal_id: Some(session.actor.clone()),
-            device_id: Some(session.device_id.clone()),
-            service_id: state.config.service_did.clone(),
-            filter_digest: Some(sync_filter_digest(None)),
-            purpose: "stream".to_owned(),
-            positions: Some(json!({
-                "realms": {
-                    "ck:realm:legacy-cursor-test": 7
-                },
-                "devices": {},
-                "to_device": 3
-            })),
-            target: None,
-            issued_at_ms: issued_at.timestamp_millis(),
-            expires_at_ms: expires_at.timestamp_millis(),
-        },
-    )
-    .await;
-    let token = encode_sync_cursor_value(json!({
-        "v": "1",
-        "purpose": "stream",
-        "t": issued_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-        "x": expires_at.timestamp_millis(),
-        "h": handle
-    }));
-
-    let parsed = parse_and_validate_sync_cursor(
-        &token,
-        &state,
-        Some(&session),
-        None,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("legacy stateful cursor parses");
-
-    assert_eq!(
-        parsed.positions.get("ck:realm:legacy-cursor-test"),
-        Some(&7)
-    );
-    assert!(parsed.account_positions.is_empty());
-    assert_eq!(parsed.to_device_position, 3);
-}
-
-#[tokio::test]
 async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
     let state = test_state();
     let session = roster_session(&state, "did:web:alice.example");

@@ -78,7 +78,7 @@ pub fn protocol_router() -> Router {
         )
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
         // `gate` — authentication entry (session-grant / dev-login / logout /
         // agent-key-pair). Trust segment: outermost authenticated edge.
@@ -115,11 +115,11 @@ pub fn legacy_router() -> Router {
             Router::with_path("self")
                 .push(account::router())
                 .push(keys::router())
-                .push(key_backup::legacy_router())
-                .push(device_messages::legacy_router())
+                .push(key_backup::local_router())
+                .push(device_messages::local_router())
                 .push(profile::router())
                 // CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle.
-                .push(agents::legacy_router()),
+                .push(agents::local_router()),
         )
 }
 

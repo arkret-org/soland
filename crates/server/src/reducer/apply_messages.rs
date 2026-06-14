@@ -195,16 +195,7 @@ impl ProjectionState {
             revised.revision_of = Some(original_id.clone());
             revised.created_at = now;
             revised.operation_id = operation.operation_id.to_string();
-            // Spec form: `payload.patch` (ck.schema.patch.v1) carrying
-            // shallow set/unset entries on the message's content body.
-            // The reducer accepts both shapes — legacy `payload.content`
-            // (full replace) and the new `payload.patch` (delta) — so
-            // existing clients keep working while new clients can emit
-            // patches. When both are present, `content` wins (legacy
-            // path).
-            if let Some(content) = operation.payload.get("content") {
-                revised.content = content.clone();
-            } else if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
+            if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
                 if let Some(obj) = revised.content.as_object_mut() {
                     for (path, value) in patch {
                         match value {

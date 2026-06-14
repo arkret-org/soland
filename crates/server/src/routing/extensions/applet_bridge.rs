@@ -216,7 +216,7 @@ pub(super) fn router() -> Router {
 /// Compatibility copy of the applet ghost-provision surface under
 /// `/_soland/self/applets/...`; the canonical route is mounted under
 /// `/_cokret/self/applets/{applet_id}/ghosts/provision`.
-pub(super) fn legacy_self_router() -> Router {
+pub(super) fn local_self_router() -> Router {
     Router::with_path("applets").push(
         Router::with_path("{applet_id}")
             .push(Router::with_path("ghosts/provision").post(provision_ghost_actor_endpoint)),

@@ -45,7 +45,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(
             Router::with_path("device_messages/describe")

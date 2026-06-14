@@ -175,8 +175,7 @@ impl ProjectionState {
     /// Apply `ck.strand.archive` / `ck.strand.restore`. Spec
     /// `common-fields.md §5.1` + `event-payload.schema.json`
     /// `object_lifecycle_payload`. Unknown Strand tolerated. The target id is
-    /// carried by `target_ref` per spec; `object_ref` and the legacy
-    /// `strand_id` field are accepted as fallbacks.
+    /// carried by `target_ref` per spec.
     pub(crate) fn apply_strand_lifecycle(
         &mut self,
         operation: &Operation,
@@ -186,8 +185,6 @@ impl ProjectionState {
         let Some(strand_id) = operation
             .payload
             .get("target_ref")
-            .or_else(|| operation.payload.get("object_ref"))
-            .or_else(|| operation.payload.get("strand_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
@@ -958,18 +955,20 @@ impl ProjectionState {
         let target_state = payload
             .get("state")
             .and_then(Value::as_str)
-            .or_else(|| payload.get("membership").and_then(Value::as_str))
             .unwrap_or("active")
             .to_owned();
         // The requester (`sender`) is distinct from the membership target
         // (`actor`). When they differ, the operation is "admin pulls another
         // actor into the Circle"; when they match, it is a self-service join.
-        // `sender` falls back to `actor` for legacy self-only payloads.
-        let sender = payload
+        let Some(sender) = payload
             .get("sender")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| actor.clone());
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "circle_member_state_missing_sender".to_owned(),
+            };
+        };
         // Snapshot the parent Realm id + the Circle's `join_rule` and the
         // target's current active-membership BEFORE taking a mutable borrow on
         // the Circle entry so we can run the strict-subset and CKP-0007 §8

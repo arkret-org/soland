@@ -72,7 +72,7 @@ pub fn router() -> Router {
 pub fn protocol_router() -> Router {
     // `/_cokret/` carries only operation-registry routes. The soland-private
     // Welcome drain (`welcomes/pending`) lives on the `/_soland/` product
-    // surface (see `legacy_router`).
+    // surface (see `local_router`).
     Router::with_path("keys").push(
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))
@@ -82,7 +82,7 @@ pub fn protocol_router() -> Router {
     )
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::with_path("keys").push(
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))

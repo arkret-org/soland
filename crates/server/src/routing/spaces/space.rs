@@ -45,7 +45,7 @@ pub(super) fn protocol_router() -> Router {
 /// Soland-local Space-container child-order cell read surface
 /// (`org.cokret.soland.spaces.cells.get`); no canonical operation, stays on the
 /// `/_soland` product surface.
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
 }

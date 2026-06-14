@@ -158,7 +158,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("describe").get(server_describe))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         // `/_soland/describe` — compatibility copy with soland-local extras.
         .push(Router::with_path("describe").get(legacy_server_describe))

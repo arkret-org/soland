@@ -11,8 +11,8 @@
 //! Convergence rules (capabilities.md §12.1):
 //! - **grant** = or_set **add**. The add dot is the reducer-deterministic
 //!   `ck:operation:<operation_id>` (the soland reducer's per-event handle; the spec's
-//!   `ck:event:<event_id>:<effect_index>` is the wire form, but the legacy `Operation` boundary
-//!   carries only `operation_id`). value = the canonical grant snapshot.
+//!   `ck:event:<event_id>:<effect_index>` is the wire form). value = the canonical
+//!   grant snapshot.
 //! - **revoke** = or_set **observed-remove** on the *same* grant cell. We mark the surviving add(s)
 //!   `revoked` (the read path filters `revoked*`). Terminal: a later re-add of the same `grant_id`
 //!   MUST NOT revive a removed add — once a cell holds a revoked entry for the grant, every add
@@ -33,18 +33,12 @@
 use super::*;
 
 /// Map a cell grant body's resource selectors to the engine `Grant`'s single
-/// `resource` String (the legacy index matches via `resource_matches`).
+/// `resource` String.
 /// Precedence: an explicit string selector / `id` wins; a realm-kind
 /// selector resolves to its `id` (or the grant's realm); everything else
 /// (wildcard / empty) falls back to `*` so the grant is not silently
 /// narrowed out of the index.
 fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
-    // A flat `resource` string (legacy engine Grant shape) wins verbatim.
-    if let Some(resource) = body.get("resource").and_then(Value::as_str) {
-        if !resource.is_empty() {
-            return resource.to_owned();
-        }
-    }
     let mut selectors = value_array_field(body, "resources");
     selectors.extend(value_array_field(body, "resource_selectors"));
     for selector in &selectors {
@@ -132,8 +126,7 @@ fn engine_grant_from_cell_body(
     })
 }
 
-/// or_set add dot for a capability event projected from the legacy
-/// `Operation` boundary. Deterministic per accepted event.
+/// or_set add dot for a capability event. Deterministic per accepted event.
 fn capability_add_dot(operation: &Operation) -> String {
     operation.operation_id.to_string()
 }

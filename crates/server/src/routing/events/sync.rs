@@ -135,7 +135,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("snapshot/head").get(snapshot_head))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
@@ -334,7 +334,7 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     // Long-poll only when the client supplied an `after` cursor (true
     // incremental sync) AND the snapshot is delta-empty. Full sync always
     // returns immediately because the client needs the baseline. A
-    // `max_wait_ms=0` opt-out preserves the legacy immediate-return
+    // `max_wait_ms=0` opt-out preserves the immediate-return
     // behavior for tests / clients that handle their own polling cadence.
     if body.after.is_some() && max_wait_ms > 0 && delta_is_empty(&response) {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(max_wait_ms);
@@ -1001,11 +1001,10 @@ async fn stored_sync_cursor_by_handle(
     Ok(stored_value_from_sync_cursor_record(record))
 }
 
-/// Rebuild the legacy in-memory `{ctx, positions, target?, expires_at_ms}`
-/// stored shape from a persisted row, so the validation code downstream of
-/// the lookup is byte-compatible with the pre-durability behavior (generic
-/// rows reconstruct a ctx WITHOUT `principal_id`/`device_id`, which
-/// `parse_and_validate_sync_cursor` rejects by construction).
+/// Rebuild the in-memory `{ctx, positions, target?, expires_at_ms}` stored
+/// shape from a persisted row. Generic rows reconstruct a ctx WITHOUT
+/// `principal_id`/`device_id`, which `parse_and_validate_sync_cursor` rejects
+/// by construction.
 fn stored_value_from_sync_cursor_record(record: SyncCursorRecord) -> Value {
     let mut ctx = serde_json::Map::new();
     if let Some(principal_id) = record.principal_id {
@@ -1178,7 +1177,11 @@ pub async fn parse_and_validate_sync_cursor(
         "realms",
         Some("cursor handle is missing positions.realms"),
     )?;
-    let account_positions = cursor_position_map(positions_value, "account_realms", None)?;
+    let account_positions = cursor_position_map(
+        positions_value,
+        "account_realms",
+        Some("cursor handle is missing positions.account_realms"),
+    )?;
     let to_device_position = positions_value
         .get("to_device")
         .and_then(|position| position.as_i64())

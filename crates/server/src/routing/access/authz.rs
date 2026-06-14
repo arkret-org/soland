@@ -44,7 +44,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("authz/invites").get(invites))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("authz/describe").get(super::describe::authz_describe))
         .push(Router::with_path("authz/check").post(authz_check))

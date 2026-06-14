@@ -195,7 +195,7 @@ pub mod reasons {
     pub const SIDECAR_CREATE_DENIED: &str = core_error::ERROR_CODE_SIDECAR_CREATE_DENIED;
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ERROR_CODE_ACTOR_KIND_REDUCER_MANAGED;
 
-    // Media binding / CKP-0010 (10 codes).
+    // Media binding / CKP-0010.
     pub const FOCUS_MISMATCH: &str = core_error::ERROR_CODE_FOCUS_MISMATCH;
     pub const UNKNOWN_FOCUS_TYPE: &str = core_error::ERROR_CODE_UNKNOWN_FOCUS_TYPE;
     pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ERROR_CODE_TOKEN_ISSUER_UNAUTHORISED;
@@ -209,12 +209,6 @@ pub mod reasons {
         core_error::ERROR_CODE_E2EE_KEY_SOURCE_UNAUTHORISED;
     pub const RECORDING_ARTIFACT_PIPELINE_BYPASSED: &str =
         core_error::ERROR_CODE_RECORDING_ARTIFACT_PIPELINE_BYPASSED;
-    // Not in the SDK mirror nor `error-code-registry.json` (2026-06-11):
-    // CKP-0010 §5 reserves this reason for v1.1 (v1 SHOULD normalize the
-    // legacy single-endpoint shape instead of rejecting), so the v1
-    // registry/SDK intentionally omit it. Stays a soland-local literal
-    // until the v1.1 registry entry lands.
-    pub const LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE: &str = "legacy_single_endpoint_media_service";
     pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
         core_error::ERROR_CODE_FOCUS_UNAVAILABLE_FOR_CLIENT;
 
@@ -299,7 +293,6 @@ pub mod reasons {
         SESSION_FOCUS_ALREADY_COMMITTED,
         E2EE_KEY_SOURCE_UNAUTHORISED,
         RECORDING_ARTIFACT_PIPELINE_BYPASSED,
-        LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE,
         FOCUS_UNAVAILABLE_FOR_CLIENT,
         RECOVERY_WITNESS_REVOKE_LAGGING,
         HANDLE_HOMOGRAPH_FORBIDDEN,
@@ -376,10 +369,6 @@ pub mod reasons {
         (
             RECORDING_ARTIFACT_PIPELINE_BYPASSED,
             "routing::interop::webrtc recording artifact pipeline",
-        ),
-        (
-            LEGACY_SINGLE_ENDPOINT_MEDIA_SERVICE,
-            "routing::events::operations ck.realm.media_service legacy",
         ),
         (
             FOCUS_UNAVAILABLE_FOR_CLIENT,

@@ -33,7 +33,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("keys/backups/describe").get(super::describe::key_backups_describe))
         .push(
@@ -248,7 +248,7 @@ fn validate_key_backup_body_typed(
     if key_backup_extra_str(backup, "schema") == Some("ck.secret_storage.v1") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "legacy ck.secret_storage.v1 wire form: senders MUST use ck.schema.key_backup.v1",
+            "ck.secret_storage.v1 wire form is not accepted; senders MUST use ck.schema.key_backup.v1",
         )
         .with_wire_code("key_backup_wire_schema_required"));
     }
@@ -1569,7 +1569,7 @@ fn deny_key_backup_delete(message: impl Into<String>) -> AppError {
     AppError::conflict(message)
         .with_wire_code("key_backup_delete_not_retired")
         .with_reason_detail(
-            "only backups stale relative to the active recovery policy, retention-expired backups, or legacy invalid DID recovery backups may be deleted",
+            "only backups stale relative to the active recovery policy or retention-expired backups may be deleted",
         )
 }
 
@@ -1594,13 +1594,6 @@ fn ensure_key_backup_delete_is_retired_or_redundant(
             )));
         }
         None => {}
-    }
-
-    if backup_class == "did_recovery" {
-        // v1 did_recovery envelopes are unusable unless they are explicitly
-        // bound to the active recovery policy. A missing policy ref here can
-        // only be legacy/invalid data because PUT validation now rejects it.
-        return Ok(());
     }
 
     Err(deny_key_backup_delete(format!(
@@ -2207,13 +2200,13 @@ mod tests {
     #[test]
     fn unsupported_recipient_method_is_rejected() {
         let mut encryption = passphrase_encryption();
-        encryption["recipient_method"] = json!("legacy_magic_key");
+        encryption["recipient_method"] = json!("unknown_magic_key");
         let body = key_backup_body("secret_storage", "recovery_secret", encryption);
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("unknown recipient methods must not pass schema validation");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("legacy_magic_key"));
+        assert!(err.message.contains("unknown_magic_key"));
     }
 
     #[test]
@@ -2363,19 +2356,6 @@ mod tests {
 
         ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
             .expect("non-active policy backup is provably stale");
-    }
-
-    #[test]
-    fn delete_allows_legacy_did_recovery_without_policy_ref() {
-        let policy = active_policy(POLICY_REF, 1);
-        let body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            recovery_public_key_encryption(),
-        );
-
-        ensure_key_backup_delete_is_retired_or_redundant(&body, Some(&policy))
-            .expect("policy-less did_recovery is not usable under current v1 rules");
     }
 
     #[test]

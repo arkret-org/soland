@@ -50,9 +50,9 @@ pub fn peer_router() -> Router {
     peer::router()
 }
 
-pub fn legacy_router() -> Router {
+pub fn local_router() -> Router {
     Router::new()
-        .push(sync::legacy_router())
+        .push(sync::local_router())
         .push(event_log::router())
-        .push(projection_query::legacy_router())
+        .push(projection_query::local_router())
 }

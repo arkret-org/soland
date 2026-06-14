@@ -773,15 +773,10 @@ fn validate_encrypted_attachment_metadata(
         return Err("attachment envelope must be a JSON object");
     };
 
-    // Algorithm identifier. soland's existing wire contract uses `algorithm`;
-    // the spec field is `alg`. Accept either so both the legacy clients and
-    // spec-conformant clients validate.
-    let has_alg = ["alg", "algorithm"].iter().any(|field| {
-        envelope
-            .get(*field)
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty())
-    });
+    let has_alg = envelope
+        .get("alg")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.trim().is_empty());
     if !has_alg {
         return Err("attachment envelope requires alg");
     }
@@ -1247,20 +1242,6 @@ mod tests {
                 "ciphertext_digest": digest,
             }))
             .is_err()
-        );
-    }
-
-    #[test]
-    fn attachment_envelope_legacy_algorithm_field_still_accepted() {
-        let digest = format!("sha256:{}", "0".repeat(64));
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "algorithm": "mls-rfc9420",
-                "key_ref": {"kid": "did:web:alice.example#device"},
-                "nonce": "nonce",
-                "ciphertext_digest": digest,
-            }))
-            .is_ok()
         );
     }
 

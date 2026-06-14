@@ -53,7 +53,7 @@ pub(super) fn protocol_router() -> Router {
         )
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::new()
         .push(Router::with_path("policy/check").post(policy_check))
         // `policies/describe` and PATCH are soland-local extensions with no

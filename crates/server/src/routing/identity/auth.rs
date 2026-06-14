@@ -47,7 +47,7 @@ const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
 
 pub(super) fn router() -> Router {
-    legacy_router()
+    local_router()
 }
 
 pub(super) fn protocol_account_router() -> Router {
@@ -62,7 +62,7 @@ pub(super) fn protocol_account_router() -> Router {
         .push(Router::with_path("device-pair").post(account_device_pair))
 }
 
-pub(super) fn legacy_router() -> Router {
+pub(super) fn local_router() -> Router {
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
