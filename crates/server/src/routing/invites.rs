@@ -10,7 +10,7 @@ use chrono::Duration;
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
-use cokret_sdk::model::DisclosurePolicy;
+use cokret_sdk::models::DisclosurePolicy;
 use cokret_sdk::{
     DetachedPayloadProof, Did, DisclosedOutcome, DisclosureLevel, Hash, IntroductionEvidence,
     InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,

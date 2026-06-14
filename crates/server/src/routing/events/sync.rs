@@ -569,7 +569,7 @@ fn parse_max_wait_ms(req: &mut Request) -> u64 {
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &cokret_sdk::model::SyncOutcome) -> bool {
+fn delta_is_empty(response: &cokret_sdk::models::SyncOutcome) -> bool {
     response.realms.is_empty()
         && response.left_realms.is_empty()
         && response.to_device.is_empty()
@@ -605,7 +605,7 @@ fn presence_status_wire(status: &PresenceStatus) -> &'static str {
     }
 }
 
-fn account_delta_frame(response: cokret_sdk::model::SyncOutcome) -> Value {
+fn account_delta_frame(response: cokret_sdk::models::SyncOutcome) -> Value {
     let mut to_device = json!({"messages": response.to_device});
     if let Some(object) = to_device.as_object_mut() {
         if let Some(ack_token) = response.to_device_ack_token {

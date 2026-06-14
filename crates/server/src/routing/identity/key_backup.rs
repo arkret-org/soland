@@ -1446,7 +1446,7 @@ fn key_backup_metadata_for_list(mut backup: Value) -> Value {
 
 fn key_backup_summary_for_list(
     backup: Value,
-) -> Result<cokret_sdk::model::KeyBackupSummary, AppError> {
+) -> Result<cokret_sdk::models::KeyBackupSummary, AppError> {
     serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
         AppError::internal(format!(
             "stored key backup metadata does not match SDK summary: {error}"

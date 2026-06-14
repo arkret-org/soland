@@ -7,7 +7,7 @@ pub(crate) async fn build_sync_snapshot(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
-) -> cokret_sdk::model::SyncOutcome {
+) -> cokret_sdk::models::SyncOutcome {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (cokret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
@@ -270,7 +270,7 @@ pub(crate) async fn build_sync_snapshot(
         Vec::new()
     };
 
-    cokret_sdk::model::SyncOutcome {
+    cokret_sdk::models::SyncOutcome {
         cursor: sync_token_for_client_sync(
             state,
             session,

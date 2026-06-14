@@ -90,7 +90,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### Realm ceiling(`ck.realm.policy_components` 的 `agent_participation` 组件)
 扩展 `apply_realm_policy_components`(reducer.rs):
 - payload 含 `agent_participation.native_agent.{reply,accept_third_party_mention,act_on_behalf}` 时:
-  - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `cokret_sdk::model::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
+  - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `cokret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
   - 写 cell `ck:cell:ck.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
   - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
 

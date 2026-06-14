@@ -221,7 +221,7 @@ impl ProjectionState {
                                     // add/remove on arrays — best-effort
                                     // shallow handling; reducer-side full
                                     // grammar lives in
-                                    // `cokret_core::model::patch::Patch`.
+                                    // `cokret_core::models::patch::Patch`.
                                     Some("add") => {
                                         if let Some(v) = op.get("value") {
                                             if let Some(arr) = obj

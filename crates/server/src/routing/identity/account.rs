@@ -24,7 +24,7 @@ use cokret_sdk::http::{
 // `cokret_sdk::InviteReceivePolicy` also resolves at the crate root, but the
 // invite-addressing strong type lives under `model`; import it via the
 // `model` path to avoid binding the wrong same-named re-export.
-use cokret_sdk::model::InviteReceivePolicy;
+use cokret_sdk::models::InviteReceivePolicy;
 use cokret_sdk::{
     AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody, AccountView,
     DeviceId, Did, ErrorCode, EventId, StrandId, RealmId,

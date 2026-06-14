@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::identity::DidResolver;
-use cokret_sdk::model::AuthzDecision;
+use cokret_sdk::models::AuthzDecision;
 use cokret_sdk::{
     Did, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
     PolicyCheckSignature, PolicyCheckSource, RealmId,

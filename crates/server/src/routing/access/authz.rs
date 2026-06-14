@@ -12,7 +12,7 @@
 //! the missing constraint types, the condition.kind types, the
 //! capability lattice, and grant/invite/policy lifecycle integration.
 
-use cokret_sdk::model::{
+use cokret_sdk::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };

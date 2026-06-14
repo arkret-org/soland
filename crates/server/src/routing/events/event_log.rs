@@ -1822,7 +1822,7 @@ const DID_INCEPTION_REF_ROLE: &str = "did_inception";
 /// `role="did_inception"` evidence ref. For those, the receiver seals on the
 /// `did:webvh` entry-0 `versionTime` (the verifiable bootstrap timestamp) and
 /// computes the inception-key age against its own local clock via the SDK
-/// [`cokret_sdk::model::inception_key_age_exceeded`]; an age past the 24h hard
+/// [`cokret_sdk::models::inception_key_age_exceeded`]; an age past the 24h hard
 /// cap is rejected with reason `inception_key_window_exceeded`, regardless of
 /// any longer deployment-self-reported window.
 ///
@@ -1884,7 +1884,7 @@ async fn enforce_inception_key_online_window(
         ));
     };
 
-    if cokret_sdk::model::inception_key_age_exceeded(bootstrap_ts, now()) {
+    if cokret_sdk::models::inception_key_age_exceeded(bootstrap_ts, now()) {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             crate::error::reasons::INCEPTION_KEY_WINDOW_EXCEEDED,
@@ -2264,7 +2264,7 @@ pub fn realm_policy_components_check(
                         .to_owned(),
                 )
             })?;
-            if cokret_sdk::model::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
+            if cokret_sdk::models::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
                 return Err((
                     ErrorCode::MlsGovernanceBindingStale,
                     "media_service_decrypts=true fact recomputed from the policy \
@@ -2278,7 +2278,7 @@ pub fn realm_policy_components_check(
     Ok(())
 }
 
-/// SEC-03 — build a `cokret_sdk::model::MediaDecryptPolicyValue`
+/// SEC-03 — build a `cokret_sdk::models::MediaDecryptPolicyValue`
 /// from a `ck.realm.policy_components` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
@@ -2293,7 +2293,7 @@ pub fn realm_policy_components_check(
 /// entries that carry no concrete DID are skipped because the SDK digest is
 /// defined over concrete service DIDs.
 fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<cokret_sdk::Hash> {
-    use cokret_sdk::model::{
+    use cokret_sdk::models::{
         MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
     };
 
@@ -2478,7 +2478,7 @@ mod admission_tests {
         // service: the digest the governance binding covers MUST equal the
         // digest recomputed from the policy cell value, else fail closed with
         // `mls_governance_binding_stale` (media-service-binding.md §8.2 rule 5).
-        use cokret_sdk::model::{
+        use cokret_sdk::models::{
             MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
         };
 

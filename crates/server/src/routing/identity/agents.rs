@@ -29,7 +29,7 @@
 //! projections stay in sync ahead of the reducer rewrite.
 
 use chrono::SecondsFormat;
-use cokret_sdk::model::{
+use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
     AgentLifecycleState, AgentList, AgentParticipation, AgentParticipationEntry,

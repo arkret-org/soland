@@ -524,10 +524,10 @@ fn agent_participation_ceiling_change(
 ) -> Option<(
     &'static str,
     String,
-    cokret_sdk::model::AgentParticipation,
+    cokret_sdk::models::AgentParticipation,
     Vec<String>,
 )> {
-    use cokret_sdk::model::AgentParticipation;
+    use cokret_sdk::models::AgentParticipation;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
     let find = |native: bool| -> Option<Value> {
@@ -619,7 +619,7 @@ pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use cokret_sdk::model::{AgentParticipation, validate_agent_participation_tightens};
+    use cokret_sdk::models::{AgentParticipation, validate_agent_participation_tightens};
     for operation in operations {
         let Some((_scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)
@@ -663,7 +663,7 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
     }))
 }
 
-fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::model::AgentParticipation) -> bool {
+fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::models::AgentParticipation) -> bool {
     ap_bool(selection, "reply") && ceiling.reply
 }
 
@@ -678,7 +678,7 @@ pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use cokret_sdk::model::AgentParticipation;
+    use cokret_sdk::models::AgentParticipation;
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
             Some(kinds::CK_MESSAGE_CREATE) | Some(kinds::CK_REACTION_ADD) => {}

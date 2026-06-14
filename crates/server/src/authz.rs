@@ -760,7 +760,7 @@ pub async fn check_with_policy_server(
         }
     };
 
-    use cokret_sdk::model::AuthzDecision;
+    use cokret_sdk::models::AuthzDecision;
     let allow = matches!(remote.decision, AuthzDecision::Allow);
     if !allow {
         return MergedAuthzDecision::RemoteDeny { local, remote };

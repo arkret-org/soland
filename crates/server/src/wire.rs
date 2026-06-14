@@ -346,7 +346,7 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
 pub use cokret_sdk::SyncRequestBody;
-pub use cokret_sdk::model::SyncDescription;
+pub use cokret_sdk::models::SyncDescription;
 
 #[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SolandHandleClaim {
@@ -537,7 +537,7 @@ pub struct EventsFrontierAccountClientState {
 // (allow / soft_deny / hard_deny / quarantine / require_review) and
 // `AuthzCheckRequestBody` to `{ actor_id, action, resource?, context? }`,
 // so soland re-uses them directly instead of carrying local copies.
-pub use cokret_sdk::model::{
+pub use cokret_sdk::models::{
     AuthzCheckOutcome, AuthzCheckRequestBody, PushRegisterDeviceRequestBody,
     PushUnregisterDeviceRequestBody,
 };
@@ -573,7 +573,7 @@ pub struct UpsertPushRuleRequestBody {
 // `service-operation-dtos.schema.json#/$defs/ModerationReportOutcome`:
 // `status` enum `submitted|resolved`, `routed_to` is an array of bare DIDs);
 // no soland mirrors.
-pub use cokret_sdk::model::{ModerationReportOutcome, ModerationReportRequestBody};
+pub use cokret_sdk::models::{ModerationReportOutcome, ModerationReportRequestBody};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct UpsertPolicyDocumentRequestBody {
@@ -766,7 +766,7 @@ pub struct SendMessageRequestBody {
 // Identity log / receipts outcomes are the SDK DTOs (`model/api.rs` is the
 // authoritative carrier for identity operation shapes); no soland mirrors.
 // CKP-0008 / CKP-0009 — Personal Agent operations. Every request/response
-// DTO is the SDK-authoritative `cokret_sdk::model::Agent*` shape (spec
+// DTO is the SDK-authoritative `cokret_sdk::models::Agent*` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
@@ -783,7 +783,7 @@ pub struct SendMessageRequestBody {
 // `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
-pub use cokret_sdk::model::{
+pub use cokret_sdk::models::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
     AgentPauseRequestBody, AgentResumeRequestBody, AgentRotateKeyOutcome,
@@ -791,10 +791,10 @@ pub use cokret_sdk::model::{
     AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
-// (`cokret_sdk::model` is the authoritative carrier for
+// (`cokret_sdk::models` is the authoritative carrier for
 // `keys-operations.schema.json#/$defs/keys_backups_replace_outcome` /
 // `keys_backups_delete_outcome`); no soland mirrors.
-pub use cokret_sdk::model::{
+pub use cokret_sdk::models::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
 pub use cokret_sdk::{
@@ -806,7 +806,7 @@ pub use cokret_sdk::{
 // `routing::identity::recovery`: policy publish uses the SDK request body,
 // while receipt write keeps a signed JSON wrapper so the raw signed fields can
 // be verified before being projected into typed outcomes. The SDK carries the
-// authoritative typed forms (`cokret_sdk::model::{RecoveryPolicy,
+// authoritative typed forms (`cokret_sdk::models::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]

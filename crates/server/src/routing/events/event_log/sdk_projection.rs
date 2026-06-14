@@ -522,7 +522,7 @@ where
 fn sdk_effective_scope(
     record: &CanonicalEventRecord,
     realm_id: &RealmId,
-) -> Option<cokret_sdk::model::EffectiveScope> {
+) -> Option<cokret_sdk::models::EffectiveScope> {
     if let Some(scope) = record
         .envelope
         .get("effective_scope")
@@ -535,13 +535,13 @@ fn sdk_effective_scope(
         Some(scope) if scope.starts_with("ck:circle:") => {
             cokret_sdk::CircleId::new(scope.to_owned())
                 .ok()
-                .map(|circle_id| cokret_sdk::model::EffectiveScope::Circle {
+                .map(|circle_id| cokret_sdk::models::EffectiveScope::Circle {
                     realm_id: realm_id.clone(),
                     circle_id,
                 })
         }
         Some(scope) if scope.starts_with("realm:") => {
-            Some(cokret_sdk::model::EffectiveScope::Realm {
+            Some(cokret_sdk::models::EffectiveScope::Realm {
                 realm_id: realm_id.clone(),
             })
         }

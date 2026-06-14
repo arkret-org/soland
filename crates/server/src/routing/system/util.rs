@@ -232,7 +232,7 @@ pub fn validate_space_id(value: &str) -> Result<SpaceId, ()> {
 /// CKP R3 spec-sync (2026-05-27, cokret-spec b47ff6ec): the wire-level
 /// canonical comparison MUST run through NFC + UTS#39 confusable folding +
 /// script-mix rejection. We delegate that to the SDK helper
-/// (`cokret_core::model::handle::normalize_handle_localpart`) so any
+/// (`cokret_core::models::handle::normalize_handle_localpart`) so any
 /// script-mixed or homograph-confusable handle is rejected with the
 /// `handle_homograph_forbidden` reason code before the ASCII allow-list
 /// kicks in. See `_before_todos.md §0.14` for the normative wording.
@@ -262,7 +262,7 @@ pub fn classify_handle(handle: &str) -> Result<(), (&'static str, &'static str)>
     // UTS#39 confusable skeleton + script-mix reject. Any failure here
     // is surfaced as `handle_homograph_forbidden` so call sites can
     // distinguish from the plain ASCII allow-list reject below.
-    if cokret_sdk::model::normalize_handle_localpart(localpart).is_err() {
+    if cokret_sdk::models::normalize_handle_localpart(localpart).is_err() {
         return Err((
             "handle_homograph_forbidden",
             "handle localpart fails NFC + UTS#39 confusable skeleton + script-mixed reject",
