@@ -1137,9 +1137,9 @@ fn project_search_users_row(
         .ok_or_else(|| AppError::internal("directory user search row missing DID"))?;
     Ok(UserSearchOutcome {
         handle: (!canonical.is_empty()).then_some(canonical),
-        did: Did::new(did.to_owned()).map_err(|error| {
+        did: Some(Did::new(did.to_owned()).map_err(|error| {
             AppError::internal(format!("directory user DID is invalid: {error}"))
-        })?,
+        })?),
         display_name: actor
             .get("display_name")
             .and_then(Value::as_str)
