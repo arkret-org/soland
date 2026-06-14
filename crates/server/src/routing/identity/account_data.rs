@@ -10,10 +10,12 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
+use cokret_sdk::{
+    AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::device_messages::{
@@ -173,27 +175,6 @@ pub(super) fn router() -> Router {
         )
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AccountDataSetRequestBody {
-    /// Caller-supplied opaque payload. Server stores it verbatim; canonical
-    /// encoding and (for sensitive keys like `ck.contacts.*` /
-    /// `ck.account.blocklist`) client-side encryption are the client's
-    /// responsibility.
-    pub content: Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AccountDataEntry {
-    pub data_type: String,
-    pub content: Value,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct AccountDataListOutcome {
-    pub entries: Vec<AccountDataEntry>,
-}
-
 fn validate_data_type(data_type: &str) -> Result<(), AppError> {
     if data_type.is_empty() {
         return Err(AppError::invalid_param("data_type must not be empty"));
@@ -247,7 +228,7 @@ async fn put_account_data(
     req: &mut Request,
     res: &mut Response,
     data_type: PathParam<String>,
-    body: JsonBody<AccountDataSetRequestBody>,
+    body: JsonBody<AccountDataReplaceRequestBody>,
 ) -> JsonResult<AccountDataEntry> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -378,7 +359,7 @@ async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AccountDataListOutcome> {
+) -> JsonResult<AccountDataList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let entries = state
@@ -390,7 +371,7 @@ async fn list_account_data(
         .into_iter()
         .map(entry_from)
         .collect();
-    json_ok(AccountDataListOutcome { entries })
+    json_ok(AccountDataList { entries })
 }
 
 #[endpoint(
@@ -404,7 +385,7 @@ async fn delete_account_data(
     depot: &mut Depot,
     req: &mut Request,
     data_type: PathParam<String>,
-) -> JsonResult<serde_json::Value> {
+) -> JsonResult<AccountDataDeleteOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let data_type = data_type.into_inner();
@@ -439,7 +420,10 @@ async fn delete_account_data(
     )
     .await;
 
-    json_ok(serde_json::json!({"ok": true, "data_type": data_type}))
+    json_ok(AccountDataDeleteOutcome {
+        ok: true,
+        data_type,
+    })
 }
 
 #[cfg(test)]

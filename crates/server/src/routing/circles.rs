@@ -32,11 +32,17 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{
+    CircleCreateRequestBody, CircleDirectoryVisibility, CircleId, CircleList,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
+    CircleView, Did, EncryptionFloor, EncryptionProfile, HistoryVisibility, Operation, OperationId,
+    RealmId,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use super::{AuthArgs, accept_local_operations};
@@ -64,102 +70,59 @@ pub(crate) fn router() -> Router {
         .push(Router::with_path("{circle_id}/tombstone").post(post_circle_tombstone))
 }
 
-// ── Response / request types ─────────────────────────────────────────────
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleOutcome {
-    pub circle_id: String,
-    pub realm_id: String,
-    pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    pub directory_visibility: String,
-    pub join_rule: String,
-    pub history_visibility: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_encryption_floor: Option<String>,
-    pub encryption_profile: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mls_group_ref: Option<String>,
-    pub state: String,
-    pub members: Vec<String>,
-    pub created_by: String,
-    pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_by: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
+fn parse_sdk_field<T>(field: &str, value: impl Serialize) -> Result<T, AppError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(json!(value))
+        .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListCirclesOutcome {
-    pub realm_id: String,
-    pub circles: Vec<CircleOutcome>,
+fn circle_view_from(c: &CircleProjection) -> Result<CircleView, AppError> {
+    Ok(CircleView {
+        circle_id: parse_sdk_field("circle_id", &c.circle_id)?,
+        realm_id: parse_sdk_field("realm_id", &c.realm_id)?,
+        title: c.title.clone(),
+        summary: c.summary.clone(),
+        directory_visibility: parse_sdk_field("directory_visibility", &c.directory_visibility)?,
+        join_rule: parse_sdk_field("join_rule", &c.join_rule)?,
+        history_visibility: parse_sdk_field("history_visibility", &c.history_visibility)?,
+        content_encryption_floor: c
+            .content_encryption_floor
+            .as_ref()
+            .map(|floor| parse_sdk_field::<EncryptionFloor>("content_encryption_floor", floor))
+            .transpose()?,
+        metadata_encryption_floor: c
+            .metadata_encryption_floor
+            .as_ref()
+            .map(|floor| parse_sdk_field::<EncryptionFloor>("metadata_encryption_floor", floor))
+            .transpose()?,
+        encryption_profile: parse_sdk_field("encryption_profile", &c.encryption_profile)?,
+        mls_group_ref: c.mls_group_ref.clone(),
+        state: parse_sdk_field("state", c.state.as_str())?,
+        members: c
+            .members
+            .iter()
+            .map(|member| parse_sdk_field::<Did>("member", member))
+            .collect::<Result<Vec<_>, _>>()?,
+        created_by: parse_sdk_field("created_by", &c.created_by)?,
+        created_at: c.created_at,
+        updated_by: c
+            .updated_by
+            .as_ref()
+            .map(|actor| parse_sdk_field::<Did>("updated_by", actor))
+            .transpose()?,
+        updated_at: c.updated_at,
+    })
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateCircleRequestBody {
-    pub realm_id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub directory_visibility: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub join_rule: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub history_visibility: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata_encryption_floor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub encryption_profile: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleMemberRequestBody {
-    pub actor_id: String,
-    /// Optional explicit member state. Defaults to `"active"`. Spec
-    /// `ck.circle.member.state` enum: invited / active / removed / banned / left.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleMembershipOutcome {
-    pub circle_id: String,
-    pub actor_id: String,
-    pub state: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CircleScopeRotateOutcome {
-    pub circle_id: String,
-    pub mls_group_ref: Option<String>,
-    /// Reducer-emitted reason code on `Ignored`/`Rejected`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-impl From<&CircleProjection> for CircleOutcome {
-    fn from(c: &CircleProjection) -> Self {
-        Self {
-            circle_id: c.circle_id.clone(),
-            realm_id: c.realm_id.clone(),
-            title: c.title.clone(),
-            summary: c.summary.clone(),
-            directory_visibility: c.directory_visibility.clone(),
-            join_rule: c.join_rule.clone(),
-            history_visibility: c.history_visibility.clone(),
-            metadata_encryption_floor: c.metadata_encryption_floor.clone(),
-            encryption_profile: c.encryption_profile.clone(),
-            mls_group_ref: c.mls_group_ref.clone(),
-            state: c.state.as_str().to_owned(),
-            members: c.members.iter().cloned().collect(),
-            created_by: c.created_by.clone(),
-            created_at: c.created_at.to_rfc3339(),
-            updated_by: c.updated_by.clone(),
-            updated_at: c.updated_at.map(|t| t.to_rfc3339()),
-        }
+fn circle_membership_to_reducer_state(membership: CircleMembership) -> &'static str {
+    match membership {
+        CircleMembership::Join => "join",
+        CircleMembership::Invite => "invite",
+        CircleMembership::Knock => "knock",
+        CircleMembership::Leave => "leave",
+        CircleMembership::Ban => "ban",
     }
 }
 
@@ -176,17 +139,18 @@ async fn list_circles(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ListCirclesOutcome> {
+) -> JsonResult<CircleList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner();
+    let realm_id = RealmId::new(realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let projection = state.projection.lock().expect("projection mutex");
     let circles = projection
-        .circles_for_realm(&realm_id)
+        .circles_for_realm(realm_id.as_str())
         .iter()
-        .map(|c| CircleOutcome::from(*c))
-        .collect();
-    json_ok(ListCirclesOutcome { realm_id, circles })
+        .map(|c| circle_view_from(c))
+        .collect::<Result<Vec<_>, _>>()?;
+    json_ok(CircleList { realm_id, circles })
 }
 
 #[endpoint(
@@ -200,7 +164,7 @@ async fn get_circle(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleOutcome> {
+) -> JsonResult<CircleView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
@@ -208,7 +172,7 @@ async fn get_circle(
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
-    json_ok(CircleOutcome::from(circle))
+    json_ok(circle_view_from(circle)?)
 }
 
 #[endpoint(
@@ -219,26 +183,27 @@ async fn get_circle(
 #[tracing::instrument(skip_all, fields(op = "ck.self.circle.command.create"))]
 async fn post_circle(
     aa: AuthArgs,
-    body: JsonBody<CreateCircleRequestBody>,
+    body: JsonBody<CircleCreateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleOutcome> {
+) -> JsonResult<CircleView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let realm_scope = RealmId::new(body.realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let circle_id = ids::generate_circle_id();
+    let realm_scope = body.realm_id.clone();
+    let circle_id = CircleId::new(ids::generate_circle_id())
+        .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?;
     let object = json!({
         "id": circle_id,
         "realm_id": body.realm_id,
         "title": body.title,
         "summary": body.summary,
-        "directory_visibility": body.directory_visibility.unwrap_or_else(|| "members".to_owned()),
-        "join_rule": body.join_rule.unwrap_or_else(|| "invite".to_owned()),
-        "history_visibility": body.history_visibility.unwrap_or_else(|| "joined".to_owned()),
+        "directory_visibility": body.directory_visibility.unwrap_or(CircleDirectoryVisibility::Members),
+        "join_rule": body.join_rule.unwrap_or(cokret_sdk::CircleJoinRule::Invite),
+        "history_visibility": body.history_visibility.unwrap_or(HistoryVisibility::Joined),
+        "content_encryption_floor": body.content_encryption_floor,
         "metadata_encryption_floor": body.metadata_encryption_floor,
-        "encryption_profile": body.encryption_profile.unwrap_or_else(|| "mls_rfc9420".to_owned()),
+        "encryption_profile": body.encryption_profile.unwrap_or(EncryptionProfile::MlsRfc9420),
         "created_by": session.actor.clone(),
     });
     let payload = json!({"object": object, "sender": session.actor.clone()});
@@ -250,9 +215,9 @@ async fn post_circle(
         .map_err(reducer_reject_to_app_error)?;
     let projection = state.projection.lock().expect("projection mutex");
     let circle = projection
-        .circle(&circle_id)
+        .circle(circle_id.as_str())
         .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
-    json_ok(CircleOutcome::from(circle))
+    json_ok(circle_view_from(circle)?)
 }
 
 #[endpoint(
@@ -273,7 +238,8 @@ async fn post_circle_member(
     let circle_id = circle_id.into_inner();
     let body = body.into_inner();
     let realm_scope = circle_realm_scope(state, &circle_id)?;
-    let target_state = body.state.clone().unwrap_or_else(|| "active".to_owned());
+    let membership = body.membership.unwrap_or(CircleMembership::Join);
+    let target_state = circle_membership_to_reducer_state(membership);
     // CKP-0007 strict-subset invariant (`Circle.members ⊆ Realm.members`) —
     // surfaced HERE, pre-projection, because `accept_local_operations` projects
     // fire-and-forget and does not propagate the reducer's `Rejected` effect
@@ -281,12 +247,12 @@ async fn post_circle_member(
     // be silently dropped by the reducer yet return 200. We mirror the reducer's
     // `apply_circle_member_state` check (parent realm membership == "join") and
     // return the same canonical 422 wire code the reducer emits.
-    if target_state == "active" {
+    if membership == CircleMembership::Join {
         let realm_id = realm_scope.to_string();
         let parent_joined = {
             let projection = state.projection.lock().expect("projection mutex");
             projection
-                .member(&realm_id, &body.actor_id)
+                .member(&realm_id, body.actor_id.as_str())
                 .map(|m| m.state == "join")
                 .unwrap_or(false)
         };
@@ -307,8 +273,8 @@ async fn post_circle_member(
     // the reducer's fail-closed second-line check can rely on it. A
     // self-service join (`actor == sender`) is left to the reducer's
     // `join_rule=open` gate.
-    let pulling_other = body.actor_id != session.actor;
-    let manage_verified = if target_state == "active" && pulling_other {
+    let pulling_other = body.actor_id.as_str() != session.actor;
+    let manage_verified = if membership == CircleMembership::Join && pulling_other {
         let realm_id = realm_scope.to_string();
         let (owner, members) = circle_authz_principals(state, &realm_id).await;
         let verdict = state.authz.check(
@@ -333,7 +299,7 @@ async fn post_circle_member(
     let payload = json!({
         "circle_id": circle_id,
         "actor": body.actor_id,
-        "state": target_state,
+        "membership": target_state,
         "sender": session.actor.clone(),
         "manage_capability_verified": manage_verified,
         "actor_capability": {
@@ -349,9 +315,10 @@ async fn post_circle_member(
         .await
         .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipOutcome {
-        circle_id,
+        circle_id: CircleId::new(circle_id)
+            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
         actor_id: body.actor_id,
-        state: target_state,
+        membership,
     })
 }
 
@@ -376,7 +343,7 @@ async fn delete_circle_member(
     let payload = json!({
         "circle_id": circle_id,
         "actor": actor_id,
-        "state": "removed",
+        "membership": "leave",
         "sender": session.actor.clone(),
     });
     let op_id = OperationId::new(ids::generate_operation_id())
@@ -386,9 +353,11 @@ async fn delete_circle_member(
         .await
         .map_err(reducer_reject_to_app_error)?;
     json_ok(CircleMembershipOutcome {
-        circle_id,
-        actor_id,
-        state: "removed".to_owned(),
+        circle_id: CircleId::new(circle_id)
+            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+        actor_id: Did::new(actor_id)
+            .map_err(|e| AppError::invalid_param(format!("actor_id: {e}")))?,
+        membership: CircleMembership::Leave,
     })
 }
 
@@ -430,7 +399,7 @@ async fn post_circle_archive(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleOutcome> {
+) -> JsonResult<CircleView> {
     submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_ARCHIVE).await
 }
 
@@ -445,7 +414,7 @@ async fn post_circle_tombstone(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleOutcome> {
+) -> JsonResult<CircleView> {
     submit_circle_lifecycle(depot, req, aa, circle_id.into_inner(), CK_CIRCLE_TOMBSTONE).await
 }
 
@@ -455,7 +424,7 @@ async fn submit_circle_lifecycle(
     aa: AuthArgs,
     circle_id: String,
     kind: &'static str,
-) -> JsonResult<CircleOutcome> {
+) -> JsonResult<CircleView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_scope = circle_realm_scope(state, &circle_id)?;
@@ -474,15 +443,9 @@ async fn submit_circle_lifecycle(
     // map lookup so the response still surfaces the terminal state.
     let response = projection
         .circle(&circle_id)
-        .map(CircleOutcome::from)
-        .or_else(|| {
-            projection.circles.get(&circle_id).map(|c| CircleOutcome {
-                state: "tombstoned".to_owned(),
-                members: Vec::new(),
-                ..CircleOutcome::from(c)
-            })
-        })
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
+        .or_else(|| projection.circles.get(&circle_id))
+        .ok_or_else(|| AppError::not_found("circle not found"))
+        .and_then(circle_view_from)?;
     json_ok(response)
 }
 

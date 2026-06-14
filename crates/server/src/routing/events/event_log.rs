@@ -108,7 +108,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
 #[tracing::instrument(skip_all, fields(op = "submit_event"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let envelope = match req.parse_json::<Value>().await {
+    let submit = match req.parse_json::<SolandEventsSubmitRequestBody>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -120,7 +120,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             return;
         }
     };
-    if envelope.get("service_binding_ref").is_some() {
+    if matches!(submit, SolandEventsSubmitRequestBody::Federation(_)) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -132,42 +132,33 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
-    if envelope.get("envelopes").is_some() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "ck.self.events.command.submit batch/federation request uses events[], not envelopes[]",
-        );
-        return;
-    }
-    match batch_envelopes_from_submit_body(&envelope) {
-        Ok(Some(envelopes)) => {
-            submit_event_batch(state, &session, envelopes, res).await;
-            return;
+    match submit {
+        SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::Batch(batch) => {
+            submit_event_batch(state, &session, batch.events, res).await;
         }
-        Ok(None) => {}
-        Err(error) => {
-            render_submit_one_error(res, error);
-            return;
+        SolandEventsSubmitRequestBody::Single(envelope) => {
+            let envelope = match serde_json::to_value(envelope) {
+                Ok(value) => value,
+                Err(_) => {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "bad_json",
+                        "invalid event envelope",
+                    );
+                    return;
+                }
+            };
+            let envelope_for_chaos = envelope.clone();
+            match submit_event_value(state, &session, envelope).await {
+                Ok(response) => {
+                    maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
+                    res.render(Json(response.outcome));
+                }
+                Err(error) => render_submit_one_error(res, error),
+            }
         }
-    }
-    if envelope.as_array().is_some() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "POST /_cokret/self/events batch body must be an object with events[]",
-        );
-        return;
-    }
-    let envelope_for_chaos = envelope.clone();
-    match submit_event_value(state, &session, envelope).await {
-        Ok(response) => {
-            maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
-            res.render(Json(response.outcome));
-        }
-        Err(error) => render_submit_one_error(res, error),
     }
 }
 
@@ -617,45 +608,50 @@ fn render_submit_one_error(res: &mut Response, error: SubmitOneError) {
     render_error(res, error.status, &error.code, &error.message);
 }
 
-fn batch_envelopes_from_submit_body(body: &Value) -> Result<Option<Vec<Value>>, SubmitOneError> {
-    let Some(envelopes_value) = body.get("events") else {
-        return Ok(None);
-    };
-    let Some(envelopes) = envelopes_value.as_array() else {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "events submit batch requires events[] array",
-        ));
-    };
-    if envelopes.is_empty() {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "events submit batch must contain at least one envelope",
-        ));
-    }
-    if envelopes.len() > MAX_EVENT_SUBMIT_BATCH {
-        return Err(SubmitOneError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "payload_too_large",
-            "events submit batch exceeds max batch size",
-        ));
-    }
-    Ok(Some(envelopes.clone()))
-}
-
 async fn submit_event_batch(
     state: &AppState,
     session: &SessionRecord,
-    envelopes: Vec<Value>,
+    envelopes: Vec<Event>,
     res: &mut Response,
 ) {
+    if envelopes.is_empty() {
+        render_submit_one_error(
+            res,
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "events submit batch must contain at least one envelope",
+            ),
+        );
+        return;
+    }
+    if envelopes.len() > MAX_EVENT_SUBMIT_BATCH {
+        render_submit_one_error(
+            res,
+            SubmitOneError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "events submit batch exceeds max batch size",
+            ),
+        );
+        return;
+    }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
 
     for envelope in envelopes {
+        let envelope = match serde_json::to_value(envelope) {
+            Ok(value) => value,
+            Err(error) => {
+                rejected.push(json!({
+                    "id": "unknown",
+                    "reason_code": "bad_json",
+                    "detail": format!("event envelope re-encode failed: {error}"),
+                }));
+                continue;
+            }
+        };
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         match submit_event_value(state, session, envelope).await {
@@ -692,32 +688,21 @@ async fn submit_event_batch(
 pub(super) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
-    body: Value,
+    body: EventsSubmitFederationRequestBody,
     res: &mut Response,
 ) {
-    let Some(object) = body.as_object() else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "ck.peer.events.command.submit body must be an object",
-        );
-        return;
-    };
-    for key in object.keys() {
-        if !matches!(
-            key.as_str(),
-            "service_binding_ref" | "events" | "idempotency_key"
-        ) {
+    let body_value = match serde_json::to_value(&body) {
+        Ok(value) => value,
+        Err(error) => {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "ck.peer.events.command.submit permits only service_binding_ref, events, and idempotency_key",
+                &format!("invalid ck.peer.events.command.submit shape: {error}"),
             );
             return;
         }
-    }
+    };
 
     let trust_headers =
         match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
@@ -759,7 +744,7 @@ pub(super) async fn submit_federation_events(
         );
         return;
     }
-    let request_hash = match canonical::canonical_sha256(&body) {
+    let request_hash = match canonical::canonical_sha256(&body_value) {
         Ok(value) => value,
         Err(error) => {
             render_error(
@@ -782,18 +767,7 @@ pub(super) async fn submit_federation_events(
         return;
     }
 
-    let submit = match serde_json::from_value::<EventsSubmitFederationRequestBody>(body) {
-        Ok(value) => value,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                &format!("invalid ck.peer.events.command.submit shape: {error}"),
-            );
-            return;
-        }
-    };
+    let submit = body;
     if let Err((code, message)) =
         SolandEventsSubmitRequestBody::validate_federation_binding(&submit)
     {
@@ -827,6 +801,17 @@ pub(super) async fn submit_federation_events(
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
 
     for envelope in submit.events {
+        let envelope = match serde_json::to_value(envelope) {
+            Ok(value) => value,
+            Err(error) => {
+                rejected.push(json!({
+                    "id": "unknown",
+                    "reason_code": "bad_json",
+                    "detail": format!("event envelope re-encode failed: {error}"),
+                }));
+                continue;
+            }
+        };
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         let event_realm = event_string_field_from_value(&envelope, "realm_id");
@@ -1385,14 +1370,30 @@ async fn enqueue_peer_event_fanout(
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
     });
-    let service_binding_ref = json!({
-        "realm_id": parsed.realm_id,
-        "realm_policy_digest": canonical_json_hash(&binding_payload),
-        "membership_frontier": [event_id],
-        "delivery_binding_frontier": [event_id],
-        "destination_service_type": "principal_server",
-        "reducer_profile_digest": cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
-    });
+    let service_binding_ref = match (
+        RealmId::new(parsed.realm_id.clone()),
+        Hash::new(canonical_json_hash(&binding_payload)),
+        EventId::new(event_id.to_owned()),
+        Hash::new(cokret_sdk::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST.to_owned()),
+    ) {
+        (Ok(realm_id), Ok(realm_policy_digest), Ok(event_id), Ok(reducer_profile_digest)) => {
+            cokret_sdk::FederationServiceBindingRef {
+                realm_id,
+                realm_policy_digest,
+                membership_frontier: vec![event_id.clone()],
+                delivery_binding_frontier: vec![event_id],
+                destination_service_type: "principal_server".to_owned(),
+                reducer_profile_digest,
+            }
+        }
+        _ => {
+            tracing::warn!(
+                event_id,
+                "failed to build typed ck.peer.events.command.submit service binding"
+            );
+            return;
+        }
+    };
     let mut hasher_input = Vec::new();
     hasher_input.extend_from_slice(state.config.service_did.as_bytes());
     hasher_input.extend_from_slice(b"|");
@@ -1400,11 +1401,22 @@ async fn enqueue_peer_event_fanout(
     hasher_input.extend_from_slice(b"|");
     hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
     let idempotency_key = format!("ck:outbox:event:{}", sha256_hex(&hasher_input));
-    let body = json!({
-        "service_binding_ref": service_binding_ref,
-        "events": [envelope],
-        "idempotency_key": idempotency_key,
-    });
+    let event = match serde_json::from_value::<Event>(envelope.clone()) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                event_id,
+                "failed to type checked peer fanout event envelope"
+            );
+            return;
+        }
+    };
+    let body = EventsSubmitFederationRequestBody {
+        service_binding_ref,
+        events: vec![event],
+        idempotency_key: Some(idempotency_key.clone()),
+    };
     let payload = match canonical::canonical_json_bytes(&body)
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -1963,7 +1975,7 @@ pub enum SolandEventsSubmitRequestBody {
     /// Batch form — multiple envelopes, optional `idempotency_key`.
     Batch(cokret_sdk::EventsSubmitBatchRequestBody),
     /// Single Event Envelope (legacy / dominant shape).
-    Single(Value),
+    Single(Event),
 }
 
 impl SolandEventsSubmitRequestBody {

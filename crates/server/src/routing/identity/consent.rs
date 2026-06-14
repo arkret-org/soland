@@ -6,11 +6,13 @@
 //! requests consult that projection before opening or accepting a request.
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::Operation;
+use cokret_sdk::{
+    ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
+    ConsentUpdateRequestBody, Did, Operation,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
@@ -25,51 +27,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("cells/{holder_did}/grant").post(grant_consent_cell))
         .push(Router::with_path("cells/{holder_did}/revoke").post(revoke_consent_cell))
         .push(Router::with_path("request").post(request_consent_cell))
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ConsentCellOutcome {
-    pub ok: bool,
-    pub cell_id: String,
-    pub holder_did: String,
-    pub peer_did: String,
-    // Spec `consent-model.md` §3 names this `consent_scope` (domain-prefixed,
-    // per the "no bare scope" naming rule); the reducer Move payload already
-    // carries `consent_scope`. This admin/holder REST surface now emits the
-    // same name instead of the legacy bare `scope`.
-    #[serde(rename = "consent_scope")]
-    pub scope: String,
-    pub state: String,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub requested_at: Option<DateTime<Utc>>,
-    pub updated_at: DateTime<Utc>,
-    pub active_grant_dots: Vec<String>,
-    pub grant_dots: Vec<String>,
-    pub revoked_dots: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ConsentCellsOutcome {
-    pub ok: bool,
-    pub cells: Vec<ConsentCellOutcome>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ConsentRequestBody {
-    pub holder_did: String,
-    #[serde(default)]
-    pub peer_did: Option<String>,
-    #[serde(default, rename = "consent_scope")]
-    pub scope: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ConsentUpdateBody {
-    pub peer_did: String,
-    #[serde(default, rename = "consent_scope")]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
@@ -152,7 +109,7 @@ async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ConsentCellsOutcome> {
+) -> JsonResult<ConsentCellList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let now = now();
@@ -163,14 +120,14 @@ async fn list_consent_cells(
         .values()
         .filter(|cell| cell.holder == session.actor || cell.peer == session.actor)
         .map(|cell| consent_response(cell, now))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     cells.sort_by(|a, b| {
         a.holder_did
             .cmp(&b.holder_did)
             .then_with(|| a.peer_did.cmp(&b.peer_did))
-            .then_with(|| a.scope.cmp(&b.scope))
+            .then_with(|| a.consent_scope.cmp(&b.consent_scope))
     });
-    json_ok(ConsentCellsOutcome { ok: true, cells })
+    json_ok(ConsentCellList { ok: true, cells })
 }
 
 #[endpoint(
@@ -185,7 +142,7 @@ async fn get_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-) -> JsonResult<ConsentCellOutcome> {
+) -> JsonResult<ConsentCellView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
@@ -211,7 +168,7 @@ async fn get_consent_cell(
         .get(&key)
         .cloned()
         .ok_or_else(|| AppError::not_found("consent cell not found"))?;
-    json_ok(consent_response(&cell, now()))
+    json_ok(consent_response(&cell, now())?)
 }
 
 #[endpoint(
@@ -226,18 +183,18 @@ async fn grant_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-    body: JsonBody<ConsentUpdateBody>,
-) -> JsonResult<ConsentCellOutcome> {
+    body: JsonBody<ConsentUpdateRequestBody>,
+) -> JsonResult<ConsentCellView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
-    validate_holder_update(&session.actor, &holder, &body.peer_did)?;
-    let scope = normalize_scope(body.scope.as_deref())?;
+    validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
+    let scope = normalize_scope(body.consent_scope.as_deref())?;
     let updated = grant_cell(
         state,
         &holder,
-        &body.peer_did,
+        body.peer_did.as_str(),
         &scope,
         body.expires_at,
         now(),
@@ -248,7 +205,14 @@ async fn grant_consent_cell(
     } else {
         "pending"
     };
-    upsert_contact_status(state, &body.peer_did, &holder, &scope, contact_status).await?;
+    upsert_contact_status(
+        state,
+        body.peer_did.as_str(),
+        &holder,
+        &scope,
+        contact_status,
+    )
+    .await?;
     append_audit_log(
         state,
         Some(&holder),
@@ -262,7 +226,7 @@ async fn grant_consent_cell(
         "accepted",
     )
     .await;
-    json_ok(consent_response(&updated, now()))
+    json_ok(consent_response(&updated, now())?)
 }
 
 #[endpoint(
@@ -277,17 +241,17 @@ async fn revoke_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-    body: JsonBody<ConsentUpdateBody>,
-) -> JsonResult<ConsentCellOutcome> {
+    body: JsonBody<ConsentUpdateRequestBody>,
+) -> JsonResult<ConsentCellView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
     let body = body.into_inner();
-    validate_holder_update(&session.actor, &holder, &body.peer_did)?;
-    let scope = normalize_scope(body.scope.as_deref())?;
-    let updated = revoke_cell(state, &holder, &body.peer_did, &scope, now());
+    validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
+    let scope = normalize_scope(body.consent_scope.as_deref())?;
+    let updated = revoke_cell(state, &holder, body.peer_did.as_str(), &scope, now());
     persist_consent_cell(state, &updated).await;
-    upsert_contact_status(state, &body.peer_did, &holder, &scope, "pending").await?;
+    upsert_contact_status(state, body.peer_did.as_str(), &holder, &scope, "pending").await?;
     append_audit_log(
         state,
         Some(&holder),
@@ -301,7 +265,7 @@ async fn revoke_consent_cell(
         "accepted",
     )
     .await;
-    json_ok(consent_response(&updated, now()))
+    json_ok(consent_response(&updated, now())?)
 }
 
 #[endpoint(
@@ -316,16 +280,17 @@ async fn request_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-    body: JsonBody<ConsentRequestBody>,
-) -> JsonResult<ConsentCellOutcome> {
+    body: JsonBody<ConsentRequestRequestBody>,
+) -> JsonResult<ConsentCellView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if validate_did(&body.holder_did).is_err() {
-        return Err(AppError::invalid_param("invalid holder DID"));
-    }
-    let peer = body.peer_did.unwrap_or_else(|| session.actor.clone());
-    if peer != session.actor {
+    let peer = match body.peer_did {
+        Some(peer) => peer,
+        None => Did::new(session.actor.clone())
+            .map_err(|e| AppError::invalid_param(format!("peer_did: {e}")))?,
+    };
+    if peer.as_str() != session.actor {
         return Err(AppError::capability_denied(
             "consent request peer must match authenticated actor",
         ));
@@ -333,33 +298,40 @@ async fn request_consent_cell(
     let holder_account = state
         .persistence
         .accounts()
-        .get(&body.holder_did)
+        .get(body.holder_did.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if holder_account.is_none() {
         return Err(AppError::not_found("holder account not found"));
     }
-    let scope = normalize_scope(body.scope.as_deref())?;
-    let cell = record_pending_request(state, &body.holder_did, &peer, &scope, now());
+    let scope = normalize_scope(body.consent_scope.as_deref())?;
+    let cell = record_pending_request(
+        state,
+        body.holder_did.as_str(),
+        peer.as_str(),
+        &scope,
+        now(),
+    );
     persist_consent_cell(state, &cell).await;
     res.status_code(StatusCode::CREATED);
-    json_ok(consent_response(&cell, now()))
+    json_ok(consent_response(&cell, now())?)
 }
 
 pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
-    let raw = input.unwrap_or("message").trim();
+    let raw = input.unwrap_or("direct_message").trim();
     if raw.is_empty() {
-        return Ok("message".to_owned());
+        return Ok("direct_message".to_owned());
     }
     let normalized = raw.to_ascii_lowercase();
     match normalized.as_str() {
         "invite" => Ok("invite".to_owned()),
-        "message" | "direct_message" | "messaging" | "dm" => Ok("message".to_owned()),
-        "call" | "voice_call" | "video_call" => Ok("call".to_owned()),
+        "message" | "direct_message" | "messaging" | "dm" => Ok("direct_message".to_owned()),
+        "call" | "voice_call" => Ok("voice_call".to_owned()),
+        "video_call" => Ok("video_call".to_owned()),
         "presence" => Ok("presence".to_owned()),
         "any" => Ok("any".to_owned()),
         _ => Err(AppError::invalid_param(
-            "scope must be invite, message, call, presence, or any",
+            "scope must be invite, direct_message, voice_call, video_call, presence, or any",
         )),
     }
 }
@@ -407,8 +379,9 @@ pub(super) fn has_active_consent_for_scope(
     scope: &str,
     at: DateTime<Utc>,
 ) -> bool {
+    let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
     let cells = state.consent_cells.lock().expect("consent_cells lock");
-    let exact_key = consent_key(holder, peer, scope);
+    let exact_key = consent_key(holder, peer, &scope);
     let any_key = consent_key(holder, peer, "any");
     [exact_key, any_key].iter().any(|key| {
         cells
@@ -549,13 +522,14 @@ pub(crate) fn grant_contact_managed_consent(
     scope: &str,
     granted_at: DateTime<Utc>,
 ) -> (String, ConsentCellRecord) {
+    let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
     let event_id = ids::generate_event_id();
     // actor_seq is a per-actor monotonic counter on the originating event;
     // contact-managed grants are minted server-side without a real event log
     // seq, so we pin seq=0. `event_ref_for_dot` strips the trailing numeric
     // segment and recovers `event_id` regardless of the seq value.
     let dot = format!("{event_id}:0");
-    let updated = grant_cell_with_dot(state, holder, peer, scope, dot, None, None, granted_at);
+    let updated = grant_cell_with_dot(state, holder, peer, &scope, dot, None, None, granted_at);
     (event_id, updated)
 }
 
@@ -993,15 +967,20 @@ fn observed_dot_string(value: &Value) -> Option<String> {
     None
 }
 
-fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellOutcome {
+fn consent_response(
+    cell: &ConsentCellRecord,
+    at: DateTime<Utc>,
+) -> Result<ConsentCellView, AppError> {
     let active_grant_dots = active_grant_dots(cell, at);
-    ConsentCellOutcome {
+    Ok(ConsentCellView {
         ok: true,
         cell_id: cell.cell_id.clone(),
-        holder_did: cell.holder.clone(),
-        peer_did: cell.peer.clone(),
-        scope: cell.scope.clone(),
-        state: effective_state(cell, at).to_owned(),
+        holder_did: Did::new(cell.holder.clone())
+            .map_err(|e| AppError::internal(format!("stored consent holder_did: {e}")))?,
+        peer_did: Did::new(cell.peer.clone())
+            .map_err(|e| AppError::internal(format!("stored consent peer_did: {e}")))?,
+        consent_scope: normalize_scope(Some(&cell.scope))?,
+        state: consent_response_state(cell, at),
         expires_at: response_expires_at(cell),
         requested_at: cell.requested_at,
         updated_at: cell.updated_at,
@@ -1012,6 +991,14 @@ fn consent_response(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentCellO
             .map(|grant| grant.dot.clone())
             .collect(),
         revoked_dots: cell.revoked_dots.iter().cloned().collect(),
+    })
+}
+
+fn consent_response_state(cell: &ConsentCellRecord, at: DateTime<Utc>) -> ConsentState {
+    match effective_state(cell, at) {
+        "granted" => ConsentState::Active,
+        "revoked" => ConsentState::Revoked,
+        _ => ConsentState::Pending,
     }
 }
 

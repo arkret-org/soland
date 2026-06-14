@@ -15,8 +15,8 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoveryPolicyRecord, RecoverySessionRecord};
 use crate::wire::{
-    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
-    KeysBackupsPutRequestBody,
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutRequestBody,
+    KeysBackupsReplaceOutcome,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -1644,7 +1644,7 @@ async fn put_key_backup(
     backup: JsonBody<KeysBackupsPutRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<KeysBackupsPutOutcome> {
+) -> JsonResult<KeysBackupsReplaceOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
@@ -1681,7 +1681,7 @@ async fn put_key_backup(
         .put(backup_id.clone(), backup_value)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(KeysBackupsPutOutcome {
+    json_ok(KeysBackupsReplaceOutcome {
         status: if duplicate {
             KeyBackupPutStatus::Duplicate
         } else {

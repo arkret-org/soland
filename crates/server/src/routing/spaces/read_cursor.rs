@@ -4,11 +4,14 @@
 //! resulting account-private state is consumed through projection/account sync.
 //! Mounted on the protocol surface at `/_cokret/self/read-cursors*`.
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use cokret_sdk::{
+    DeviceId, Did, Operation, OperationId, ReadCursorAdvanceRequestBody, ReadCursorList,
+    ReadCursorPosition, ReadMarkerOutcome, ReadScope, ReadScopeKind, RealmId,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{AuthArgs, accept_local_operations, now};
 use crate::error::{AppError, ErrorCode};
@@ -16,9 +19,6 @@ use crate::routing::identity::device_messages::{
     READ_MARKER_UPDATE_TYPE, fanout_actor_private_update,
 };
 use crate::state::AppState;
-use crate::wire::{
-    ReadCursorPositionWire, ReadMarkerOutcome, ReadScopeWire, SetReadMarkerRequestBody,
-};
 use crate::{JsonResult, ids, json_ok, kinds};
 
 #[endpoint(
@@ -31,15 +31,16 @@ pub(super) async fn set_read_cursor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<SetReadMarkerRequestBody>,
+    body: JsonBody<ReadCursorAdvanceRequestBody>,
 ) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let realm_id = body.realm_id.clone();
-    if RealmId::new(realm_id.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid realm_id"));
-    }
+    let actor_id = Did::new(session.actor.clone())
+        .map_err(|e| AppError::invalid_param(format!("actor_id: {e}")))?;
+    let device_id = DeviceId::new(session.device_id.clone())
+        .map_err(|e| AppError::invalid_param(format!("device_id: {e}")))?;
     validate_read_scope(&body.read_scope)?;
     validate_position(&body.position)?;
     let operation_id = ids::generate_operation_id();
@@ -47,16 +48,17 @@ pub(super) async fn set_read_cursor(
     let payload = json!({
         "id": ids::generate_read_cursor_id(),
         "schema": "ck.schema.read_cursor.v1",
-        "actor_id": session.actor,
+        "actor_id": actor_id,
         "realm_id": realm_id,
-        "device_id": session.device_id,
+        "device_id": device_id,
         "read_scope": body.read_scope.clone(),
         "position": body.position.clone(),
         "updated_at": read_at,
     });
     let operation = Operation::create(
-        OperationId::new(operation_id.clone()).unwrap(),
-        RealmId::new(realm_id.clone()).unwrap(),
+        OperationId::new(operation_id.clone())
+            .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?,
+        realm_id.clone(),
         kinds::CK_READ_MARKER,
         payload,
     );
@@ -72,8 +74,8 @@ pub(super) async fn set_read_cursor(
         READ_MARKER_UPDATE_TYPE,
         json!({
             "schema": "ck.schema.read_cursor.v1",
-            "actor_id": session.actor,
-            "device_id": session.device_id,
+            "actor_id": actor_id,
+            "device_id": device_id,
             "realm_id": realm_id,
             "read_scope": body.read_scope.clone(),
             "position": body.position.clone(),
@@ -83,11 +85,11 @@ pub(super) async fn set_read_cursor(
     .await;
     json_ok(ReadMarkerOutcome {
         realm_id: realm_id.clone(),
-        actor_id: session.actor.clone(),
-        device_id: session.device_id.clone(),
+        actor_id,
+        device_id,
         read_scope: body.read_scope,
         position: body.position,
-        updated_at: read_at.to_rfc3339(),
+        updated_at: read_at,
     })
 }
 
@@ -102,7 +104,7 @@ pub(super) async fn get_read_cursors(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: QueryParam<String, false>,
-) -> JsonResult<Value> {
+) -> JsonResult<ReadCursorList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner().unwrap_or_default();
@@ -113,56 +115,59 @@ pub(super) async fn get_read_cursors(
             .filter(|m| {
                 m.actor_id == session.actor && (realm_id.is_empty() || m.realm_id == realm_id)
             })
-            .map(|m| ReadMarkerOutcome {
-                realm_id: m.realm_id.clone(),
-                actor_id: m.actor_id.clone(),
-                device_id: m.device_id.clone(),
-                read_scope: m.read_scope.clone(),
-                position: m.position.clone(),
-                updated_at: m.updated_at.to_rfc3339(),
+            .map(|m| {
+                Ok(ReadMarkerOutcome {
+                    realm_id: RealmId::new(m.realm_id.clone())
+                        .map_err(|e| AppError::invalid_param(format!("stored realm_id: {e}")))?,
+                    actor_id: Did::new(m.actor_id.clone())
+                        .map_err(|e| AppError::invalid_param(format!("stored actor_id: {e}")))?,
+                    device_id: DeviceId::new(m.device_id.clone())
+                        .map_err(|e| AppError::invalid_param(format!("stored device_id: {e}")))?,
+                    read_scope: m.read_scope.clone(),
+                    position: m.position.clone(),
+                    updated_at: m.updated_at,
+                })
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>, AppError>>()?
     };
-    json_ok(json!({ "markers": markers }))
+    json_ok(ReadCursorList { markers })
 }
 
-fn validate_read_scope(scope: &ReadScopeWire) -> Result<(), AppError> {
-    match scope.kind.as_str() {
-        "realm" => {
+fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
+    match &scope.kind {
+        ReadScopeKind::Realm => {
             if scope.object_ref.is_some() || scope.track.is_some() || scope.track_scope.is_some() {
                 return Err(AppError::invalid_param(
                     "read_scope.ref/track_name/track_scope must be omitted when kind is realm",
                 ));
             }
         }
-        "flow" | "thread" | "view" | "message" | "morph" => {
+        ReadScopeKind::Flow
+        | ReadScopeKind::Thread
+        | ReadScopeKind::View
+        | ReadScopeKind::Message
+        | ReadScopeKind::Morph => {
             if scope.object_ref.as_deref().unwrap_or("").trim().is_empty() {
                 return Err(AppError::invalid_param(
                     "read_scope.ref is required when kind is not realm",
                 ));
             }
         }
-        "flow_discussion" | "flow_synthesis" => {
-            return Err(AppError::invalid_param(
-                "removed read_scope.kind; use kind='flow' plus track",
-            ));
-        }
-        _ => return Err(AppError::invalid_param("invalid read_scope.kind")),
     }
 
     match (
-        scope.kind.as_str(),
+        &scope.kind,
         scope.track.as_deref(),
         scope.track_scope.as_ref(),
     ) {
-        ("flow", Some(track), None) => validate_track(track)?,
-        ("flow", None, Some(_)) => {}
-        ("flow", Some(_), Some(_)) => {
+        (ReadScopeKind::Flow, Some(track), None) => validate_track(track)?,
+        (ReadScopeKind::Flow, None, Some(_)) => {}
+        (ReadScopeKind::Flow, Some(_), Some(_)) => {
             return Err(AppError::invalid_param(
                 "read_scope must carry exactly one of track_name or track_scope",
             ));
         }
-        ("flow", None, None) => {
+        (ReadScopeKind::Flow, None, None) => {
             return Err(AppError::invalid_param(
                 "read_scope requires track_name or track_scope when kind is flow",
             ));
@@ -194,11 +199,11 @@ fn validate_track(track: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_position(position: &ReadCursorPositionWire) -> Result<(), AppError> {
-    if !position.event_id.starts_with("ck:event:") {
+fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
+    if !position.event_id.as_str().starts_with("ck:event:") {
         return Err(AppError::invalid_param("invalid position.event_id"));
     }
-    let parts = position.hlc.split('-').collect::<Vec<_>>();
+    let parts = position.hlc.as_str().split('-').collect::<Vec<_>>();
     if parts.len() != 3
         || parts[0].len() != 12
         || parts[1].len() != 4

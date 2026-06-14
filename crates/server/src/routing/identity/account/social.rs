@@ -727,11 +727,18 @@ fn contact_state_rank(state: &ContactState) -> u8 {
 }
 
 fn active_scopes(state: &AppState, holder: &str, peer: &str) -> Vec<String> {
-    ["message", "invite", "call", "presence", "any"]
-        .into_iter()
-        .filter(|scope| has_active_consent_for_scope(state, holder, peer, scope, now()))
-        .map(contact_scope_wire)
-        .collect()
+    [
+        "direct_message",
+        "invite",
+        "voice_call",
+        "video_call",
+        "presence",
+        "any",
+    ]
+    .into_iter()
+    .filter(|scope| has_active_consent_for_scope(state, holder, peer, scope, now()))
+    .map(contact_scope_wire)
+    .collect()
 }
 
 fn contact_scope_wire(scope: &str) -> String {

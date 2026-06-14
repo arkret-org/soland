@@ -6,7 +6,7 @@ use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
 pub use cokret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
     DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
-    DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody, DirectConversationBindingState,
+    DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody, DirectConversationBindingState,
     DirectConversationSummary, EventsQueryPostRequestBody, IdentityResolveRequestBody,
     KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
     KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome, PushNotifyRequestBody,
@@ -845,15 +845,12 @@ pub use cokret_sdk::model::{
     AgentRotateKeyRequestBody, AgentSidecarThreadEnsureOutcome,
     AgentSidecarThreadEnsureRequestBody, AgentView, CallMediaTokenExchangeRequestBody,
 };
-// Key-backup put/delete outcomes are the SDK server-side DTOs
+// Key-backup replace/delete outcomes are the SDK server-side DTOs
 // (`cokret_sdk::model` is the authoritative carrier for
-// `keys-operations.schema.json#/$defs/keys_backups_put_outcome` /
-// `keys_backups_delete_outcome`); no soland mirrors. NOTE: the crate-root
-// names `cokret_sdk::KeysBackupsPutOutcome` / `KeysBackupsDeleteOutcome`
-// resolve to the *client-side* twins from `key_backup_client` (same wire
-// shape, no salvo `ToSchema`); the server must use the `model` ones.
+// `keys-operations.schema.json#/$defs/keys_backups_replace_outcome` /
+// `keys_backups_delete_outcome`); no soland mirrors.
 pub use cokret_sdk::model::{
-    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
 pub use cokret_sdk::{
     CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, IdentityLogOutcome,
@@ -1455,47 +1452,11 @@ pub struct RemoveReactionRequestBody {
     pub realm_id: String,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SetReadMarkerRequestBody {
-    pub realm_id: String,
-    pub read_scope: ReadScopeWire,
-    pub position: ReadCursorPositionWire,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReadScopeWire {
-    pub kind: String,
-    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
-    pub object_ref: Option<String>,
-    #[serde(rename = "track_name", skip_serializing_if = "Option::is_none")]
-    pub track: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track_scope: Option<ReadScopeTrackScopeWire>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReadScopeTrackScopeWire {
-    All,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, salvo::oapi::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReadCursorPositionWire {
-    pub event_id: String,
-    pub hlc: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReadMarkerOutcome {
-    pub realm_id: String,
-    pub actor_id: String,
-    pub device_id: String,
-    pub read_scope: ReadScopeWire,
-    pub position: ReadCursorPositionWire,
-    pub updated_at: String,
-}
+pub type SetReadMarkerRequestBody = cokret_sdk::ReadCursorAdvanceRequestBody;
+pub type ReadScopeWire = cokret_sdk::ReadScope;
+pub type ReadScopeTrackScopeWire = cokret_sdk::ReadScopeTrackScope;
+pub type ReadCursorPositionWire = cokret_sdk::ReadCursorPosition;
+pub type ReadMarkerOutcome = cokret_sdk::ReadMarkerOutcome;
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetReadMarkersRequestBody {

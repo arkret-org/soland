@@ -16,11 +16,16 @@
 //!   `ck.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
 //!   effective_policy, inheritance_chain, inheritance_mode}`.
 
-use cokret_sdk::{Operation, OperationId, RealmId};
+use std::collections::BTreeMap;
+
+use cokret_sdk::{
+    Operation, OperationId, RealmEffectivePolicyInheritanceMode, RealmEffectivePolicyOutcome,
+    RealmId, RealmLinkCreateRequestBody, RealmLinkDirection, RealmLinkEntry, RealmLinkKind,
+    RealmLinkList, RealmLinkMutationOutcome, RealmLinkStatus,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{AuthArgs, accept_local_operations};
@@ -43,74 +48,32 @@ pub(crate) fn router() -> Router {
         .push(Router::with_path("{realm_id}/effective-policy").get(get_effective_policy))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmLinkResponseEntry {
-    pub realm_id: String,
-    pub target_realm_id: String,
-    pub link_kind: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commitment: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+fn stored_realm_id(field: &str, value: &str) -> Result<RealmId, AppError> {
+    RealmId::new(value.to_owned())
+        .map_err(|e| AppError::internal(format!("stored realm link {field}: {e}")))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListRealmLinksOutcome {
-    pub realm_id: String,
-    pub direction: String,
-    pub links: Vec<RealmLinkResponseEntry>,
+fn stored_link_kind(value: &str) -> Result<RealmLinkKind, AppError> {
+    RealmLinkKind::parse(value)
+        .ok_or_else(|| AppError::internal(format!("stored realm link link_kind: {value}")))
 }
 
-/// POST body for creating / updating a `ck.realm.link`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateRealmLinkRequestBody {
-    pub target_realm_id: String,
-    pub link_kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commitment: Option<String>,
+fn stored_link_status(value: &str) -> Result<RealmLinkStatus, AppError> {
+    RealmLinkStatus::parse(value)
+        .ok_or_else(|| AppError::internal(format!("stored realm link status: {value}")))
 }
 
-/// POST/DELETE response.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmLinkMutationOutcome {
-    pub realm_id: String,
-    pub target_realm_id: String,
-    pub link_kind: String,
-    pub status: String,
-}
-
-/// Effective-policy response.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct EffectivePolicyOutcome {
-    pub realm_id: String,
-    pub effective_policy: Value,
-    pub inheritance_chain: Vec<String>,
-    /// `"explicit"` when the realm has projected a
-    /// `ck.realm.inheritance_policy`; `"none"` otherwise (spec §5
-    /// forbids implicit inheritance).
-    pub inheritance_mode: String,
-}
-
-impl From<&RealmLinkState> for RealmLinkResponseEntry {
-    fn from(row: &RealmLinkState) -> Self {
-        Self {
-            realm_id: row.realm_id.clone(),
-            target_realm_id: row.target_realm_id.clone(),
-            link_kind: row.link_kind.clone(),
-            status: row.status.clone(),
-            label: row.label.clone(),
-            commitment: row.commitment.clone(),
-            created_at: row.created_at.to_rfc3339(),
-            updated_at: row.updated_at.to_rfc3339(),
-        }
-    }
+fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppError> {
+    Ok(RealmLinkEntry {
+        realm_id: stored_realm_id("realm_id", &row.realm_id)?,
+        target_realm_id: stored_realm_id("target_realm_id", &row.target_realm_id)?,
+        link_kind: stored_link_kind(&row.link_kind)?,
+        status: stored_link_status(&row.status)?,
+        label: row.label.clone(),
+        commitment: row.commitment.clone(),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
 }
 
 #[endpoint(
@@ -126,44 +89,46 @@ async fn list_realm_links(
     link_kind_allow: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<ListRealmLinksOutcome> {
+) -> JsonResult<RealmLinkList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner();
+    let realm_id = RealmId::new(realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let direction_str = direction.into_inner().unwrap_or_else(|| "both".to_owned());
-    let direction_enum = cokret_sdk::RealmLinkDirection::parse(&direction_str)
+    let direction_enum = RealmLinkDirection::parse(&direction_str)
         .ok_or_else(|| AppError::invalid_param("direction MUST be one of outbound|inbound|both"))?;
     // `link_kind_allow` is a comma-separated list — keeps the query
     // surface dense and avoids repeated query params.
     let allow_raw = link_kind_allow.into_inner();
-    let allow: Option<Vec<String>> = allow_raw.as_ref().map(|s| {
-        s.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect()
-    });
-    if let Some(values) = allow.as_ref() {
-        // Reject unknown link_kinds eagerly with a clear error.
-        for value in values {
-            if cokret_sdk::RealmLinkKind::parse(value).is_none() {
-                return Err(AppError::invalid_param(format!(
-                    "link_kind_allow contains unknown kind '{value}'"
-                )));
-            }
-        }
-    }
+    let allow: Option<Vec<String>> = allow_raw
+        .as_ref()
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|value| {
+                    RealmLinkKind::parse(value)
+                        .map(|kind| kind.as_str().to_owned())
+                        .ok_or_else(|| {
+                            AppError::invalid_param(format!(
+                                "link_kind_allow contains unknown kind '{value}'"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
 
     let projection = state.projection.lock().expect("projection mutex");
-    let rows = projection.realm_links_query(&realm_id, direction_enum, allow.as_deref());
+    let rows = projection.realm_links_query(realm_id.as_str(), direction_enum, allow.as_deref());
     let entries = rows
         .iter()
-        .map(RealmLinkResponseEntry::from)
-        .collect::<Vec<_>>();
+        .map(realm_link_entry_from)
+        .collect::<Result<Vec<_>, _>>()?;
 
-    json_ok(ListRealmLinksOutcome {
+    json_ok(RealmLinkList {
         realm_id,
-        direction: direction_str,
+        direction: direction_enum,
         links: entries,
     })
 }
@@ -181,21 +146,15 @@ async fn list_realm_links(
 async fn post_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
-    body: JsonBody<CreateRealmLinkRequestBody>,
+    body: JsonBody<RealmLinkCreateRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner();
+    let realm_scope = RealmId::new(realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let body = body.into_inner();
-    if cokret_sdk::RealmLinkKind::parse(&body.link_kind).is_none() {
-        return Err(AppError::invalid_param(format!(
-            "link_kind '{}' is not a canonical RealmLinkKind",
-            body.link_kind
-        )));
-    }
-    let status = body.status.clone().unwrap_or_else(|| "active".to_owned());
     // G3.S5 — preflight check. The projection pipeline silently drops
     // `ProjectionEffect::Rejected` (see `project_accepted_operations`),
     // so the HTTP route must enforce admission itself by running the
@@ -204,17 +163,17 @@ async fn post_realm_link(
         let projection = state.projection.lock().expect("projection mutex");
         check_realm_link_admissible(
             &projection,
-            &realm_id,
-            &body.target_realm_id,
-            &body.link_kind,
-            &status,
+            realm_scope.as_str(),
+            body.target_realm_id.as_str(),
+            body.link_kind.as_str(),
+            body.status.as_str(),
         )
         .map_err(reducer_reject_to_app_error)?;
     }
     let mut payload = json!({
         "target_realm_id": body.target_realm_id,
         "link_kind": body.link_kind,
-        "status": status,
+        "status": body.status,
     });
     if let Some(label) = body.label.as_ref() {
         payload["label"] = json!(label);
@@ -222,19 +181,17 @@ async fn post_realm_link(
     if let Some(commitment) = body.commitment.as_ref() {
         payload["commitment"] = json!(commitment);
     }
-    let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_scope.clone(), CK_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
     json_ok(RealmLinkMutationOutcome {
-        realm_id,
+        realm_id: realm_scope,
         target_realm_id: body.target_realm_id,
         link_kind: body.link_kind,
-        status,
+        status: body.status,
     })
 }
 
@@ -273,39 +230,43 @@ async fn delete_realm_link(
 ) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner();
-    let target_realm_id = target_realm_id.into_inner();
+    let realm_id = RealmId::new(realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    let target_realm_id = RealmId::new(target_realm_id.into_inner())
+        .map_err(|e| AppError::invalid_param(format!("target_realm_id: {e}")))?;
     let link_kind = link_kind
         .into_inner()
-        .unwrap_or_else(|| "governed_by".to_owned());
-    if cokret_sdk::RealmLinkKind::parse(&link_kind).is_none() {
-        return Err(AppError::invalid_param(format!(
-            "link_kind '{link_kind}' is not a canonical RealmLinkKind"
-        )));
-    }
+        .map(|value| {
+            RealmLinkKind::parse(&value).ok_or_else(|| {
+                AppError::invalid_param(format!(
+                    "link_kind '{value}' is not a canonical RealmLinkKind"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(RealmLinkKind::GovernedBy);
+    let status = RealmLinkStatus::Tombstoned;
     // Preflight (same reasoning as POST). Tombstones aren't
     // cycle-checked, but kind / status validation still applies.
     {
         let projection = state.projection.lock().expect("projection mutex");
         check_realm_link_admissible(
             &projection,
-            &realm_id,
-            &target_realm_id,
-            &link_kind,
-            "tombstoned",
+            realm_id.as_str(),
+            target_realm_id.as_str(),
+            link_kind.as_str(),
+            status.as_str(),
         )
         .map_err(reducer_reject_to_app_error)?;
     }
     let payload = json!({
         "target_realm_id": target_realm_id,
         "link_kind": link_kind,
-        "status": "tombstoned",
+        "status": status,
     });
-    let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, CK_REALM_LINK, payload);
+    let operation = Operation::create(op_id, realm_id.clone(), CK_REALM_LINK, payload);
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
         .await
         .map_err(reducer_reject_to_app_error)?;
@@ -313,7 +274,7 @@ async fn delete_realm_link(
         realm_id,
         target_realm_id,
         link_kind,
-        status: "tombstoned".to_owned(),
+        status,
     })
 }
 
@@ -344,16 +305,41 @@ async fn get_effective_policy(
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EffectivePolicyOutcome> {
+) -> JsonResult<RealmEffectivePolicyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let projection = state.projection.lock().expect("projection mutex");
     let ep = effective_policy_for_realm(&projection, &realm_id);
-    json_ok(EffectivePolicyOutcome {
-        realm_id: ep.realm_id,
-        effective_policy: ep.effective_policy,
-        inheritance_chain: ep.inheritance_chain,
-        inheritance_mode: ep.inheritance_mode,
+    let effective_policy = match ep.effective_policy {
+        Value::Object(map) => map.into_iter().collect::<BTreeMap<_, _>>(),
+        _ => {
+            return Err(AppError::internal(
+                "effective policy projection must be a JSON object",
+            ));
+        }
+    };
+    let inheritance_mode = match ep.inheritance_mode.as_str() {
+        "explicit" => RealmEffectivePolicyInheritanceMode::Explicit,
+        "none" => RealmEffectivePolicyInheritanceMode::None,
+        other => {
+            return Err(AppError::internal(format!(
+                "effective policy inheritance_mode: {other}"
+            )));
+        }
+    };
+    json_ok(RealmEffectivePolicyOutcome {
+        realm_id: RealmId::new(ep.realm_id)
+            .map_err(|e| AppError::internal(format!("effective policy realm_id: {e}")))?,
+        effective_policy,
+        inheritance_chain: ep
+            .inheritance_chain
+            .into_iter()
+            .map(|id| {
+                RealmId::new(id)
+                    .map_err(|e| AppError::internal(format!("inheritance_chain realm_id: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        inheritance_mode,
     })
 }

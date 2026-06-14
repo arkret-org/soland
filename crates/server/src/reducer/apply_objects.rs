@@ -978,7 +978,7 @@ impl ProjectionState {
             ),
             None => return ProjectionEffect::Ignored,
         };
-        if target_state == "active" {
+        if matches!(target_state.as_str(), "join" | "active") {
             // CKP-0007 strict subset invariant: Circle.members ⊆
             // Realm.members. Reducer reason
             // `circle_member_must_be_realm_member`.
@@ -1033,13 +1033,13 @@ impl ProjectionState {
             };
         }
         match target_state.as_str() {
-            "active" => {
+            "join" | "active" => {
                 circle.members.insert(actor.clone());
             }
-            "removed" | "banned" | "left" => {
+            "leave" | "ban" | "removed" | "banned" | "left" => {
                 circle.members.remove(&actor);
             }
-            "invited" => {
+            "invite" | "knock" | "invited" => {
                 // Invited members are not yet active; no projection-side
                 // membership change. Wire effect is still emitted so the
                 // notification dispatcher can react.

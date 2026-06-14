@@ -26,7 +26,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord, DeviceMessageRecord};
 use crate::wire::{
     DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
-    DeviceMessagesGetOutcome, DeviceMessagesPutOutcome, DeviceMessagesPutRequestBody,
+    DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
 };
 
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
@@ -67,10 +67,10 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.device_messages.command.send"))]
 async fn send_device_messages(
     aa: AuthArgs,
-    body: JsonBody<DeviceMessagesPutRequestBody>,
+    body: JsonBody<DeviceMessagesSendRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<DeviceMessagesPutOutcome> {
+) -> JsonResult<DeviceMessagesSendOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = req
@@ -139,7 +139,7 @@ async fn send_device_messages(
         .await
         .unwrap_or(false);
     if !registered {
-        return json_ok(DeviceMessagesPutOutcome {
+        return json_ok(DeviceMessagesSendOutcome {
             ok: true,
             delivered: BTreeMap::new(),
             unknown_devices: BTreeMap::new(),
@@ -181,7 +181,7 @@ async fn send_device_messages(
             delivered.insert(recipient.to_string(), json!(delivered_devices));
         }
     }
-    json_ok(DeviceMessagesPutOutcome {
+    json_ok(DeviceMessagesSendOutcome {
         ok: true,
         delivered,
         unknown_devices,
