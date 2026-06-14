@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use cokret_sdk::{
+    KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
+};
 use serde_json::{Map, Value};
 use soland::persistence::{PersistenceStore, SolandMemoryPersistenceStore};
 use soland::state::{
@@ -1536,11 +1539,15 @@ async fn delete_key_backup(
     expected_status: StatusCode,
 ) -> Value {
     let proof = format!("dev-ssk-delete:v1:{principal_id}:{backup_id}");
+    let body = KeysBackupsDeleteRequestBody {
+        proof: KeyBackupDeleteProof::Development(KeyBackupDeleteDevelopmentProof::new(proof)),
+        reason: None,
+    };
     let mut response = TestClient::delete(format!(
         "http://server/_cokret/self/keys/backups/{backup_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&serde_json::json!({ "proof": proof }))
+    .json(&body)
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.unwrap();

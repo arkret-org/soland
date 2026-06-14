@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::SecondsFormat;
 use cokret_sdk::http::{EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody};
-use cokret_sdk::{Did, EventsQueryPostRequestBody, RealmId, canonical};
+use cokret_sdk::{
+    Did, EventsQueryPostRequestBody, EventsSubmitFederationRequestBody, RealmId, canonical,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -83,7 +85,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "ck.peer.events.command.submit"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = match req.parse_json::<Value>().await {
+    let body = match req.parse_json::<EventsSubmitFederationRequestBody>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -95,7 +97,17 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    if let Err(error) = validate_peer_request(state, req, Some(&body)) {
+    let body_value = match serde_json::to_value(&body) {
+        Ok(body_value) => body_value,
+        Err(error) => {
+            render_app_error(
+                res,
+                AppError::internal(format!("peer events submit body serialize: {error}")),
+            );
+            return;
+        }
+    };
+    if let Err(error) = validate_peer_request(state, req, Some(&body_value)) {
         render_app_error(res, error);
         return;
     }
@@ -126,12 +138,15 @@ async fn peer_events_query_post(
     req: &mut Request,
 ) -> JsonResult<EventsQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = parse_json_body(req, "invalid ck.peer.events.query.scan request body").await?;
+    let request = parse_json_body::<EventsQueryPostRequestBody>(
+        req,
+        "invalid ck.peer.events.query.scan request body",
+    )
+    .await?;
+    let body = serde_json::to_value(&request).map_err(|error| {
+        AppError::internal(format!("peer events query request serialize: {error}"))
+    })?;
     validate_peer_request(state, req, Some(&body))?;
-    let request =
-        serde_json::from_value::<EventsQueryPostRequestBody>(body.clone()).map_err(|error| {
-            schema_violation(format!("invalid ck.peer.events.query.scan shape: {error}"))
-        })?;
     let parts = PeerEventsQueryParts::from_body(request)?;
     peer_events_query_response(state, parts).await
 }
@@ -147,13 +162,15 @@ async fn peer_events_resolve(
     req: &mut Request,
 ) -> JsonResult<EventsResolveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = parse_json_body(req, "invalid ck.peer.events.query.resolve request body").await?;
-    validate_peer_request(state, req, Some(&body))?;
-    let request = serde_json::from_value::<EventsResolveRequestBody>(body).map_err(|error| {
-        schema_violation(format!(
-            "invalid ck.peer.events.query.resolve shape: {error}"
-        ))
+    let request = parse_json_body::<EventsResolveRequestBody>(
+        req,
+        "invalid ck.peer.events.query.resolve request body",
+    )
+    .await?;
+    let body = serde_json::to_value(&request).map_err(|error| {
+        AppError::internal(format!("peer events resolve request serialize: {error}"))
     })?;
+    validate_peer_request(state, req, Some(&body))?;
     if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
         return Err(AppError::new(
             crate::error::ErrorCode::PayloadTooLarge,
@@ -580,8 +597,11 @@ fn parse_kind_filter(filters: Option<&Value>) -> Result<Option<String>, AppError
         .map(ToOwned::to_owned))
 }
 
-async fn parse_json_body(req: &mut Request, message: &'static str) -> Result<Value, AppError> {
-    req.parse_json::<Value>()
+async fn parse_json_body<T>(req: &mut Request, message: &'static str) -> Result<T, AppError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    req.parse_json::<T>()
         .await
         .map_err(|_| AppError::bad_json(message))
 }

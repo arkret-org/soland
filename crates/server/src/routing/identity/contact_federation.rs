@@ -18,12 +18,16 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::SecondsFormat;
+use cokret_sdk::{
+    Did, Event, Hash, Hlc, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
+    Proof, RealmId, canonical, proof_kind,
+};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::consent::{grant_contact_managed_consent, normalize_scope, persist_consent_cell};
-use super::{now, sha256_hex};
+use super::now;
 use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::{AppState, ContactRecord};
@@ -75,35 +79,37 @@ pub(crate) async fn federate_contact_fact(
         return Ok(false);
     };
 
+    let fact_kind = PeerContactFactKind::from_wire(fact_kind)
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let issuer_pcr = super::recovery::principal_control_realm_for_did(issuer);
-    let contact_event = build_contact_envelope(state, fact_kind, issuer, &issuer_pcr, fact_payload);
-    let delivery = json!({
-        "schema": "ck.schema.peer_contact_delivery_request.v1",
-        "contact_event": contact_event,
-        "contact_address": {
-            "subject_id": subject_id,
-            "recipient_service_did": recipient_service_did,
-            "recipient_service_type": "principal_server",
+    let contact_event =
+        build_contact_envelope(state, fact_kind, issuer, &issuer_pcr, fact_payload)?;
+    let idempotency_key = contact_delivery_idempotency_key(
+        &state.config.service_did,
+        recipient_service_did,
+        fact_kind.as_str(),
+        issuer,
+        subject_id,
+        &contact_event,
+    );
+    let delivery = PeerContactDeliveryRequest::new(
+        contact_event,
+        PeerContactAddress {
+            subject_id: Did::new(subject_id.to_owned())
+                .map_err(|error| AppError::invalid_param(format!("invalid subject_id: {error}")))?,
+            recipient_service_did: Did::new(recipient_service_did.to_owned()).map_err(|error| {
+                AppError::invalid_param(format!("invalid recipient_service_did: {error}"))
+            })?,
+            recipient_service_type: Some("principal_server".to_owned()),
         },
-        "fact_kind": fact_kind,
-        "idempotency_key": contact_delivery_idempotency_key(
-            &state.config.service_did,
-            recipient_service_did,
-            fact_kind,
-            issuer,
-            subject_id,
-            &contact_event,
-        ),
-    });
-    let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&delivery)
+        fact_kind,
+        idempotency_key,
+    );
+    let payload_bytes = canonical::canonical_json_bytes(&delivery)
         .map_err(|error| AppError::internal(format!("contact delivery canonicalize: {error}")))?;
     let payload_json = String::from_utf8(payload_bytes)
         .map_err(|error| AppError::internal(format!("contact delivery utf8: {error}")))?;
-    let idempotency_key = delivery
-        .get("idempotency_key")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+    let idempotency_key = delivery.idempotency_key.clone();
 
     crate::routing::federation::outbox::enqueue_outbound(
         state,
@@ -116,7 +122,7 @@ pub(crate) async fn federate_contact_fact(
     .await
     .map_err(|error| AppError::internal(format!("contact delivery enqueue: {error}")))?;
     tracing::info!(
-        fact_kind,
+        fact_kind = fact_kind.as_str(),
         issuer,
         subject_id,
         recipient_service_did,
@@ -130,38 +136,35 @@ pub(crate) async fn federate_contact_fact(
 /// original signed envelope; it never re-signs it as a local fact (spec §2).
 fn build_contact_envelope(
     state: &AppState,
-    fact_kind: &str,
+    fact_kind: PeerContactFactKind,
     issuer: &str,
     issuer_pcr: &str,
     fact_payload: Value,
-) -> Value {
-    let event_id = crate::ids::generate_event_id();
-    let created_at = now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let payload_digest = format!(
-        "sha256:{}",
-        sha256_hex(
-            &cokret_sdk::canonical::canonical_json_bytes(&fact_payload)
-                .unwrap_or_else(|_| fact_payload.to_string().into_bytes())
-        )
-    );
-    let _ = state;
-    json!({
-        "event_id": event_id,
-        "kind": fact_kind,
-        "schema_id": "ck.schema.event.v1",
-        "realm_id": issuer_pcr,
-        "actor_id": issuer,
-        "actor_seq": 0,
-        "created_at": created_at,
-        "prev_refs": [],
-        "refs": [],
-        "payload": fact_payload,
-        "proofs": [{
-            "type": "dev-proof",
-            "verification_method": format!("{issuer}#device"),
-            "payload_digest": payload_digest,
-        }],
-    })
+) -> Result<Event, AppError> {
+    let realm_id = RealmId::new(issuer_pcr.to_owned())
+        .map_err(|error| AppError::internal(format!("issuer PCR realm_id invalid: {error}")))?;
+    let actor_id = Did::new(issuer.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("invalid contact issuer DID: {error}")))?;
+    let hlc = Hlc::new(state.hlc.now())
+        .map_err(|error| AppError::internal(format!("contact event HLC invalid: {error}")))?;
+    let mut event = Event::new(fact_kind.as_str(), realm_id, actor_id, 0, hlc, fact_payload)
+        .map_err(|error| AppError::internal(format!("contact event build failed: {error}")))?;
+    let event_digest = event
+        .event_digest()
+        .map_err(|error| AppError::internal(format!("contact event digest failed: {error}")))?;
+    let event_digest = Hash::new(event_digest)
+        .map_err(|error| AppError::internal(format!("contact event digest invalid: {error}")))?;
+    event.proofs.push(Proof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: format!("{issuer}#device"),
+        event_digest,
+        created_at: event.created_at,
+        domain: None,
+        audience: None,
+        jws: "dev-contact-fact".to_owned(),
+    });
+    Ok(event)
 }
 
 fn contact_delivery_idempotency_key(
@@ -170,12 +173,9 @@ fn contact_delivery_idempotency_key(
     fact_kind: &str,
     issuer: &str,
     subject_id: &str,
-    contact_event: &Value,
+    contact_event: &Event,
 ) -> String {
-    let event_id = contact_event
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let event_id = contact_event.event_id.as_str();
     let mut hasher = Sha256::new();
     for part in [
         origin_service_did,
@@ -199,60 +199,31 @@ fn contact_delivery_idempotency_key(
 #[tracing::instrument(skip_all, fields(op = "ck.peer.contacts.command.submit"))]
 async fn peer_contacts_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<Value>()
+    let delivery = req
+        .parse_json::<PeerContactDeliveryRequest>()
         .await
         .map_err(|_| AppError::bad_json("invalid ck.peer.contacts.command.submit request body"))?;
+    let body = serde_json::to_value(&delivery).map_err(|error| {
+        AppError::internal(format!("contact delivery request serialize: {error}"))
+    })?;
     super::super::events::peer::validate_peer_request(state, req, Some(&body))?;
     validate_content_digest(req, &body)?;
 
-    if body.get("schema").and_then(Value::as_str)
-        != Some("ck.schema.peer_contact_delivery_request.v1")
-    {
-        return Err(super::super::events::peer::schema_violation(
-            "schema must be ck.schema.peer_contact_delivery_request.v1",
-        ));
-    }
-    let contact_event = body
-        .get("contact_event")
-        .ok_or_else(|| super::super::events::peer::schema_violation("contact_event is required"))?;
-    let fact_kind = body
-        .get("fact_kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| super::super::events::peer::schema_violation("fact_kind is required"))?;
-    if contact_event.get("kind").and_then(Value::as_str) != Some(fact_kind) {
-        return Err(super::super::events::peer::schema_violation(
-            "fact_kind must equal contact_event.kind",
-        ));
-    }
-    let issuer = contact_event
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            super::super::events::peer::schema_violation("contact_event.actor_id is required")
-        })?
-        .to_owned();
-    let subject_id = body
-        .pointer("/contact_address/subject_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            super::super::events::peer::schema_violation("contact_address.subject_id is required")
-        })?
-        .to_owned();
-    let recipient_service_did = body
-        .pointer("/contact_address/recipient_service_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            super::super::events::peer::schema_violation(
-                "contact_address.recipient_service_did is required",
-            )
-        })?;
+    delivery.validate_minimal().map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "invalid contact delivery request: {error}"
+        ))
+    })?;
+    let fact_kind = delivery.fact_kind.as_str();
+    let issuer = delivery.contact_event.actor_id.as_str().to_owned();
+    let subject_id = delivery.contact_address.subject_id.as_str().to_owned();
+    let recipient_service_did = delivery.contact_address.recipient_service_did.as_str();
     if recipient_service_did != state.config.service_did {
         return Err(super::super::events::peer::cross_domain_replay(
             "contact_address.recipient_service_did does not match this service",
         ));
     }
-    let payload = contact_event.get("payload").cloned().unwrap_or(Value::Null);
+    let payload = delivery.contact_event.content.clone();
 
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`

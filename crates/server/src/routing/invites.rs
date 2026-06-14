@@ -49,19 +49,16 @@ pub(crate) fn open_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.peer.invites.command.submit"))]
 async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<Value>()
+    let delivery = req
+        .parse_json::<InviteDeliveryRequest>()
         .await
         .map_err(|_| AppError::bad_json("invalid ck.peer.invites.command.submit request body"))?;
+    let body = serde_json::to_value(&delivery).map_err(|error| {
+        AppError::internal(format!("invite delivery request serialize: {error}"))
+    })?;
     super::events::peer::validate_peer_request(state, req, Some(&body))?;
     validate_content_digest(req, &body)?;
 
-    let delivery: InviteDeliveryRequest =
-        serde_json::from_value(body.clone()).map_err(|error| {
-            super::events::peer::schema_violation(format!(
-                "invalid ck.peer.invites.command.submit shape: {error}"
-            ))
-        })?;
     delivery.validate_minimal().map_err(|error| {
         super::events::peer::schema_violation(format!("invalid invite delivery request: {error}"))
     })?;

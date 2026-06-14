@@ -2,11 +2,15 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::{BackupClass, BackupId, DeviceId, Did, KeyBackup, KeyBackupRecipientMethod};
+use cokret_sdk::{
+    BackupClass, BackupId, DeviceId, Did, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
+    KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
+    KeysBackupsDeleteRequestBody,
+};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::append_audit_log;
@@ -104,14 +108,6 @@ const KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS: &[&str] = &[
     "proof_digest",
     "issued_at",
 ];
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-struct KeyBackupDeleteProofHeader {
-    issuer: String,
-    verification_method: String,
-    jws: String,
-}
 
 #[derive(Debug, Serialize)]
 struct KeyBackupDeleteProofTranscript<'a> {
@@ -1312,16 +1308,16 @@ fn key_backup_delete_proof_canonical_bytes(
 
 async fn verify_key_backup_delete_jws_proof(
     state: &AppState,
-    proof: &str,
+    proof: &KeyBackupDeleteDetachedJwsProof,
     backup_id: &str,
     actor_id: &str,
 ) -> Result<(), AppError> {
-    let proof: KeyBackupDeleteProofHeader = serde_json::from_str(proof).map_err(|error| {
-        AppError::capability_denied(format!(
-            "key backup delete proof must be JSON detached-JWS metadata: {error}"
-        ))
-    })?;
-    if proof.issuer != actor_id {
+    if proof.kind.trim().is_empty() {
+        return Err(AppError::capability_denied(
+            "key backup delete proof kind must not be empty",
+        ));
+    }
+    if proof.issuer.as_str() != actor_id {
         return Err(AppError::capability_denied(
             "key backup delete proof issuer must match authenticated actor",
         ));
@@ -1376,51 +1372,40 @@ async fn verify_delete_ownership_proof(
 ) -> Result<(), AppError> {
     // spec `keys_backups_delete_request_body` (additionalProperties: false):
     // the DELETE proof MUST travel in the JSON request body `{proof, reason?}`,
-    // not a header. `proof` is an object (the detached-JWS metadata); the
-    // development form is accepted as a plain string for opt-in dev builds.
-    let body = req.parse_json::<Value>().await.map_err(|_| {
-        AppError::invalid_param("ck.self.keys.backups.resource.delete request body must be JSON")
-    })?;
-    let object = body.as_object().ok_or_else(|| {
-        AppError::invalid_param(
-            "ck.self.keys.backups.resource.delete request body must be an object",
-        )
-    })?;
-    for key in object.keys() {
-        if !matches!(key.as_str(), "proof" | "reason") {
-            return Err(AppError::invalid_param(
-                "ck.self.keys.backups.resource.delete permits only proof and reason",
-            ));
-        }
-    }
-    let proof_value = object.get("proof").ok_or_else(|| {
-        AppError::invalid_param(
-            "ck.self.keys.backups.resource.delete requires a proof in the request body",
-        )
-    })?;
-    // Dev-mode escape hatch: a bare string proof.
-    if let Some(proof) = proof_value.as_str() {
-        let proof = proof.trim();
-        if is_development_delete_proof(proof, backup_id, actor_id) {
-            if state.config.development_mode {
-                return Ok(());
-            }
-            return Err(AppError::capability_denied(
-                "development key-backup delete proofs are disabled outside development_mode",
-            ));
-        }
-        return verify_key_backup_delete_jws_proof(state, proof, backup_id, actor_id).await;
-    }
-    // spec-canonical form: `proof` is a detached-JWS metadata object.
-    if proof_value.is_object() {
-        let proof = serde_json::to_string(proof_value).map_err(|error| {
-            AppError::internal(format!("key backup delete proof re-encode failed: {error}"))
+    // not a header. `proof` is an object; the development-only proof shape is
+    // explicit so the SDK never serializes a raw proof string.
+    let body = req
+        .parse_json::<KeysBackupsDeleteRequestBody>()
+        .await
+        .map_err(|_| {
+            AppError::invalid_param(
+                "ck.self.keys.backups.resource.delete request body must be JSON",
+            )
         })?;
-        return verify_key_backup_delete_jws_proof(state, &proof, backup_id, actor_id).await;
+    match body.proof {
+        KeyBackupDeleteProof::Development(proof) => {
+            if proof.kind != KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND {
+                return Err(AppError::invalid_param(
+                    "ck.self.keys.backups.resource.delete development proof kind is invalid",
+                ));
+            }
+            let value = proof.value.trim();
+            if is_development_delete_proof(value, backup_id, actor_id) {
+                if state.config.development_mode {
+                    return Ok(());
+                }
+                return Err(AppError::capability_denied(
+                    "development key-backup delete proofs are disabled outside development_mode",
+                ));
+            }
+            Err(AppError::invalid_param(
+                "ck.self.keys.backups.resource.delete proof string is only valid for development delete proofs",
+            ))
+        }
+        KeyBackupDeleteProof::DetachedJws(proof) => {
+            verify_key_backup_delete_jws_proof(state, &proof, backup_id, actor_id).await
+        }
     }
-    Err(AppError::invalid_param(
-        "ck.self.keys.backups.resource.delete proof must be an object or a development proof string",
-    ))
 }
 
 fn key_backup_duplicate_for_actor(

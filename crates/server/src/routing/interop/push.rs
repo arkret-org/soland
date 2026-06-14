@@ -304,13 +304,15 @@ pub(super) async fn push_notify(
 ) -> JsonResult<PushNotifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if push_notification_leaks_private_payload(&body.notification, None) {
+    let notification = serde_json::to_value(&body.notification).map_err(|error| {
+        AppError::internal(format!("push notification request serialize: {error}"))
+    })?;
+    if push_notification_leaks_private_payload(&notification, None) {
         return Err(AppError::invalid_param(
             "push notification must not include plaintext content or stable identifiers",
         ));
     }
-    let devices = body
-        .notification
+    let devices = notification
         .get("devices")
         .and_then(|value| value.as_array())
         .cloned()
@@ -381,8 +383,7 @@ pub(super) async fn push_notify(
         }
 
         if let Some(rule_id) =
-            push_device_suppressed_by_rule(state, actor, &body.notification, registered_device)
-                .await
+            push_device_suppressed_by_rule(state, actor, &notification, registered_device).await
         {
             rejected.push(push_rejection(device, "push_rule", Some(rule_id)));
         }
