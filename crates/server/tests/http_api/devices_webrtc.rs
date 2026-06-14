@@ -249,7 +249,6 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
     let devices = TestClient::get("http://server/_cokret/self/devices")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
-        .await
         .await;
     assert_eq!(devices.status_code, Some(StatusCode::NOT_FOUND));
 
