@@ -58,6 +58,56 @@ pub fn render_error_with_detail(
     ));
 }
 
+/// Variant of [`render_error`] that stamps a **stable** top-level `reason`
+/// discriminator (and `error.reason` mirror) alongside the canonical envelope.
+///
+/// COT-03-001 / `applet-integration.md` §7.3.1: the inbound transaction-push
+/// signature failures pin the discriminator in `reason`, keeping `error.code`
+/// the generic `unauthenticated`. The discriminator is mirrored at both the
+/// top level (`reason`) and `error.reason` so callers can read either. An
+/// optional `reason_detail` is still threaded into `error.details.reason_detail`
+/// for opaque diagnostics.
+pub fn render_error_with_top_level_reason(
+    res: &mut Response,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    reason: &str,
+    reason_detail: Option<&str>,
+) {
+    let request_id = ids::generate_request_id();
+    let mut envelope = cokret_sdk::ErrorEnvelope::new(code, message).with_request_id(request_id);
+    if let Some(reason_detail) = reason_detail {
+        envelope = envelope.with_detail(
+            "reason_detail",
+            serde_json::Value::String(reason_detail.to_owned()),
+        );
+    }
+    let mut body = serde_json::to_value(&envelope).unwrap_or_else(|_| {
+        serde_json::json!({
+            "ok": false,
+            "error": { "code": code, "message": message },
+        })
+    });
+    if let Some(object) = body.as_object_mut() {
+        object.insert(
+            "reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
+        );
+        if let Some(error) = object
+            .get_mut("error")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            error.insert(
+                "reason".to_owned(),
+                serde_json::Value::String(reason.to_owned()),
+            );
+        }
+    }
+    res.status_code(status);
+    res.render(Json(body));
+}
+
 /// Pull a single query-string value, decoding `+` to space and any
 /// `%XX` percent-escapes back to their raw byte form. Required for
 /// typed-id query args like `?space_id=ck:space:...` where browsers
