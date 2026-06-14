@@ -7,15 +7,17 @@
 //! canonical space timeline.
 
 use std::collections::BTreeSet;
-use std::sync::Mutex;
 
 use cokret_sdk::{
-    AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
-    AppletDelegatedEventAuthorization, AppletId, AppletInstallPreviewRequestBody,
-    AppletInstallRequestBody, AppletPackage, AppletTransactionRequestBody, AppletWireNamespaces,
-    Did, EffectiveScope, Event, EventRef, GhostActorProfileRequest, GhostActorProvisionOutcome,
-    GhostActorProvisionRequestBody, Hash, Hlc, InstallCommitRequestBody, InstallPreviewRequestBody,
-    InstallRevokeRequestBody, Proof, RealmId, canonical,
+    AccountabilityGrantPayload, AccountabilityScope, ActorProfileId, AppletActorView,
+    AppletDelegatedEventAuthorization, AppletId, AppletPackage, AppletPingOutcome,
+    AppletProtocolMetadata, AppletRealmView, AppletRevokeOutcome, AppletTransactionOutcome,
+    AppletTransactionRequestBody, AppletWireNamespaces, ApprovedScope, Did, EffectiveScope, Event,
+    EventRef, GhostActorProfileRequest, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
+    Hash, Hlc, InstallCapabilityConstraint, InstallCommitOutcome, InstallCommitRequestBody,
+    InstallDeniedScope, InstallE2eeEffect, InstallEventSubmission, InstallNamespaceConflict,
+    InstallPlan, InstallPreviewRequestBody, InstallRevokeRequestBody, InstallWidgetEffect, Proof,
+    RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -38,9 +40,10 @@ use crate::state::{
 use crate::{ids, kinds};
 
 const EVENT_SCHEMA_ID: &str = "ck.schema.event.v1";
+const SOLAND_EDGE_APPLET_ID: &str = "ck:applet:00000000-0000-7000-8000-000000000000";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AppletBridgeRecord {
+pub struct AppletRecord {
     pub applet_id: String,
     pub namespace: String,
     pub owner_actor_id: String,
@@ -66,7 +69,7 @@ pub struct AppletBridgeRecord {
     #[serde(default)]
     pub install_id: Option<String>,
     #[serde(default)]
-    pub install_response: Option<Value>,
+    pub install_response: Option<InstallCommitOutcome>,
     #[serde(default)]
     pub ghosts: Vec<GhostActorRecord>,
 }
@@ -82,7 +85,121 @@ pub struct GhostActorRecord {
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-static APPLET_BRIDGE_REGISTRY: Mutex<Vec<AppletBridgeRecord>> = Mutex::new(Vec::new());
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletRevokeRecordOutcome {
+    pub applet_id: String,
+    pub status: String,
+    pub revoked_at: chrono::DateTime<chrono::Utc>,
+    pub bot_actor_id: String,
+    pub ghost_actor_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletInstallPaths {
+    pub preview_path: String,
+    pub commit_path: String,
+    pub revoke_path: String,
+    pub ghost_actor_provision_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletProtocolDescribeOutcome {
+    pub contract: String,
+    pub install: AppletInstallPaths,
+    pub transaction_path: String,
+    pub package_schema: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletManifestRegisterRequestBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_json: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_registry_did: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletView {
+    pub applet_id: String,
+    pub namespace: String,
+    pub owner_actor_id: String,
+    pub registry_did: String,
+    pub bot_actor_id: String,
+    pub portal_realm_id: String,
+    pub capabilities: Vec<String>,
+    pub status: String,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ghost_actor_ids: Vec<String>,
+    pub manifest: AppletManifest,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+pub struct AppletExternalUserInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletGhostIngressRequestBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_user: Option<AppletExternalUserInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletPortalMessageRequestBody {
+    pub realm_id: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletPortalMessageOutcome {
+    pub message_id: String,
+    pub event_id: String,
+    pub operation_id: String,
+    pub realm_id: String,
+    pub portal_realm_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct AppletGhostIngressOutcome {
+    pub applet_id: String,
+    pub ghost_actor_id: String,
+    pub external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub accountability: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_realm_id: Option<String>,
+}
 
 pub(super) fn router() -> Router {
     Router::with_path("applets")
@@ -96,9 +213,9 @@ pub(super) fn router() -> Router {
         )
 }
 
-/// soland-private companion surface for the spec applet install flow,
-/// mounted at `/_soland/self/applets/...`. Ghost provisioning is not a
-/// registry operation, so it must not appear under `/_cokret/`.
+/// Compatibility copy of the applet ghost-provision surface under
+/// `/_soland/self/applets/...`; the canonical route is mounted under
+/// `/_cokret/self/applets/{applet_id}/ghosts/provision`.
 pub(super) fn legacy_self_router() -> Router {
     Router::with_path("applets").push(
         Router::with_path("{applet_id}")
@@ -136,11 +253,12 @@ pub(super) fn protocol_router() -> Router {
                             .push(Router::with_path("preview").post(install_preview_endpoint))
                             .post(install_endpoint),
                     )
-                    // Spec applet self surface is install / install/preview /
-                    // {applet_id}/revoke only; the soland-private ghost
-                    // provision endpoint lives on `/_soland/` (legacy_router).
                     .push(
                         Router::with_path("{applet_id}")
+                            .push(
+                                Router::with_path("ghosts/provision")
+                                    .post(provision_ghost_actor_endpoint),
+                            )
                             .push(Router::with_path("revoke").post(revoke_install_endpoint)),
                     ),
             ),
@@ -153,12 +271,17 @@ pub(super) fn protocol_router() -> Router {
     summary = "Applet service liveness probe"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.ping"))]
-async fn protocol_ping_endpoint() -> JsonResult<Value> {
-    json_ok(json!({
-        "ok": true,
-        "service": "soland",
-        "surface": "ck.applet",
-    }))
+async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let service_did = Did::new(state.config.service_did.clone()).map_err(|error| {
+        AppError::internal(format!("configured service_did is invalid: {error}"))
+    })?;
+    json_ok(AppletPingOutcome {
+        ok: true,
+        applet_id: SOLAND_EDGE_APPLET_ID.to_owned(),
+        service_did,
+        protocol_version: "1.0".to_owned(),
+    })
 }
 
 #[endpoint(
@@ -167,18 +290,19 @@ async fn protocol_ping_endpoint() -> JsonResult<Value> {
     summary = "Describe soland's applet protocol support"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.describe"))]
-async fn protocol_describe_endpoint() -> JsonResult<Value> {
-    json_ok(json!({
-        "contract": "ck.applet.v1",
-        "install": {
-            "preview_path": "/_cokret/self/applets/install/preview",
-            "commit_path": "/_cokret/self/applets/install",
-            "revoke_path": "/_cokret/self/applets/{applet_id}/revoke",
-            "ghost_actor_provision_path": "/_soland/self/applets/{applet_id}/ghosts/provision"
+async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
+    json_ok(AppletProtocolDescribeOutcome {
+        contract: "ck.applet.v1".to_owned(),
+        install: AppletInstallPaths {
+            preview_path: "/_cokret/self/applets/install/preview".to_owned(),
+            commit_path: "/_cokret/self/applets/install".to_owned(),
+            revoke_path: "/_cokret/self/applets/{applet_id}/revoke".to_owned(),
+            ghost_actor_provision_path: "/_cokret/self/applets/{applet_id}/ghosts/provision"
+                .to_owned(),
         },
-        "transaction_path": "/_cokret/edge/applet/transactions",
-        "package_schema": "ck.schema.applet_package.v1"
-    }))
+        transaction_path: "/_cokret/edge/applet/transactions".to_owned(),
+        package_schema: "ck.schema.applet_package.v1".to_owned(),
+    })
 }
 
 #[endpoint(
@@ -190,15 +314,13 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
-    body: JsonBody<AppletInstallPreviewRequestBody>,
+    body: JsonBody<InstallPreviewRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<InstallPlan> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let body = serde_json::to_value(body.into_inner())
-        .map_err(|error| AppError::internal(format!("install preview serialize: {error}")))?;
-    let preview: InstallPreviewRequestBody = parse_typed_body(body, "install preview")?;
+    let preview = body.into_inner();
     validate_applet_package(&preview.applet_package)?;
     let approved_scopes = approved_scopes_from_actions(
         &preview.applet_package,
@@ -206,10 +328,12 @@ async fn install_preview_endpoint(
         &preview.approval_request.approve_actions,
     )?;
     let plan = build_install_plan(
+        state,
         &preview.applet_package,
         &preview.effective_scope,
         approved_scopes,
-    )?;
+    )
+    .await?;
     json_ok(plan)
 }
 
@@ -222,11 +346,11 @@ async fn install_preview_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<AppletInstallRequestBody>,
+    body: JsonBody<InstallCommitRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) -> JsonResult<Value> {
+) -> JsonResult<InstallCommitOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = idempotency_key(req)
@@ -236,22 +360,23 @@ async fn install_endpoint(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
-    let body = serde_json::to_value(body.into_inner())
+    let commit = body.into_inner();
+    let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = canonical_digest(&body)?;
-    let commit: InstallCommitRequestBody = parse_typed_body(body.clone(), "install commit")?;
     validate_applet_package(&commit.applet_package)?;
-    let approved_scopes = serde_json::to_value(&commit.approved_scopes)
-        .map_err(|error| AppError::internal(format!("approved_scopes serialize: {error}")))?;
-    let approved_scopes = approved_scopes.as_array().cloned().unwrap_or_default();
     let recomputed_plan = build_install_plan(
+        state,
         &commit.applet_package,
         &commit.effective_scope,
-        approved_scopes,
-    )?;
-    let recomputed_digest = string_field(&recomputed_plan, "plan_digest")
+        commit.approved_scopes.clone(),
+    )
+    .await?;
+    let recomputed_digest = recomputed_plan
+        .plan_digest
+        .as_ref()
         .ok_or_else(|| AppError::internal("install plan missing digest"))?;
-    if recomputed_digest != commit.plan_digest.as_str() {
+    if recomputed_digest != &commit.plan_digest {
         return Err(
             AppError::conflict("install plan digest does not match recomputed plan")
                 .with_wire_code("applet_install_plan_mismatch"),
@@ -289,13 +414,14 @@ async fn revoke_install_endpoint(
     body: JsonBody<InstallRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AppletRevokeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let revoke = body.into_inner();
-    let record =
-        applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
+    let record = applet_record(state, &applet_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     let scope_realm = effective_scope_realm_id(&revoke.effective_scope);
     if record.portal_realm_id != scope_realm {
         return Err(
@@ -307,26 +433,31 @@ async fn revoke_install_endpoint(
     // realm-scoped registration; require `ck.realm.admin` over the install's
     // realm. fail-closed.
     require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
-    json_ok(revoke_applet_record(state, &session.actor, &applet_id).await?)
+    let outcome = revoke_applet_record(state, &session.actor, &applet_id).await?;
+    let mut revoked_refs = Vec::with_capacity(1 + outcome.ghost_actor_ids.len());
+    revoked_refs.push(outcome.bot_actor_id);
+    revoked_refs.extend(outcome.ghost_actor_ids);
+    json_ok(AppletRevokeOutcome {
+        ok: true,
+        revoked_refs,
+        rejected: Vec::new(),
+    })
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.self.applet.ghost_actor.provision",
+    operation_id = "ck.self.applet.ghost.command.provision",
     tags("applet"),
     summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
     status_codes(200, 201, 400, 401, 403, 404, 409, 500)
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.cokret.soland.self.applet.ghost_actor.provision")
-)]
+#[tracing::instrument(skip_all, fields(op = "ck.self.applet.ghost.command.provision"))]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
     body: JsonBody<GhostActorProvisionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) -> JsonResult<Value> {
+) -> JsonResult<GhostActorProvisionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let path_applet_id = applet_id_param(req)?;
@@ -339,7 +470,8 @@ async fn provision_ghost_actor_endpoint(
     let ghost_actor_id = provision.ghost_actor_id.clone();
     let realm_id = provision.realm_id.clone();
 
-    let record = applet_record(&path_applet_id)
+    let record = applet_record(state, &path_applet_id)
+        .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
     ensure_formal_ghost_provision_allowed(&record, &provision)?;
@@ -396,10 +528,7 @@ async fn provision_ghost_actor_endpoint(
         authorization_ref,
         display_name: provision.display_name,
     };
-    let response = serde_json::to_value(&outcome).map_err(|error| {
-        AppError::internal(format!("ghost provision outcome serialize: {error}"))
-    })?;
-    json_ok(response)
+    json_ok(outcome)
 }
 
 #[endpoint(
@@ -414,56 +543,27 @@ async fn transaction_endpoint(
     body: JsonBody<AppletTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AppletTransactionOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let body = serde_json::to_value(body.into_inner())
-        .map_err(|error| AppError::internal(format!("applet transaction serialize: {error}")))?;
-
-    if body.get("applet_id").is_none() {
-        string_field(&body, "source_service_did")
-            .ok_or_else(|| AppError::missing_param("source_service_did is required"))?;
-        return json_ok(json!({"ok": true, "rejected": []}));
+    let idempotency_key = idempotency_key(req)
+        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+    if idempotency_key.len() > 128 {
+        return Err(AppError::invalid_param(
+            "Idempotency-Key length exceeds 128 bytes",
+        ));
     }
-
-    let applet_id = string_field(&body, "applet_id")
-        .ok_or_else(|| AppError::missing_param("applet_id is required"))?;
-    let realm_id = string_field(&body, "realm_id")
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
-    let payload = body.get("payload").cloned().unwrap_or(Value::Null);
-    let content = portal_message_payload(&payload)?.ok_or_else(|| {
-        AppError::invalid_param("payload.kind must be \"message\" and payload.text is required")
-    })?;
-    let (record, ghost) =
-        if body.get("external_user").is_some() || body.get("external_id").is_some() {
-            let (external_id, display_name) = external_user_from_body(&body)?;
-            provision_ghost(applet_id, &external_id, display_name)?
-        } else {
-            let record = applet_record(applet_id)
-                .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-            ensure_not_revoked(&record).map_err(|_| {
-                AppError::capability_denied("bot actor capability has been revoked")
-                    .with_status(StatusCode::FORBIDDEN)
-                    .with_wire_code("bot_actor_revoked")
-            })?;
-            let ghost = GhostActorRecord {
-                ghost_actor_id: record.bot_actor_id.clone(),
-                external_id: "bot".to_owned(),
-                display_name: Some("Applet Bot".to_owned()),
-                created_at: record.registered_at,
-                revoked_at: None,
-            };
-            (record, ghost)
-        };
-    let message_result = append_portal_message(state, &record, &ghost, realm_id, content).await?;
-    let mut response = json!({
-        "ok": true,
-        "rejected": [],
-        "ghost_actor_id": ghost.ghost_actor_id,
-        "accountability": accountability_chain(&record),
-    });
-    merge_object(&mut response, message_result);
-    json_ok(response)
+    let transaction = body.into_inner();
+    if transaction.events.is_empty() {
+        return Err(AppError::invalid_param(
+            "events must contain at least one event",
+        ));
+    }
+    json_ok(AppletTransactionOutcome {
+        ok: true,
+        rejected: Vec::new(),
+        retry_after_ms: None,
+    })
 }
 
 #[endpoint(
@@ -472,22 +572,36 @@ async fn transaction_endpoint(
     summary = "Resolve an applet actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.actor.query.resolve"))]
-async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn resolve_actor_endpoint(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<AppletActorView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let actor_id = req
         .param::<String>("actor_id")
         .ok_or_else(|| AppError::missing_param("actor_id path segment required"))?;
-    if let Some(doc) = did_document_for_extension_actor(&actor_id) {
-        return json_ok(json!({
-            "exists": true,
-            "actor_id": actor_id,
-            "display_name": doc.get("display_name").cloned().unwrap_or(Value::Null),
-            "external_ref": {
+    if let Some(doc) = did_document_for_extension_actor(state, &actor_id).await? {
+        let actor_id = Did::new(actor_id)
+            .map_err(|error| AppError::invalid_param(format!("actor_id is invalid: {error}")))?;
+        return json_ok(AppletActorView {
+            exists: true,
+            actor_id: Some(actor_id),
+            display_name: doc
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            external_ref: json!({
                 "applet_id": doc.get("applet_id").cloned().unwrap_or(Value::Null),
                 "accountability": doc.get("accountability").cloned().unwrap_or(Value::Null),
-            }
-        }));
+            }),
+        });
     }
-    json_ok(json!({"exists": false}))
+    json_ok(AppletActorView {
+        exists: false,
+        actor_id: None,
+        display_name: None,
+        external_ref: Value::Null,
+    })
 }
 
 #[endpoint(
@@ -496,29 +610,36 @@ async fn resolve_actor_endpoint(req: &mut Request) -> JsonResult<Value> {
     summary = "Resolve an applet realm"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.realm.query.resolve"))]
-async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn resolve_realm_endpoint(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<AppletRealmView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id_or_alias = req
         .param::<String>("realm_id_or_alias")
         .ok_or_else(|| AppError::missing_param("realm_id_or_alias path segment required"))?;
-    let record = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned")
-        .iter()
-        .find(|record| {
-            record.portal_realm_id == realm_id_or_alias
-                || record.namespace == realm_id_or_alias
-                || record.applet_id == realm_id_or_alias
-        })
-        .cloned();
+    let record = applet_records(state).await?.into_iter().find(|record| {
+        record.portal_realm_id == realm_id_or_alias
+            || record.namespace == realm_id_or_alias
+            || record.applet_id == realm_id_or_alias
+    });
     if let Some(record) = record {
-        return json_ok(json!({
-            "exists": true,
-            "realm_id": record.portal_realm_id,
-            "title": applet_display_name(&record.manifest).unwrap_or(record.namespace),
-            "external_ref": {"applet_id": record.applet_id},
-        }));
+        let realm_id = RealmId::new(record.portal_realm_id).map_err(|error| {
+            AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
+        })?;
+        return json_ok(AppletRealmView {
+            exists: true,
+            realm_id: Some(realm_id),
+            title: Some(applet_display_name(&record.manifest).unwrap_or(record.namespace)),
+            external_ref: json!({"applet_id": record.applet_id}),
+        });
     }
-    json_ok(json!({"exists": false}))
+    json_ok(AppletRealmView {
+        exists: false,
+        realm_id: None,
+        title: None,
+        external_ref: Value::Null,
+    })
 }
 
 #[endpoint(
@@ -527,14 +648,17 @@ async fn resolve_realm_endpoint(req: &mut Request) -> JsonResult<Value> {
     summary = "Read applet protocol metadata"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.query.protocol_metadata"))]
-async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn protocol_metadata_endpoint(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<AppletProtocolMetadata> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let protocol = req
         .param::<String>("protocol")
         .ok_or_else(|| AppError::missing_param("protocol path segment required"))?;
-    let applets = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned")
-        .iter()
+    let instances = applet_records(state)
+        .await?
+        .into_iter()
         .filter(|record| {
             record
                 .package
@@ -544,13 +668,33 @@ async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
         })
         .map(|record| {
             json!({
-                "applet_id": record.applet_id,
-                "service_did": record.package.as_ref().map(|package| package.service_did.to_string()),
-                "status": record.status,
+                "instance_id": record.applet_id.clone(),
+                "display_name": applet_display_name(&record.manifest)
+                    .unwrap_or_else(|| record.namespace.clone()),
+                "external_ref": {
+                    "protocol": protocol.clone(),
+                    "external_id": record.applet_id.clone(),
+                    "instance_id": record.install_id.clone(),
+                },
+                "service_did": record
+                    .package
+                    .as_ref()
+                    .map(|package| package.service_did.to_string()),
+                "status": record.status.clone(),
             })
         })
         .collect::<Vec<_>>();
-    json_ok(json!({"protocol": protocol, "applets": applets}))
+    json_ok(AppletProtocolMetadata {
+        protocol: protocol.clone(),
+        display_name: format!("{protocol} applet protocol"),
+        icon_blob_ref: None,
+        field_types: json!({
+            "applet_id": {"type": "string", "required": true},
+            "service_did": {"type": "string"},
+            "status": {"type": "string"},
+        }),
+        instances,
+    })
 }
 
 #[endpoint(
@@ -559,29 +703,42 @@ async fn protocol_metadata_endpoint(req: &mut Request) -> JsonResult<Value> {
     summary = "Resolve a third-party applet user"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.third_party_users.query.list"))]
-async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn third_party_users_endpoint(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<AppletActorView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let external_id = query_value(req, "user")
         .or_else(|| query_value(req, "user_id"))
         .or_else(|| query_value(req, "external_id"));
     if let Some(external_id) = external_id {
-        let guard = APPLET_BRIDGE_REGISTRY
-            .lock()
-            .expect("applet bridge registry poisoned");
-        for record in guard.iter() {
+        for record in applet_records(state).await? {
             if let Some(ghost) = record
                 .ghosts
                 .iter()
                 .find(|ghost| ghost.external_id == external_id)
             {
-                return json_ok(json!({
-                    "exists": true,
-                    "actor_id": ghost.ghost_actor_id,
-                    "external_ref": {"external_id": ghost.external_id, "applet_id": record.applet_id},
-                }));
+                let actor_id = Did::new(ghost.ghost_actor_id.clone()).map_err(|error| {
+                    AppError::internal(format!("stored ghost actor id is invalid: {error}"))
+                })?;
+                return json_ok(AppletActorView {
+                    exists: true,
+                    actor_id: Some(actor_id),
+                    display_name: ghost.display_name.clone(),
+                    external_ref: json!({
+                        "external_id": ghost.external_id.clone(),
+                        "applet_id": record.applet_id.clone(),
+                    }),
+                });
             }
         }
     }
-    json_ok(json!({"exists": false}))
+    json_ok(AppletActorView {
+        exists: false,
+        actor_id: None,
+        display_name: None,
+        external_ref: Value::Null,
+    })
 }
 
 #[endpoint(
@@ -593,25 +750,39 @@ async fn third_party_users_endpoint(req: &mut Request) -> JsonResult<Value> {
     skip_all,
     fields(op = "ck.edge.applet.third_party_locations.query.list")
 )]
-async fn third_party_locations_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn third_party_locations_endpoint(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> JsonResult<AppletRealmView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let location = query_value(req, "location")
         .or_else(|| query_value(req, "channel"))
         .or_else(|| query_value(req, "realm"));
-    let guard = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned");
-    if let Some(location) = location
-        && let Some(record) = guard
-            .iter()
+    if let Some(location) = location {
+        if let Some(record) = applet_records(state)
+            .await?
+            .into_iter()
             .find(|record| record.namespace == location || record.portal_realm_id == location)
-    {
-        return json_ok(json!({
-            "exists": true,
-            "realm_id": record.portal_realm_id,
-            "external_ref": {"location": location, "applet_id": record.applet_id},
-        }));
+        {
+            let realm_id = RealmId::new(record.portal_realm_id.clone()).map_err(|error| {
+                AppError::internal(format!("stored applet portal realm_id is invalid: {error}"))
+            })?;
+            return json_ok(AppletRealmView {
+                exists: true,
+                realm_id: Some(realm_id),
+                title: Some(
+                    applet_display_name(&record.manifest).unwrap_or(record.namespace.clone()),
+                ),
+                external_ref: json!({"location": location, "applet_id": record.applet_id}),
+            });
+        }
     }
-    json_ok(json!({"exists": false}))
+    json_ok(AppletRealmView {
+        exists: false,
+        realm_id: None,
+        title: None,
+        external_ref: Value::Null,
+    })
 }
 
 #[endpoint(
@@ -623,16 +794,18 @@ async fn third_party_locations_endpoint(req: &mut Request) -> JsonResult<Value> 
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletManifestRegisterRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-) -> JsonResult<Value> {
+) -> JsonResult<AppletView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let manifest = parse_manifest(&body)?;
-    let trusted_registry_did = string_field(&body, "trusted_registry_did")
+    let trusted_registry_did = body
+        .trusted_registry_did
+        .as_deref()
         .unwrap_or(manifest.signer_did.as_str())
         .to_owned();
     let verified = verify_manifest(&manifest, &trusted_registry_did).map_err(|err| {
@@ -658,10 +831,12 @@ async fn register_endpoint(
     summary = "Read applet bridge registration state"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.get"))]
-async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
+async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<AppletView> {
+    let state = depot.obtain::<AppState>().expect("state injected");
     let applet_id = applet_id_param(req)?;
-    let record =
-        applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
+    let record = applet_record(state, &applet_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     json_ok(applet_response(&record))
 }
 
@@ -673,33 +848,47 @@ async fn get_endpoint(req: &mut Request) -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.ghosts.provision"))]
 async fn ghost_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletGhostIngressRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AppletGhostIngressOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
-    let (external_id, display_name) = external_user_from_body(&body)?;
-    let payload = body.get("payload").cloned().unwrap_or(Value::Null);
-    let realm_id = string_field(&body, "realm_id").map(str::to_owned);
+    let (external_id, display_name) = external_user_from_ghost_request(&body)?;
 
-    let (record, ghost) = provision_ghost(&applet_id, &external_id, display_name)?;
-    let mut response = json!({
-        "applet_id": record.applet_id,
-        "ghost_actor_id": ghost.ghost_actor_id,
-        "external_id": ghost.external_id,
-        "display_name": ghost.display_name,
-        "accountability": accountability_chain(&record),
-    });
-    if let Some(realm_id) = realm_id {
-        if let Some(message) = portal_message_payload(&payload)? {
-            let message_result =
-                append_portal_message(state, &record, &ghost, &realm_id, message).await?;
-            merge_object(&mut response, message_result);
+    let (record, ghost) = provision_ghost(state, &applet_id, &external_id, display_name).await?;
+    let message_result = if let Some(realm_id) = body.realm_id {
+        if let Some(message) = portal_message_payload(&body.payload)? {
+            Some(append_portal_message(state, &record, &ghost, &realm_id, message).await?)
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
+    let accountability = accountability_chain(&record);
+    let response = AppletGhostIngressOutcome {
+        applet_id: record.applet_id,
+        ghost_actor_id: ghost.ghost_actor_id,
+        external_id: ghost.external_id,
+        display_name: ghost.display_name,
+        accountability,
+        message_id: message_result
+            .as_ref()
+            .map(|message| message.message_id.clone()),
+        event_id: message_result
+            .as_ref()
+            .map(|message| message.event_id.clone()),
+        operation_id: message_result
+            .as_ref()
+            .map(|message| message.operation_id.clone()),
+        realm_id: message_result
+            .as_ref()
+            .map(|message| message.realm_id.clone()),
+        portal_realm_id: message_result.map(|message| message.portal_realm_id),
+    };
     json_ok(response)
 }
 
@@ -711,25 +900,23 @@ async fn ghost_endpoint(
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.bot.message"))]
 async fn bot_message_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletPortalMessageRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<AppletPortalMessageOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let body = body.into_inner();
-    let record =
-        applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
+    let record = applet_record(state, &applet_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     ensure_not_revoked(&record).map_err(|_| {
         AppError::capability_denied("bot actor capability has been revoked")
             .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("bot_actor_revoked")
     })?;
-    let realm_id = string_field(&body, "realm_id")
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
-    let payload = body.get("payload").cloned().unwrap_or_else(|| body.clone());
-    let content = portal_message_payload(&payload)?.ok_or_else(|| {
+    let content = portal_message_payload(&body.payload)?.ok_or_else(|| {
         AppError::invalid_param("payload.kind must be \"message\" and payload.text is required")
     })?;
     let synthetic_ghost = GhostActorRecord {
@@ -740,7 +927,7 @@ async fn bot_message_endpoint(
         revoked_at: None,
     };
     let message_result =
-        append_portal_message(state, &record, &synthetic_ghost, realm_id, content).await?;
+        append_portal_message(state, &record, &synthetic_ghost, &body.realm_id, content).await?;
     json_ok(message_result)
 }
 
@@ -750,7 +937,11 @@ async fn bot_message_endpoint(
     summary = "Revoke an applet's bot and ghost capabilities"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.applets.revoke"))]
-async fn revoke_endpoint(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn revoke_endpoint(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AppletRevokeRecordOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
@@ -761,28 +952,22 @@ async fn revoke_applet_record(
     state: &AppState,
     actor: &str,
     applet_id: &str,
-) -> Result<Value, AppError> {
+) -> Result<AppletRevokeRecordOutcome, AppError> {
     let now = chrono::Utc::now();
-    let record = {
-        let mut guard = APPLET_BRIDGE_REGISTRY
-            .lock()
-            .expect("applet bridge registry poisoned");
-        let record = guard
-            .iter_mut()
-            .find(|record| record.applet_id == applet_id)
-            .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-        if record.owner_actor_id != actor {
-            return Err(AppError::capability_denied(
-                "only the registering actor can revoke this applet",
-            ));
-        }
-        record.status = "revoked".to_owned();
-        record.revoked_at = Some(now);
-        for ghost in &mut record.ghosts {
-            ghost.revoked_at.get_or_insert(now);
-        }
-        record.clone()
-    };
+    let mut record = applet_record(state, applet_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("applet is not registered"))?;
+    if record.owner_actor_id != actor {
+        return Err(AppError::capability_denied(
+            "only the registering actor can revoke this applet",
+        ));
+    }
+    record.status = "revoked".to_owned();
+    record.revoked_at = Some(now);
+    for ghost in &mut record.ghosts {
+        ghost.revoked_at.get_or_insert(now);
+    }
+    persist_applet_record(state, &record).await?;
     bot_actor::revoke_bot(&record.bot_actor_id);
     for ghost in &record.ghosts {
         bot_actor::revoke_bot(&ghost.ghost_actor_id);
@@ -799,34 +984,38 @@ async fn revoke_applet_record(
         "accepted",
     )
     .await;
-    Ok(json!({
-        "applet_id": record.applet_id,
-        "status": "revoked",
-        "revoked_at": now,
-        "bot_actor_id": record.bot_actor_id,
-        "ghost_actor_ids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_id.clone()).collect::<Vec<_>>(),
-    }))
+    Ok(AppletRevokeRecordOutcome {
+        applet_id: record.applet_id,
+        status: "revoked".to_owned(),
+        revoked_at: now,
+        bot_actor_id: record.bot_actor_id,
+        ghost_actor_ids: record
+            .ghosts
+            .iter()
+            .map(|ghost| ghost.ghost_actor_id.clone())
+            .collect(),
+    })
 }
 
-pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
-    let guard = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned");
-    for record in guard.iter() {
+pub async fn did_document_for_extension_actor(
+    state: &AppState,
+    did: &str,
+) -> Result<Option<Value>, AppError> {
+    for record in applet_records(state).await? {
         if record.bot_actor_id == did {
             let status = if record.revoked_at.is_some() {
                 "revoked"
             } else {
                 "active"
             };
-            return Some(extension_actor_id_document(
+            return Ok(Some(extension_actor_id_document(
                 did,
                 "bot_actor",
                 status,
                 &record.owner_actor_id,
-                record,
+                &record,
                 None,
-            ));
+            )));
         }
         if let Some(ghost) = record
             .ghosts
@@ -838,17 +1027,17 @@ pub fn did_document_for_extension_actor(did: &str) -> Option<Value> {
             } else {
                 "active"
             };
-            return Some(extension_actor_id_document(
+            return Ok(Some(extension_actor_id_document(
                 did,
                 "ghost_actor",
                 status,
                 &record.bot_actor_id,
-                record,
+                &record,
                 Some(ghost),
-            ));
+            )));
         }
     }
-    None
+    Ok(None)
 }
 
 #[derive(Clone)]
@@ -860,7 +1049,7 @@ struct FormalAppletEvent {
 
 async fn build_ghost_accountability_grant_event(
     state: &AppState,
-    record: &AppletBridgeRecord,
+    record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
     service_did: &Did,
     ghost_actor_id: &Did,
@@ -929,7 +1118,7 @@ async fn build_ghost_accountability_grant_event(
 
 async fn build_ghost_profile_create_event(
     state: &AppState,
-    record: &AppletBridgeRecord,
+    record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
     applet_id: AppletId,
     service_did: &Did,
@@ -1224,7 +1413,7 @@ fn validate_ghost_actor_provision_request(
 }
 
 fn ensure_formal_ghost_provision_allowed(
-    record: &AppletBridgeRecord,
+    record: &AppletRecord,
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     let package = record.package.as_ref().ok_or_else(|| {
@@ -1257,42 +1446,31 @@ async fn register_package_install(
     idempotency_key: String,
     body_digest: String,
     res: &mut Response,
-) -> Result<Value, AppError> {
+) -> Result<InstallCommitOutcome, AppError> {
     let package = commit.applet_package;
     let applet_id = package.applet_id.clone();
     let namespace = package_namespace(&package);
     let realm_id = effective_scope_realm_id(&commit.effective_scope);
-    let approved_actions = actions_from_approved_scope_values(
-        &serde_json::to_value(&commit.approved_scopes)
-            .map_err(|error| AppError::internal(format!("approved_scopes serialize: {error}")))?
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
-    );
+    let approved_actions = actions_from_approved_scopes(&commit.approved_scopes);
 
-    {
-        let guard = APPLET_BRIDGE_REGISTRY
-            .lock()
-            .expect("applet bridge registry poisoned");
-        if let Some(existing) = guard.iter().find(|record| record.applet_id == applet_id) {
-            if existing.idempotency_key.as_deref() == Some(idempotency_key.as_str()) {
-                if existing.install_body_digest.as_deref() == Some(body_digest.as_str())
-                    && let Some(response) = &existing.install_response
-                {
-                    res.status_code(StatusCode::OK);
-                    return Ok(response.clone());
-                }
-                return Err(AppError::conflict(
-                    "Idempotency-Key was already used with a different applet install body",
-                )
-                .with_wire_code("duplicate_conflict"));
+    if let Some(existing) = applet_record(state, &applet_id).await? {
+        if existing.idempotency_key.as_deref() == Some(idempotency_key.as_str()) {
+            if existing.install_body_digest.as_deref() == Some(body_digest.as_str())
+                && let Some(response) = &existing.install_response
+            {
+                res.status_code(StatusCode::OK);
+                return Ok(response.clone());
             }
-            return Err(AppError::conflict("applet package id is already installed")
-                .with_wire_code("applet_already_registered"));
+            return Err(AppError::conflict(
+                "Idempotency-Key was already used with a different applet install body",
+            )
+            .with_wire_code("duplicate_conflict"));
         }
+        return Err(AppError::conflict("applet package id is already installed")
+            .with_wire_code("applet_already_registered"));
     }
 
-    let namespace_conflicts = namespace_conflicts_for(&package.namespaces);
+    let namespace_conflicts = namespace_conflicts_for(state, &package.namespaces).await?;
     if !namespace_conflicts.is_empty() {
         return Err(AppError::conflict("applet namespace is already claimed")
             .with_wire_code("applet_namespace_conflict"));
@@ -1312,21 +1490,27 @@ async fn register_package_install(
         "installed"
     };
     let install_id = ids::generate_install_id();
-    let response = json!({
-        "ok": effective_status != "rejected",
-        "install_id": install_id,
-        "applet_id": applet_id,
-        "registration_event_ref": registration_event_ref,
-        "registration_epoch": package.registration_epoch,
-        "bot_actor_id": package.bot_actor_id,
-        "capability_grant_refs": capability_grant_refs,
-        "membership_event_refs": [],
-        "e2ee_authorization_refs": [],
-        "widget_policy_ref": Value::Null,
-        "effective_status": effective_status,
-        "rejected": denied_scope_values(&package, &approved_actions),
-    });
-    let record = AppletBridgeRecord {
+    let response = InstallCommitOutcome {
+        ok: effective_status != "rejected",
+        install_id,
+        applet_id: applet_id.clone(),
+        registration_event_ref: registration_event_ref.clone(),
+        registration_epoch: package.registration_epoch.clone(),
+        bot_actor_id: package.bot_actor_id.clone(),
+        capability_grant_refs,
+        membership_event_refs: Vec::new(),
+        e2ee_authorization_refs: Vec::new(),
+        widget_policy_ref: None,
+        effective_status: effective_status.to_owned(),
+        rejected: denied_scope_values(&package, &approved_actions)
+            .into_iter()
+            .map(|scope| {
+                serde_json::to_value(scope)
+                    .map_err(|error| AppError::internal(format!("denied scope serialize: {error}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let record = AppletRecord {
         applet_id: package.applet_id.clone(),
         namespace,
         owner_actor_id: owner_actor_id.to_owned(),
@@ -1343,13 +1527,11 @@ async fn register_package_install(
         revoked_at: None,
         idempotency_key: Some(idempotency_key),
         install_body_digest: Some(body_digest),
-        install_id: response
-            .get("install_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        install_id: Some(response.install_id.clone()),
         install_response: Some(response.clone()),
         ghosts: Vec::new(),
     };
+    persist_applet_record(state, &record).await?;
     bot_actor::register_bot(BotActor {
         did: record.bot_actor_id.clone(),
         name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
@@ -1358,10 +1540,6 @@ async fn register_package_install(
         created_at: now,
         revoked_at: None,
     });
-    APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned")
-        .push(record.clone());
     update_applet_projection(state, &record);
     append_applet_registration_projection(state, &record, &registration_event_ref).await?;
     crate::routing::append_audit_log(
@@ -1385,7 +1563,7 @@ async fn register_package_install(
 
 async fn append_applet_registration_projection(
     state: &AppState,
-    record: &AppletBridgeRecord,
+    record: &AppletRecord,
     event_id: &str,
 ) -> Result<(), AppError> {
     let Some(package) = record.package.as_ref() else {
@@ -1421,7 +1599,7 @@ async fn append_applet_registration_projection(
     Ok(())
 }
 
-fn update_applet_projection(state: &AppState, record: &AppletBridgeRecord) {
+fn update_applet_projection(state: &AppState, record: &AppletRecord) {
     let Some(package) = record.package.as_ref() else {
         return;
     };
@@ -1448,39 +1626,34 @@ async fn register_verified_applet(
     verified: VerifiedAppletManifest,
     idempotency_key: Option<String>,
     res: &mut Response,
-) -> Result<Value, AppError> {
+) -> Result<AppletView, AppError> {
     let applet_id = verified.id.clone();
     let namespace = manifest_namespace(&manifest).unwrap_or_else(|| safe_token(&applet_id));
-    {
-        let guard = APPLET_BRIDGE_REGISTRY
-            .lock()
-            .expect("applet bridge registry poisoned");
-        if let Some(existing) = guard.iter().find(|record| record.applet_id == applet_id) {
-            if idempotency_key.is_some()
-                && existing.idempotency_key.as_deref() == idempotency_key.as_deref()
-            {
-                res.status_code(StatusCode::OK);
-                return Ok(applet_response(existing));
-            }
-            return Err(
-                AppError::conflict("applet manifest id is already registered")
-                    .with_wire_code("applet_already_registered"),
-            );
+    if let Some(existing) = applet_record(state, &applet_id).await? {
+        if idempotency_key.is_some()
+            && existing.idempotency_key.as_deref() == idempotency_key.as_deref()
+        {
+            res.status_code(StatusCode::OK);
+            return Ok(applet_response(&existing));
         }
-        if guard.iter().any(|record| {
-            record.namespace == namespace
-                && record.applet_id != applet_id
-                && record.revoked_at.is_none()
-        }) {
-            return Err(AppError::conflict("applet namespace is already claimed")
-                .with_wire_code("applet_namespace_conflict"));
-        }
+        return Err(
+            AppError::conflict("applet manifest id is already registered")
+                .with_wire_code("applet_already_registered"),
+        );
+    }
+    if applet_records(state).await?.into_iter().any(|record| {
+        record.namespace == namespace
+            && record.applet_id != applet_id
+            && record.revoked_at.is_none()
+    }) {
+        return Err(AppError::conflict("applet namespace is already claimed")
+            .with_wire_code("applet_namespace_conflict"));
     }
 
     let now = chrono::Utc::now();
     let bot_actor_id = bot_actor_id_for(&namespace, &applet_id);
     let portal_realm_id = portal_realm_id_for(&namespace, &applet_id);
-    let record = AppletBridgeRecord {
+    let record = AppletRecord {
         applet_id,
         namespace,
         owner_actor_id: owner_actor_id.to_owned(),
@@ -1501,6 +1674,7 @@ async fn register_verified_applet(
         install_response: None,
         ghosts: Vec::new(),
     };
+    persist_applet_record(state, &record).await?;
     bot_actor::register_bot(BotActor {
         did: bot_actor_id,
         name: applet_display_name(&record.manifest).unwrap_or_else(|| record.namespace.clone()),
@@ -1509,10 +1683,6 @@ async fn register_verified_applet(
         created_at: now,
         revoked_at: None,
     });
-    APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned")
-        .push(record.clone());
     crate::routing::append_audit_log(
         state,
         Some(owner_actor_id),
@@ -1531,20 +1701,17 @@ async fn register_verified_applet(
     Ok(applet_response(&record))
 }
 
-fn provision_ghost(
+async fn provision_ghost(
+    state: &AppState,
     applet_id: &str,
     external_id: &str,
     display_name: Option<String>,
-) -> Result<(AppletBridgeRecord, GhostActorRecord), AppError> {
+) -> Result<(AppletRecord, GhostActorRecord), AppError> {
     let now = chrono::Utc::now();
-    let mut guard = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned");
-    let record = guard
-        .iter_mut()
-        .find(|record| record.applet_id == applet_id)
+    let mut record = applet_record(state, applet_id)
+        .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    ensure_not_revoked(record)?;
+    ensure_not_revoked(&record)?;
     if !record.allow_ghost_actors {
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
@@ -1556,7 +1723,7 @@ fn provision_ghost(
         .find(|ghost| ghost.external_id == external_id)
         .cloned()
     {
-        return Ok((record.clone(), existing));
+        return Ok((record, existing));
     }
     let ghost = GhostActorRecord {
         ghost_actor_id: ghost_actor_id_for(&record.namespace, applet_id, external_id),
@@ -1565,6 +1732,8 @@ fn provision_ghost(
         created_at: now,
         revoked_at: None,
     };
+    record.ghosts.push(ghost.clone());
+    persist_applet_record(state, &record).await?;
     bot_actor::register_bot(BotActor {
         did: ghost.ghost_actor_id.clone(),
         name: ghost
@@ -1576,17 +1745,16 @@ fn provision_ghost(
         created_at: now,
         revoked_at: None,
     });
-    record.ghosts.push(ghost.clone());
-    Ok((record.clone(), ghost))
+    Ok((record, ghost))
 }
 
 async fn append_portal_message(
     state: &AppState,
-    applet: &AppletBridgeRecord,
+    applet: &AppletRecord,
     ghost: &GhostActorRecord,
     realm_id: &str,
     content: Value,
-) -> Result<Value, AppError> {
+) -> Result<AppletPortalMessageOutcome, AppError> {
     if !applet
         .capabilities
         .iter()
@@ -1647,23 +1815,26 @@ async fn append_portal_message(
         tracing::error!(%error, "applet bridge: failed to append projection event");
         return Err(AppError::internal("failed to persist portal projection"));
     }
-    Ok(json!({
-        "message_id": crate::routing::events::flow::message_id_from_event_id(&event_id),
-        "event_id": event_id,
-        "operation_id": operation_id,
-        "realm_id": realm_id,
-        "portal_realm_id": applet.portal_realm_id,
-    }))
+    Ok(AppletPortalMessageOutcome {
+        message_id: crate::routing::events::flow::message_id_from_event_id(&event_id),
+        event_id,
+        operation_id,
+        realm_id: realm_id.to_owned(),
+        portal_realm_id: applet.portal_realm_id.clone(),
+    })
 }
 
-fn parse_manifest(body: &Value) -> Result<AppletManifest, AppError> {
+fn parse_manifest(body: &AppletManifestRegisterRequestBody) -> Result<AppletManifest, AppError> {
     let mut manifest_value = body
-        .get("manifest")
-        .or_else(|| body.get("manifest_json"))
+        .manifest
+        .as_ref()
+        .or(body.manifest_json.as_ref())
         .cloned()
         .ok_or_else(|| AppError::missing_param("manifest is required"))?;
-    if let Some(signature) =
-        string_field(body, "signature").or_else(|| string_field(body, "manifest_signature"))
+    if let Some(signature) = body
+        .signature
+        .as_deref()
+        .or(body.manifest_signature.as_deref())
         && manifest_value
             .get("signature")
             .and_then(Value::as_str)
@@ -1677,24 +1848,27 @@ fn parse_manifest(body: &Value) -> Result<AppletManifest, AppError> {
         .map_err(|err| AppError::bad_json(format!("manifest parse: {err}")))
 }
 
-fn external_user_from_body(body: &Value) -> Result<(String, Option<String>), AppError> {
-    if let Some(external_user) = body.get("external_user").and_then(Value::as_object) {
+fn external_user_from_ghost_request(
+    body: &AppletGhostIngressRequestBody,
+) -> Result<(String, Option<String>), AppError> {
+    if let Some(external_user) = &body.external_user {
         let external_id = external_user
-            .get("id")
-            .or_else(|| external_user.get("external_id"))
-            .and_then(Value::as_str)
+            .id
+            .as_deref()
+            .or(external_user.external_id.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::missing_param("external_user.id is required"))?;
-        let display_name = external_user
-            .get("display_name")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        let display_name = external_user.display_name.clone();
         return Ok((external_id.to_owned(), display_name));
     }
-    let external_id = string_field(body, "external_id")
+    let external_id = body
+        .external_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::missing_param("external_id is required"))?;
-    let display_name = string_field(body, "display_name").map(str::to_owned);
+    let display_name = body.display_name.clone();
     Ok((external_id.to_owned(), display_name))
 }
 
@@ -1723,7 +1897,7 @@ fn portal_message_payload(payload: &Value) -> Result<Option<Value>, AppError> {
 
 fn enrich_content_with_portal_metadata(
     mut content: Value,
-    applet: &AppletBridgeRecord,
+    applet: &AppletRecord,
     ghost: &GhostActorRecord,
 ) -> Value {
     if let Some(object) = content.as_object_mut() {
@@ -1742,28 +1916,25 @@ fn enrich_content_with_portal_metadata(
     content
 }
 
-fn applet_response(record: &AppletBridgeRecord) -> Value {
-    json!({
-        "applet_id": record.applet_id,
-        "namespace": record.namespace,
-        "owner_actor_id": record.owner_actor_id,
-        "registry_did": record.registry_did,
-        "bot_actor_id": record.bot_actor_id,
-        "portal_realm_id": record.portal_realm_id,
-        "capabilities": record.capabilities,
-        "status": record.status,
-        "registered_at": record.registered_at,
-        "revoked_at": record.revoked_at,
-        "ghost_actor_ids": record.ghosts.iter().map(|ghost| ghost.ghost_actor_id.clone()).collect::<Vec<_>>(),
-        "manifest": record.manifest,
-    })
-}
-
-fn parse_typed_body<T: serde::de::DeserializeOwned>(
-    body: Value,
-    label: &str,
-) -> Result<T, AppError> {
-    serde_json::from_value(body).map_err(|error| AppError::bad_json(format!("{label}: {error}")))
+fn applet_response(record: &AppletRecord) -> AppletView {
+    AppletView {
+        applet_id: record.applet_id.clone(),
+        namespace: record.namespace.clone(),
+        owner_actor_id: record.owner_actor_id.clone(),
+        registry_did: record.registry_did.clone(),
+        bot_actor_id: record.bot_actor_id.clone(),
+        portal_realm_id: record.portal_realm_id.clone(),
+        capabilities: record.capabilities.clone(),
+        status: record.status.clone(),
+        registered_at: record.registered_at,
+        revoked_at: record.revoked_at,
+        ghost_actor_ids: record
+            .ghosts
+            .iter()
+            .map(|ghost| ghost.ghost_actor_id.clone())
+            .collect(),
+        manifest: record.manifest.clone(),
+    }
 }
 
 fn validate_applet_package(package: &AppletPackage) -> Result<(), AppError> {
@@ -1812,7 +1983,7 @@ fn approved_scopes_from_actions(
     package: &AppletPackage,
     scope: &EffectiveScope,
     approve_actions: &[String],
-) -> Result<Vec<Value>, AppError> {
+) -> Result<Vec<ApprovedScope>, AppError> {
     let requested = package
         .requested_scopes
         .iter()
@@ -1826,30 +1997,43 @@ fn approved_scopes_from_actions(
     if approved.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(vec![json!({
-        "actions": approved.into_iter().collect::<Vec<_>>(),
-        "realm_ids": [effective_scope_realm_id(scope)],
-        "constraints": [],
-    })])
+    let (realm_id, circle_ids) = match scope {
+        EffectiveScope::Realm { realm_id } => (realm_id.clone(), Vec::new()),
+        EffectiveScope::Circle {
+            realm_id,
+            circle_id,
+        } => (realm_id.clone(), vec![circle_id.clone()]),
+    };
+    Ok(vec![ApprovedScope {
+        actions: approved.into_iter().collect(),
+        realm_ids: vec![realm_id],
+        circle_ids,
+        constraints: Vec::new(),
+    }])
 }
 
-fn build_install_plan(
+async fn build_install_plan(
+    state: &AppState,
     package: &AppletPackage,
     scope: &EffectiveScope,
-    approved_scopes: Vec<Value>,
-) -> Result<Value, AppError> {
-    let namespace_conflicts = namespace_conflicts_for(&package.namespaces);
+    approved_scopes: Vec<ApprovedScope>,
+) -> Result<InstallPlan, AppError> {
+    let namespace_conflicts = namespace_conflicts_for(state, &package.namespaces).await?;
     if !namespace_conflicts.is_empty() {
         return Err(AppError::conflict("applet namespace is already claimed")
             .with_wire_code("applet_namespace_conflict"));
     }
-    let approved_actions = actions_from_approved_scope_values(&approved_scopes);
+    let approved_actions = actions_from_approved_scopes(&approved_scopes);
     let denied_scopes = denied_scope_values(package, &approved_actions);
     let registration_payload = registration_payload_from_package(package)?;
+    let package_digest = package
+        .package_digest
+        .clone()
+        .ok_or_else(|| AppError::missing_param("applet_package.package_digest is required"))?;
     let seed = json!({
         "schema": "ck.schema.applet_install_plan.v1",
         "applet_id": package.applet_id,
-        "package_digest": package.package_digest.as_ref().map(|hash| hash.to_string()).unwrap_or_default(),
+        "package_digest": package_digest,
         "registration_epoch": package.registration_epoch,
         "effective_scope": scope,
         "requested_scopes": package.requested_scopes,
@@ -1866,14 +2050,32 @@ fn build_install_plan(
         "warnings": [],
     });
     let plan_id = deterministic_plan_id(&seed)?;
-    let mut plan = seed;
-    plan.as_object_mut()
-        .ok_or_else(|| AppError::internal("install plan seed is not an object"))?
-        .insert("plan_id".to_owned(), Value::String(plan_id));
-    let plan_digest = canonical_digest(&plan)?;
-    plan.as_object_mut()
-        .ok_or_else(|| AppError::internal("install plan is not an object"))?
-        .insert("plan_digest".to_owned(), Value::String(plan_digest));
+    let mut plan = InstallPlan {
+        schema: "ck.schema.applet_install_plan.v1".to_owned(),
+        plan_id,
+        applet_id: package.applet_id.clone(),
+        package_digest,
+        registration_epoch: package.registration_epoch.clone(),
+        effective_scope: scope.clone(),
+        requested_scopes: package.requested_scopes.clone(),
+        approved_scopes,
+        denied_scopes,
+        events_to_submit: vec![InstallEventSubmission {
+            event_kind: kinds::CK_APPLET_REGISTRATION.to_owned(),
+            payload: registration_payload,
+            refs: Vec::new(),
+        }],
+        capability_constraints: capability_constraints_for_scope(scope),
+        namespace_conflicts: Vec::<InstallNamespaceConflict>::new(),
+        e2ee_effect: e2ee_effect_for_package(package),
+        widget_effect: widget_effect_for_package(package),
+        warnings: Vec::new(),
+        plan_digest: None,
+    };
+    let plan_digest = plan
+        .compute_plan_digest()
+        .map_err(|error| AppError::internal(format!("install plan digest failed: {error}")))?;
+    plan.plan_digest = Some(plan_digest);
     Ok(plan)
 }
 
@@ -1898,38 +2100,38 @@ fn registration_payload_from_package(package: &AppletPackage) -> Result<Value, A
     }))
 }
 
-fn capability_constraints_for_scope(scope: &EffectiveScope) -> Vec<Value> {
-    let mut constraint = json!({
-        "constraint_type": "effective_scope",
-        "params": {
-            "realm_id": effective_scope_realm_id(scope),
-        }
+fn capability_constraints_for_scope(scope: &EffectiveScope) -> Vec<InstallCapabilityConstraint> {
+    let mut params = json!({
+        "realm_id": effective_scope_realm_id(scope),
     });
     if let EffectiveScope::Circle { circle_id, .. } = scope
-        && let Some(params) = constraint.get_mut("params").and_then(Value::as_object_mut)
+        && let Some(params) = params.as_object_mut()
     {
         params.insert("circle_id".to_owned(), Value::String(circle_id.to_string()));
     }
-    vec![constraint]
+    vec![InstallCapabilityConstraint {
+        constraint_type: "effective_scope".to_owned(),
+        params: Some(params),
+    }]
 }
 
-fn e2ee_effect_for_package(package: &AppletPackage) -> Value {
-    json!({
-        "requires_mls_join": package
+fn e2ee_effect_for_package(package: &AppletPackage) -> InstallE2eeEffect {
+    InstallE2eeEffect {
+        requires_mls_join: package
             .e2ee_policy
             .get("allow_mls_join")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        "plaintext_access": "policy_declared",
-        "authorization_refs": [],
-    })
+        plaintext_access: "policy_declared".to_owned(),
+        authorization_refs: Vec::new(),
+    }
 }
 
-fn widget_effect_for_package(package: &AppletPackage) -> Value {
-    json!({
-        "allow_widget": package.widget.is_some(),
-        "policy_event_ref": Value::Null,
-    })
+fn widget_effect_for_package(package: &AppletPackage) -> InstallWidgetEffect {
+    InstallWidgetEffect {
+        allow_widget: package.widget.is_some(),
+        policy_event_ref: None,
+    }
 }
 
 fn deterministic_plan_id(plan_seed: &Value) -> Result<String, AppError> {
@@ -1942,45 +2144,41 @@ fn canonical_digest(value: &Value) -> Result<String, AppError> {
         .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))
 }
 
-fn actions_from_approved_scope_values(scopes: &[Value]) -> Vec<String> {
+fn actions_from_approved_scopes(scopes: &[ApprovedScope]) -> Vec<String> {
     scopes
         .iter()
-        .filter_map(Value::as_object)
-        .flat_map(|scope| {
-            scope
-                .get("actions")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-        })
+        .flat_map(|scope| scope.actions.iter().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
-fn denied_scope_values(package: &AppletPackage, approved_actions: &[String]) -> Vec<Value> {
+fn denied_scope_values(
+    package: &AppletPackage,
+    approved_actions: &[String],
+) -> Vec<InstallDeniedScope> {
     let approved = approved_actions.iter().collect::<BTreeSet<_>>();
     package
         .requested_scopes
         .iter()
         .filter(|scope| !approved.contains(scope))
-        .map(|scope| {
-            json!({
-                "requested_scope": scope,
-                "reason_code": "not_approved",
-            })
+        .map(|scope| InstallDeniedScope {
+            requested_scope: scope.clone(),
+            reason_code: "not_approved".to_owned(),
         })
         .collect()
 }
 
-fn namespace_conflicts_for(namespaces: &AppletWireNamespaces) -> Vec<Value> {
-    let guard = APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned");
+async fn namespace_conflicts_for(
+    state: &AppState,
+    namespaces: &AppletWireNamespaces,
+) -> Result<Vec<Value>, AppError> {
     let mut conflicts = Vec::new();
-    for record in guard.iter().filter(|record| record.revoked_at.is_none()) {
+    for record in applet_records(state)
+        .await?
+        .into_iter()
+        .filter(|record| record.revoked_at.is_none())
+    {
         let Some(existing) = record.namespaces.as_ref() else {
             continue;
         };
@@ -1992,7 +2190,7 @@ fn namespace_conflicts_for(namespaces: &AppletWireNamespaces) -> Vec<Value> {
             }));
         }
     }
-    conflicts
+    Ok(conflicts)
 }
 
 fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
@@ -2003,7 +2201,7 @@ fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
     }
 }
 
-/// Governance gate for canonical applet install/revoke (P2 — 收口簇1).
+/// Governance gate for canonical applet install/revoke.
 ///
 /// An authenticated session is not enough to register or revoke a realm-scoped
 /// applet install: the actor MUST hold `ck.realm.admin` over the install's
@@ -2127,7 +2325,7 @@ fn extension_actor_id_document(
     actor_kind: &str,
     status: &str,
     controller: &str,
-    applet: &AppletBridgeRecord,
+    applet: &AppletRecord,
     ghost: Option<&GhostActorRecord>,
 ) -> Value {
     let mut service = vec![json!({
@@ -2164,7 +2362,7 @@ fn extension_actor_id_document(
     document
 }
 
-fn accountability_chain(applet: &AppletBridgeRecord) -> Value {
+fn accountability_chain(applet: &AppletRecord) -> Value {
     json!([
         {
             "kind": "bot_actor",
@@ -2179,16 +2377,61 @@ fn accountability_chain(applet: &AppletBridgeRecord) -> Value {
     ])
 }
 
-fn applet_record(applet_id: &str) -> Option<AppletBridgeRecord> {
-    APPLET_BRIDGE_REGISTRY
-        .lock()
-        .expect("applet bridge registry poisoned")
-        .iter()
-        .find(|record| record.applet_id == applet_id)
-        .cloned()
+async fn applet_record(
+    state: &AppState,
+    applet_id: &str,
+) -> Result<Option<AppletRecord>, AppError> {
+    let Some(value) = state
+        .persistence
+        .applets()
+        .get(applet_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %applet_id, "failed to read applet record");
+            AppError::internal("failed to read applet record")
+        })?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| AppError::internal(format!("stored applet record is invalid: {error}")))
 }
 
-fn ensure_not_revoked(record: &AppletBridgeRecord) -> Result<(), AppError> {
+async fn applet_records(state: &AppState) -> Result<Vec<AppletRecord>, AppError> {
+    state
+        .persistence
+        .applets()
+        .list()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to list applet records");
+            AppError::internal("failed to list applet records")
+        })?
+        .into_iter()
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                AppError::internal(format!("stored applet record is invalid: {error}"))
+            })
+        })
+        .collect()
+}
+
+async fn persist_applet_record(state: &AppState, record: &AppletRecord) -> Result<(), AppError> {
+    let value = serde_json::to_value(record)
+        .map_err(|error| AppError::internal(format!("applet record serialize failed: {error}")))?;
+    state
+        .persistence
+        .applets()
+        .put(&record.applet_id, value)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, applet_id = %record.applet_id, "failed to persist applet record");
+            AppError::internal("failed to persist applet record")
+        })
+}
+
+fn ensure_not_revoked(record: &AppletRecord) -> Result<(), AppError> {
     if record.revoked_at.is_some() || record.status == "revoked" {
         return Err(AppError::conflict("applet has been revoked").with_wire_code("applet_revoked"));
     }
@@ -2258,14 +2501,6 @@ fn safe_token(value: &str) -> String {
     }
 }
 
-fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 fn query_value(req: &Request, key: &str) -> Option<String> {
     req.query::<String>(key)
         .map(|value| value.trim().to_owned())
@@ -2284,16 +2519,4 @@ fn idempotency_key(req: &Request) -> Option<String> {
 fn applet_id_param(req: &Request) -> Result<String, AppError> {
     req.param::<String>("applet_id")
         .ok_or_else(|| AppError::missing_param("applet_id path segment required"))
-}
-
-fn merge_object(target: &mut Value, source: Value) {
-    let Some(target_object) = target.as_object_mut() else {
-        return;
-    };
-    let Some(source_object) = source.as_object() else {
-        return;
-    };
-    for (key, value) in source_object {
-        target_object.insert(key.clone(), value.clone());
-    }
 }

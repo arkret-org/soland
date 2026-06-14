@@ -55,6 +55,55 @@ struct FederationPeerTarget {
     did: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct FederationActorEventsOutcome {
+    actor: String,
+    events: Vec<Value>,
+    erasure_receipts: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FederationBackfillOperationsRequestBody {
+    realm_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_pages: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct FederationOperationFrontierOutcome {
+    realm_id: String,
+    operation_count: usize,
+    operation_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_operation_id: Option<String>,
+    frontier_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+pub(super) struct FederationBackfillOperationsOutcome {
+    peer_url: String,
+    peer_did: String,
+    realm_id: String,
+    pulled: usize,
+    accepted: Vec<String>,
+    rejected: Vec<Value>,
+    pages: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+    has_more: bool,
+    frontier_before: FederationOperationFrontierOutcome,
+    frontier_after: FederationOperationFrontierOutcome,
+}
+
 #[endpoint(
     operation_id = "org.cokret.soland.federation.transaction",
     tags("federation"),
@@ -352,7 +401,7 @@ pub(super) async fn federation_push_operations(
 pub(super) async fn federation_actor_events(
     actor_id: PathParam<String>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<FederationActorEventsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor_id.into_inner();
     if Did::new(actor.clone()).is_err() {
@@ -393,11 +442,11 @@ pub(super) async fn federation_actor_events(
         .iter()
         .map(crate::routing::events::projection::projection_event_json)
         .collect::<Vec<_>>();
-    json_ok(json!({
-        "actor": actor,
-        "events": events,
-        "erasure_receipts": erasure_receipts,
-    }))
+    json_ok(FederationActorEventsOutcome {
+        actor,
+        events,
+        erasure_receipts,
+    })
 }
 
 fn projection_event_matches_actor(
@@ -769,31 +818,25 @@ pub(super) async fn federation_pull_operations(
     fields(op = "org.cokret.soland.federation.backfill_operations")
 )]
 pub(super) async fn federation_backfill_operations(
-    body: JsonBody<Value>,
+    body: JsonBody<FederationBackfillOperationsRequestBody>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<FederationBackfillOperationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let realm_id = required_json_string(&body, "realm_id")?;
-    if cokret_sdk::RealmId::new(realm_id.to_owned()).is_err() {
+    let realm_id = body.realm_id.trim().to_owned();
+    if realm_id.is_empty() {
+        return Err(AppError::missing_param("realm_id is required"));
+    }
+    if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
-    let peer = configured_peer_from_backfill_body(state, &body)?;
-    let limit = body
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(100)
-        .clamp(1, 100) as usize;
-    let max_pages = body
-        .get("max_pages")
-        .and_then(Value::as_u64)
-        .unwrap_or(16)
-        .clamp(1, 64) as usize;
-    let mut after_cursor = body
-        .get("after_cursor")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let frontier_before = operation_frontier_value(state, realm_id).await;
+    let body_value = serde_json::to_value(&body)
+        .map_err(|error| AppError::internal(format!("backfill request serialize: {error}")))?;
+    let peer = configured_peer_from_backfill_body(state, &body_value)?;
+    let limit = body.limit.unwrap_or(100).clamp(1, 100) as usize;
+    let max_pages = body.max_pages.unwrap_or(16).clamp(1, 64) as usize;
+    let mut after_cursor = body.after_cursor;
+    let frontier_before = operation_frontier_outcome(state, &realm_id).await;
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
     let mut pulled = 0usize;
@@ -803,7 +846,7 @@ pub(super) async fn federation_backfill_operations(
     for _ in 0..max_pages {
         pages += 1;
         let page =
-            pull_operations_page(state, &peer, realm_id, after_cursor.as_deref(), limit).await?;
+            pull_operations_page(state, &peer, &realm_id, after_cursor.as_deref(), limit).await?;
         pulled += page.operations.len();
         peer_next_cursor = page.next_cursor.clone();
         peer_has_more = page.has_more;
@@ -820,20 +863,20 @@ pub(super) async fn federation_backfill_operations(
             break;
         }
     }
-    let frontier_after = operation_frontier_value(state, realm_id).await;
-    json_ok(json!({
-        "peer_url": peer.url,
-        "peer_did": peer.did,
-        "realm_id": realm_id,
-        "pulled": pulled,
-        "accepted": accepted,
-        "rejected": rejected,
-        "pages": pages,
-        "next_cursor": peer_next_cursor,
-        "has_more": peer_has_more,
-        "frontier_before": frontier_before,
-        "frontier_after": frontier_after,
-    }))
+    let frontier_after = operation_frontier_outcome(state, &realm_id).await;
+    json_ok(FederationBackfillOperationsOutcome {
+        peer_url: peer.url,
+        peer_did: peer.did,
+        realm_id,
+        pulled,
+        accepted,
+        rejected,
+        pages,
+        next_cursor: peer_next_cursor,
+        has_more: peer_has_more,
+        frontier_before,
+        frontier_after,
+    })
 }
 
 #[endpoint(
@@ -848,13 +891,13 @@ pub(super) async fn federation_backfill_operations(
 pub(super) async fn federation_operation_frontier(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<FederationOperationFrontierOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     if cokret_sdk::RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::invalid_param("invalid realm_id"));
     }
-    json_ok(operation_frontier_value(state, &realm_id).await)
+    json_ok(operation_frontier_outcome(state, &realm_id).await)
 }
 
 #[endpoint(
@@ -1826,14 +1869,6 @@ fn federation_destination_matches(state: &AppState, destination: &str) -> bool {
     destination == state.config.service_did
 }
 
-fn required_json_string<'a>(body: &'a Value, key: &str) -> Result<&'a str, AppError> {
-    body.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::missing_param(format!("{key} is required")))
-}
-
 fn configured_peer_from_backfill_body(
     state: &AppState,
     body: &Value,
@@ -1904,6 +1939,14 @@ async fn pull_operations_page(
 }
 
 async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
+    serde_json::to_value(operation_frontier_outcome(state, realm_id).await)
+        .unwrap_or_else(|_| Value::Null)
+}
+
+async fn operation_frontier_outcome(
+    state: &AppState,
+    realm_id: &str,
+) -> FederationOperationFrontierOutcome {
     let operations = state
         .persistence
         .federation_operations()
@@ -1918,7 +1961,7 @@ async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
     let latest_operation_id = operation_ids.last().cloned();
     let digest_payload = json!({
         "realm_id": realm_id,
-        "operation_ids": operation_ids,
+        "operation_ids": operation_ids.clone(),
     });
     let frontier_digest = cokret_sdk::canonical::canonical_sha256(&digest_payload)
         .map(|digest| {
@@ -1934,13 +1977,13 @@ async fn operation_frontier_value(state: &AppState, realm_id: &str) -> Value {
                 sha256_hex(digest_payload.to_string().as_bytes())
             )
         });
-    json!({
-        "realm_id": realm_id,
-        "operation_count": operations.len(),
-        "operation_ids": digest_payload["operation_ids"].clone(),
-        "latest_operation_id": latest_operation_id,
-        "frontier_digest": frontier_digest,
-    })
+    FederationOperationFrontierOutcome {
+        realm_id: realm_id.to_owned(),
+        operation_count: operations.len(),
+        operation_ids,
+        latest_operation_id,
+        frontier_digest,
+    }
 }
 
 fn is_valid_federation_txn_id(value: &str) -> bool {

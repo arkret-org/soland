@@ -13,7 +13,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{BlobPresignRequestBody, RealmId};
+use cokret_sdk::{BlobPresignOutcome, BlobPresignRequestBody, RealmId};
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
@@ -558,7 +558,7 @@ async fn blob_presign(
     body: JsonBody<BlobPresignRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<BlobPresignOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -601,15 +601,11 @@ async fn blob_presign(
         expires_at.timestamp(),
         token,
     );
-    json_ok(json!({
-        "url": url,
-        "method": "GET",
-        "expires_at": expires_at.to_rfc3339(),
-        "cache_control": PRESIGN_CACHE_CONTROL,
-        "referrer_policy": PRESIGN_REFERRER_POLICY,
-        "blob_ref": blob_ref,
-        "purpose": purpose,
-    }))
+    json_ok(BlobPresignOutcome {
+        url,
+        expires_at,
+        purpose: Some(purpose.to_owned()),
+    })
 }
 
 fn validate_presign_query(state: &AppState, req: &Request, blob_ref: &str, purpose: &str) -> bool {

@@ -15,9 +15,13 @@
 //! mirrors what `directory` / `sync` expose so clients see a stable wire
 //! contract while the durable projection store lands.
 
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
 use cokret_sdk::RealmId;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
@@ -42,6 +46,172 @@ const QUERY_FEATURES: &[&str] = &[
 ];
 const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
 const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
+
+fn default_index_filters() -> Value {
+    json!({})
+}
+
+fn default_index_sort() -> Value {
+    json!("title_asc")
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexObjectView {
+    object_id: String,
+    kind: String,
+    schema: String,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexObjectOutcome {
+    object: IndexObjectView,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexThreadView {
+    thread_id: String,
+    schema: String,
+    message_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexThreadEvent {
+    event_id: String,
+    kind: String,
+    realm_id: String,
+    thread_id: String,
+    sender: String,
+    content: Value,
+    encrypted: bool,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexThreadOutcome {
+    thread: IndexThreadView,
+    events: Vec<IndexThreadEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexNotificationItem {
+    kind: String,
+    event_ref: String,
+    realm_id: String,
+    thread_id: String,
+    sender: String,
+    encrypted: bool,
+    created_at: DateTime<Utc>,
+    unread: bool,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexNotificationsOutcome {
+    actor: String,
+    notifications: Vec<IndexNotificationItem>,
+    items: Vec<IndexNotificationItem>,
+    unread_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+struct IndexSearchRequestBody {
+    query: String,
+    #[serde(default)]
+    object_kinds: Vec<String>,
+    #[serde(default)]
+    realm_ids: Vec<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexSearchOutcome {
+    query: String,
+    results: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexSpaceHierarchyOutcome {
+    root_space_id: String,
+    children: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+struct IndexQueryRequestBody {
+    #[serde(default)]
+    realm_ids: Vec<String>,
+    #[serde(default)]
+    facets: Vec<String>,
+    #[serde(default)]
+    renderer: Option<String>,
+    #[serde(default = "default_index_filters")]
+    filters: Value,
+    #[serde(default = "default_index_sort")]
+    sort: Value,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexQueryFrontier {
+    limited: bool,
+    result_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexQueryOutcome {
+    results: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+    renderer: String,
+    facets: Vec<String>,
+    sort: Value,
+    filters: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stability: Option<String>,
+    frontier: IndexQueryFrontier,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    production_gap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limitation: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexDebugReducerFrontier {
+    message_count: usize,
+    projection_event_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_event_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexDebugReducerEvent {
+    event_id: String,
+    kind: String,
+    sender: String,
+    thread_id: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+struct IndexDebugReducerOutcome {
+    service_did: String,
+    realm_id: String,
+    reducer_profile: String,
+    schema_profiles: Vec<String>,
+    frontier: IndexDebugReducerFrontier,
+    recent_events: Vec<IndexDebugReducerEvent>,
+    production_gap: String,
+}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -109,17 +279,17 @@ fn object_kind_for(object_id: &str) -> Option<&'static str> {
     summary = "Describe a typed object by its `ck:<kind>:...` id"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.index.object"))]
-async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> {
+async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<IndexObjectOutcome> {
     let object_id = object_id.into_inner();
     let kind = object_kind_for(&object_id)
         .ok_or_else(|| AppError::invalid_param("object_id has no recognised typed prefix"))?;
-    json_ok(json!({
-        "object": {
-            "object_id": object_id,
-            "kind": kind,
-            "schema": format!("ck.schema.{kind}.v1"),
+    json_ok(IndexObjectOutcome {
+        object: IndexObjectView {
+            object_id,
+            kind: kind.to_owned(),
+            schema: format!("ck.schema.{kind}.v1"),
         },
-    }))
+    })
 }
 
 #[endpoint(
@@ -128,7 +298,10 @@ async fn index_object(object_id: QueryParam<String, true>) -> JsonResult<Value> 
     summary = "List events for a thread (up to 100)"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.index.thread"))]
-async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) -> JsonResult<Value> {
+async fn index_thread(
+    thread_id: QueryParam<String, true>,
+    depot: &mut Depot,
+) -> JsonResult<IndexThreadOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let thread_id = thread_id.into_inner();
     let messages = state
@@ -137,30 +310,28 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
         .list_for_thread(&thread_id, 100)
         .await
         .unwrap_or_default();
-    let events: Vec<Value> = messages
+    let events = messages
         .iter()
-        .map(|message| {
-            json!({
-                "event_id": message.event_id,
-                "kind": "ck.message.create",
-                "realm_id": message.realm_id,
-                "thread_id": message.thread_id,
-                "sender": message.sender,
-                "content": message.content,
-                "encrypted": message.encrypted,
-                "created_at": message.created_at,
-            })
+        .map(|message| IndexThreadEvent {
+            event_id: message.event_id.clone(),
+            kind: "ck.message.create".to_owned(),
+            realm_id: message.realm_id.clone(),
+            thread_id: message.thread_id.clone(),
+            sender: message.sender.clone(),
+            content: message.content.clone(),
+            encrypted: message.encrypted,
+            created_at: message.created_at.clone(),
         })
         .collect();
-    json_ok(json!({
-        "thread": {
-            "thread_id": thread_id,
-            "schema": "ck.schema.thread.v1",
-            "message_count": events.len(),
+    json_ok(IndexThreadOutcome {
+        thread: IndexThreadView {
+            thread_id,
+            schema: "ck.schema.thread.v1".to_owned(),
+            message_count: events.len(),
         },
-        "events": events,
-        "next_cursor": Value::Null,
-    }))
+        events,
+        next_cursor: None,
+    })
 }
 
 #[endpoint(
@@ -172,10 +343,10 @@ async fn index_thread(thread_id: QueryParam<String, true>, depot: &mut Depot) ->
 async fn index_notifications(
     actor: QueryParam<String, false>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<IndexNotificationsOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let actor = actor.into_inner().unwrap_or_default();
-    let mut notifications: Vec<Value> = Vec::new();
+    let mut notifications = Vec::new();
     let realm_snapshot: Vec<RealmDirectoryEntry> = {
         let realms = state.realms.lock().expect("realms lock");
         realms
@@ -208,25 +379,27 @@ async fn index_notifications(
             {
                 continue;
             }
-            notifications.push(json!({
-                "kind": "message",
-                "event_ref": message.event_id,
-                "realm_id": message.realm_id,
-                "thread_id": message.thread_id,
-                "sender": message.sender,
-                "encrypted": message.encrypted,
-                "created_at": message.created_at,
-                "unread": true,
-            }));
+            notifications.push(IndexNotificationItem {
+                kind: "message".to_owned(),
+                event_ref: message.event_id,
+                realm_id: message.realm_id,
+                thread_id: message.thread_id,
+                sender: message.sender,
+                encrypted: message.encrypted,
+                created_at: message.created_at,
+                unread: true,
+            });
         }
     }
-    json_ok(json!({
-        "actor": actor,
-        "notifications": notifications,
-        "items": notifications,
-        "unread_count": notifications.len(),
-        "next_cursor": Value::Null,
-    }))
+    let unread_count = notifications.len();
+    let items = notifications.clone();
+    json_ok(IndexNotificationsOutcome {
+        actor,
+        notifications,
+        items,
+        unread_count,
+        next_cursor: None,
+    })
 }
 
 async fn personal_blocklist_blocks_sender(state: &AppState, actor: &str, sender: &str) -> bool {
@@ -325,44 +498,22 @@ async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     summary = "Substring-search messages + Realms for a query string"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.index.search"))]
-async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn index_search(
+    body: JsonBody<IndexSearchRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<IndexSearchOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let query = body
-        .get("query")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let query = body.query;
     if query.trim().is_empty() {
         return Err(AppError::missing_param("query is required"));
     }
-    let limit = body
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(20)
-        .min(100) as usize;
-    let object_kinds = body
-        .get("object_kinds")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let realm_id_filter: std::collections::BTreeSet<String> = body
-        .get("realm_ids")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let include_realm = object_kinds.is_empty()
-        || object_kinds
-            .iter()
-            .any(|kind| kind.as_str() == Some("realm"));
-    let include_message = object_kinds
-        .iter()
-        .any(|kind| kind.as_str() == Some("message"));
+    let limit = body.limit.unwrap_or(20).min(100);
+    let object_kinds = body.object_kinds;
+    let realm_id_filter: BTreeSet<String> = body.realm_ids.into_iter().collect();
+    let include_realm =
+        object_kinds.is_empty() || object_kinds.iter().any(|kind| kind.as_str() == "realm");
+    let include_message = object_kinds.iter().any(|kind| kind.as_str() == "message");
     let lower = query.to_lowercase();
     let mut results: Vec<Value> = Vec::new();
 
@@ -422,11 +573,11 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
         }));
     }
     results.truncate(limit);
-    json_ok(json!({
-        "query": query,
-        "results": results,
-        "next_cursor": Value::Null,
-    }))
+    json_ok(IndexSearchOutcome {
+        query,
+        results,
+        next_cursor: None,
+    })
 }
 
 #[endpoint(
@@ -435,13 +586,15 @@ async fn index_search(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Va
     summary = "Walk the space hierarchy below a root space id"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.index.space_hierarchy"))]
-async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonResult<Value> {
+async fn index_space_hierarchy(
+    root_space_id: QueryParam<String, true>,
+) -> JsonResult<IndexSpaceHierarchyOutcome> {
     let root_space_id = root_space_id.into_inner();
-    json_ok(json!({
-        "root_space_id": root_space_id,
-        "children": [],
-        "next_cursor": Value::Null,
-    }))
+    json_ok(IndexSpaceHierarchyOutcome {
+        root_space_id,
+        children: Vec::new(),
+        next_cursor: None,
+    })
 }
 
 #[endpoint(
@@ -450,55 +603,41 @@ async fn index_space_hierarchy(root_space_id: QueryParam<String, true>) -> JsonR
     summary = "Faceted projection query (renderer + filters + sort + cursor)"
 )]
 #[tracing::instrument(skip_all, fields(op = "org.cokret.soland.index.query"))]
-async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn index_query(
+    body: JsonBody<IndexQueryRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<IndexQueryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let realm_ids = body
-        .get("realm_ids")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let facets = body
-        .get("facets")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let renderer = body
-        .get("renderer")
-        .and_then(Value::as_str)
-        .unwrap_or("collection")
-        .to_owned();
-    let limit = body
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(20)
-        .min(200) as usize;
-    let cursor = body
-        .get("cursor")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let sort_value = body
-        .get("sort")
-        .cloned()
-        .unwrap_or_else(|| json!("title_asc"));
-    let filters = body.get("filters").cloned().unwrap_or_else(|| json!({}));
+    let realm_ids = body.realm_ids;
+    let facets = body.facets;
+    let renderer = body.renderer.unwrap_or_else(|| "collection".to_owned());
+    let limit = body.limit.unwrap_or(20).min(200);
+    let cursor = body.cursor;
+    let sort_value = body.sort;
+    let filters = body.filters;
 
     let unsupported = facets
         .iter()
-        .filter_map(Value::as_str)
-        .any(|facet| !SUPPORTED_FACETS.contains(&facet));
+        .any(|facet| !SUPPORTED_FACETS.contains(&facet.as_str()));
     if unsupported {
-        return json_ok(json!({
-            "results": [],
-            "next_cursor": Value::Null,
-            "renderer": renderer,
-            "facets": facets,
-            "sort": sort_value,
-            "filters": filters,
-            "frontier": {"limited": false, "result_count": 0},
-            "production_gap": "facet_registry_lookup_and_projection_replay",
-            "limitation": "unsupported facet rejected by limited_projection index query",
-        }));
+        return json_ok(IndexQueryOutcome {
+            results: Vec::new(),
+            next_cursor: None,
+            renderer,
+            facets,
+            sort: sort_value,
+            filters,
+            stability: None,
+            frontier: IndexQueryFrontier {
+                limited: false,
+                result_count: 0,
+            },
+            production_gap: Some("facet_registry_lookup_and_projection_replay".to_owned()),
+            limitation: Some(
+                "unsupported facet rejected by limited_projection index query".to_owned(),
+            ),
+        });
     }
 
     let fingerprint = index_query_fingerprint(&filters, &sort_value, &facets, &renderer);
@@ -522,11 +661,7 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
         .get("text")
         .and_then(Value::as_str)
         .map(|value| value.to_lowercase());
-    let realm_id_filter: std::collections::BTreeSet<String> = realm_ids
-        .iter()
-        .filter_map(Value::as_str)
-        .map(ToOwned::to_owned)
-        .collect();
+    let realm_id_filter: BTreeSet<String> = realm_ids.into_iter().collect();
 
     let mut results: Vec<Value> = Vec::new();
     for realm in realm_snapshot {
@@ -613,25 +748,27 @@ async fn index_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Val
     } else {
         None
     };
-    json_ok(json!({
-        "results": page,
-        "next_cursor": next_cursor,
-        "renderer": renderer,
-        "facets": facets,
-        "sort": sort_value,
-        "filters": filters,
-        "stability": "limited_projection",
-        "frontier": {
-            "limited": has_more,
-            "result_count": total,
+    json_ok(IndexQueryOutcome {
+        results: page,
+        next_cursor,
+        renderer,
+        facets,
+        sort: sort_value,
+        filters,
+        stability: Some("limited_projection".to_owned()),
+        frontier: IndexQueryFrontier {
+            limited: has_more,
+            result_count: total,
         },
-    }))
+        production_gap: None,
+        limitation: None,
+    })
 }
 
 fn index_query_fingerprint(
     filters: &Value,
     sort: &Value,
-    facets: &[Value],
+    facets: &[String],
     renderer: &str,
 ) -> String {
     use sha2::{Digest, Sha256};
@@ -722,7 +859,7 @@ async fn index_debug_reducer(
     realm_id: QueryParam<String, true>,
     limit: QueryParam<usize, false>,
     depot: &mut Depot,
-) -> JsonResult<Value> {
+) -> JsonResult<IndexDebugReducerOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
@@ -736,31 +873,29 @@ async fn index_debug_reducer(
         .list_for_realm(&realm_id, limit)
         .await
         .unwrap_or_default();
-    let projection_events: Vec<Value> = messages
+    let projection_events = messages
         .iter()
-        .map(|message| {
-            json!({
-                "event_id": message.event_id,
-                "kind": "ck.message.create",
-                "sender": message.sender,
-                "thread_id": message.thread_id,
-                "created_at": message.created_at,
-            })
+        .map(|message| IndexDebugReducerEvent {
+            event_id: message.event_id.clone(),
+            kind: "ck.message.create".to_owned(),
+            sender: message.sender.clone(),
+            thread_id: message.thread_id.clone(),
+            created_at: message.created_at.clone(),
         })
         .collect();
     let latest_event_id = messages.last().map(|message| message.event_id.clone());
 
-    json_ok(json!({
-        "service_did": state.config.service_did.clone(),
-        "realm_id": realm_id,
-        "reducer_profile": "ck.reducer.v1",
-        "schema_profiles": ["ck.schema.core.v1"],
-        "frontier": {
-            "message_count": messages.len(),
-            "projection_event_count": projection_events.len(),
-            "latest_event_id": latest_event_id,
+    json_ok(IndexDebugReducerOutcome {
+        service_did: state.config.service_did.clone(),
+        realm_id,
+        reducer_profile: "ck.reducer.v1".to_owned(),
+        schema_profiles: vec!["ck.schema.core.v1".to_owned()],
+        frontier: IndexDebugReducerFrontier {
+            message_count: messages.len(),
+            projection_event_count: projection_events.len(),
+            latest_event_id,
         },
-        "recent_events": projection_events,
-        "production_gap": "durable_reducer_replay_and_conflict_records",
-    }))
+        recent_events: projection_events,
+        production_gap: "durable_reducer_replay_and_conflict_records".to_owned(),
+    })
 }

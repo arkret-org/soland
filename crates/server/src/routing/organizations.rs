@@ -12,7 +12,7 @@ use salvo::http::StatusCode;
 use salvo::oapi::ToSchema;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
@@ -43,6 +43,95 @@ struct UpsertOrganizationRequestBody {
 #[derive(Debug, Deserialize, ToSchema)]
 struct LinkOrganizationRealmRequestBody {
     realm_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub(crate) struct OrganizationView {
+    organization_id: String,
+    organization_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handle: Option<String>,
+    display_name: String,
+    name: String,
+    verified: bool,
+    verified_badge: bool,
+    #[serde(default)]
+    members: Vec<String>,
+    member_count: usize,
+    #[serde(default)]
+    realms: Vec<String>,
+    realm_count: usize,
+    created_by: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+struct OrganizationListOutcome {
+    organizations: Vec<OrganizationView>,
+    total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub(crate) struct OrganizationPolicyView {
+    kind: String,
+    organization_id: String,
+    policy_id: String,
+    version: u64,
+    policy: Value,
+    #[serde(default)]
+    applies_to_realms: Vec<String>,
+    updated_by: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub(crate) struct RealmModerationPolicyOutcome {
+    kind: String,
+    realm_id: String,
+    policy: Value,
+    updated_by: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+struct OrganizationRealmLinkOutcome {
+    organization_id: String,
+    realm_id: String,
+    linked: bool,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+struct OrganizationPolicyLayer {
+    source: String,
+    organization_id: String,
+    policy_id: String,
+    version: u64,
+    policy: Value,
+    #[serde(default)]
+    applies_to_realms: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+struct RealmModerationPolicyFanout {
+    source: String,
+    rewrites_realm_policy: bool,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub(crate) struct RealmEffectiveModerationPolicyOutcome {
+    realm_id: String,
+    inheritance_mode: String,
+    #[serde(default)]
+    inheritance_chain: Vec<String>,
+    #[serde(default)]
+    organization_policy_layers: Vec<OrganizationPolicyLayer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    realm_policy: Option<RealmModerationPolicyOutcome>,
+    #[serde(default)]
+    effective_rules: Vec<Value>,
+    override_requires_organization_approval: bool,
+    fanout: RealmModerationPolicyFanout,
 }
 
 #[derive(Debug)]
@@ -99,7 +188,7 @@ async fn list_organizations(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationListOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let mut rows = state
@@ -107,19 +196,14 @@ async fn list_organizations(
         .lock()
         .expect("organizations lock")
         .values()
-        .map(|record| organization_record_json(state, record))
+        .map(|record| organization_record_view(state, record))
         .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["display_name"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["display_name"].as_str().unwrap_or_default())
-    });
+    rows.sort_by(|left, right| left.display_name.cmp(&right.display_name));
     let total = rows.len();
-    json_ok(json!({
-        "organizations": rows,
-        "total": total,
-    }))
+    json_ok(OrganizationListOutcome {
+        organizations: rows,
+        total,
+    })
 }
 
 #[endpoint(
@@ -133,7 +217,7 @@ async fn upsert_organization(
     depot: &mut Depot,
     req: &mut Request,
     body: JsonBody<UpsertOrganizationRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -172,7 +256,7 @@ async fn upsert_organization(
         .lock()
         .expect("organizations lock")
         .insert(organization_id, record.clone());
-    json_ok(organization_record_json(state, &record))
+    json_ok(organization_record_view(state, &record))
 }
 
 #[endpoint(
@@ -186,7 +270,7 @@ async fn get_organization(
     depot: &mut Depot,
     req: &mut Request,
     organization_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
@@ -197,7 +281,7 @@ async fn get_organization(
         .get(&organization_id)
         .cloned()
         .ok_or_else(|| AppError::not_found("organization not found"))?;
-    json_ok(organization_record_json(state, &record))
+    json_ok(organization_record_view(state, &record))
 }
 
 #[endpoint(
@@ -211,7 +295,7 @@ async fn get_organization_policy(
     depot: &mut Depot,
     req: &mut Request,
     organization_id: PathParam<String>,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationPolicyView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
@@ -222,7 +306,7 @@ async fn get_organization_policy(
         .get(&organization_id)
         .cloned()
         .ok_or_else(|| AppError::not_found("organization policy not found"))?;
-    json_ok(organization_policy_record_json(state, &policy))
+    json_ok(organization_policy_record_view(state, &policy))
 }
 
 #[endpoint(
@@ -237,7 +321,7 @@ async fn upsert_organization_policy(
     req: &mut Request,
     organization_id: PathParam<String>,
     body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationPolicyView> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
@@ -296,7 +380,7 @@ async fn upsert_organization_policy(
         .lock()
         .expect("organization policies lock")
         .insert(organization_id, record.clone());
-    json_ok(organization_policy_record_json(state, &record))
+    json_ok(organization_policy_record_view(state, &record))
 }
 
 #[endpoint(
@@ -311,18 +395,18 @@ async fn link_organization_realm(
     req: &mut Request,
     organization_id: PathParam<String>,
     body: JsonBody<LinkOrganizationRealmRequestBody>,
-) -> JsonResult<Value> {
+) -> JsonResult<OrganizationRealmLinkOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor);
     link_realm_to_organization(state, &body.realm_id, &organization_id);
-    json_ok(json!({
-        "organization_id": organization_id,
-        "realm_id": body.realm_id,
-        "linked": true,
-    }))
+    json_ok(OrganizationRealmLinkOutcome {
+        organization_id,
+        realm_id: body.realm_id,
+        linked: true,
+    })
 }
 
 pub(crate) fn record_realm_organizations_from_event(
@@ -386,7 +470,10 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<St
         .unwrap_or_default()
 }
 
-pub(crate) fn effective_policy_for_realm_json(state: &AppState, realm_id: &str) -> Value {
+pub(crate) fn effective_policy_for_realm(
+    state: &AppState,
+    realm_id: &str,
+) -> RealmEffectiveModerationPolicyOutcome {
     let org_ids = realm_organization_ids(state, realm_id);
     let policies = state
         .organization_policies
@@ -399,18 +486,16 @@ pub(crate) fn effective_policy_for_realm_json(state: &AppState, realm_id: &str) 
     let org_layers = org_ids
         .iter()
         .filter_map(|org_id| policies.get(org_id).map(|policy| (org_id, policy)))
-        .map(|(org_id, policy)| {
-            json!({
-                "source": "organization",
-                "organization_id": org_id,
-                "policy_id": policy.policy_id,
-                "version": policy.version,
-                "policy": policy.payload,
-                "applies_to_realms": links
-                    .get(org_id)
-                    .map(|set| set.iter().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default(),
-            })
+        .map(|(org_id, policy)| OrganizationPolicyLayer {
+            source: "organization".to_owned(),
+            organization_id: org_id.clone(),
+            policy_id: policy.policy_id.clone(),
+            version: policy.version,
+            policy: policy.payload.clone(),
+            applies_to_realms: links
+                .get(org_id)
+                .map(|set| set.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     drop(links);
@@ -421,20 +506,25 @@ pub(crate) fn effective_policy_for_realm_json(state: &AppState, realm_id: &str) 
         .lock()
         .expect("realm moderation policies lock")
         .get(realm_id)
-        .map(realm_policy_record_json);
-    json!({
-        "realm_id": realm_id,
-        "inheritance_mode": if org_ids.is_empty() { "none" } else { "organization" },
-        "inheritance_chain": org_ids,
-        "organization_policy_layers": org_layers,
-        "realm_policy": realm_policy,
-        "effective_rules": effective_rules(state, realm_id),
-        "override_requires_organization_approval": !realm_organization_ids(state, realm_id).is_empty(),
-        "fanout": {
-            "source": "organization_policy",
-            "rewrites_realm_policy": false,
-        }
-    })
+        .map(realm_policy_record_outcome);
+    let has_organization_inheritance = !org_ids.is_empty();
+    RealmEffectiveModerationPolicyOutcome {
+        realm_id: realm_id.to_owned(),
+        inheritance_mode: if has_organization_inheritance {
+            "organization".to_owned()
+        } else {
+            "none".to_owned()
+        },
+        inheritance_chain: org_ids,
+        organization_policy_layers: org_layers,
+        realm_policy,
+        effective_rules: effective_rules(state, realm_id),
+        override_requires_organization_approval: has_organization_inheritance,
+        fanout: RealmModerationPolicyFanout {
+            source: "organization_policy".to_owned(),
+            rewrites_realm_policy: false,
+        },
+    }
 }
 
 pub(crate) fn organization_policy_blocks_join(
@@ -555,7 +645,7 @@ fn ensure_organization_placeholder(state: &AppState, organization_id: &str, acto
     );
 }
 
-fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Value {
+fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {
     let realms = state
         .organization_realms
         .lock()
@@ -564,25 +654,32 @@ fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Va
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let realm_count = realms.len();
-    json!({
-        "organization_id": record.organization_id.clone(),
-        "organization_did": record.organization_did.clone(),
-        "handle": record.handle.clone(),
-        "display_name": record.display_name.clone(),
-        "name": record.display_name.clone(),
-        "verified": record.verified,
-        "verified_badge": record.verified,
-        "members": record.members.iter().cloned().collect::<Vec<_>>(),
-        "member_count": record.member_count.max(record.members.len()),
-        "realms": realms,
-        "realm_count": realm_count,
-        "created_by": record.created_by.clone(),
-        "created_at": record.created_at.to_rfc3339(),
-        "updated_at": record.updated_at.to_rfc3339(),
-    })
+    OrganizationView {
+        organization_id: record.organization_id.clone(),
+        organization_did: record.organization_did.clone(),
+        handle: record.handle.clone(),
+        display_name: record.display_name.clone(),
+        name: record.display_name.clone(),
+        verified: record.verified,
+        verified_badge: record.verified,
+        members: record.members.iter().cloned().collect::<Vec<_>>(),
+        member_count: record.member_count.max(record.members.len()),
+        realms,
+        realm_count,
+        created_by: record.created_by.clone(),
+        created_at: record.created_at.to_rfc3339(),
+        updated_at: record.updated_at.to_rfc3339(),
+    }
 }
 
-fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicyRecord) -> Value {
+fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Value {
+    serde_json::to_value(organization_record_view(state, record)).unwrap_or(Value::Null)
+}
+
+fn organization_policy_record_view(
+    state: &AppState,
+    record: &OrganizationPolicyRecord,
+) -> OrganizationPolicyView {
     let applies_to_realms = state
         .organization_realms
         .lock()
@@ -590,26 +687,28 @@ fn organization_policy_record_json(state: &AppState, record: &OrganizationPolicy
         .get(&record.organization_id)
         .map(|set| set.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    json!({
-        "kind": "ck.organization.moderation_policy",
-        "organization_id": record.organization_id.clone(),
-        "policy_id": record.policy_id.clone(),
-        "version": record.version,
-        "policy": record.payload.clone(),
-        "applies_to_realms": applies_to_realms,
-        "updated_by": record.updated_by.clone(),
-        "updated_at": record.updated_at.to_rfc3339(),
-    })
+    OrganizationPolicyView {
+        kind: "ck.organization.moderation_policy".to_owned(),
+        organization_id: record.organization_id.clone(),
+        policy_id: record.policy_id.clone(),
+        version: record.version,
+        policy: record.payload.clone(),
+        applies_to_realms,
+        updated_by: record.updated_by.clone(),
+        updated_at: record.updated_at.to_rfc3339(),
+    }
 }
 
-fn realm_policy_record_json(record: &RealmModerationPolicyRecord) -> Value {
-    json!({
-        "kind": "ck.realm.moderation_policy",
-        "realm_id": record.realm_id.clone(),
-        "policy": record.payload.clone(),
-        "updated_by": record.updated_by.clone(),
-        "updated_at": record.updated_at.to_rfc3339(),
-    })
+pub(crate) fn realm_policy_record_outcome(
+    record: &RealmModerationPolicyRecord,
+) -> RealmModerationPolicyOutcome {
+    RealmModerationPolicyOutcome {
+        kind: "ck.realm.moderation_policy".to_owned(),
+        realm_id: record.realm_id.clone(),
+        policy: record.payload.clone(),
+        updated_by: record.updated_by.clone(),
+        updated_at: record.updated_at.to_rfc3339(),
+    }
 }
 
 fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {

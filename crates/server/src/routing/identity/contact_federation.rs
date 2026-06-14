@@ -23,6 +23,7 @@ use cokret_sdk::{
     Proof, RealmId, canonical, proof_kind,
 };
 use salvo::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -37,6 +38,17 @@ const HEADER_SOURCE_SERVICE_DID: &str = "source-service-did";
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct PeerContactDeliveryOutcome {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disclosed_outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    received_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_ms: Option<u64>,
 }
 
 /// Issuer-side: federate a signed contact fact to `subject_id`'s home
@@ -197,7 +209,10 @@ fn contact_delivery_idempotency_key(
     summary = "Private Principal Server contact fact delivery"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.peer.contacts.command.submit"))]
-async fn peer_contacts_submit(depot: &mut Depot, req: &mut Request) -> JsonResult<Value> {
+async fn peer_contacts_submit(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerContactDeliveryOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let delivery = req
         .parse_json::<PeerContactDeliveryRequest>()
@@ -269,10 +284,12 @@ async fn peer_contacts_submit(depot: &mut Depot, req: &mut Request) -> JsonResul
         outcome,
     )
     .await;
-    json_ok(json!({
-        "status": outcome,
-        "received_at": now().to_rfc3339_opts(SecondsFormat::Secs, true),
-    }))
+    json_ok(PeerContactDeliveryOutcome {
+        status: outcome.to_owned(),
+        disclosed_outcome: None,
+        received_at: Some(now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+        retry_after_ms: None,
+    })
 }
 
 /// Project a delivered contact fact into the local `subject_id`'s contact

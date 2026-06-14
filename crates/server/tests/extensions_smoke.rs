@@ -115,7 +115,7 @@ async fn applet_protocol_describe_smoke() {
     );
     assert_eq!(
         describe["install"]["ghost_actor_provision_path"],
-        json!("/_soland/self/applets/{applet_id}/ghosts/provision")
+        json!("/_cokret/self/applets/{applet_id}/ghosts/provision")
     );
     assert_eq!(
         describe["transaction_path"],
@@ -130,7 +130,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
-    let applet_id = format!("applet:bridge:install-{suffix}");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
 
@@ -193,7 +193,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         safe_did_token(&namespace)
     );
     let mut response = TestClient::post(format!(
-        "http://server/_soland/self/applets/{applet_id}/ghosts/provision"
+        "http://server/_cokret/self/applets/{applet_id}/ghosts/provision"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
@@ -321,7 +321,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = format!("applet:bridge:smoke-{suffix}");
+    let applet_id = cokret_sdk::new_prefixed_uuid7("ck:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     let realm_id = cokret_sdk::new_prefixed_uuid7("ck:realm:");
@@ -336,19 +336,20 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     assert_eq!(install["effective_status"], json!("installed"));
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
 
-    let ghost: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "applet_id": applet_id,
-            "realm_id": realm_id,
-            "external_user": {"id": "ext-user-x", "display_name": "External X"},
-            "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let ghost: Value = TestClient::post(format!(
+        "http://server/_soland/self/applets/{applet_id}/ghosts"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "realm_id": realm_id,
+        "external_user": {"id": "ext-user-x", "display_name": "External X"},
+        "payload": {"kind": "message", "text": format!("hi from outside {suffix}")},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(ghost["ok"], json!(true), "transaction response: {ghost}");
     let ghost_actor_id = ghost["ghost_actor_id"].as_str().unwrap().to_owned();
     assert!(ghost_actor_id.starts_with("did:web:ghost-ext-user-x-"));
@@ -396,46 +397,48 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
         "effective_scope": {"kind": "realm", "realm_id": realm_id},
-        "registration_epoch": package.registration_epoch.clone(),
-        "reason": "smoke-test",
+        "reason_code": "smoke_test",
+        "revoke_mode": "revoke_all",
     }))
     .send(&app)
     .await
     .take_json()
     .await
     .unwrap();
-    assert_eq!(revoke["status"], json!("revoked"));
+    assert_eq!(revoke["ok"], json!(true));
 
-    let rejected: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "applet_id": applet_id,
-            "realm_id": realm_id,
-            "external_id": "ext-user-x",
-            "payload": {"kind": "message", "text": "after revoke"},
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let rejected: Value = TestClient::post(format!(
+        "http://server/_soland/self/applets/{applet_id}/ghosts"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "realm_id": realm_id,
+        "external_id": "ext-user-x",
+        "payload": {"kind": "message", "text": "after revoke"},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(rejected["error"]["code"], json!("applet_revoked"));
 
     let revoked_doc = canonical_did_document(&app, &ghost_actor_id).await;
     assert_eq!(revoked_doc["status"], json!("revoked"));
 
-    let bot_rejected: Value = TestClient::post("http://server/_cokret/edge/applet/transactions")
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({
-            "applet_id": applet_id,
-            "realm_id": realm_id,
-            "payload": {"kind": "message", "text": "bot after revoke"},
-        }))
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let bot_rejected: Value = TestClient::post(format!(
+        "http://server/_soland/self/applets/{applet_id}/bot/messages"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .json(&json!({
+        "realm_id": realm_id,
+        "payload": {"kind": "message", "text": "bot after revoke"},
+    }))
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(bot_rejected["error"]["code"], json!("bot_actor_revoked"));
 }
 
@@ -581,6 +584,9 @@ async fn install_applet_package(
             "approval_request": {
                 "approve_actions": package.requested_scopes.clone(),
                 "allow_ghost_actors": true,
+                "allow_delegated_native_actors": false,
+                "allow_e2ee_join": false,
+                "allow_widget": false,
             },
         }))
         .send(app)

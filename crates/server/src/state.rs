@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cokret_sdk::identity::CompositeDidResolver;
-use cokret_sdk::{Did, RealmId};
+use cokret_sdk::{AppletPackage, Did, RealmId};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2619,8 +2619,8 @@ async fn hydrate_projections_from_persistence(
     proj: &mut ProjectionState,
 ) {
     use crate::reducer::{
-        FlowProjection, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
-        SpaceContainerProjection,
+        AppletProjection, FlowProjection, MorphProjection, ObjectLifecycleState,
+        SpaceContainerLifecycleState, SpaceContainerProjection,
     };
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
@@ -2769,6 +2769,49 @@ async fn hydrate_projections_from_persistence(
                     updated_at: record.updated_at,
                 },
             );
+        }
+    }
+    if let Ok(rows) = persistence.applets().list().await {
+        for row in rows {
+            let applet_id = row
+                .get("applet_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let namespace = row
+                .get("namespace")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let Some(package_value) = row.get("package").filter(|value| !value.is_null()).cloned()
+            else {
+                continue;
+            };
+            let Ok(package) = serde_json::from_value::<AppletPackage>(package_value) else {
+                if let Some(applet_id) = &applet_id {
+                    tracing::warn!(%applet_id, "skipping applet projection row with invalid package during hydrate");
+                }
+                continue;
+            };
+            let registered_at = row
+                .get("registered_at")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<chrono::DateTime<chrono::Utc>>(value).ok()
+                })
+                .unwrap_or_else(chrono::Utc::now);
+            let projection = AppletProjection {
+                service_did: package.service_did.to_string(),
+                namespace,
+                manifest: Some(package.manifest_snapshot()),
+                capabilities: row.get("capabilities").cloned(),
+                registered_at,
+                updated_at: registered_at,
+            };
+            proj.applets
+                .insert(projection.service_did.clone(), projection.clone());
+            if let Some(applet_id) = applet_id {
+                proj.applets.insert(applet_id, projection);
+            }
         }
     }
 }
