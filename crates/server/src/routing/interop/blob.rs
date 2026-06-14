@@ -13,7 +13,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::RealmId;
+use cokret_sdk::{BlobPresignRequestBody, RealmId};
 use ed25519_dalek::Signer;
 use salvo::http::{Method, StatusCode};
 use salvo::oapi::extract::JsonBody;
@@ -555,21 +555,15 @@ async fn try_recover_profile_avatar_blob(
 #[tracing::instrument(skip_all, fields(op = "ck.self.blob.command.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<BlobPresignRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let blob_ref = body
-        .get("blob_ref")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("blob_ref is required"))?;
-    let purpose = body
-        .get("purpose")
-        .and_then(Value::as_str)
-        .unwrap_or("download");
+    let blob_ref = body.blob_ref.as_str();
+    let purpose = body.purpose.as_deref().unwrap_or("download");
     if !is_valid_blob_purpose(purpose) {
         return Err(AppError::invalid_param("invalid blob purpose"));
     }
@@ -585,7 +579,7 @@ async fn blob_presign(
         state,
         &blob,
         &session,
-        body.get("realm_id").and_then(Value::as_str),
+        body.realm_id.as_ref().map(|realm_id| realm_id.as_str()),
     )
     .await
     {
@@ -596,11 +590,7 @@ async fn blob_presign(
         let (code, reason) = block.as_error();
         return Err(AppError::new(code, reason));
     }
-    let ttl_seconds = body
-        .get("ttl_seconds")
-        .and_then(Value::as_u64)
-        .unwrap_or(300)
-        .clamp(1, 300);
+    let ttl_seconds = u64::from(body.max_age_seconds.unwrap_or(300)).clamp(1, 300);
     let expires_at = now() + chrono::Duration::seconds(ttl_seconds as i64);
     let token = presign_token(state, blob_ref, purpose, expires_at.timestamp());
     let base = state.config.public_base_url.trim_end_matches('/');

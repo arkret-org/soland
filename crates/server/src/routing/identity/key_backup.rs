@@ -5,7 +5,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use cokret_sdk::{
     BackupClass, BackupId, DeviceId, Did, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
     KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupRecipientMethod,
-    KeysBackupsDeleteRequestBody,
+    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -1755,7 +1755,7 @@ async fn list_key_backups(
 async fn unlock_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<KeysBackupsUnlockRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -1765,22 +1765,8 @@ async fn unlock_key_backup(
     // spec `keys_backups_unlock_request_body` (additionalProperties: false):
     // `{proof}` only; the unlock proof MUST NOT travel in a header or query.
     let body = body.into_inner();
-    let object = body.as_object().ok_or_else(|| {
-        AppError::invalid_param(
-            "ck.self.keys.backups.command.unlock request body must be an object",
-        )
-    })?;
-    for key in object.keys() {
-        if key != "proof" {
-            return Err(AppError::invalid_param(
-                "ck.self.keys.backups.command.unlock permits only proof",
-            ));
-        }
-    }
-    let proof = object.get("proof").ok_or_else(|| {
-        AppError::invalid_param(
-            "ck.self.keys.backups.command.unlock requires a proof in the request body",
-        )
+    let proof = serde_json::to_value(&body.proof).map_err(|error| {
+        AppError::internal(format!("key backup unlock proof serialize: {error}"))
     })?;
     let Some(backup) = state
         .persistence
@@ -1798,7 +1784,7 @@ async fn unlock_key_backup(
     // The path `backup_id` and `proof.backup_id` MUST match: the envelope is
     // looked up by the path id and the shape check below requires
     // `proof.backup_id` to equal the envelope's own `backup_id`.
-    verify_key_backup_unlock_proof(state, proof, &session.actor, &session.device_id, &backup)
+    verify_key_backup_unlock_proof(state, &proof, &session.actor, &session.device_id, &backup)
         .await?;
     // key-management.md §7.4.1 — anchor the released envelope's auth_data.signature
     // to the actor's cross-signing trust root before returning the full ciphertext.

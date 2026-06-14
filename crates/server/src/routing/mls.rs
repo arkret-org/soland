@@ -35,9 +35,15 @@
 //! validation queues only minimal routing metadata and rejects plaintext
 //! sender/profile/relationship side-band fields.
 
+use std::collections::BTreeSet;
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cokret_sdk::{Operation, OperationId, RealmId};
+use chrono::{DateTime, TimeZone, Utc};
+use cokret_sdk::{
+    KeyPackagesClaimRequestBody, KeyPackagesConsumeRequestBody, KeyPackagesRevokeRequestBody,
+    KeyPackagesUploadRequestBody, Operation, OperationId, RealmId,
+};
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -100,7 +106,7 @@ pub const MAX_WELCOMES_PER_POLL: usize = 50;
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.upload.create"))]
 async fn upload_keypackage(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<KeyPackagesUploadRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -108,15 +114,8 @@ async fn upload_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    let keypackage_id = require_str(&body, "keypackage_id")?;
-    let actor_id = body
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .unwrap_or(session.actor.as_str());
-    let device_id = body
-        .get("device_id")
-        .and_then(Value::as_str)
-        .unwrap_or(session.device_id.as_str());
+    let actor_id = body.principal_id.to_string();
+    let device_id = body.device_id.to_string();
     if actor_id != session.actor {
         return Err(AppError::capability_denied(
             "actor_id must match the calling session",
@@ -127,62 +126,106 @@ async fn upload_keypackage(
             "device_id must match the calling session",
         ));
     }
-
-    // Run the reducer's projection update first — that path enforces
-    // the wire shape (lifetime, bytes presence, etc.) and gives us the
-    // canonical Rejected reason if anything is malformed.
-    //
-    // Canonical event kind is `ck.mls.keypackage` (publish/claim
-    // distinction is conveyed via `payload.action`). The HTTP
-    // operation_id (`ck.self.keys.keypackages.upload.create`) lives at the wire
-    // layer; the internal event log stores `ck.mls.keypackage`.
-    let mut publish_payload = body.clone();
-    if let Value::Object(ref mut map) = publish_payload {
-        map.insert("action".to_owned(), Value::String("publish".to_owned()));
-    }
-    let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, publish_payload);
-    let effect = reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
-    match effect {
-        ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
-        ProjectionEffect::Rejected { reason } => {
-            return Err(AppError::new(ErrorCode::SchemaViolation, reason));
-        }
-        other => {
-            return Err(AppError::internal(format!(
-                "unexpected reducer effect: {other:?}"
-            )));
-        }
+    if body.key_packages.is_empty() {
+        return Err(AppError::missing_param("key_packages is required"));
     }
 
-    // Mirror into the durable store. We snapshot the freshly-applied
-    // projection row instead of re-parsing the body so the persistence
-    // payload and the in-process state are guaranteed to match.
-    let snapshot = {
-        let projection = state.projection.lock().unwrap();
-        projection
-            .mls_key_packages
-            .get(keypackage_id)
-            .cloned()
-            .expect("publish reducer landed the row")
-    };
-    let record = key_package_to_record(&snapshot);
-    state
-        .persistence
-        .mls_key_packages()
-        .put(&record)
-        .await
-        .map_err(|err| AppError::internal(format!("mls_key_packages.put: {err}")))?;
+    let mut accepted = 0_u32;
+    let mut key_package_refs = Vec::new();
+    let mut rejected = Vec::new();
+    for entry in body.key_packages {
+        let keypackage_id = match entry_string(&entry, "keypackage_id") {
+            Ok(value) => value.to_owned(),
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let keypackage_ref = entry
+            .get("keypackage_ref")
+            .and_then(Value::as_str)
+            .unwrap_or(keypackage_id.as_str())
+            .to_owned();
+        let key_package_bytes_b64 = match entry_string(&entry, "key_package") {
+            Ok(value) => value.to_owned(),
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let created_at = match entry_timestamp(&entry, "created_at") {
+            Ok(value) => value,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+        let expires_at = match entry_timestamp(&entry, "expires_at") {
+            Ok(value) => value,
+            Err(reason) => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+        };
+
+        // Run the reducer's projection update first — that path enforces
+        // the MLS bytes/lifetime shape and gives us the canonical rejected
+        // reason if anything is malformed. The public operation id stays at
+        // the HTTP layer; the reducer sees the durable `ck.mls.keypackage`.
+        let publish_payload = json!({
+            "action": "publish",
+            "keypackage_id": keypackage_id.clone(),
+            "actor_id": actor_id.clone(),
+            "device_id": device_id.clone(),
+            "lifetime": {
+                "not_before": created_at,
+                "not_after": expires_at,
+            },
+            "key_package_bytes_b64": key_package_bytes_b64,
+        });
+        let op = build_op(crate::kinds::CK_MLS_KEYPACKAGE, publish_payload);
+        let effect =
+            reducer::mls::apply_keypackage_publish(&mut state.projection.lock().unwrap(), &op);
+        match effect {
+            ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { .. }) => {}
+            ProjectionEffect::Rejected { reason } => {
+                rejected.push(keypackage_failure(&entry, &device_id, reason));
+                continue;
+            }
+            other => {
+                return Err(AppError::internal(format!(
+                    "unexpected reducer effect: {other:?}"
+                )));
+            }
+        }
+
+        // Mirror into the durable store. We snapshot the freshly-applied
+        // projection row instead of re-parsing the body so persistence and
+        // in-process state stay aligned.
+        let snapshot = {
+            let projection = state.projection.lock().unwrap();
+            projection
+                .mls_key_packages
+                .get(&keypackage_id)
+                .cloned()
+                .expect("publish reducer landed the row")
+        };
+        let record = key_package_to_record(&snapshot);
+        state
+            .persistence
+            .mls_key_packages()
+            .put(&record)
+            .await
+            .map_err(|err| AppError::internal(format!("mls_key_packages.put: {err}")))?;
+        accepted += 1;
+        key_package_refs.push(keypackage_ref);
+    }
 
     json_ok(json!({
-        "keypackage_id": snapshot.id,
-        "actor_id": snapshot.actor_id,
-        "device_id": snapshot.device_id,
-        "lifetime": {
-            "not_before": snapshot.lifetime.not_before,
-            "not_after": snapshot.lifetime.not_after,
-        },
-        "claimed": false,
-        "created_at": snapshot.created_at,
+        "accepted": accepted,
+        "rejected": rejected,
+        "key_package_refs": key_package_refs,
+        "available_count": available_keypackage_count(state, &actor_id, Some(&device_id)),
     }))
 }
 
@@ -196,16 +239,73 @@ async fn upload_keypackage(
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<KeyPackagesClaimRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    let keypackage_id = require_str(&body, "keypackage_id")?.to_owned();
-    let mls_group_ref = require_str(&body, "mls_group_ref")?;
+    let requester = body.requester.to_string();
+    if requester != session.actor {
+        return Err(AppError::capability_denied(
+            "requester must match the calling session",
+        ));
+    }
+    if body.expires_at <= Utc::now() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage claim request expired",
+        )
+        .with_wire_code("mls_keypackage_claim_request_expired"));
+    }
+
+    let target_principal_id = body.target_principal_id.to_string();
+    let target_device_ids = body
+        .target_device_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let available_before = available_keypackage_count(
+        state,
+        &target_principal_id,
+        if target_device_ids.len() == 1 {
+            target_device_ids.iter().next().map(String::as_str)
+        } else {
+            None
+        },
+    );
+    let now_secs = now().timestamp();
+    let keypackage_id = {
+        let projection = state.projection.lock().unwrap();
+        projection
+            .mls_key_packages
+            .values()
+            .filter(|kp| kp.actor_id == target_principal_id)
+            .filter(|kp| {
+                target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str())
+            })
+            .filter(|kp| kp.claimed_by.is_none())
+            .filter(|kp| kp.lifetime.not_after > now_secs)
+            .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
+            .map(|kp| kp.id.clone())
+    };
+    let Some(keypackage_id) = keypackage_id else {
+        return json_ok(json!({
+            "claims": [],
+            "failures": [{
+                "device_id": target_device_ids.iter().next().cloned().unwrap_or_default(),
+                "reason_code": reducer::mls::REASON_KEYPACKAGE_NOT_FOUND,
+            }],
+            "available_count": available_before,
+        }));
+    };
+    let mls_group_ref = body
+        .mls_group_id
+        .clone()
+        .or_else(|| body.flow_id.as_ref().map(ToString::to_string))
+        .unwrap_or_else(|| body.intended_realm_id.to_string());
 
     // Build the canonical op so the reducer sees the same shape as a
     // federated `ck.mls.keypackage` envelope would. Canonical event
@@ -274,9 +374,14 @@ async fn claim_keypackage(
         )
         .with_wire_code(reducer::mls::REASON_KEYPACKAGE_ALREADY_CLAIMED));
     }
+    let Some(claimed_record) = updated else {
+        return Err(AppError::internal("claimed KeyPackage row missing"));
+    };
 
     json_ok(json!({
-        "keypackage_id": claimed_keypackage_id,
+        "claims": [keypackage_claim_record(&claimed_record, &body.claim_nonce)],
+        "failures": [],
+        "available_count": available_keypackage_count(state, &target_principal_id, None),
         "mls_group_ref": claimed_group_id,
         "claimed_at": consumed_at,
     }))
@@ -290,42 +395,46 @@ async fn claim_keypackage(
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<KeyPackagesConsumeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let refs = keypackage_refs_from_body(&body)?;
-    let group_id = body
-        .get("group_id")
-        .or_else(|| body.get("flow_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("manual-consume");
+    if body.consumer_device_id.to_string() != session.device_id {
+        return Err(AppError::capability_denied(
+            "consumer_device_id must match the calling session",
+        ));
+    }
+    let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
+    let group_id = consume_group_ref(&body);
     let consumed_at = now().timestamp();
     let mut consumed = Vec::new();
-    let mut failures = serde_json::Map::new();
+    let mut failures = Vec::new();
     for keypackage_id in refs {
         match state
             .persistence
             .mls_key_packages()
-            .try_claim(&keypackage_id, group_id, consumed_at)
+            .try_claim(&keypackage_id, &group_id, consumed_at)
             .await
         {
             Ok(Some(_)) => consumed.push(keypackage_id),
             Ok(None) => {
-                failures.insert(keypackage_id, json!("already_consumed_or_missing"));
+                failures.push(keypackage_ref_failure(
+                    keypackage_id,
+                    "already_consumed_or_missing",
+                ));
             }
             Err(error) => {
-                failures.insert(keypackage_id, json!(error.to_string()));
+                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
             }
         }
     }
     json_ok(json!({
         "consumed": consumed,
         "failures": failures,
-        "consumer_device_id": body.get("consumer_device_id").and_then(Value::as_str).unwrap_or(session.device_id.as_str()),
+        "consumer_device_id": session.device_id,
         "consumed_at": consumed_at,
     }))
 }
@@ -338,17 +447,23 @@ async fn consume_keypackages(
 #[tracing::instrument(skip_all, fields(op = "ck.self.keys.keypackages.command.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<KeyPackagesRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let refs = keypackage_refs_from_body(&body)?;
+    let device_id = body.device_id.to_string();
+    if device_id != session.device_id {
+        return Err(AppError::capability_denied(
+            "device_id must match the calling session",
+        ));
+    }
+    let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
     let revoked_at = now().timestamp();
     let mut revoked = Vec::new();
-    let mut failures = serde_json::Map::new();
+    let mut failures = Vec::new();
     for keypackage_id in refs {
         match state
             .persistence
@@ -357,10 +472,10 @@ async fn revoke_keypackages(
             .await
         {
             Ok(Some(record)) if record.actor_id != session.actor => {
-                failures.insert(keypackage_id, json!("not_owner"));
+                failures.push(keypackage_ref_failure(keypackage_id, "not_owner"));
             }
             Ok(Some(record)) if record.consumed_at.is_some() => {
-                failures.insert(keypackage_id, json!("already_consumed"));
+                failures.push(keypackage_ref_failure(keypackage_id, "already_consumed"));
             }
             Ok(Some(_)) => {
                 match state
@@ -371,26 +486,29 @@ async fn revoke_keypackages(
                 {
                     Ok(Some(_)) => revoked.push(keypackage_id),
                     Ok(None) => {
-                        failures.insert(keypackage_id, json!("already_consumed_or_missing"));
+                        failures.push(keypackage_ref_failure(
+                            keypackage_id,
+                            "already_consumed_or_missing",
+                        ));
                     }
                     Err(error) => {
-                        failures.insert(keypackage_id, json!(error.to_string()));
+                        failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
                     }
                 }
             }
             Ok(None) => {
-                failures.insert(keypackage_id, json!("not_found"));
+                failures.push(keypackage_ref_failure(keypackage_id, "not_found"));
             }
             Err(error) => {
-                failures.insert(keypackage_id, json!(error.to_string()));
+                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
             }
         }
     }
     json_ok(json!({
         "revoked": revoked,
         "failures": failures,
-        "device_id": body.get("device_id").and_then(Value::as_str).unwrap_or(session.device_id.as_str()),
-        "reason": body.get("reason").cloned().unwrap_or(Value::Null),
+        "device_id": session.device_id,
+        "reason": body.reason,
         "revoked_at": revoked_at,
     }))
 }
@@ -475,33 +593,95 @@ async fn pending_welcomes(
 
 // ── helpers ───────────────────────────────────────────────────────────
 
-fn require_str<'a>(body: &'a Value, field: &'static str) -> Result<&'a str, AppError> {
-    body.get(field)
+fn entry_string<'a>(entry: &'a Value, field: &'static str) -> Result<&'a str, String> {
+    entry
+        .get(field)
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param(format!("missing {field}")))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{field}_missing"))
 }
 
-fn keypackage_refs_from_body(body: &Value) -> Result<Vec<String>, AppError> {
-    if let Some(items) = body.get("key_package_refs").and_then(Value::as_array) {
-        let refs = items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if refs.is_empty() {
-            return Err(AppError::missing_param("key_package_refs is required"));
-        }
-        return Ok(refs);
+fn entry_timestamp(entry: &Value, field: &'static str) -> Result<i64, String> {
+    let value = entry_string(entry, field)?;
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.timestamp())
+        .map_err(|_| format!("{field}_invalid"))
+}
+
+fn keypackage_failure(entry: &Value, device_id: &str, reason_code: impl Into<String>) -> Value {
+    json!({
+        "keypackage_ref": entry
+            .get("keypackage_ref")
+            .or_else(|| entry.get("keypackage_id"))
+            .and_then(Value::as_str),
+        "device_id": device_id,
+        "reason_code": reason_code.into(),
+    })
+}
+
+fn keypackage_ref_failure(keypackage_ref: String, reason_code: impl Into<String>) -> Value {
+    json!({
+        "keypackage_ref": keypackage_ref,
+        "reason_code": reason_code.into(),
+    })
+}
+
+fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
+    if refs.is_empty() {
+        return Err(AppError::missing_param("key_package_refs is required"));
     }
-    if let Some(item) = body
-        .get("keypackage_ref")
-        .or_else(|| body.get("keypackage_id"))
-        .or_else(|| body.get("key_package_ref"))
-        .and_then(Value::as_str)
-    {
-        return Ok(vec![item.to_owned()]);
-    }
-    Err(AppError::missing_param("key_package_refs is required"))
+    Ok(refs.to_vec())
+}
+
+fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
+    body.mls_group_id
+        .clone()
+        .or_else(|| body.flow_id.as_ref().map(ToString::to_string))
+        .or_else(|| body.realm_id.as_ref().map(ToString::to_string))
+        .or_else(|| body.welcome_ref.clone())
+        .unwrap_or_else(|| "manual-consume".to_owned())
+}
+
+fn available_keypackage_count(state: &AppState, actor_id: &str, device_id: Option<&str>) -> u64 {
+    let now_secs = now().timestamp();
+    let projection = state.projection.lock().unwrap();
+    projection
+        .mls_key_packages
+        .values()
+        .filter(|kp| kp.actor_id == actor_id)
+        .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
+        .filter(|kp| kp.claimed_by.is_none())
+        .filter(|kp| kp.lifetime.not_after > now_secs)
+        .count() as u64
+}
+
+fn keypackage_claim_record(record: &MlsKeyPackageRow, claim_nonce: &str) -> Value {
+    let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
+    json!({
+        "claim_id": format!("{}:{claim_nonce}", record.id),
+        "keypackage_ref": record.id.clone(),
+        "keypackage_digest": cokret_sdk::canonical::sha256_digest(&record.key_package_bytes),
+        "principal_id": record.actor_id.clone(),
+        "device_id": record.device_id.clone(),
+        "key_package": key_package,
+        "capabilities": ["unknown"],
+        "capabilities_digest": cokret_sdk::canonical::sha256_digest(b"[\"unknown\"]"),
+        "ssk_generation": 1,
+        "expires_at": unix_timestamp_rfc3339(record.lifetime_not_after),
+        "device_signature": {
+            "kid": format!("{}#{}", record.actor_id, record.device_id),
+            "alg": "unknown",
+            "sig": "unknown",
+        },
+        "revocation_status": "active",
+    })
+}
+
+fn unix_timestamp_rfc3339(timestamp: i64) -> String {
+    Utc.timestamp_opt(timestamp, 0)
+        .single()
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339()
 }
 
 /// Build a minimal in-process `Operation` carrying the MLS payload so

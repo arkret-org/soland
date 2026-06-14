@@ -45,6 +45,37 @@ struct LinkOrganizationRealmRequestBody {
     realm_id: String,
 }
 
+#[derive(Debug)]
+struct OrganizationModerationPolicyReplaceRequestBody(serde_json::Map<String, Value>);
+
+impl<'de> Deserialize<'de> for OrganizationModerationPolicyReplaceRequestBody {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match Value::deserialize(deserializer)? {
+            Value::Object(object) => Ok(Self(object)),
+            _ => Err(serde::de::Error::custom(
+                "organization moderation policy must be a JSON object",
+            )),
+        }
+    }
+}
+
+impl ToSchema for OrganizationModerationPolicyReplaceRequestBody {
+    fn to_schema(
+        components: &mut salvo::oapi::Components,
+    ) -> salvo::oapi::RefOr<salvo::oapi::schema::Schema> {
+        serde_json::Map::<String, Value>::to_schema(components)
+    }
+}
+
+impl From<OrganizationModerationPolicyReplaceRequestBody> for Value {
+    fn from(body: OrganizationModerationPolicyReplaceRequestBody) -> Self {
+        Value::Object(body.0)
+    }
+}
+
 pub(crate) fn router() -> Router {
     Router::with_path("organizations")
         .get(list_organizations)
@@ -205,13 +236,13 @@ async fn upsert_organization_policy(
     depot: &mut Depot,
     req: &mut Request,
     organization_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let organization_id = normalized_organization_id(&organization_id.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor);
-    let mut payload = body.into_inner();
+    let mut payload = Value::from(body.into_inner());
     if !payload.is_object() {
         return Err(AppError::bad_json(
             "organization moderation policy must be a JSON object",

@@ -12,7 +12,7 @@
 //! write in this Realm?".
 
 use chrono::{DateTime, Utc};
-use cokret_sdk::{Did, RealmId, SpaceId};
+use cokret_sdk::{Did, RealmId, RealmModerationPolicyReplaceRequestBody, SpaceId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ pub(super) fn protocol_router() -> Router {
                 Router::with_path("moderation-policy/effective")
                     .get(get_realm_effective_moderation_policy),
             )
-            .push(Router::with_path("moderation-policy").post(upsert_realm_moderation_policy))
+            .push(Router::with_path("moderation-policy").put(upsert_realm_moderation_policy))
             .push(Router::with_path("export").get(export_realm)),
     )
 }
@@ -110,7 +110,7 @@ async fn upsert_realm_moderation_policy(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<RealmModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -126,7 +126,9 @@ async fn upsert_realm_moderation_policy(
     if record.owner != session.actor {
         return Err(AppError::capability_denied("missing_capability"));
     }
-    let payload = body.into_inner();
+    let payload = serde_json::to_value(body.into_inner().policy).map_err(|error| {
+        AppError::internal(format!("realm moderation policy serialize: {error}"))
+    })?;
     if organizations::realm_policy_override_requires_approval(state, &realm_id, &payload)
         && !organizations::realm_policy_override_has_approval(state, &realm_id, &payload)
     {

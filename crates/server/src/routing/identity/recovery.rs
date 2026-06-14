@@ -18,7 +18,10 @@ use std::collections::BTreeSet;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::SecondsFormat;
-use cokret_sdk::Did;
+use cokret_sdk::{
+    Did, RecoveryPolicy, RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody,
+    RecoverySessionProofSubmitRequestBody,
+};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -410,18 +413,18 @@ async fn load_owned_recovery_session(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_session.create",
+    operation_id = "ck.root.identity.recovery_session.command.create",
     tags("identity", "recovery"),
     summary = "Open a recovery session bound to the active policy (REC-1)",
     status_codes(200, 201, 400, 401, 403, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_session.create")
+    fields(op = "ck.root.identity.recovery_session.command.create")
 )]
 async fn recovery_session_create(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<RecoverySessionCreateRequestBody>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
@@ -434,8 +437,7 @@ async fn recovery_session_create(
     // `principal_id` is part of the wire contract (recovery-session.schema.json
     // create_request) and MUST equal the authenticated principal — a caller may
     // only open a recovery session for itself.
-    let body_principal = require_did(&payload, "principal_id")?;
-    if body_principal != principal {
+    if payload.principal_id.as_str() != principal {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "principal_id does not match the authenticated principal",
@@ -443,13 +445,13 @@ async fn recovery_session_create(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    let requesting_device_id = require_string(&payload, "requesting_device_id")?;
+    let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ck:device:") {
         return Err(AppError::invalid_param(format!(
             "requesting_device_id `{requesting_device_id}` must start with ck:device:",
         )));
     }
-    let trust_domain = require_string(&payload, "trust_domain")?;
+    let trust_domain = payload.trust_domain.as_str().to_owned();
     if !trust_domain.starts_with("ck:trust_domain:") {
         return Err(AppError::invalid_param(format!(
             "trust_domain `{trust_domain}` must start with ck:trust_domain:",
@@ -458,7 +460,10 @@ async fn recovery_session_create(
     // Accepted cross-signing generation the requester believes is current. The
     // server snapshots it onto the session; completion (C-P4) MUST reject if the
     // accepted generation has since moved on (device_recovery_ssk_generation_mismatch).
-    let ssk_generation = require_u32_min(&payload, "ssk_generation", 1)?;
+    let ssk_generation = u32::try_from(payload.ssk_generation)
+        .ok()
+        .filter(|generation| *generation >= 1)
+        .ok_or_else(|| AppError::invalid_param("ssk_generation must be >= 1 and fit u32"))?;
 
     // A session can only be opened against an accepted recovery policy — and the
     // requested trust_domain MUST match it (no domain confusion).
@@ -494,10 +499,10 @@ async fn recovery_session_create(
     // Optional client CAS hint: if `expected_recovery_policy_ref` is present it
     // MUST match the policy the server is about to snapshot, else the client is
     // racing a policy rotation → recovery_policy_mismatch.
-    if let Some(expected) = payload.get("expected_recovery_policy_ref") {
-        let exp_id = expected.get("policy_id").and_then(Value::as_str);
-        let exp_ver = expected.get("policy_version").and_then(Value::as_u64);
-        if exp_id != Some(active.policy_id.as_str()) || exp_ver != Some(active.version as u64) {
+    if let Some(expected) = payload.expected_recovery_policy_ref.as_ref() {
+        if expected.policy_id.as_str() != active.policy_id
+            || expected.policy_version != active.version as u64
+        {
             return Err(AppError::conflict(format!(
                 "expected_recovery_policy_ref does not match active policy `{}` v{}",
                 active.policy_id, active.version
@@ -533,7 +538,7 @@ async fn recovery_session_create(
     append_audit_log(
         state,
         Some(&session.actor),
-        "org.cokret.soland.identity.recovery_session.create",
+        "ck.root.identity.recovery_session.command.create",
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
             "principal_id": record.principal_id.clone(),
@@ -549,14 +554,14 @@ async fn recovery_session_create(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_session.get",
+    operation_id = "ck.root.identity.recovery_session.resource.get",
     tags("identity", "recovery"),
     summary = "Read a recovery session status (REC-1)",
     status_codes(200, 401, 403, 404, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_session.get")
+    fields(op = "ck.root.identity.recovery_session.resource.get")
 )]
 async fn recovery_session_get(
     aa: AuthArgs,
@@ -572,19 +577,19 @@ async fn recovery_session_get(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_session.proof_submit",
+    operation_id = "ck.root.identity.recovery_session.command.submit_proof",
     tags("identity", "recovery"),
     summary = "Submit a recovery proof for a pending session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_session.proof_submit")
+    fields(op = "ck.root.identity.recovery_session.command.submit_proof")
 )]
 async fn recovery_session_proof_submit(
     aa: AuthArgs,
     recovery_session_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<RecoverySessionProofSubmitRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -601,9 +606,11 @@ async fn recovery_session_proof_submit(
     }
 
     let payload = body.into_inner();
+    let payload_value = serde_json::to_value(&payload)
+        .map_err(|error| AppError::internal(format!("recovery proof submit serialize: {error}")))?;
     let proof = payload
-        .get("proof")
-        .and_then(Value::as_object)
+        .proof
+        .as_object()
         .ok_or_else(|| AppError::invalid_param("proof object is required"))?;
     let proof_kind = proof
         .get("kind")
@@ -664,7 +671,7 @@ async fn recovery_session_proof_submit(
     let now = chrono::Utc::now();
     let updated = RecoverySessionRecord {
         state: "verified".to_owned(),
-        proof_payload: Some(payload.clone()),
+        proof_payload: Some(payload_value.clone()),
         updated_at: now,
         ..record
     };
@@ -783,19 +790,19 @@ fn recovery_proof_transcript(record: &RecoverySessionRecord, kind: &str) -> Valu
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.identity.recovery_session.complete",
+    operation_id = "ck.root.identity.recovery_session.command.complete",
     tags("identity", "recovery"),
     summary = "Finalize a verified recovery session (REC-1)",
     status_codes(200, 400, 401, 403, 404, 409, 500)
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.cokret.soland.identity.recovery_session.complete")
+    fields(op = "ck.root.identity.recovery_session.command.complete")
 )]
 async fn recovery_session_complete(
     aa: AuthArgs,
     recovery_session_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<RecoverySessionCompleteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -826,9 +833,11 @@ async fn recovery_session_complete(
     // Envelope carrying the next actor_seq. Completion REFERENCES those durable
     // event ids and verifies they are the right events bound to this session —
     // the server never authors/signs control events on the principal's behalf.
-    let authorization_event_id = require_string(&complete_request, "authorization_event_id")?;
-    let device_list_update_event_id =
-        require_string(&complete_request, "device_list_update_event_id")?;
+    let authorization_event_id = complete_request.authorization_event_id.as_str().to_owned();
+    let device_list_update_event_id = complete_request
+        .device_list_update_event_id
+        .as_str()
+        .to_owned();
 
     // Resolve + verify the referenced ck.device.authorize.
     let authorize_payload =
@@ -968,7 +977,7 @@ async fn recovery_session_complete(
     append_audit_log(
         state,
         Some(&completed.principal_id),
-        "org.cokret.soland.identity.recovery_session.complete",
+        "ck.root.identity.recovery_session.command.complete",
         json!({
             "recovery_session_id": completed.recovery_session_id,
             "device_id": completed.requesting_device_id,
@@ -1110,14 +1119,15 @@ fn recovery_session_store_error(error: PersistenceError) -> AppError {
 )]
 async fn recovery_policy_put(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<RecoveryPolicy>,
     depot: &mut Depot,
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body.into_inner();
+    let payload = serde_json::to_value(body.into_inner())
+        .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;
 
     let mut record = validate_recovery_policy(&payload)?;
     if record.principal_id != session.actor {

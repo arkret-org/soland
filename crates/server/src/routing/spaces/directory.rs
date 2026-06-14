@@ -32,15 +32,17 @@ use cokret_sdk::model::{
 };
 use cokret_sdk::{
     AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, DeliveryBindingHint, Did,
-    DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome, DirectoryDescription,
-    DirectoryHandleResolutionOutcome, DirectoryListHandlesForSubjectRequestBody,
-    DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
-    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+    DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
+    DirectoryAnnounceRequestBody, DirectoryDescription, DirectoryHandleResolutionOutcome,
+    DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
+    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryRequestBody,
+    DirectoryPushRegisterRequestBody, DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
-    DirectorySearchActorsRequestBody, DirectorySearchOrganizationsRequestBody,
-    DirectorySearchRealmsRequestBody, DirectorySearchUsersRequestBody, DirectorySubjectHandleList,
-    DirectoryUserSearchOutcome, Ed25519MoveSigner, JoinRule, LinkType, MoveSigner,
+    DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
+    DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
+    DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryUserSearchOutcome,
+    DirectoryWithdrawRequestBody, Ed25519MoveSigner, JoinRule, LinkType, MoveSigner,
     OrganizationPreview, RealmId, RealmJoinCandidate, RealmJoinCandidateRole,
     RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
     RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef, TargetDescriptor,
@@ -266,22 +268,21 @@ async fn resolve_realm(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_target"))]
 async fn resolve_target(
-    body: JsonBody<Value>,
+    body: JsonBody<DirectoryResolveTargetRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let address = body
-        .get("address")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::missing_param("address is required"))?;
+    let address = body.address.trim();
+    if address.is_empty() {
+        return Err(AppError::missing_param("address is required"));
+    }
     let parsed = parse_address(address).map_err(|_| AppError::not_found("not found"))?;
     let session = authenticated_session(state, req).await.ok();
     let token = body
-        .get("token")
-        .and_then(Value::as_str)
+        .token
+        .as_deref()
         .or(parsed.token.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -2073,7 +2074,7 @@ fn primary_handle_from_subject_claims(claims: &[Value]) -> Option<String> {
     fields(op = "ck.find.directory.query.private_contact_discovery")
 )]
 async fn private_contact_discovery(
-    body: JsonBody<Value>,
+    body: JsonBody<DirectoryPrivateContactDiscoveryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -2081,11 +2082,7 @@ async fn private_contact_discovery(
     require_demo_directory_provider(state)?;
     let session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
-    let contacts = body
-        .get("contacts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let contacts = body.contacts;
     let mut visible: Vec<Value> = Vec::new();
     for actor in demo_actors(state).await {
         if actor_visible_to(state, &actor, session.as_ref()).await {
@@ -2174,7 +2171,7 @@ async fn private_contact_discovery(
         "matches": matches,
         "proofs": [],
         "retry_after_ms": if retry_after_ms > 0 { json!(retry_after_ms) } else { Value::Null },
-        "privacy_profile": body.get("privacy_profile").cloned().unwrap_or_else(|| json!("padded_batch_dev")),
+        "privacy_profile": body.privacy_profile.unwrap_or_else(|| "padded_batch_dev".to_owned()),
     }))
 }
 
@@ -2185,7 +2182,7 @@ async fn private_contact_discovery(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.command.announce"))]
 async fn directory_announce(
-    body: JsonBody<Value>,
+    body: JsonBody<DirectoryAnnounceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -2198,15 +2195,8 @@ async fn directory_announce(
                 .with_wire_code(code)
         })?;
     let body = body.into_inner();
-    let resource_kind = body
-        .get("resource_kind")
-        .and_then(Value::as_str)
-        .unwrap_or("realm");
-    let resource_id = body
-        .get("resource_id")
-        .or_else(|| body.get("realm_id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("resource_id is required"))?;
+    let resource_kind = directory_resource_kind_str(body.resource_kind);
+    let resource_id = body.resource_id.as_str();
     if resource_kind == "realm"
         && !super::realm_has_member(state, resource_id, &session.actor).await
     {
@@ -2237,7 +2227,7 @@ async fn directory_announce(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.command.withdraw"))]
 async fn directory_withdraw(
-    body: JsonBody<Value>,
+    body: JsonBody<DirectoryWithdrawRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -2250,29 +2240,16 @@ async fn directory_withdraw(
                 .with_wire_code(code)
         })?;
     let body = body.into_inner();
-    let announcement_id = body
-        .get("announcement_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            body.get("resource_id")
-                .and_then(Value::as_str)
-                .map(|resource_id| {
-                    format!(
-                        "ck:announcement:{}",
-                        super::sha256_hex(
-                            format!("{}:realm:{}", session.actor, resource_id).as_bytes()
-                        )
-                    )
-                })
-        })
-        .ok_or_else(|| AppError::missing_param("announcement_id or resource_id is required"))?;
+    let announcement_id = format!(
+        "ck:announcement:{}",
+        super::sha256_hex(format!("{}:realm:{}", session.actor, body.resource_id).as_bytes())
+    );
     json_ok(json!({
         "ok": true,
         "announcement_id": announcement_id,
         "withdrawn_by": session.actor,
         "withdrawn_at": now().to_rfc3339(),
-        "reason": body.get("reason").cloned().unwrap_or(Value::Null),
+        "reason": body.reason,
     }))
 }
 
@@ -2283,21 +2260,35 @@ async fn directory_withdraw(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.push.command.register"))]
 async fn directory_subscribe(
-    body: JsonBody<Value>,
+    body: JsonBody<DirectoryPushRegisterRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = authenticated_session(state, req).await.ok();
     let body = body.into_inner();
+    let resource_kinds =
+        serde_json::to_value(&body.resource_filter.resource_kinds).map_err(|error| {
+            AppError::internal(format!("directory resource_kinds serialize: {error}"))
+        })?;
     json_ok(json!({
         "ok": true,
         "subscription_id": ids::generate("directory_subscription"),
         "cursor": crate::routing::sync_token(state).await,
-        "subscriber": session.map(|session| session.actor).unwrap_or_else(|| "anonymous".to_owned()),
-        "resource_kinds": body.get("resource_kinds").cloned().unwrap_or_else(|| json!(["realm", "actor", "organization"])),
+        "subscriber": session.map(|session| session.actor).unwrap_or_else(|| body.subscriber_did.to_string()),
+        "resource_kinds": resource_kinds,
         "updates": [],
     }))
+}
+
+fn directory_resource_kind_str(kind: DirectoryResourceKind) -> &'static str {
+    match kind {
+        DirectoryResourceKind::Realm => "realm",
+        DirectoryResourceKind::Organization => "organization",
+        DirectoryResourceKind::Actor => "actor",
+        DirectoryResourceKind::Applet => "applet",
+        DirectoryResourceKind::Handle => "handle",
+    }
 }
 
 // ── Helpers shared with the rest of `crate::routing` ───────────────────────

@@ -18,7 +18,8 @@
 use cokret_sdk::http::{IdentityDescribeOutcome, IdentityDocumentViewOutcome};
 use cokret_sdk::identity::DidResolver;
 use cokret_sdk::{
-    Did, DidDocumentRef, IdentityDescription, IdentityDocumentView, IdentityResolveOutcome,
+    Did, DidDocumentRef, DidOperationSubmitRequestBody, IdentityDescription, IdentityDocumentView,
+    IdentityResolveOutcome,
 };
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
@@ -593,10 +594,11 @@ pub(super) async fn identity_receipts(
 #[tracing::instrument(skip_all, fields(op = "ck.root.identity.command.submit_did_operation"))]
 pub(super) async fn identity_submit_did_operation(
     depot: &mut Depot,
-    body: JsonBody<Value>,
+    body: JsonBody<DidOperationSubmitRequestBody>,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = serde_json::to_value(body.into_inner())
+        .map_err(|error| AppError::internal(format!("DID operation serialize: {error}")))?;
     let did = string_field(&body, "did")
         .or_else(|| {
             body.get("operation")

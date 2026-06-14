@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
-use cokret_sdk::RealmId;
+use cokret_sdk::{MediaIceConfigRequestBody, MediaIceMode, RealmId};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -80,13 +80,27 @@ pub(super) fn legacy_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ck.self.media.query.ice_config"))]
 async fn cokret_ice_config(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<MediaIceConfigRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    issue_ice_config(state, &session, body.into_inner(), None, false).await
+    let body = body.into_inner();
+    issue_ice_config(
+        state,
+        &session,
+        json!({
+            "realm_id": body.realm_id.as_str(),
+            "call_id": body.call_id,
+            "actor_id": body.actor_id.as_str(),
+            "device_id": body.device_id.as_str(),
+            "force_turn": matches!(body.mode, MediaIceMode::Turn),
+        }),
+        None,
+        false,
+    )
+    .await
 }
 
 #[endpoint(

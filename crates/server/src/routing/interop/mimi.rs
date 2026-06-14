@@ -19,9 +19,14 @@
 //! through the MIMI facade rather than as a native signed Move.
 
 use chrono::Duration;
-use cokret_sdk::RealmId;
+use cokret_sdk::{
+    MimiIdentifierQueryRequestBody, MimiKeyMaterialRequestBody, MimiNotifyRequestBody,
+    MimiProxyDownloadRequestBody, MimiReportAbuseRequestBody, MimiRequestConsentRequestBody,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageRequestBody, MimiUpdateConsentRequestBody, RealmId,
+};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{append_audit_log, now, sha256_hex};
@@ -73,15 +78,20 @@ async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     summary = "Claim MIMI/MLS key material for a target identifier"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.exchange.request_key_material"))]
-async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_key_material(
+    body: JsonBody<MimiKeyMaterialRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi key material")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let target = body
         .get("target_identifier")
         .or_else(|| body.get("target_did"))
+        .or_else(|| body.get("mimi_room_uri"))
+        .or_else(|| body.get("flow_id"))
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     json_ok(json!({
@@ -104,12 +114,12 @@ async fn mimi_key_material(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_room"))]
 async fn mimi_room_update(
     flow_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<MimiRoomUpdateRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi room update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -122,7 +132,17 @@ async fn mimi_room_update(
     // fall through to the receipt-only response. A binding block that
     // omits both `binding_scope.realm_id` and a top-level `realm_id`
     // is rejected; we never implicitly route to a default Realm.
-    let binding_event_id = match body.get("room_binding") {
+    let binding_event_id = match body
+        .get("room_binding")
+        .or_else(|| {
+            body.get("update")
+                .and_then(|update| update.get("room_binding"))
+        })
+        .or_else(|| {
+            body.get("update")
+                .and_then(|update| update.get("payload"))
+                .and_then(|payload| payload.get("room_binding"))
+        }) {
         Some(binding) if binding.is_object() => {
             let event_id = emit_mimi_room_binding_event(state, &room_id, binding)
                 .await
@@ -158,12 +178,12 @@ async fn mimi_room_update(
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.notify"))]
 async fn mimi_notify(
     flow_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<MimiNotifyRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi notify")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -225,12 +245,12 @@ async fn mimi_notify(
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.submit_message"))]
 async fn mimi_room_message(
     flow_id: PathParam<String>,
-    body: JsonBody<Value>,
+    body: JsonBody<MimiSubmitMessageRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let room_id = flow_id.into_inner();
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi submit message")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -276,6 +296,7 @@ async fn mimi_room_message(
     let sender = body
         .get("sender_did")
         .or_else(|| body.get("from_did"))
+        .or_else(|| body.get("sender_actor_id"))
         .and_then(|v| v.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| {
@@ -429,9 +450,12 @@ async fn mimi_group_info(flow_id: PathParam<String>, depot: &mut Depot) -> JsonR
     summary = "Open a MIMI consent request"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.request_consent"))]
-async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_consent_request(
+    body: JsonBody<MimiRequestConsentRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi consent request")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -453,9 +477,12 @@ async fn mimi_consent_request(body: JsonBody<Value>, depot: &mut Depot) -> JsonR
     summary = "Update a MIMI consent state"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_consent"))]
-async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_consent_update(
+    body: JsonBody<MimiUpdateConsentRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi consent update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -466,6 +493,7 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
         .unwrap_or_else(|| ids::generate("mimi_consent"));
     let state_value = body
         .get("state")
+        .or_else(|| body.get("decision"))
         .and_then(|value| value.as_str())
         .unwrap_or("accepted");
     json_ok(json!({
@@ -485,9 +513,12 @@ async fn mimi_consent_update(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
     summary = "Resolve a MIMI / DID identifier to a reachable Cokret actor"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.identifiers"))]
-async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_identifiers_query(
+    body: JsonBody<MimiIdentifierQueryRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -497,7 +528,34 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_owned();
-    if query.is_empty() || !(query.starts_with("mimi://") || query.starts_with("did:")) {
+    if query.is_empty() {
+        let matches = body
+            .get("identifiers")
+            .and_then(Value::as_array)
+            .map(|identifiers| {
+                identifiers
+                    .iter()
+                    .map(|identifier| {
+                        json!({
+                            "identifier": identifier,
+                            "reachable": false,
+                            "reason_code": "identifier_mapping_not_available",
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        return json_ok(json!({
+            "matches": matches,
+            "proofs": [],
+            "has_more": false,
+            "receipt": mimi_receipt(state, "ck.open.mimi.query.identifiers", &body, json!({
+                "contact_graph_exposed": false,
+                "connection_identifier_separated": true
+            }))
+        }));
+    }
+    if !(query.starts_with("mimi://") || query.starts_with("did:")) {
         return Err(AppError::invalid_param(
             "identifier query must be a MIMI URI or DID",
         ));
@@ -528,9 +586,12 @@ async fn mimi_identifiers_query(body: JsonBody<Value>, depot: &mut Depot) -> Jso
     summary = "File a MIMI abuse report (mirrors as ck.self.moderation.report projection event)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.report_abuse"))]
-async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_report_abuse(
+    body: JsonBody<MimiReportAbuseRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -543,8 +604,14 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
             "kind": "mimi_abuse_report",
             "mimi_room_uri": body.get("mimi_room_uri").cloned(),
             "provider_id": body.get("provider_id").cloned(),
-            "target_event_digest": body.get("target_event_digest").cloned(),
-            "frank": body.get("frank").cloned(),
+            "target_event_digest": body
+                .get("target_event_digest")
+                .or_else(|| body.get("target_ref"))
+                .cloned(),
+            "frank": body
+                .get("frank")
+                .or_else(|| body.get("franking_proof"))
+                .cloned(),
             "created_at": now(),
         }))
         .await
@@ -562,6 +629,7 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         .get("mimi_room_uri")
         .and_then(Value::as_str)
         .and_then(|uri| uri.rsplit('/').next())
+        .or_else(|| body.get("flow_id").and_then(Value::as_str))
         .map(str::to_owned);
     let bound_realm = match mimi_room_id.as_deref() {
         Some(id) => mimi_bound_realm_id(state, id).await,
@@ -586,12 +654,20 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
         operation_id: None,
         sender: body
             .get("reporter_did")
+            .or_else(|| body.get("reporter"))
             .and_then(Value::as_str)
             .map(str::to_owned),
         payload: json!({
             "report_id": report_id,
-            "target_event_digest": body.get("target_event_digest").cloned(),
-            "frank": body.get("frank").cloned(),
+            "target_event_digest": body
+                .get("target_event_digest")
+                .or_else(|| body.get("target_ref"))
+                .cloned(),
+            "frank": body
+                .get("frank")
+                .or_else(|| body.get("franking_proof"))
+                .cloned(),
+            "abuse_reason_code": body.get("abuse_reason_code").cloned(),
             "evidence_encrypted": true,
             "mimi_provenance": {
                 "facade": "soland.mimi.v1",
@@ -637,16 +713,20 @@ async fn mimi_report_abuse(body: JsonBody<Value>, depot: &mut Depot) -> JsonResu
     summary = "Issue a proxy-download token for a MIMI blob (asset privacy policy honored)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.proxy_download"))]
-async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonResult<Value> {
+async fn mimi_proxy_download(
+    body: JsonBody<MimiProxyDownloadRequestBody>,
+    depot: &mut Depot,
+) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
+    let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
     let blob_ref = body
         .get("blob_ref")
+        .or_else(|| body.get("asset_ref"))
         .and_then(|value| value.as_str())
-        .ok_or_else(|| AppError::missing_param("blob_ref is required"))?;
+        .ok_or_else(|| AppError::missing_param("asset_ref is required"))?;
     let asset_policy = body
         .get("asset_privacy_policy")
         .and_then(|value| value.as_str())
@@ -669,6 +749,11 @@ async fn mimi_proxy_download(body: JsonBody<Value>, depot: &mut Depot) -> JsonRe
             "client_must_verify_content_hash": true
         }))
     }))
+}
+
+fn typed_body_value<T: Serialize>(body: T, context: &'static str) -> Result<Value, AppError> {
+    serde_json::to_value(body)
+        .map_err(|error| AppError::internal(format!("{context} request body serialize: {error}")))
 }
 
 fn mimi_provider_directory_value(state: &AppState) -> Value {

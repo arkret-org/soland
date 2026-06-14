@@ -11,10 +11,11 @@ use std::sync::Mutex;
 
 use cokret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
-    AppletDelegatedEventAuthorization, AppletId, AppletPackage, AppletWireNamespaces, Did,
-    EffectiveScope, Event, EventRef, GhostActorProfileRequest, GhostActorProvisionOutcome,
-    GhostActorProvisionRequestBody, Hash, Hlc, InstallCommitRequestBody, InstallPreviewRequestBody,
-    InstallRevokeRequestBody, Proof, RealmId, canonical,
+    AppletDelegatedEventAuthorization, AppletId, AppletInstallPreviewRequestBody,
+    AppletInstallRequestBody, AppletPackage, AppletRevokeRequestBody, AppletTransactionRequestBody,
+    AppletWireNamespaces, Did, EffectiveScope, Event, EventRef, GhostActorProfileRequest,
+    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, Hash, Hlc,
+    InstallCommitRequestBody, InstallPreviewRequestBody, Proof, RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -189,14 +190,15 @@ async fn protocol_describe_endpoint() -> JsonResult<Value> {
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletInstallPreviewRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let preview: InstallPreviewRequestBody =
-        parse_typed_body(body.into_inner(), "install preview")?;
+    let body = serde_json::to_value(body.into_inner())
+        .map_err(|error| AppError::internal(format!("install preview serialize: {error}")))?;
+    let preview: InstallPreviewRequestBody = parse_typed_body(body, "install preview")?;
     validate_applet_package(&preview.applet_package)?;
     let approved_scopes = approved_scopes_from_actions(
         &preview.applet_package,
@@ -220,14 +222,13 @@ async fn install_preview_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletInstallRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
     let idempotency_key = idempotency_key(req)
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
@@ -235,6 +236,8 @@ async fn install_endpoint(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
+    let body = serde_json::to_value(body.into_inner())
+        .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = canonical_digest(&body)?;
     let commit: InstallCommitRequestBody = parse_typed_body(body.clone(), "install commit")?;
     validate_applet_package(&commit.applet_package)?;
@@ -283,28 +286,21 @@ async fn install_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
-    let revoke: InstallRevokeRequestBody = parse_typed_body(body.into_inner(), "applet revoke")?;
+    let revoke = body.into_inner();
     let record =
         applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    if record
-        .package
-        .as_ref()
-        .map(|package| package.registration_epoch.as_str())
-        != Some(revoke.registration_epoch.as_str())
-    {
-        return Err(
-            AppError::conflict("registration_epoch does not match active applet install")
-                .with_wire_code("applet_registration_epoch_mismatch"),
-        );
-    }
-    let scope_realm = effective_scope_realm_id(&revoke.effective_scope);
+    let effective_scope: EffectiveScope = parse_typed_body(
+        revoke.effective_scope.clone(),
+        "applet revoke effective_scope",
+    )?;
+    let scope_realm = effective_scope_realm_id(&effective_scope);
     if record.portal_realm_id != scope_realm {
         return Err(
             AppError::conflict("effective_scope does not match active applet install")
@@ -330,7 +326,7 @@ async fn revoke_install_endpoint(
 )]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<GhostActorProvisionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
@@ -338,8 +334,7 @@ async fn provision_ghost_actor_endpoint(
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let path_applet_id = applet_id_param(req)?;
-    let provision: GhostActorProvisionRequestBody =
-        parse_typed_body(body.into_inner(), "ghost actor provision")?;
+    let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
 
     // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
@@ -420,13 +415,14 @@ async fn provision_ghost_actor_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
     aa: AuthArgs,
-    body: JsonBody<Value>,
+    body: JsonBody<AppletTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
+    let body = serde_json::to_value(body.into_inner())
+        .map_err(|error| AppError::internal(format!("applet transaction serialize: {error}")))?;
 
     if body.get("applet_id").is_none() {
         string_field(&body, "source_service_did")
