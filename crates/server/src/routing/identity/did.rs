@@ -15,11 +15,11 @@
 //! `did_resolver` is still an in-process resolver chain. Production must move it onto a
 //! durable store (see todo F2) — currently in-memory.
 
-use cokret_sdk::http::{IdentityDescribeOutcome, IdentityDocumentViewOutcome};
+use cokret_sdk::http::IdentityDocumentViewOutcome;
 use cokret_sdk::identity::DidResolver;
 use cokret_sdk::{
     Did, DidDocumentRef, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash,
-    IdentityDescription, IdentityDocumentView, IdentityResolveOutcome,
+    IdentityDocumentView, IdentityResolveOutcome,
 };
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, Verifier, VerifyingKey};
 use salvo::http::{StatusCode, header};
@@ -48,33 +48,115 @@ pub struct RawDidDocumentJson(
     #[salvo(schema(value_type = serde_json::Value))] pub serde_json::Value,
 );
 
-#[endpoint]
+#[endpoint(
+    operation_id = "ck.root.identity.registry.query.describe",
+    tags("identity"),
+    summary = "Identity registry capability description"
+)]
 #[tracing::instrument(skip_all, fields(op = "identity_describe"))]
 pub(super) async fn identity_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
     let did_webvh = did_webvh_descriptor(state);
-    let mut profiles = vec!["ck.identity.local-dev.v1".to_owned()];
+    let mut profiles = vec![
+        "ck.profile.identity_registry.v1".to_owned(),
+        "ck.identity.local-dev.v1".to_owned(),
+    ];
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ck.identity.webvh.provider.v1".to_owned());
     }
-    let service_did = match Did::new(state.config.service_did.clone()) {
-        Ok(did) => did,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &format!("invalid configured service_did: {error}"),
-            );
-            return;
-        }
+    if let Err(error) = Did::new(state.config.service_did.clone()) {
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            &format!("invalid configured service_did: {error}"),
+        );
+        return;
     };
-    res.render(Json(IdentityDescribeOutcome(IdentityDescription {
-        service_did,
-        registry_mode: "development_local".to_owned(),
-        supported_receipts: vec!["local".to_owned()],
-        protocol_version: "1.0".to_owned(),
-        profiles,
+    let supported_did_methods = state
+        .config
+        .did_resolver_allow_methods
+        .iter()
+        .map(|method| format!("did:{method}"))
+        .collect::<Vec<_>>();
+    let trust_roots = identity_trust_roots(state);
+    let supported_features = vec![
+        "ck.feature.identity.resolve.v1",
+        "ck.feature.identity.receipts.v1",
+        "ck.feature.identity.did_webvh.v1",
+    ];
+
+    res.render(Json(json!({
+        "protocol_version": cokret_sdk::PROTOCOL_VERSION,
+        "service_type": "identity_registry",
+        "service_did": state.config.service_did,
+        "trust_domain": state.config.trust_domain,
+        "registry_mode": "development_local",
+        "supported_receipts": ["local"],
+        "profiles": profiles,
+        "supported_profiles": profiles,
+        "supported_operations": [
+            "ck.root.identity.registry.query.describe",
+            "ck.root.identity.query.resolve",
+            "ck.root.identity.document.resource.get",
+            "ck.root.identity.log.query.list",
+            "ck.root.identity.receipts.query.list",
+            "ck.root.identity.command.submit_did_operation"
+        ],
+        "supported_bindings": [{
+            "kind": "http",
+            "base_url": state.config.public_base_url,
+            "paths": [
+                "/_cokret/root/identity/describe",
+                "/_cokret/root/identity/resolve",
+                "/_cokret/root/identity/document",
+                "/_cokret/root/identity/log",
+                "/_cokret/root/identity/receipts",
+                "/_cokret/root/identity/submit-did-operation"
+            ]
+        }],
+        "supported_features": supported_features,
+        "auth_metadata": {
+            "mode": if state.config.development_mode { "development" } else { "production" },
+            "read": "public_metadata"
+        },
+        "limits": {},
+        "plaintext_visibility": {
+            "default": "metadata_only",
+            "services": []
+        },
+        "implemented_features": supported_features,
+        "claimed_profiles": [{
+            "profile_id": "ck.profile.identity_registry.v1",
+            "claim_kind": "self_claimed"
+        }],
+        "verified_profiles": [],
+        "experimental_features": [],
+        "compat_surfaces": [],
+        "development_mode": state.config.development_mode,
+        "rate_limit_policy": {
+            "kind": "windowed",
+            "per_minute": 600
+        },
+        "supported_did_methods": supported_did_methods,
+        "resolver_policy": {
+            "allow_methods": state.config.did_resolver_allow_methods,
+            "freshness_receipts": {
+                "endpoint_template": "/_cokret/root/identity/receipts?did={did}"
+            },
+            "webvh_validation": {
+                "witness_quorum": "enforced_for_local_webvh_records"
+            },
+            "trust_roots": trust_roots
+        },
+        "registry_visibility": {
+            "mode": "development_local",
+            "public_resolution": true,
+            "public_receipts": true,
+            "write_policy": "local_registry"
+        },
+        "did_webvh": did_webvh,
+        "todos": []
     })));
 }
 
@@ -409,6 +491,7 @@ pub(super) async fn identity_resolve(
         return json_ok(identity_resolve_outcome(
             body.did,
             record.did_document,
+            key_log_head_hash(record.key_log_head)?,
             Some(record.seq),
             record.method_evidence,
         ));
@@ -430,6 +513,7 @@ pub(super) async fn identity_resolve(
                 "alsoKnownAs": doc.also_known_as,
             }),
             None,
+            None,
             json!({"mode": "sdk_resolver", "source": "did_resolver"}),
         ));
     }
@@ -437,6 +521,7 @@ pub(super) async fn identity_resolve(
     json_ok(identity_resolve_outcome(
         body.did,
         record.did_document,
+        key_log_head_hash(record.key_log_head)?,
         Some(record.seq),
         record.method_evidence,
     ))
@@ -459,26 +544,35 @@ pub(super) async fn identity_document(
     }
     let typed_did = Did::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
     let record = identity_document_record(state, &did).await;
+    let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
     json_ok(IdentityDocumentViewOutcome(IdentityDocumentView {
         did_document: DidDocumentRef {
             did: typed_did,
             document: record.did_document,
         },
-        head_event_digest: None,
+        head_event_digest,
         seq: Some(record.seq),
         receipts: Vec::new(),
     }))
 }
 
+fn key_log_head_hash(value: Option<String>) -> Result<Option<Hash>, AppError> {
+    value
+        .map(Hash::new)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("invalid key_log_head digest: {error}")))
+}
+
 fn identity_resolve_outcome(
     did: Did,
     document: Value,
+    key_log_head: Option<Hash>,
     seq: Option<u64>,
     method_evidence: Value,
 ) -> IdentityResolveOutcome {
     IdentityResolveOutcome {
         did_document: DidDocumentRef { did, document },
-        key_log_head: None,
+        key_log_head,
         seq,
         receipts: Vec::new(),
         method_evidence,
@@ -741,6 +835,32 @@ struct EmbeddedWebvhLocation {
     scid: String,
     document_url: String,
     log_url: String,
+}
+
+fn identity_trust_roots(state: &AppState) -> Vec<Value> {
+    let mut trust_roots = vec![json!({
+        "id": "soland.local_identity_store",
+        "kind": "local_identity_store",
+        "profile": "ck.profile.identity_registry.v1",
+        "service_did": state.config.service_did,
+        "trust_domain": state.config.trust_domain,
+        "proof_verification": {
+            "controller_proof": "eddsa-jcs-2022",
+            "webvh_log_chain": "required",
+            "webvh_scid": "required",
+            "webvh_witness_quorum": "required_when_policy_present"
+        }
+    })];
+    if let Some(url) = state.config.external_webvh_provider_url.as_deref() {
+        trust_roots.push(json!({
+            "id": "external.webvh",
+            "kind": "external",
+            "profile": "ck.identity.webvh.provider.v1",
+            "base_url": url,
+            "expected_trust_domain": state.config.trust_domain
+        }));
+    }
+    trust_roots
 }
 
 fn did_webvh_descriptor(state: &AppState) -> Value {

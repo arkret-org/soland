@@ -4,13 +4,11 @@
 //!
 //! - `GET  /_soland/admin/handles` — paginated list of handle rows.
 //! - `GET  /_soland/admin/handles/{id}` — single handle row.
-//! - `GET  /_soland/admin/handles/{id}/audit` — handle audit trail from the
-//!   shared audit table.
-//! - `POST /_soland/admin/handles/{id}/revoke` — operator-level handle
-//!   revocation (releases the durable account binding + records the audit
-//!   trail).
-//! - `POST /_soland/admin/handles/{id}/reassign` — operator-level re-bind of
-//!   a handle to a new subject DID.
+//! - `GET  /_soland/admin/handles/{id}/audit` — handle audit trail from the shared audit table.
+//! - `POST /_soland/admin/handles/{id}/revoke` — operator-level handle revocation (releases the
+//!   durable account binding + records the audit trail).
+//! - `POST /_soland/admin/handles/{id}/reassign` — operator-level re-bind of a handle to a new
+//!   subject DID.
 //!
 //! Authoritative data source: the durable `accounts` table. Each account
 //! row carries a bare `localpart`; the canonical handle is `@<localpart>`.

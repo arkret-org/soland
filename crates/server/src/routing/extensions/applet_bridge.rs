@@ -30,8 +30,8 @@ use super::bot_actor::{self, BotActor, KIND_BOT, KIND_GHOST};
 use crate::error::AppError;
 use crate::reducer::AppletProjection;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::routing::events::projection::projection_event_json;
+use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::sha256_hex;
 use crate::state::{

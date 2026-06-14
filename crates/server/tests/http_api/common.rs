@@ -1040,14 +1040,17 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     };
     if kind == "ck.strand.create" {
         if let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut) {
-            strand.entry("schema".to_owned())
+            strand
+                .entry("schema".to_owned())
                 .or_insert_with(|| Value::String("ck.schema.strand.v1".to_owned()));
             strand.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
-            strand.entry("created_at".to_owned())
+            strand
+                .entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
-            strand.entry("stage".to_owned())
+            strand
+                .entry("stage".to_owned())
                 .or_insert_with(|| Value::String("draft".to_owned()));
             strand.entry("tracks".to_owned()).or_insert_with(|| {
                 serde_json::json!({

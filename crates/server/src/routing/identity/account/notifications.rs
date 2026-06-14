@@ -375,7 +375,9 @@ fn audience_targets_actor(
 ) -> bool {
     match audience {
         "effective_scope_members" => true,
-        "strand_participants" => strand_participants_include_actor(state, &message.thread_id, actor),
+        "strand_participants" => {
+            strand_participants_include_actor(state, &message.thread_id, actor)
+        }
         "strand_watchers" => strand_watchers_include_actor(state, &message.thread_id, actor),
         "strand_engaged" => {
             strand_participants_include_actor(state, &message.thread_id, actor)

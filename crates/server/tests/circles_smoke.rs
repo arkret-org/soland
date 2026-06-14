@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
-    CK_STRAND_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
+    CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS, CK_STRAND_CREATE,
 };
 use soland::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,

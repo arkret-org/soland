@@ -620,7 +620,10 @@ fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketLabel {
 }
 
 fn object_preview_for_address(parsed: &cokret_sdk::ParsedAddress) -> Option<Value> {
-    let strand_id = parsed.strand.as_deref().map(|strand| format!("ck:strand:{strand}"));
+    let strand_id = parsed
+        .strand
+        .as_deref()
+        .map(|strand| format!("ck:strand:{strand}"));
     let message_id = parsed
         .message
         .as_deref()

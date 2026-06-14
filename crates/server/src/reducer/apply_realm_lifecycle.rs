@@ -237,7 +237,10 @@ impl ProjectionState {
         realm.default_strand_id = Some(strand_id.clone());
         realm.updated_at = now;
 
-        ProjectionEffect::RealmDefaultStrandSet { realm_id, strand_id }
+        ProjectionEffect::RealmDefaultStrandSet {
+            realm_id,
+            strand_id,
+        }
     }
 
     pub(crate) fn realm_organization_cell_id(realm_id: &str) -> Option<CellRef> {

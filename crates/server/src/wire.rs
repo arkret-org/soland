@@ -875,6 +875,7 @@ pub struct SolandBlobUploadOutcome {
 const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "service_discovery",
     "events_sync",
+    "device_and_keys",
     "realtime_media",
     "authz_policy",
     "moderation_reports",
@@ -882,6 +883,7 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "push",
     "mimi_interop",
     "invite_locator_handoff",
+    "agent_runtime",
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[

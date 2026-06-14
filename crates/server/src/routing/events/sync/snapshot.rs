@@ -85,7 +85,8 @@ pub(crate) async fn build_sync_snapshot(
     let mut account_positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
     for (realm_id, title, summary, tags, category, members) in visible_realms {
-        let strand = strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
+        let strand =
+            strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
         let strand_state_after = strand.clone();
         let strand_list_item = strand.clone();
         let summary_members = members.clone();

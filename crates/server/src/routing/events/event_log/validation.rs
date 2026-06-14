@@ -1033,7 +1033,10 @@ async fn validate_strand_watch_audit_pair(
         .get("payload")
         .and_then(Value::as_object)
         .ok_or_else(|| manage_others_audit_error("audit_pair payload is invalid"))?;
-    let strand_id = payload.get("strand_id").and_then(Value::as_str).unwrap_or("");
+    let strand_id = payload
+        .get("strand_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let checks = [
         ("access_kind", "watch_set_others"),
         ("writer_did", actor_id),

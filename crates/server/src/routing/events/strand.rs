@@ -26,7 +26,8 @@ pub fn derived_strand_id(seed: &str) -> String {
 }
 
 pub fn strand_id_from_realm_id(realm_id: &str) -> String {
-    retag_typed_id(realm_id, "ck:realm:", "ck:strand:").unwrap_or_else(|| derived_strand_id(realm_id))
+    retag_typed_id(realm_id, "ck:realm:", "ck:strand:")
+        .unwrap_or_else(|| derived_strand_id(realm_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {

@@ -8,8 +8,8 @@
 //!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
 //!   * `PUT  /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
-//!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic `ck.open.mimi.command.notify`
-//!     projection event so live subscribers observe MIMI fanout.
+//!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
+//!     `ck.open.mimi.command.notify` projection event so live subscribers observe MIMI fanout.
 //!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
 //!     `ck.self.moderation.report` projection event so the audit timeline reflects the report.
 //!

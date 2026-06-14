@@ -12,11 +12,14 @@
 //! the missing constraint types, the condition.kind types, the
 //! capability lattice, and grant/invite/policy lifecycle integration.
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cokret_sdk::models::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };
 use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, Operation, OperationId, RealmId};
+use ed25519_dalek::Signer;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -490,10 +493,9 @@ async fn emit_capability_grant_event(
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let grant_body = serde_json::to_value(grant)
-        .map_err(|e| AppError::internal(format!("grant encode: {e}")))?;
+    let grant_body = capability_grant_event_body(state, grant)?;
     let payload = json!({
-        "grant_id": grant.grant_id,
+        "grant_id": grant.grant_id.clone(),
         "grant": grant_body,
     });
     let operation = Operation::create(op_id, realm_id, CK_CAPABILITY_GRANT, payload);
@@ -505,6 +507,128 @@ async fn emit_capability_grant_event(
                 reason.to_owned(),
             )
         })
+}
+
+fn capability_grant_event_body(
+    state: &AppState,
+    grant: &crate::authz::Grant,
+) -> Result<Value, AppError> {
+    let mut constraints = serde_json::to_value(&grant.constraints)
+        .map_err(|e| AppError::internal(format!("grant constraints encode: {e}")))?;
+    canonicalize_timestamp_fields(&mut constraints);
+    let issued_at = canonical_rfc3339(&grant.created_at);
+    let mut grant_body = json!({
+        "id": grant.grant_id.clone(),
+        "schema": "ck.schema.capability.v1",
+        "realm_id": grant.realm_id.clone(),
+        "issuer": grant.issuer.clone(),
+        "subject": grant.subject.clone(),
+        "actions": grant.actions.clone(),
+        "resources": [capability_resource_selector(&grant.resource, &grant.realm_id)],
+        "constraints": constraints,
+        "parent_grant_id": grant.delegated_from.clone(),
+        "issued_at": issued_at,
+        "expires_at": grant.expires_at.as_ref().map(canonical_rfc3339),
+        "proofs": []
+    });
+    if let Value::Object(map) = &mut grant_body {
+        if map.get("parent_grant_id").is_some_and(Value::is_null) {
+            map.remove("parent_grant_id");
+        }
+        if map.get("expires_at").is_some_and(Value::is_null) {
+            map.remove("expires_at");
+        }
+    }
+    let proof = capability_grant_proof(state, &grant_body)?;
+    if let Value::Object(map) = &mut grant_body {
+        map.insert("proofs".to_owned(), Value::Array(vec![proof]));
+    }
+    Ok(grant_body)
+}
+
+fn capability_resource_selector(resource: &str, realm_id: &str) -> Value {
+    if resource == "*" {
+        return json!({"kind": "*"});
+    }
+    if resource == realm_id || resource == "realm" || resource.starts_with("ck:realm:") {
+        return json!({"kind": "realm", "realm_id": realm_id});
+    }
+    if resource.starts_with("ck:strand:") {
+        return json!({"kind": "strand", "realm_id": realm_id, "strand_id": resource});
+    }
+    if resource.starts_with("ck:space:") {
+        return json!({"kind": "space", "realm_id": realm_id, "space_id": resource});
+    }
+    if resource.starts_with("ck:circle:") {
+        return json!({"kind": "circle", "realm_id": realm_id, "circle_id": resource});
+    }
+    json!({"kind": "object", "realm_id": realm_id, "object_ref": resource})
+}
+
+fn capability_grant_proof(state: &AppState, grant_body: &Value) -> Result<Value, AppError> {
+    let mut proofless = grant_body.clone();
+    if let Value::Object(map) = &mut proofless {
+        map.remove("proofs");
+    }
+    let payload_bytes = cokret_sdk::canonical::canonical_json_bytes(&proofless)
+        .map_err(|e| AppError::internal(format!("grant proof canonicalization failed: {e}")))?;
+    let payload_digest = cokret_sdk::canonical::sha256_digest(&payload_bytes);
+    let created_at = proofless
+        .get("issued_at")
+        .and_then(Value::as_str)
+        .unwrap_or("1970-01-01T00:00:00Z");
+    let verification_method = format!("{}#capability-grant", state.config.service_did);
+    let binding = json!({
+        "payload_digest": payload_digest,
+        "verification_method": verification_method,
+        "created_at": created_at,
+        "domain": "ck.capability.grant.v1",
+    });
+    let binding_bytes = cokret_sdk::canonical::canonical_json_bytes(&binding).map_err(|e| {
+        AppError::internal(format!("grant proof binding canonicalization failed: {e}"))
+    })?;
+    let protected = br#"{"alg":"EdDSA","typ":"ck.proof.v1","b64":false,"crit":["b64"]}"#;
+    let protected_b64u = URL_SAFE_NO_PAD.encode(protected);
+    let payload_b64u = URL_SAFE_NO_PAD.encode(&binding_bytes);
+    let signing_input = format!("{protected_b64u}.{payload_b64u}");
+    let signature = state.notary_signing_key().sign(signing_input.as_bytes());
+    let signature_b64u = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    Ok(json!({
+        "kind": "detached_jws",
+        "verification_method": verification_method,
+        "alg": "EdDSA",
+        "payload_digest": payload_digest,
+        "created_at": created_at,
+        "domain": "ck.capability.grant.v1",
+        "jws": format!("{protected_b64u}..{signature_b64u}")
+    }))
+}
+
+fn canonicalize_timestamp_fields(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map.iter_mut() {
+                if key.ends_with("_at")
+                    && let Some(timestamp) = value.as_str()
+                    && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp)
+                {
+                    *value = Value::String(canonical_rfc3339(&parsed.with_timezone(&chrono::Utc)));
+                    continue;
+                }
+                canonicalize_timestamp_fields(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                canonicalize_timestamp_fields(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
+    ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// P1 stage 3 — emit a `ck.capability.revoke` event (top-level `grant_id`,

@@ -4283,7 +4283,10 @@ impl ProjectionState {
     /// Read-only preflight for profile-level Strand status FSM stored at
     /// `fields.status`. This guards common workflow statuses while leaving
     /// unknown/custom statuses to Realm profiles.
-    pub fn check_strand_status_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+    pub fn check_strand_status_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(crate::kinds::CK_STRAND_UPDATE)
         {

@@ -122,7 +122,8 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(strand_id) = strand_id_from_payload(&operation.payload).map(ToOwned::to_owned) else {
+        let Some(strand_id) = strand_id_from_payload(&operation.payload).map(ToOwned::to_owned)
+        else {
             return ProjectionEffect::Rejected {
                 reason: "strand_update_missing_strand_id".to_owned(),
             };
@@ -237,7 +238,10 @@ impl ProjectionState {
     /// carry track-level state (StrandProjection has no `tracks` field by
     /// design — SDK is the source of truth client-side); only the parent
     /// Strand's lifecycle state matters here.
-    pub fn check_strand_tracks_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+    pub fn check_strand_tracks_transition(
+        &self,
+        operation: &Operation,
+    ) -> Result<(), &'static str> {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),

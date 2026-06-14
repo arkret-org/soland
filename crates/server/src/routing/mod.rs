@@ -40,16 +40,16 @@ pub(crate) mod realm_policy;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
-use events::strand::{
-    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
-    strand_id_from_realm_id, strand_projection_for_realm,
-};
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
 use events::operations::{validate_canonical_json_value, validate_device_message_target};
 use events::projection::{
     accept_local_operations, ingest_federation_operations, operation_is_visible,
     projection_event_from_operation, redaction_targets_from_operations,
+};
+use events::strand::{
+    default_discussion_track, discussion_track_for_projection_event,
+    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
@@ -809,6 +809,27 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "push",
         "org.cokret.soland.push.outbound_bridge_cache_import",
         "import outbound push bridge cache snapshots",
+    ),
+    (
+        "/_soland/edge/push/rules",
+        PathItemType::Get,
+        "push",
+        "org.cokret.soland.push.rules",
+        "list local push rules",
+    ),
+    (
+        "/_soland/edge/push/rules",
+        PathItemType::Post,
+        "push",
+        "org.cokret.soland.push.upsert_rule",
+        "create or update a local push rule",
+    ),
+    (
+        "/_soland/edge/push/rules/{rule_id}",
+        PathItemType::Delete,
+        "push",
+        "org.cokret.soland.push.delete_rule",
+        "delete a local push rule",
     ),
     (
         "/_cokret/self/keys/backups/{backup_id}",

@@ -10,6 +10,10 @@ use cokret_sdk::Operation;
 // `ck.self.events.command.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
 pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CK_CIRCLE_CREATE;
+// Space-container lifecycle (`ck.space.*`). Spec
+// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
+// container, distinct from the `ck.realm.*` security boundary below.
+pub use cokret_sdk::events::kinds::SPACE_CREATE as CK_SPACE_CONTAINER_CREATE;
 // Strand lifecycle (round 13 — Strand projection state machine). spec
 // `common-fields.md §5.1` Strand row: active / archived / redacted / deleted.
 // Strand has no dedicated `ck.strand.tombstone` event (terminal state reached
@@ -39,16 +43,10 @@ pub use cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE as CK_STRAND_TRACKS_UPDA
 // projection's updated_at is NOT bumped — watch is a per-(strand, actor)
 // subscription that does not represent a Strand state mutation.
 pub use cokret_sdk::events::kinds::STRAND_WATCH_SET as CK_STRAND_WATCH_SET;
-// Space-container lifecycle (`ck.space.*`). Spec
-// `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
-// container, distinct from the `ck.realm.*` security boundary below.
-pub use cokret_sdk::events::kinds::SPACE_CREATE as CK_SPACE_CONTAINER_CREATE;
 pub use cokret_sdk::events::kinds::{
     CIRCLE_ARCHIVE as CK_CIRCLE_ARCHIVE, CIRCLE_MEMBER_STATE as CK_CIRCLE_MEMBER_STATE,
     CIRCLE_RESTORE as CK_CIRCLE_RESTORE, CIRCLE_TOMBSTONE as CK_CIRCLE_TOMBSTONE,
-    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, STRAND_ARCHIVE as CK_STRAND_ARCHIVE,
-    STRAND_REORDER as CK_STRAND_REORDER, STRAND_RESTORE as CK_STRAND_RESTORE,
-    STRAND_UPDATE as CK_STRAND_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
+    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
     MESSAGE_REDACT as CK_MESSAGE_REDACT, MESSAGE_REVISE as CK_MESSAGE_REVISE,
     PIN_ADD as CK_PIN_ADD, PIN_REMOVE as CK_PIN_REMOVE, PIN_REORDER as CK_PIN_REORDER,
     REACTION_ADD as CK_REACTION_ADD, REACTION_REMOVE as CK_REACTION_REMOVE,
@@ -56,7 +54,9 @@ pub use cokret_sdk::events::kinds::{
     RELATION_UPDATE as CK_RELATION_UPDATE, RSVP_SET as CK_RSVP_SET,
     SPACE_ARCHIVE as CK_SPACE_CONTAINER_ARCHIVE, SPACE_PARENT as CK_SPACE_CONTAINER_PARENT,
     SPACE_RESTORE as CK_SPACE_CONTAINER_RESTORE, SPACE_TOMBSTONE as CK_SPACE_CONTAINER_TOMBSTONE,
-    SPACE_UPDATE as CK_SPACE_CONTAINER_UPDATE, VIEW_CREATE as CK_VIEW_CREATE,
+    SPACE_UPDATE as CK_SPACE_CONTAINER_UPDATE, STRAND_ARCHIVE as CK_STRAND_ARCHIVE,
+    STRAND_REORDER as CK_STRAND_REORDER, STRAND_RESTORE as CK_STRAND_RESTORE,
+    STRAND_UPDATE as CK_STRAND_UPDATE, VIEW_CREATE as CK_VIEW_CREATE,
     VIEW_RECONCILE as CK_VIEW_RECONCILE, VIEW_UPDATE as CK_VIEW_UPDATE,
 };
 use serde_json::Value;

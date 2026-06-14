@@ -2,13 +2,12 @@
 //!
 //! Endpoints (product-local operator surface):
 //!
-//! - `GET  /_soland/admin/realms/{realm_id}/mls/covered-seals` — project the
-//!   covered-seals state for a Realm's MLS group(s) alongside the current
-//!   governance Seal set so the operator can compute lag.
-//! - `POST /_soland/admin/realms/{realm_id}/mls/covered-seals/advance` —
-//!   operator override that folds the current governance Seal set into the
-//!   group's covered_seals accumulator. Used when MLS members are offline
-//!   and can't ack on their own; this is a coarse maintenance hammer (it
+//! - `GET  /_soland/admin/realms/{realm_id}/mls/covered-seals` — project the covered-seals state
+//!   for a Realm's MLS group(s) alongside the current governance Seal set so the operator can
+//!   compute lag.
+//! - `POST /_soland/admin/realms/{realm_id}/mls/covered-seals/advance` — operator override that
+//!   folds the current governance Seal set into the group's covered_seals accumulator. Used when
+//!   MLS members are offline and can't ack on their own; this is a coarse maintenance hammer (it
 //!   does NOT replace per-epoch MLS commits).
 //!
 //! Read source: [`crate::reducer::ProjectionState::mls_commit_epochs`]

@@ -118,16 +118,17 @@ async fn mimi_provider_facade_contracts_work() {
         false
     );
 
-    let mapped: Value = TestClient::post("http://server/_cokret/open/mimi/strands/01JSMIMI/messages")
-        .json(&serde_json::json!({
-            "source_format": "text/markdown;variant=GFM-MIMI",
-            "body": "hello from MIMI"
-        }))
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let mapped: Value =
+        TestClient::post("http://server/_cokret/open/mimi/strands/01JSMIMI/messages")
+            .json(&serde_json::json!({
+                "source_format": "text/markdown;variant=GFM-MIMI",
+                "body": "hello from MIMI"
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(mapped["ok"], true);
     assert_eq!(
         mapped["receipt"]["operation_id"],

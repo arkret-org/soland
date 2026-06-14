@@ -241,14 +241,16 @@ pub(crate) const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
 // builders. The first field present (in spec-canonical order) names the
 // target Strand; `apply_strand_lifecycle` reads them with the same precedence.
 pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref", "strand_id"];
-pub(crate) const STRAND_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    STRAND_LIFECYCLE_ID_FIELDS,
-    "strand lifecycle operation requires target_ref (or strand_id)",
-)];
-pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
-    "object",
-    "strand create operation requires object",
-)];
+pub(crate) const STRAND_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::AnyOf(
+        STRAND_LIFECYCLE_ID_FIELDS,
+        "strand lifecycle operation requires target_ref (or strand_id)",
+    )];
+pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "object",
+        "strand create operation requires object",
+    )];
 pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
         &["target_ref", "strand_id"],

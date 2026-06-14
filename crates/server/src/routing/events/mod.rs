@@ -8,17 +8,13 @@ pub(super) mod peer;
 // Strand + projection helpers are `pub(crate)` so the MIMI interop
 // facade can reuse the canonical space→strand mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Cokret timeline.
-pub(crate) mod strand;
 pub(super) mod notify;
 pub(super) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
+pub(crate) mod strand;
 pub(super) mod sync;
 
-use strand::{
-    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
-    strand_id_from_realm_id, strand_projection_for_realm, message_id_from_event_id,
-};
 use operations::{
     validate_agent_participation_ceiling, validate_agent_reply_participation,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
@@ -26,6 +22,10 @@ use operations::{
 use projection::{
     augment_timeline_message_json, backfill_gap_events, projected_event_page,
     projection_event_json, sync_timeline_message_json_with_projection, truncate_gap_events,
+};
+use strand::{
+    default_discussion_track, discussion_track_for_projection_event, message_id_from_event_id,
+    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
 };
 
 use super::{

@@ -329,7 +329,10 @@ mod tests {
             signer_did: signer_did.to_owned(),
             signature: String::new(),
             signer_public_key: pubkey_b64,
-            requested_capabilities: vec!["ck.message.create".to_owned(), "ck.strand.read".to_owned()],
+            requested_capabilities: vec![
+                "ck.message.create".to_owned(),
+                "ck.strand.read".to_owned(),
+            ],
             schema_hash: current_applet_schema_hash(),
             metadata: json!({"namespace": "bridge.demo"}),
         };

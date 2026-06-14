@@ -564,7 +564,10 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
         .await
         .unwrap();
     assert_eq!(inbox["strands"].as_array().unwrap().len(), 1);
-    assert_eq!(inbox["strands"][0]["strand"]["schema"], "ck.schema.strand.v1");
+    assert_eq!(
+        inbox["strands"][0]["strand"]["schema"],
+        "ck.schema.strand.v1"
+    );
 
     let search: Value = TestClient::post("http://server/_soland/self/index/search")
         .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))

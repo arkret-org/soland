@@ -138,18 +138,6 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             submit_event_batch(state, &session, batch.events, res).await;
         }
         SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope = match serde_json::to_value(envelope) {
-                Ok(value) => value,
-                Err(_) => {
-                    render_error(
-                        res,
-                        StatusCode::BAD_REQUEST,
-                        "bad_json",
-                        "invalid event envelope",
-                    );
-                    return;
-                }
-            };
             let envelope_for_chaos = envelope.clone();
             match submit_event_value(state, &session, envelope).await {
                 Ok(response) => {
@@ -1975,7 +1963,7 @@ pub enum SolandEventsSubmitRequestBody {
     /// Batch form — multiple envelopes, optional `idempotency_key`.
     Batch(cokret_sdk::EventsSubmitBatchRequestBody),
     /// Single Event Envelope (legacy / dominant shape).
-    Single(Event),
+    Single(Value),
 }
 
 impl SolandEventsSubmitRequestBody {

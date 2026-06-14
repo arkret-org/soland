@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::reducer::{
-    CircleLifecycleState, CircleProjection, StrandProjection, ObjectLifecycleState,
+    CircleLifecycleState, CircleProjection, ObjectLifecycleState, StrandProjection,
 };
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};

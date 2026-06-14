@@ -9,8 +9,8 @@
 //! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing
 //!   Space containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /_cokret/self/projection/strands?realm_id=...` — same for Strands (state ∈ {active, archived,
-//!   redacted}).
+//! - `GET /_cokret/self/projection/strands?realm_id=...` — same for Strands (state ∈ {active,
+//!   archived, redacted}).
 //! - `GET /_cokret/self/projection/morphs?realm_id=...` — same for Morphs (same enum as Strands).
 //!
 //! All three endpoints are authenticated. Resource visibility check
@@ -31,9 +31,9 @@
 //! debugging UIs.
 
 use cokret_sdk::{
-    Did, StrandId, MorphId, ProjectionAssignedToRelation, ProjectionStrandList, ProjectionStrandRow,
-    ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
-    ProjectionSpaceRow, ProjectionSpaceState, RealmId, RelationId, SpaceId,
+    Did, MorphId, ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow,
+    ProjectionObjectState, ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState,
+    ProjectionStrandList, ProjectionStrandRow, RealmId, RelationId, SpaceId, StrandId,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -523,7 +523,8 @@ async fn list_strand_projections(
         .filter(|f| f.realm_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
-            let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &f.strand_id)?;
+            let (board_space_id, list_space_id, rank) =
+                strand_position_fields(&proj, &f.strand_id)?;
             let assigned_to_relations = strand_assigned_to_relations(&proj, &f.strand_id)?;
             let mut assigned_actor_ids = assigned_to_relations
                 .iter()

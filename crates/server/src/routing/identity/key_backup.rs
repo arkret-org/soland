@@ -19,8 +19,7 @@ use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoveryPolicyRecord, RecoverySessionRecord};
 use crate::wire::{
-    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutRequestBody,
-    KeysBackupsReplaceOutcome,
+    KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -231,6 +230,14 @@ fn validate_key_backup_extension_extras_typed(backup: &KeyBackup) -> Result<(), 
 fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError> {
     serde_json::to_value(backup)
         .map_err(|error| AppError::internal(format!("key backup body re-encode failed: {error}")))
+}
+
+fn typed_key_backup_body(body: &Value) -> Result<KeyBackup, AppError> {
+    serde_json::from_value(body.clone()).map_err(|error| {
+        schema_error(format!(
+            "key backup payload failed SDK type validation: {error}"
+        ))
+    })
 }
 
 fn validate_key_backup_body_typed(
@@ -1626,7 +1633,7 @@ async fn ensure_key_backup_delete_allowed(
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
-    backup: JsonBody<KeysBackupsPutRequestBody>,
+    backup: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsReplaceOutcome> {
@@ -1644,7 +1651,7 @@ async fn put_key_backup(
             "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
         ))
     })?;
-    let backup = backup.into_inner().0;
+    let backup = typed_key_backup_body(&backup.into_inner())?;
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
     if backup.backup_class == BackupClass::DidRecovery {
         ensure_key_backup_writer_device_authorized(
@@ -1931,6 +1938,7 @@ mod tests {
         let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
+            "device_id": DEVICE_ID,
             "backup_class": backup_class,
             "backup_version": "kb_1",
             "created_at": "2026-05-30T00:00:00Z",

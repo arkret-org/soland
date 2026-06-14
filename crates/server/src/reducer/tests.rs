@@ -1655,7 +1655,10 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         ),
         &hlc,
     );
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Archived
+    );
     let relation = state
         .relations
         .values()
@@ -1776,7 +1779,10 @@ fn board_archive_cascades_child_lists_and_cards() {
         state.space_containers[list_id].state,
         SpaceContainerLifecycleState::Archived
     );
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Archived
+    );
 
     state.apply(
         &make_operation(
@@ -1853,7 +1859,10 @@ fn strand_lifecycle_round_trip() {
             ..
         }
     ));
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Archived
+    );
 
     let restore_effect = state.apply(
         &make_operation(
@@ -2259,7 +2268,10 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
             ..
         }
     ));
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Redacted);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Redacted
+    );
     assert!(state.strands[strand_id].state.is_terminal());
 }
 
@@ -2346,7 +2358,10 @@ fn redaction_preflight_rejects_against_already_terminal() {
         ),
         &hlc,
     );
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Redacted);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Redacted
+    );
 
     // Second redaction against the now-Redacted Strand → preflight rejects.
     let second_redact = make_operation(
@@ -2493,7 +2508,10 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
         ),
         &hlc,
     );
-    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(
+        state.strands[strand_id].state,
+        ObjectLifecycleState::Archived
+    );
 
     let tracks_op = make_operation(
         crate::kinds::CK_STRAND_TRACKS_UPDATE,

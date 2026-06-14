@@ -27,8 +27,8 @@
 //!   in-process notary worker (`crate::notary::run_one_signing_pass`) so the new admin Control Move
 //!   / Seal strands through the same `apply_seal` pipeline as everything else. Where Control Move
 //!   construction / signing for a brand-new admin DID needs threading through the admin signer
-//!   strand, we land a structurally correct placeholder response **and** an inline `FUTURE:` seal so
-//!   sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
+//!   strand, we land a structurally correct placeholder response **and** an inline `FUTURE:` seal
+//!   so sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
 //!   work.
 //! - `threshold` / `open_set` / `mixed` notary profiles, `Manual` repair (free-form effects), and
 //!   full multi-signer compaction are placeholder-only — these need the admin signer strand +

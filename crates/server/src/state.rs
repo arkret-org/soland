@@ -2630,8 +2630,8 @@ async fn hydrate_projections_from_persistence(
     proj: &mut ProjectionState,
 ) {
     use crate::reducer::{
-        AppletProjection, StrandProjection, MorphProjection, ObjectLifecycleState,
-        SpaceContainerLifecycleState, SpaceContainerProjection,
+        AppletProjection, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        SpaceContainerProjection, StrandProjection,
     };
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {

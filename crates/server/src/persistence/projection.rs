@@ -40,7 +40,10 @@ pub trait SpaceContainerProjectionStore: Send + Sync {
 pub trait StrandProjectionStore: Send + Sync {
     async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>>;
     async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>>;
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<StrandProjectionRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>>;
     async fn delete(&self, strand_id: &str) -> PersistenceResult<()>;
 }
@@ -237,7 +240,10 @@ impl StrandProjectionStore for MemoryStrandProjectionStore {
         Ok(())
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>> {
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -599,7 +605,10 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>> {
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
             "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands \
