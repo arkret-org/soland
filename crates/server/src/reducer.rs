@@ -27,6 +27,7 @@
 // `impl ProjectionState` blocks) split out of this file.
 mod apply_capability;
 mod apply_messages;
+mod apply_moderation;
 mod apply_objects;
 mod apply_realm_lifecycle;
 mod apply_realm_policy;
@@ -1416,6 +1417,33 @@ pub enum ProjectionEffect {
         subject: PushRouteSubject,
         action: String,
     },
+    /// P2 — `ck.moderation.decision` projected as an or_set add into the
+    /// `ck.component.moderation_state.v1` cell keyed by `payload.decision_id`
+    /// (content-moderation.md §2.6). Carries an issuer/target_ref/verdict
+    /// snapshot so the appeal separation-of-duties check can reverse-resolve
+    /// the original decision issuer from the cell.
+    ModerationDecisionProjected {
+        decision_id: String,
+        realm_id: String,
+    },
+    /// P2 — `ck.moderation.decision.lift` projected as an or_set
+    /// observed-remove / supersede on the moderation_state cell keyed by
+    /// `payload.decision_ref`. Terminal: a re-add of a lifted decision_id
+    /// stays lifted (mirrors capabilities.md §12.1).
+    ModerationDecisionLifted {
+        decision_id: String,
+        realm_id: String,
+    },
+    /// P2 — `ck.moderation.appeal.{submit,review,decision,close}` projected
+    /// onto the `ck.component.moderation.appeal.v1` fsm cell keyed by
+    /// `payload.appeal_id`. `new_state` is the post-transition FSM value
+    /// (submitted / under_review / decided / closed); content-moderation.md
+    /// §5.5.
+    ModerationAppealProjected {
+        appeal_id: String,
+        realm_id: String,
+        new_state: String,
+    },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412
     /// `failed_precondition` with the canonical reason_code.
@@ -2631,6 +2659,47 @@ fn apply_capability_delegate_dispatch(
     s.apply_capability_delegate(op, op.created_at)
 }
 
+/// P2 — dispatch for `ck.moderation.decision`. Projects the decision snapshot
+/// as an or_set add into the `ck.component.moderation_state.v1` cell keyed by
+/// `payload.decision_id`.
+fn apply_moderation_decision_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_moderation_decision(op, op.created_at)
+}
+
+/// P2 — dispatch for `ck.moderation.decision.lift`. Projects an observed-
+/// remove / supersede on the moderation_state cell keyed by
+/// `payload.decision_ref`.
+fn apply_moderation_decision_lift_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_moderation_decision_lift(op, op.created_at)
+}
+
+/// P2 — dispatch for `ck.moderation.appeal.{submit,review,decision,close}`.
+/// Resolves the target FSM state from the canonical kind and projects the
+/// transition (with §5.5.2 reducer constraints) onto the appeal cell.
+fn apply_moderation_appeal_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    let Some(kind) = crate::kinds::canonical_kind_for_operation(op) else {
+        return ProjectionEffect::Ignored;
+    };
+    let Some(target_state) = apply_moderation::appeal_target_state(kind) else {
+        return ProjectionEffect::Rejected {
+            reason: "moderation_appeal_kind_unknown".to_owned(),
+        };
+    };
+    s.apply_moderation_appeal(op, target_state)
+}
+
 // ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
 //
 // Each adapter forwards to the free function in `reducer::mls`. The
@@ -3056,6 +3125,29 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_CAPABILITY_GRANT, apply_capability_grant_dispatch);
     m.insert(CK_CAPABILITY_REVOKE, apply_capability_revoke_dispatch);
     m.insert(CK_CAPABILITY_DELEGATE, apply_capability_delegate_dispatch);
+    // P2 — moderation control-plane projection (decision / lift / appeal.*).
+    // decision + lift share the `ck.component.moderation_state.v1` or_set
+    // cell; the four appeal kinds drive the `ck.component.moderation.appeal.v1`
+    // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
+    // `apply_moderation.rs`.
+    m.insert(CK_MODERATION_DECISION, apply_moderation_decision_dispatch);
+    m.insert(
+        CK_MODERATION_DECISION_LIFT,
+        apply_moderation_decision_lift_dispatch,
+    );
+    m.insert(
+        CK_MODERATION_APPEAL_SUBMIT,
+        apply_moderation_appeal_dispatch,
+    );
+    m.insert(
+        CK_MODERATION_APPEAL_REVIEW,
+        apply_moderation_appeal_dispatch,
+    );
+    m.insert(
+        CK_MODERATION_APPEAL_DECISION,
+        apply_moderation_appeal_dispatch,
+    );
+    m.insert(CK_MODERATION_APPEAL_CLOSE, apply_moderation_appeal_dispatch);
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
     // governance covered_seals accumulation.

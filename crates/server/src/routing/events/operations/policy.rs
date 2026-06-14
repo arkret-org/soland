@@ -57,6 +57,7 @@ pub async fn validate_operation_policy(
         }
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_member_state_policy(state, operation).await?;
+        validate_moderation_event_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
@@ -834,6 +835,119 @@ async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+/// P2 — capability gate for the moderation control-plane events ingested at
+/// `/_cokret/self/events` (content-moderation.md §2.6 / §5.5; capability-
+/// action-registry.json). Mirrors [`validate_member_state_policy`]'s ban
+/// gate: the actor MUST hold the matching moderation capability action on the
+/// Realm, or own the Realm. fail-closed `missing_capability` otherwise.
+///
+/// Action mapping (capability-action-registry.json):
+/// - `ck.moderation.decision`            → action `ck.moderation.decision`
+/// - `ck.moderation.decision.lift`       → action `ck.moderation.decision.lift`
+/// - `ck.moderation.appeal.submit`       → action `ck.moderation.appeal.submit`
+/// - `ck.moderation.appeal.{review,decision,close}` → action
+///   `ck.moderation.appeal.review` (aggregate_admin: one review capability
+///   covers review / decision / close — §5.5.1 table note).
+///
+/// `ck.moderation.appeal.close` additionally admits the appellant-withdrawal
+/// path: an appellant closing their own appeal (closer == cell appellant)
+/// needs no review capability (§5.5.2).
+async fn validate_moderation_event_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Ok(());
+    };
+    let action = match kind {
+        kinds::CK_MODERATION_DECISION => "ck.moderation.decision",
+        kinds::CK_MODERATION_DECISION_LIFT => "ck.moderation.decision.lift",
+        kinds::CK_MODERATION_APPEAL_SUBMIT => "ck.moderation.appeal.submit",
+        kinds::CK_MODERATION_APPEAL_REVIEW
+        | kinds::CK_MODERATION_APPEAL_DECISION
+        | kinds::CK_MODERATION_APPEAL_CLOSE => "ck.moderation.appeal.review",
+        _ => return Ok(()),
+    };
+
+    // Peer/service-originated federation operations predate a typed actor
+    // envelope; they stay accepted so convergence/backfill keep working
+    // (mirrors the ban gate). Direct client submits always carry an actor.
+    let Some(actor) = moderation_actor(operation) else {
+        return Ok(());
+    };
+
+    // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
+    // without the review capability (closer == cell appellant).
+    if kind == kinds::CK_MODERATION_APPEAL_CLOSE
+        && moderation_close_is_appellant_withdrawal(state, operation, actor)
+    {
+        return Ok(());
+    }
+
+    let realm_id = operation.realm_id.as_str();
+    if realm_owner_matches(state, realm_id, actor).await {
+        return Ok(());
+    }
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            action,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
+    Err("missing_capability")
+}
+
+/// Extract the authoring actor for a moderation event. Decision events name
+/// the issuer (`issuer` / `decided_by`); appeal submit names `appellant`;
+/// appeal review/decision name `reviewer`; close names `closer`. Falls back
+/// to the envelope `sender`.
+fn moderation_actor(operation: &Operation) -> Option<&str> {
+    [
+        "sender",
+        "issuer",
+        "decided_by",
+        "reviewer",
+        "closer",
+        "appellant",
+    ]
+    .into_iter()
+    .find_map(|field| {
+        operation
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+/// True when an `appeal.close` is an appellant self-withdrawal: the closer
+/// equals the appellant anchored on the projected appeal cell at submit time.
+fn moderation_close_is_appellant_withdrawal(
+    state: &AppState,
+    operation: &Operation,
+    actor: &str,
+) -> bool {
+    let Some(appeal_id) = operation.payload.get("appeal_id").and_then(Value::as_str) else {
+        return false;
+    };
+    let appellant = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|proj| proj.moderation_appeal_appellant(appeal_id));
+    matches!(appellant, Some(appellant) if appellant == actor)
 }
 
 fn direct_conversation_member_state_guard(

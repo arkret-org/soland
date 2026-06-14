@@ -629,9 +629,16 @@ async fn moderation_appeal_submit(
     })
 }
 
-/// Helper for the admin module: read the most recent state of an appeal
-/// by replaying the persisted event history. Returns the last-known
-/// `appeal_state` string, or `None` if the appeal does not exist.
+/// Read the most recent state of an appeal by replaying the persisted event
+/// history. Returns the last-known `appeal_state` string, or `None` if the
+/// appeal does not exist.
+///
+/// Retained as a read helper over the legacy moderation persistence table.
+/// The admin write path that consumed it was taken offline in the P2
+/// governance migration (moderation truth now lives in the reducer's
+/// `ck.component.moderation.appeal.v1` cell); kept for the interop read
+/// surface and any operational queue tooling.
+#[allow(dead_code)]
 pub(crate) async fn appeal_state(state: &AppState, appeal_id: &str) -> Option<String> {
     state
         .persistence

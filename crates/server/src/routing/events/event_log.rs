@@ -1205,6 +1205,20 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
+            // P2 — moderation §5.5.2 reducer constraints (separation of
+            // duties, overturn↔lift, modify↔new-decision) fail-closed at
+            // ingest. The clone sees cells already advanced by earlier
+            // in-batch decision / lift submits, so the atomicity checks
+            // resolve against the live moderation_state cell.
+            if let Some(reason) =
+                preflight_moderation_projection_reject(&proj, operation, &state.hlc)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
+            }
         }
     }
 

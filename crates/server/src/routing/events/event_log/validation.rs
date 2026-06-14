@@ -55,6 +55,41 @@ pub(crate) fn preflight_mls_projection_reject(
     }
 }
 
+/// P2 — surface the moderation reducer's §5.5.2 fail-closed rejections at
+/// ingest, mirroring [`preflight_mls_projection_reject`]. Runs the moderation
+/// reducer against a clone of the live projection so the
+/// separation-of-duties / overturn↔lift / modify↔new-decision constraints
+/// reject the event with the canonical reason_code BEFORE it is committed.
+///
+/// The clone sees the same already-applied cells as the real apply will —
+/// within an ordered submit batch the paired `ck.moderation.decision.lift` /
+/// new `ck.moderation.decision` were applied to the live projection by their
+/// own earlier `submit_event_value` calls, so the cell already reflects them.
+pub(crate) fn preflight_moderation_projection_reject(
+    proj: &crate::reducer::ProjectionState,
+    operation: &Operation,
+    hlc: &crate::hlc::ServerHlc,
+) -> Option<String> {
+    let kind = kinds::canonical_kind_string(operation);
+    let is_moderation = matches!(
+        kind.as_str(),
+        kinds::CK_MODERATION_DECISION
+            | kinds::CK_MODERATION_DECISION_LIFT
+            | kinds::CK_MODERATION_APPEAL_SUBMIT
+            | kinds::CK_MODERATION_APPEAL_REVIEW
+            | kinds::CK_MODERATION_APPEAL_DECISION
+            | kinds::CK_MODERATION_APPEAL_CLOSE
+    );
+    if !is_moderation {
+        return None;
+    }
+    let mut snapshot = proj.clone();
+    match snapshot.apply(operation, hlc) {
+        crate::reducer::ProjectionEffect::Rejected { reason } => Some(reason),
+        _ => None,
+    }
+}
+
 fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, EventValidationError> {
     if let Some(realm_id) = event_string_field(object, &["realm_id"]) {
         if RealmId::new(realm_id.clone()).is_err() {
