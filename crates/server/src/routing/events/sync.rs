@@ -30,7 +30,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use cokret_sdk::http::EventsQueryOutcome;
 use cokret_sdk::lattice::CellState;
-use cokret_sdk::{EphemeralSubmitOutcome, PresenceStatus, RealmId};
+use cokret_sdk::{PresenceStatus, RealmId};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
@@ -45,11 +45,11 @@ use super::projection::{
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
     backfill_gap_events, default_discussion_track, device_message_envelopes_after,
-    strand_id_from_realm_id, strand_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref,
-    projected_event_page, projection_event_json, prune_expired_typing, query_param,
-    realm_discoverability, realm_event_visible_to_session, realm_has_member,
-    realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
-    snapshot_bundle_for_realm, snapshot_manifest_for_realm,
+    is_realm_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
+    prune_expired_typing, query_param, realm_discoverability, realm_event_visible_to_session,
+    realm_has_member, realm_history_visibility, realm_id_accessible, realm_visible_to,
+    render_error, sha256_hex, snapshot_bundle_for_realm, snapshot_manifest_for_realm,
+    strand_id_from_realm_id, strand_projection_for_realm,
     sync_timeline_message_json_with_projection, truncate_gap_events, typing_ephemeral_for_realm,
     validate_did,
 };
@@ -58,7 +58,7 @@ use crate::persistence::SyncCursorRecord;
 use crate::reducer::ProjectionState;
 use crate::state::{
     AppState, HandleClaimDigestInput, HandleClaimEvidenceRecord, PresenceRecord,
-    ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord, TypingRecord,
+    ProjectionEventRecord, RealmDirectoryEntry, RealmMetaRecord, SessionRecord,
 };
 use crate::wire::{EventsQueryPostRequestBody, SyncDescription, SyncRequestBody};
 
@@ -69,6 +69,7 @@ const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 
 mod snapshot;
 use snapshot::*;
+mod ephemeral;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct SyncGapBackfillOutcome {
@@ -130,7 +131,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
         .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
-        .push(Router::with_path("ephemeral").post(submit_ephemeral))
+        .push(Router::with_path("ephemeral").post(ephemeral::submit_ephemeral))
         .push(Router::with_path("snapshot/head").get(snapshot_head))
 }
 
@@ -139,7 +140,7 @@ pub(super) fn legacy_router() -> Router {
         .push(Router::with_path("account/describe").get(account_describe))
         .push(Router::with_path("account/subscribe").get(account_subscribe))
         .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
-        .push(Router::with_path("ephemeral").post(submit_ephemeral))
+        .push(Router::with_path("ephemeral").post(ephemeral::submit_ephemeral))
         .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
         // Product-face dev snapshot head: serves the deployment-local dev
         // bundle descriptor. The protocol `ck.self.snapshot.query.manifest_head` (manifest
@@ -1293,187 +1294,6 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     });
     cokret_sdk::canonical::canonical_sha256(&binding)
         .unwrap_or_else(|_| cokret_sdk::canonical::sha256_digest(binding.to_string().as_bytes()))
-}
-
-#[endpoint(
-    operation_id = "ck.self.ephemeral.command.send",
-    tags("sync"),
-    summary = "Send a broadcast ephemeral signal"
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.ephemeral.command.send"))]
-async fn submit_ephemeral(
-    aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<cokret_sdk::EphemeralEnvelope>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> crate::result::JsonResult<EphemeralSubmitOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let envelope = body.into_inner();
-
-    validate_ephemeral_envelope(&envelope)?;
-
-    let realm_id = envelope.realm_id.clone();
-    let realm_id_str = realm_id.as_str();
-    let actor_id = envelope.actor_id.to_string();
-    if actor_id != session.actor {
-        return Err(crate::error::AppError::capability_denied(
-            "ephemeral actor_id must match the bearer session actor",
-        ));
-    }
-    if !realm_has_member(state, realm_id_str, &session.actor).await {
-        return Err(crate::error::AppError::capability_denied(
-            "actor is not a joined member of the realm",
-        ));
-    }
-
-    match envelope.kind.as_str() {
-        "ck.typing" => {
-            persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
-        }
-        "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
-        "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
-        "ck.call.signal" => {}
-        _ => {
-            return Err(crate::error::AppError::invalid_param(
-                "unsupported ephemeral kind",
-            ));
-        }
-    }
-
-    crate::result::json_ok(EphemeralSubmitOutcome {
-        accepted: true,
-        kind: envelope.kind,
-        realm_id,
-        dispatched_to: None,
-        server_received_at: Some(chrono::Utc::now()),
-    })
-}
-
-fn validate_ephemeral_envelope(
-    envelope: &cokret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
-    if !matches!(
-        envelope.kind.as_str(),
-        "ck.call.signal" | "ck.presence" | "ck.typing" | "ck.receipt.read"
-    ) {
-        return Err(crate::error::AppError::invalid_param(
-            "unsupported ephemeral kind",
-        ));
-    }
-    let window_ms = envelope
-        .expires_at
-        .signed_duration_since(envelope.sent_at)
-        .num_milliseconds();
-    if window_ms <= 0 || (window_ms as u64) > cokret_sdk::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS as u64
-    {
-        return Err(crate::error::AppError::invalid_param(
-            "ephemeral expires_at must be after sent_at and within the hard TTL ceiling",
-        ));
-    }
-    if envelope.expires_at <= chrono::Utc::now() {
-        return Err(crate::error::AppError::invalid_param(
-            "ephemeral signal is already expired",
-        ));
-    }
-    Ok(())
-}
-
-async fn persist_ephemeral_typing(
-    state: &AppState,
-    actor: &str,
-    realm_id: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
-) {
-    let typing = envelope
-        .payload
-        .get("typing")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    if typing {
-        let scope_id = envelope
-            .payload
-            .get("scope_id")
-            .or_else(|| envelope.payload.get("strand_id"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
-        if let Err(error) = state
-            .persistence
-            .typing()
-            .put(TypingRecord {
-                actor: actor.to_owned(),
-                realm_id: realm_id.to_owned(),
-                scope_id,
-                expires_at: envelope.expires_at,
-                updated_at: chrono::Utc::now(),
-            })
-            .await
-        {
-            tracing::error!(%error, "failed to persist ephemeral typing");
-        }
-    } else {
-        let _ = state.persistence.typing().remove(actor, realm_id).await;
-    }
-}
-
-async fn persist_ephemeral_presence(
-    state: &AppState,
-    actor: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
-) {
-    let status = envelope
-        .payload
-        .get("status")
-        .or_else(|| envelope.payload.get("state"))
-        .and_then(Value::as_str)
-        .unwrap_or("online")
-        .to_owned();
-    if let Err(error) = state
-        .persistence
-        .presence()
-        .put(PresenceRecord {
-            actor: actor.to_owned(),
-            status,
-            updated_at: chrono::Utc::now(),
-        })
-        .await
-    {
-        tracing::error!(%error, "failed to persist ephemeral presence");
-    }
-}
-
-async fn admit_ephemeral_read_receipt(
-    state: &AppState,
-    realm_id: &str,
-    envelope: &cokret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
-    if envelope
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .is_none()
-    {
-        return Err(crate::error::AppError::invalid_param(
-            "ck.receipt.read payload requires event_id",
-        ));
-    }
-
-    let (disclosure, _visibility, _scope_overrides_allowed) =
-        super::event_log::effective_read_receipt_policy_for_realm(state, realm_id)
-            .await
-            .unwrap_or_else(|| ("optional".to_owned(), "members".to_owned(), true));
-    if disclosure == "disabled" {
-        return Err(crate::error::AppError::new(
-            crate::error::ErrorCode::PolicyViolation,
-            format!(
-                "Realm '{realm_id}' read_receipt_policy.disclosure=disabled; ck.receipt.read dropped"
-            ),
-        )
-        .with_status(StatusCode::FORBIDDEN));
-    }
-    Ok(())
 }
 
 /// `ck.self.events.stream.subscribe` at `GET /_cokret/self/events/subscribe`. NDJSON
