@@ -16,14 +16,17 @@ use cokret_sdk::model::{
     AuthzDecision, CapabilityGrant, CapabilitySubject, GrantList, Invite, InviteDeliveryTarget,
     InviteState,
 };
-use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
+use cokret_sdk::{AuthzInviteList, Did, GrantId, Hash, InviteId, Operation, OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 
 use super::{append_audit_log, now, query_param};
 use crate::error::AppError;
+use crate::ids;
+use crate::kinds::{CK_CAPABILITY_GRANT, CK_CAPABILITY_REVOKE};
 use crate::result::{JsonResult, json_ok};
+use crate::routing::accept_local_operations;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -395,6 +398,14 @@ async fn create_grant(
             expires_at,
         )
     };
+    // P1 stage 3 — the grant cell is the source of truth. The engine
+    // constructor above validated the grant (and the delegated path's
+    // subset / expiry / scope rules) and assigned a grant_id; emit the
+    // canonical `ck.capability.grant` event so the reducer projects the
+    // grant cell and the read index is refreshed from it. The engine's own
+    // in-memory insert is now superseded by this projection upsert (same
+    // grant_id, idempotent) rather than being the authoritative write.
+    emit_capability_grant_event(state, &session.actor, &grant).await?;
     let action_label = if grant.delegated_from.is_some() {
         "authz.grant.delegate"
     } else {
@@ -462,6 +473,57 @@ async fn require_realm_owner(
         )),
         None => Err(AppError::not_found("Realm not found")),
     }
+}
+
+/// P1 stage 3 — emit a `ck.capability.grant` event for a validated engine
+/// `Grant` so the canonical `ck.component.capability.grant.v1` cell is
+/// projected (and the SolandAuthzEngine read index is refreshed by
+/// projection). The cell is the source of truth; the engine builder already
+/// validated the grant (and the delegated path's subset / expiry / scope
+/// rules) before this is called.
+async fn emit_capability_grant_event(
+    state: &AppState,
+    actor: &str,
+    grant: &crate::authz::Grant,
+) -> Result<(), AppError> {
+    let op_id = OperationId::new(ids::generate_operation_id())
+        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
+    let realm_id = RealmId::new(grant.realm_id.clone())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    let grant_body =
+        serde_json::to_value(grant).map_err(|e| AppError::internal(format!("grant encode: {e}")))?;
+    let payload = json!({
+        "grant_id": grant.grant_id,
+        "grant": grant_body,
+    });
+    let operation = Operation::create(op_id, realm_id, CK_CAPABILITY_GRANT, payload);
+    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+        .await
+        .map_err(|reason| {
+            AppError::new(crate::error::ErrorCode::FailedPrecondition, reason.to_owned())
+        })
+}
+
+/// P1 stage 3 — emit a `ck.capability.revoke` event (top-level `grant_id`,
+/// no frontier per capabilities.md §12) so the grant cell records the
+/// observed-remove and the index is refreshed.
+async fn emit_capability_revoke_event(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+    grant_id: &str,
+) -> Result<(), AppError> {
+    let op_id = OperationId::new(ids::generate_operation_id())
+        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
+    let realm = RealmId::new(realm_id.to_owned())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    let payload = json!({ "grant_id": grant_id });
+    let operation = Operation::create(op_id, realm, CK_CAPABILITY_REVOKE, payload);
+    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+        .await
+        .map_err(|reason| {
+            AppError::new(crate::error::ErrorCode::FailedPrecondition, reason.to_owned())
+        })
 }
 
 fn delegation_error_to_app_error(err: crate::authz::DelegationError) -> AppError {
@@ -548,6 +610,16 @@ async fn revoke_grant(
     }
     let (revoked, cascade_revoked) = state.authz.revoke_grant_with_cascade(&grant_id);
     if revoked {
+        // P1 stage 3 — emit `ck.capability.revoke` for the target grant and
+        // every cascade-revoked descendant so each grant cell records the
+        // observed-remove (terminal) and the read index is refreshed from the
+        // cells rather than only from the in-memory cascade mutation above.
+        emit_capability_revoke_event(state, &session.actor, &grant.realm_id, &grant_id).await?;
+        for child_id in &cascade_revoked {
+            // Child grants live in the same Realm as their root (delegation
+            // does not widen realm scope).
+            emit_capability_revoke_event(state, &session.actor, &grant.realm_id, child_id).await?;
+        }
         append_audit_log(
             state,
             Some(&session.actor),

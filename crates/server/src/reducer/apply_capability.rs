@@ -42,6 +42,12 @@ use super::*;
 /// (wildcard / empty) falls back to `*` so the grant is not silently
 /// narrowed out of the index.
 fn engine_resource_from_body(body: &Value, realm_id: &str) -> String {
+    // A flat `resource` string (legacy engine Grant shape) wins verbatim.
+    if let Some(resource) = body.get("resource").and_then(Value::as_str) {
+        if !resource.is_empty() {
+            return resource.to_owned();
+        }
+    }
     let mut selectors = value_array_field(body, "resources");
     selectors.extend(value_array_field(body, "resource_selectors"));
     for selector in &selectors {
