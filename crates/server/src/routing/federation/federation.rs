@@ -1577,7 +1577,7 @@ fn development_service_signing_key(service_did: &str) -> SigningKey {
     SigningKey::from_bytes(&seed)
 }
 
-fn signature_target_uri(req: &Request, state: &AppState) -> String {
+pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) -> String {
     let scheme = req
         .uri()
         .scheme_str()
@@ -1593,7 +1593,7 @@ fn signature_target_uri(req: &Request, state: &AppState) -> String {
     format!("{scheme}://{authority}{path_and_query}")
 }
 
-fn signature_authority(req: &Request, state: &AppState) -> String {
+pub(in crate::routing) fn signature_authority(req: &Request, state: &AppState) -> String {
     req.uri()
         .authority()
         .map(|authority| authority.as_str().to_owned())

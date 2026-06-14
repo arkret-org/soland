@@ -1089,6 +1089,10 @@ pub struct SessionRecord {
     pub actor: String,
     pub device_id: String,
     pub audience: String,
+    /// Session signing key (JWK) bound by `ck.session.grant`, used to verify
+    /// RFC 9421 PoP presentations on `/_cokret/self/*` (api-conventions.md
+    /// §3.2). `None` for bearer-only / dev-login / OAuth-bridged sessions.
+    pub session_public_key: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,

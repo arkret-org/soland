@@ -64,7 +64,7 @@ impl SessionStore for PgSessionStore {
     async fn get(&self, token: &str) -> PersistenceResult<Option<SessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, session_public_key, expires_at, created_at, revoked_at \
              FROM sessions WHERE id = $1",
         )
         .bind::<Text, _>(token)
@@ -78,15 +78,17 @@ impl SessionStore for PgSessionStore {
     async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO sessions (id, actor_id, device_id, audience, payload, expires_at, revoked_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, $7, NOW()) \
+            "INSERT INTO sessions (id, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, $7, $8, NOW()) \
              ON CONFLICT (id) DO UPDATE SET actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
-             audience = EXCLUDED.audience, expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, updated_at = NOW()",
+             audience = EXCLUDED.audience, session_public_key = EXCLUDED.session_public_key, \
+             expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, updated_at = NOW()",
         )
         .bind::<Text, _>(&record.token_hash)
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.device_id)
         .bind::<Text, _>(&record.audience)
+        .bind::<Nullable<Text>, _>(record.session_public_key.as_deref())
         .bind::<Timestamptz, _>(record.expires_at)
         .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
         .bind::<Timestamptz, _>(record.created_at)
@@ -116,7 +118,7 @@ impl SessionStore for PgSessionStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<SessionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, session_public_key, expires_at, created_at, revoked_at \
              FROM sessions",
         )
         .load::<SessionRow>(&mut *conn)
@@ -136,6 +138,8 @@ struct SessionRow {
     device_id: String,
     #[diesel(sql_type = Text)]
     audience: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    session_public_key: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -151,6 +155,7 @@ impl From<SessionRow> for SessionRecord {
             actor: row.actor,
             device_id: row.device_id,
             audience: row.audience,
+            session_public_key: row.session_public_key,
             expires_at: row.expires_at,
             created_at: row.created_at,
             revoked_at: row.revoked_at,

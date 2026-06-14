@@ -191,6 +191,10 @@ fn api_v1_router() -> Router {
         // `self` — the principal's own authenticated session surface.
         .push(
             Router::with_path("self")
+                // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification:
+                // verify any presented session signature, and require PoP for
+                // writes / sensitive reads on high-security deployments.
+                .hoop(identity::session_pop::verify_session_pop)
                 // self/events/account/snapshot/projection/keys/authz/policy etc.
                 .push(spaces::router())
                 // self/events/*.
@@ -261,6 +265,9 @@ fn soland_local_router() -> Router {
         .push(identity::legacy_router())
         .push(
             Router::with_path("self")
+                // SPEC-CR-001 — the `/_soland/self` compat mirror must carry the
+                // same PoP verification as the canonical `/_cokret/self` tree.
+                .hoop(identity::session_pop::verify_session_pop)
                 .push(spaces::legacy_router())
                 .push(events::legacy_router())
                 .push(access::legacy_router())

@@ -205,6 +205,7 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
         actor: actor.to_owned(),
         device_id: "device-1".to_owned(),
         audience: state.config.service_did.clone(),
+        session_public_key: None,
         expires_at: now() + ChronoDuration::hours(1),
         created_at: now(),
         revoked_at: None,

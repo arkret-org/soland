@@ -20,6 +20,10 @@ mod profile;
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
 pub(crate) mod recovery;
+// SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification hoop for the
+// `/_cokret/self/*` surface. pub(in crate::routing) so `routing::mod` can mount
+// `verify_session_pop` on the self routers.
+pub(in crate::routing) mod session_pop;
 pub(crate) mod webvh_validation;
 
 use super::system::describe;

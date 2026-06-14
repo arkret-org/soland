@@ -518,6 +518,7 @@ async fn push_register_session_grant_bridge(
         actor: principal_id.to_owned(),
         device_id: body.device_id.as_str().to_owned(),
         audience: state.config.service_did.clone(),
+        session_public_key: None,
         expires_at,
         created_at: now(),
         revoked_at: None,

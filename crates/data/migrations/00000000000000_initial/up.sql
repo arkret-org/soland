@@ -645,6 +645,7 @@ CREATE TABLE public.sessions (
     actor_id text NOT NULL,
     device_id text NOT NULL,
     audience text NOT NULL,
+    session_public_key text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,

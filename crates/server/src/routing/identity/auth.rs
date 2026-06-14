@@ -669,6 +669,8 @@ async fn dev_login(
         actor: actor_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.config.service_did.clone(),
+        // dev-login does not carry a ck.session.grant signing key; bearer-only.
+        session_public_key: None,
         expires_at,
         created_at: now(),
         revoked_at: None,
@@ -802,6 +804,9 @@ async fn exchange_session_grant(
         actor: principal_id_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.config.service_did.clone(),
+        session_public_key: grant
+            .as_ref()
+            .and_then(|grant| grant.session_public_key.clone()),
         expires_at,
         created_at: now(),
         revoked_at: None,
@@ -895,6 +900,8 @@ struct SessionGrantIntrospectionGrant {
     audience: String,
     scopes: Vec<String>,
     expires_at: DateTime<Utc>,
+    #[serde(default)]
+    session_public_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -924,6 +931,9 @@ pub(crate) struct SessionGrantValidationInput<'a> {
 pub(crate) struct ValidatedSessionGrant {
     pub expires_at: DateTime<Utc>,
     pub one_time_use_consumed: bool,
+    /// Session signing key (JWK) for RFC 9421 PoP verification, when the
+    /// introspection bridge supplied it (SPEC-CR-001).
+    pub session_public_key: Option<String>,
 }
 
 pub(crate) async fn validate_session_grant_binding(
@@ -1031,6 +1041,7 @@ pub(crate) async fn validate_session_grant_binding(
     Ok(Some(ValidatedSessionGrant {
         expires_at: grant.expires_at,
         one_time_use_consumed: response.one_time_use_consumed,
+        session_public_key: grant.session_public_key,
     }))
 }
 
@@ -1391,6 +1402,8 @@ async fn authenticated_oauth_session(
         actor: oauth.actor,
         device_id: oauth.device_id,
         audience: state.config.service_did.clone(),
+        // OAuth-bridged sessions are bearer-only (no ck.session.grant PoP key).
+        session_public_key: None,
         expires_at: oauth.expires_at,
         created_at: now(),
         revoked_at: None,

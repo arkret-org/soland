@@ -148,6 +148,7 @@ async fn peer_invites_submit(depot: &mut Depot, req: &mut Request) -> JsonResult
         actor,
         device_id: format!("peer-invite:{source_service_did}"),
         audience: state.config.service_did.clone(),
+        session_public_key: None,
         expires_at: now() + Duration::minutes(5),
         created_at: now(),
         revoked_at: None,
