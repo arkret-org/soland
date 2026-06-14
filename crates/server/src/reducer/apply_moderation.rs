@@ -4,37 +4,31 @@
 //! events. Projects the six active moderation kinds into the canonical cells
 //! declared by `event-kind-registry.json`:
 //!
-//! - `ck.moderation.decision` → `ck.component.moderation_state.v1` (or_set,
-//!   one cell per `payload.decision_id`). The add value is the decision
-//!   snapshot (`issuer` / `target_ref` / `verdict` / `realm_id`), so the
-//!   appeal separation-of-duties check can reverse-resolve the original
-//!   decision issuer from the cell.
-//! - `ck.moderation.decision.lift` → observed-remove / supersede on the same
-//!   cell keyed by `payload.decision_ref`. Terminal per content-moderation.md
-//!   §2.6 (same §12.1 rule as capabilities): once a decision_id is lifted, a
-//!   later re-add stays lifted.
-//! - `ck.moderation.appeal.{submit,review,decision,close}` →
-//!   `ck.component.moderation.appeal.v1` (fsm, one cell per
-//!   `payload.appeal_id`). Deterministic state machine
-//!   (none) → submitted → under_review → decided → closed, with `close` also
-//!   reachable from submitted / under_review (appellant withdrawal or an
-//!   authorized close service). content-moderation.md §5.5.
+//! - `ck.moderation.decision` → `ck.component.moderation_state.v1` (or_set, one cell per
+//!   `payload.decision_id`). The add value is the decision snapshot (`issuer` / `target_ref` /
+//!   `verdict` / `realm_id`), so the appeal separation-of-duties check can reverse-resolve the
+//!   original decision issuer from the cell.
+//! - `ck.moderation.decision.lift` → observed-remove / supersede on the same cell keyed by
+//!   `payload.decision_ref`. Terminal per content-moderation.md §2.6 (same §12.1 rule as
+//!   capabilities): once a decision_id is lifted, a later re-add stays lifted.
+//! - `ck.moderation.appeal.{submit,review,decision,close}` → `ck.component.moderation.appeal.v1`
+//!   (fsm, one cell per `payload.appeal_id`). Deterministic state machine (none) → submitted →
+//!   under_review → decided → closed, with `close` also reachable from submitted / under_review
+//!   (appellant withdrawal or an authorized close service). content-moderation.md §5.5.
 //!
 //! Reducer-enforced §5.5.2 constraints (surfaced at ingest by the
 //! `preflight_moderation_projection_reject` snapshot run, mirroring the MLS
 //! preflight):
-//! - **separation of duties** — an appeal `review` / `decision` `reviewer`
-//!   MUST NOT equal the issuer of the appealed `decision_ref` decision
-//!   (looked up from the moderation_state cell). Violations reject with
-//!   `appeal_self_review_forbidden`.
-//! - **overturn ↔ lift atomic** — a `verdict=overturn` decision requires the
-//!   moderation_state cell for `decision_ref` to already show the decision
-//!   lifted. With ordered-submit-batch semantics the paired
-//!   `ck.moderation.decision.lift` is projected before the appeal decision,
-//!   so the cell already reflects it; otherwise `appeal_overturn_missing_lift`.
-//! - **modify ↔ new decision atomic** — a `verdict=modify` decision requires
-//!   `modify_decision_ref` to name a decision already present (and not lifted)
-//!   in the moderation_state cell; otherwise `appeal_modify_missing_decision`.
+//! - **separation of duties** — an appeal `review` / `decision` `reviewer` MUST NOT equal the
+//!   issuer of the appealed `decision_ref` decision (looked up from the moderation_state cell).
+//!   Violations reject with `appeal_self_review_forbidden`.
+//! - **overturn ↔ lift atomic** — a `verdict=overturn` decision requires the moderation_state cell
+//!   for `decision_ref` to already show the decision lifted. With ordered-submit-batch semantics
+//!   the paired `ck.moderation.decision.lift` is projected before the appeal decision, so the cell
+//!   already reflects it; otherwise `appeal_overturn_missing_lift`.
+//! - **modify ↔ new decision atomic** — a `verdict=modify` decision requires `modify_decision_ref`
+//!   to name a decision already present (and not lifted) in the moderation_state cell; otherwise
+//!   `appeal_modify_missing_decision`.
 //!
 //! `close` is a manual / authorized action — the reducer projects no auto-
 //! close timer, cool-off window, or timer-service check (content-moderation.md

@@ -847,9 +847,8 @@ async fn validate_member_state_policy(
 /// - `ck.moderation.decision`            → action `ck.moderation.decision`
 /// - `ck.moderation.decision.lift`       → action `ck.moderation.decision.lift`
 /// - `ck.moderation.appeal.submit`       → action `ck.moderation.appeal.submit`
-/// - `ck.moderation.appeal.{review,decision,close}` → action
-///   `ck.moderation.appeal.review` (aggregate_admin: one review capability
-///   covers review / decision / close — §5.5.1 table note).
+/// - `ck.moderation.appeal.{review,decision,close}` → action `ck.moderation.appeal.review`
+///   (aggregate_admin: one review capability covers review / decision / close — §5.5.1 table note).
 ///
 /// `ck.moderation.appeal.close` additionally admits the appellant-withdrawal
 /// path: an appellant closing their own appeal (closer == cell appellant)

@@ -12,10 +12,10 @@ use std::sync::Mutex;
 use cokret_sdk::{
     AccountabilityGrantPayload, AccountabilityScope, ActorProfileId,
     AppletDelegatedEventAuthorization, AppletId, AppletInstallPreviewRequestBody,
-    AppletInstallRequestBody, AppletPackage, AppletRevokeRequestBody, AppletTransactionRequestBody,
-    AppletWireNamespaces, Did, EffectiveScope, Event, EventRef, GhostActorProfileRequest,
-    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, Hash, Hlc,
-    InstallCommitRequestBody, InstallPreviewRequestBody, Proof, RealmId, canonical,
+    AppletInstallRequestBody, AppletPackage, AppletTransactionRequestBody, AppletWireNamespaces,
+    Did, EffectiveScope, Event, EventRef, GhostActorProfileRequest, GhostActorProvisionOutcome,
+    GhostActorProvisionRequestBody, Hash, Hlc, InstallCommitRequestBody, InstallPreviewRequestBody,
+    InstallRevokeRequestBody, Proof, RealmId, canonical,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
@@ -258,7 +258,7 @@ async fn install_endpoint(
         );
     }
 
-    // Governance gate (P2 — 收口簇1): the canonical install write projects a
+    // Governance gate: the canonical install write projects a
     // `ck.realm.admin`-scoped registration onto the effective_scope realm.
     // Authentication alone is insufficient — the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
@@ -286,7 +286,7 @@ async fn install_endpoint(
 #[tracing::instrument(skip_all, fields(op = "ck.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
-    body: JsonBody<AppletRevokeRequestBody>,
+    body: JsonBody<InstallRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<Value> {
@@ -296,18 +296,14 @@ async fn revoke_install_endpoint(
     let revoke = body.into_inner();
     let record =
         applet_record(&applet_id).ok_or_else(|| AppError::not_found("applet is not registered"))?;
-    let effective_scope: EffectiveScope = parse_typed_body(
-        revoke.effective_scope.clone(),
-        "applet revoke effective_scope",
-    )?;
-    let scope_realm = effective_scope_realm_id(&effective_scope);
+    let scope_realm = effective_scope_realm_id(&revoke.effective_scope);
     if record.portal_realm_id != scope_realm {
         return Err(
             AppError::conflict("effective_scope does not match active applet install")
                 .with_wire_code("applet_effective_scope_mismatch"),
         );
     }
-    // Governance gate (P2 — 收口簇1): revoking a canonical install mutates the
+    // Governance gate: revoking a canonical install mutates the
     // realm-scoped registration; require `ck.realm.admin` over the install's
     // realm. fail-closed.
     require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
