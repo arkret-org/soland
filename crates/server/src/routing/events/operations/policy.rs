@@ -810,6 +810,29 @@ async fn validate_member_state_policy(
     if realm_owner_matches(state, operation.realm_id.as_str(), actor).await {
         return Ok(());
     }
+    // P1 — a non-owner MAY ban iff they hold `ck.realm.admin` on this Realm
+    // (capabilities.md §16 — `ck.realm.admin` governs `ck.member.state`
+    // writes). The owner implicitly holds admin and already returned above;
+    // this reads the projected capability grant index via
+    // SolandAuthzEngine::check. fail-closed: anything other than an explicit
+    // allow keeps the `missing_capability` rejection.
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authz
+        .check(
+            actor,
+            "ck.realm.admin",
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
+    {
+        return Ok(());
+    }
     Err("missing_capability")
 }
 
