@@ -154,43 +154,43 @@ impl ProjectionState {
         }
     }
 
-    /// COT-06-004 — apply `ck.realm.set_default_flow`. Points the Realm's
-    /// `default_flow_id` at `payload.flow_id`. The named Flow MUST already be
+    /// COT-06-004 — apply `ck.realm.set_default_strand`. Points the Realm's
+    /// `default_strand_id` at `payload.strand_id`. The named Strand MUST already be
     /// projected in this Realm (else `failed_precondition` — no dangling
-    /// pointer). Optional `expected_default_flow_id` is an optimistic-
+    /// pointer). Optional `expected_default_strand_id` is an optimistic-
     /// concurrency CAS guard: when present it MUST equal the current
-    /// `default_flow_id` (or both null), else `cas_mismatch`.
+    /// `default_strand_id` (or both null), else `cas_mismatch`.
     ///
-    /// Authorization (actor holds `ck.realm.set_default_flow` / `ck.realm.admin`
+    /// Authorization (actor holds `ck.realm.set_default_strand` / `ck.realm.admin`
     /// on the Realm, or owns it) is enforced at ingest in
-    /// `routing::events::operations::policy::validate_set_default_flow_policy`,
+    /// `routing::events::operations::policy::validate_set_default_strand_policy`,
     /// mirroring the ban / moderation capability gates. The reducer does the
     /// structural acceptance check only.
-    pub(crate) fn apply_realm_set_default_flow(
+    pub(crate) fn apply_realm_set_default_strand(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let Some(flow_id) = operation
+        let Some(strand_id) = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "set_default_flow_flow_id_missing".to_owned(),
+                reason: "set_default_strand_strand_id_missing".to_owned(),
             };
         };
 
-        // failed_precondition: the target Flow MUST already be projected in
+        // failed_precondition: the target Strand MUST already be projected in
         // this Realm. Prevents a dangling default pointer.
-        match self.flows.get(&flow_id) {
-            Some(flow) if flow.realm_id == realm_id => {}
+        match self.strands.get(&strand_id) {
+            Some(strand) if strand.realm_id == realm_id => {}
             Some(_) => {
                 return ProjectionEffect::Rejected {
-                    reason: "set_default_flow_flow_realm_mismatch".to_owned(),
+                    reason: "set_default_strand_strand_realm_mismatch".to_owned(),
                 };
             }
             None => {
@@ -200,14 +200,14 @@ impl ProjectionState {
             }
         }
 
-        // Optimistic-concurrency CAS guard. `expected_default_flow_id` is
-        // `oneOf[flow_id, null]`: when the field is present (including an
+        // Optimistic-concurrency CAS guard. `expected_default_strand_id` is
+        // `oneOf[strand_id, null]`: when the field is present (including an
         // explicit JSON null), it MUST match the current pointer.
-        if let Some(expected) = operation.payload.get("expected_default_flow_id") {
+        if let Some(expected) = operation.payload.get("expected_default_strand_id") {
             let current = self
                 .realm_states
                 .get(&realm_id)
-                .and_then(|realm| realm.default_flow_id.as_deref());
+                .and_then(|realm| realm.default_strand_id.as_deref());
             let expected = expected.as_str();
             if expected != current {
                 return ProjectionEffect::Rejected {
@@ -216,7 +216,7 @@ impl ProjectionState {
             }
         }
 
-        // Structured cache: set the Realm default-Flow pointer. Create a
+        // Structured cache: set the Realm default-Strand pointer. Create a
         // minimal Realm row if we somehow haven't projected a create yet
         // (federation backfill ordering tolerance).
         let realm = self
@@ -232,12 +232,12 @@ impl ProjectionState {
                 trust_domain: None,
                 terminal_state: None,
                 successor_realm_id: None,
-                default_flow_id: None,
+                default_strand_id: None,
             });
-        realm.default_flow_id = Some(flow_id.clone());
+        realm.default_strand_id = Some(strand_id.clone());
         realm.updated_at = now;
 
-        ProjectionEffect::RealmDefaultFlowSet { realm_id, flow_id }
+        ProjectionEffect::RealmDefaultStrandSet { realm_id, strand_id }
     }
 
     pub(crate) fn realm_organization_cell_id(realm_id: &str) -> Option<CellRef> {
@@ -459,7 +459,7 @@ impl ProjectionState {
                         trust_domain: None,
                         terminal_state: None,
                         successor_realm_id: None,
-                        default_flow_id: None,
+                        default_strand_id: None,
                     });
                 entry.title = Some(title.to_owned());
                 entry.updated_at = now;
@@ -726,7 +726,7 @@ impl ProjectionState {
                 trust_domain: payload_trust_domain.clone(),
                 terminal_state: None,
                 successor_realm_id: None,
-                default_flow_id: None,
+                default_strand_id: None,
             });
         // Lock trust_domain on first observation (ck.realm.create). The
         // mismatch case is already rejected above; here we only set the
@@ -868,7 +868,7 @@ impl ProjectionState {
                     });
                     self.cells.insert(cell_id, CellState::Value(value));
                 }
-                // Tombstone keeps child Space/Flow placement live:
+                // Tombstone keeps child Space/Strand placement live:
                 // succession transfers the navigation surface to the
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
@@ -910,7 +910,7 @@ impl ProjectionState {
     ///      parent edge is downgraded so membership / capability /
     ///      history / E2EE / retention stops propagating across the
     ///      destroy frontier.
-    /// CKP-0007: `Flow.discussion_realm_ref` is a removed wire field.
+    /// CKP-0007: `Strand.discussion_realm_ref` is a removed wire field.
     /// Intra-Realm discussion boundaries now live on a Circle
     /// (`scope_circle_id`) and never cross the Realm frontier, so no
     /// cross-Realm discussion cascade is required here.

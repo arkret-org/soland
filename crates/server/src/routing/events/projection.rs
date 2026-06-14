@@ -31,8 +31,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_realm_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
+    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
+    strand_id_from_realm_id, is_valid_discoverability, message_id_from_event_id, now, touch_realm,
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use crate::persistence::{MlsKeyPackageRow, MlsWelcomeRecord};
@@ -78,8 +78,8 @@ struct ProjectionEventRow {
 }
 
 pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
-    let flow_id = flow_id_for_projection_event(event);
-    let track = discussion_track_for_projection_event(event, flow_id.as_deref());
+    let strand_id = strand_id_for_projection_event(event);
+    let track = discussion_track_for_projection_event(event, strand_id.as_deref());
     let mut value = json!({
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
@@ -92,8 +92,8 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         "created_at": event.created_at,
     });
     if let Some(object) = value.as_object_mut() {
-        if let Some(flow_id) = flow_id {
-            object.insert("flow_id".to_owned(), json!(flow_id));
+        if let Some(strand_id) = strand_id {
+            object.insert("strand_id".to_owned(), json!(strand_id));
         }
         if let Some(track) = track {
             object.insert("track_name".to_owned(), track);
@@ -341,21 +341,21 @@ pub fn project_retention_policy_from_operation(
 }
 
 pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> serde_json::Value {
-    // flow_id is always derived from realm_id; thread_id is a discussion
-    // track within the flow, not the flow itself. See
+    // strand_id is always derived from realm_id; thread_id is a discussion
+    // track within the strand, not the strand itself. See
     // `sync_timeline_message_record_json` for the matching MessageRecord
     // path. The legacy top-level `branch` object was removed in revision
     // 0a5ab85 (forbidden-wire-fields entry "branch") — only `track` is
     // emitted on v1 wire.
-    let flow_id = flow_id_from_realm_id(&message.realm_id);
+    let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": message_id_from_event_id(&message.event_id),
-        "flow_id": flow_id,
+        "strand_id": strand_id,
         "realm_id": message.realm_id,
-        "track_name": default_discussion_track(&flow_id, &track_id),
+        "track_name": default_discussion_track(&strand_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,
@@ -1244,10 +1244,10 @@ async fn mirror_mls_effect_to_persistence(
 }
 
 /// After the deterministic reducer mutates the in-memory
-/// `ProjectionState::{space_containers,flows,morphs}` maps for a
-/// Space-container / Flow / Morph lifecycle event, snapshot the affected entry (under
+/// `ProjectionState::{space_containers,strands,morphs}` maps for a
+/// Space-container / Strand / Morph lifecycle event, snapshot the affected entry (under
 /// projection lock) and upsert it to the corresponding
-/// `SpaceContainerProjectionStore` / `FlowProjectionStore` / `MorphProjectionStore`
+/// `SpaceContainerProjectionStore` / `StrandProjectionStore` / `MorphProjectionStore`
 /// in persistence. Lock is released BEFORE the persistence write so
 /// any backend latency doesn't stall other reducer paths.
 ///
@@ -1257,13 +1257,13 @@ async fn mirror_mls_effect_to_persistence(
 async fn write_through_projection(state: &AppState, operation: &Operation) {
     use crate::kinds;
     use crate::persistence::{
-        FlowProjectionRecord, MorphProjectionRecord, SpaceContainerProjectionRecord,
+        StrandProjectionRecord, MorphProjectionRecord, SpaceContainerProjectionRecord,
     };
     use crate::reducer::{ObjectLifecycleState, SpaceContainerLifecycleState};
 
     enum Snapshot {
         SpaceContainer(SpaceContainerProjectionRecord),
-        Flow(FlowProjectionRecord),
+        Strand(StrandProjectionRecord),
         Morph(MorphProjectionRecord),
     }
 
@@ -1280,16 +1280,16 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             | kinds::CK_SPACE_CONTAINER_RESTORE
             | kinds::CK_SPACE_CONTAINER_TOMBSTONE
     );
-    // Flow lifecycle (state-affecting + position-touching).
-    let is_flow_kind = matches!(
+    // Strand lifecycle (state-affecting + position-touching).
+    let is_strand_kind = matches!(
         kind,
-        kinds::CK_FLOW_CREATE
-            | kinds::CK_FLOW_UPDATE
-            | kinds::CK_FLOW_ARCHIVE
-            | kinds::CK_FLOW_RESTORE
-            | kinds::CK_FLOW_MOVE
-            | kinds::CK_FLOW_REORDER
-            | kinds::CK_FLOW_TRACKS_UPDATE
+        kinds::CK_STRAND_CREATE
+            | kinds::CK_STRAND_UPDATE
+            | kinds::CK_STRAND_ARCHIVE
+            | kinds::CK_STRAND_RESTORE
+            | kinds::CK_STRAND_MOVE
+            | kinds::CK_STRAND_REORDER
+            | kinds::CK_STRAND_TRACKS_UPDATE
     );
     let is_morph_kind = matches!(
         kind,
@@ -1298,10 +1298,10 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             | kinds::CK_MORPH_ARCHIVE
             | kinds::CK_MORPH_RESTORE
     );
-    // ck.redaction with an `object_ref` may have flipped a Flow or
+    // ck.redaction with an `object_ref` may have flipped a Strand or
     // Morph to Redacted. Pick up either by attempting both.
     let is_redaction = kind == kinds::CK_REDACTION;
-    if !(is_space_container_kind || is_flow_kind || is_morph_kind || is_redaction) {
+    if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
         return;
     }
 
@@ -1320,12 +1320,12 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let flow_id_from_payload = operation
+        let strand_id_from_payload = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let flow_id_from_object = operation
+        let strand_id_from_object = operation
             .payload
             .get("object")
             .and_then(|v| v.get("id"))
@@ -1358,19 +1358,19 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
             } else {
                 None
             }
-        } else if is_flow_kind {
-            let id = flow_id_from_payload.or(flow_id_from_object);
-            id.and_then(|i| proj.flows.get(&i))
-                .map(return_snapshot_flow)
+        } else if is_strand_kind {
+            let id = strand_id_from_payload.or(strand_id_from_object);
+            id.and_then(|i| proj.strands.get(&i))
+                .map(return_snapshot_strand)
         } else if is_morph_kind {
             let id = morph_id_from_payload.or(morph_id_from_object);
             id.and_then(|i| proj.morphs.get(&i))
                 .map(return_snapshot_morph)
         } else if is_redaction {
-            // object_ref may be ck:flow: or ck:morph:; try both.
+            // object_ref may be ck:strand: or ck:morph:; try both.
             if let Some(ref obj_ref) = object_ref {
-                if let Some(flow) = proj.flows.get(obj_ref) {
-                    Some(return_snapshot_flow(flow))
+                if let Some(strand) = proj.strands.get(obj_ref) {
+                    Some(return_snapshot_strand(strand))
                 } else {
                     proj.morphs.get(obj_ref).map(return_snapshot_morph)
                 }
@@ -1410,9 +1410,9 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         }))
     }
 
-    fn return_snapshot_flow(f: &crate::reducer::FlowProjection) -> Snapshot {
-        Snapshot::Flow(FlowProjectionRecord {
-            flow_id: f.flow_id.clone(),
+    fn return_snapshot_strand(f: &crate::reducer::StrandProjection) -> Snapshot {
+        Snapshot::Strand(StrandProjectionRecord {
+            strand_id: f.strand_id.clone(),
             realm_id: f.realm_id.clone(),
             title: f.title.clone(),
             summary: f.summary.clone(),
@@ -1466,7 +1466,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 .put(&r)
                 .await
         }
-        Snapshot::Flow(r) => state.persistence.flow_projections().put(&r).await,
+        Snapshot::Strand(r) => state.persistence.strand_projections().put(&r).await,
         Snapshot::Morph(r) => state.persistence.morph_projections().put(&r).await,
     };
     if let Err(error) = result {
@@ -1566,12 +1566,12 @@ async fn project_accepted_operations_inner(
             // (no longer written directly by the legacy HTTP handlers).
             refresh_authz_index_from_capability_effect(state, &effect);
         }
-        // Write through Space-container/Flow/Morph projection changes to durable
+        // Write through Space-container/Strand/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
         // (under lock), then upserts to persistence after releasing the
         // lock so any backend latency doesn't block other reducer paths.
         // Mirrors the canonical wire kinds the reducer dispatches into
-        // `ProjectionState::{space_containers,flows,morphs}`.
+        // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
         // CKP-0016 — mirror agent_participation ceiling changes into the
         // agent_participation_ceiling projection table (read by
@@ -2220,7 +2220,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 
     // Project an `invite` membership transition into a RealmInviteRecord so
     // `GET /_cokret/self/authz/invites` can surface seed invites carried on the
-    // canonical event path (e.g. when the Realm bootstrap flow emits
+    // canonical event path (e.g. when the Realm bootstrap strand emits
     // `ck.member.state{membership=invite}` for each seed member, per
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
     tracing::debug!(
@@ -2804,20 +2804,20 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     if matches!(store.get(&event_id).await, Ok(Some(_))) {
         return;
     }
-    // CKP-0007: derive the message's circle scope from its Flow, never from
-    // the message payload (spec: scope_circle_id is a Flow field).
-    let flow_scope = operation
+    // CKP-0007: derive the message's circle scope from its Strand, never from
+    // the message payload (spec: scope_circle_id is a Strand field).
+    let strand_scope = operation
         .payload
-        .get("flow_id")
+        .get("strand_id")
         .and_then(Value::as_str)
-        .and_then(|flow_id| {
+        .and_then(|strand_id| {
             state
                 .projection
                 .lock()
                 .ok()
-                .and_then(|proj| proj.flow_scope_circle_id(flow_id))
+                .and_then(|proj| proj.strand_scope_circle_id(strand_id))
         });
-    let content = message_content_from_payload(&operation.payload, flow_scope);
+    let content = message_content_from_payload(&operation.payload, strand_scope);
     if matches!(
         content.get("kind").and_then(Value::as_str),
         Some("ck.content.poll.response" | "ck.content.poll.close")
@@ -2857,10 +2857,10 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     }
 }
 
-/// Build the stored message content. `scope_circle_id` is the Flow-derived
-/// circle scope (resolved from the message's Flow by the caller — messages
+/// Build the stored message content. `scope_circle_id` is the Strand-derived
+/// circle scope (resolved from the message's Strand by the caller — messages
 /// never carry their own scope per spec). Any client-supplied
-/// `scope_circle_id` on the message is dropped and replaced by the Flow scope.
+/// `scope_circle_id` on the message is dropped and replaced by the Strand scope.
 fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>) -> Value {
     let mut content = payload
         .get("content")

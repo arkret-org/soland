@@ -85,9 +85,9 @@ pub(crate) async fn build_sync_snapshot(
     let mut account_positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
     for (realm_id, title, summary, tags, category, members) in visible_realms {
-        let flow = flow_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
-        let flow_state_after = flow.clone();
-        let flow_list_item = flow.clone();
+        let strand = strand_projection_for_realm(state, &realm_id, &title, summary.as_deref()).await;
+        let strand_state_after = strand.clone();
+        let strand_list_item = strand.clone();
         let summary_members = members.clone();
         let meta = state
             .persistence
@@ -134,12 +134,12 @@ pub(crate) async fn build_sync_snapshot(
         };
         // Incremental sync skips realms whose visible account-aggregate
         // projection is unchanged. This drops the always-full
-        // `summary`/`flows`/`state_after`/`members` baseline from idle polls
+        // `summary`/`strands`/`state_after`/`members` baseline from idle polls
         // while still minting a cursor that advances internal frontiers.
         //
         // Timeline and account projection positions are separate cursor
         // vectors. Visible timeline events drive `positions.realms`; Realm /
-        // Flow metadata drives `positions.account_realms`. Keeping them
+        // Strand metadata drives `positions.account_realms`. Keeping them
         // separate prevents a metadata-only position from masking a later
         // visible timeline event, and lets hidden timeline advancement move
         // the cursor without emitting an empty Realm projection.
@@ -164,7 +164,7 @@ pub(crate) async fn build_sync_snapshot(
             realm_id.clone(),
             json!({
                 "summary": {
-                    "flow": flow,
+                    "strand": strand,
                     "title": title,
                     "summary": summary,
                     "tags": tags,
@@ -184,10 +184,10 @@ pub(crate) async fn build_sync_snapshot(
                 // spec requires the flag to be present so clients can tell
                 // a small roster from a truncated one.
                 "members_limited": false,
-                "flows": [flow_list_item],
+                "strands": [strand_list_item],
                 "timeline": {"events": timeline_events, "limited": false},
                 "state": [],
-                "state_after": {"events": [flow_state_after]},
+                "state_after": {"events": [strand_state_after]},
                 "bottom_cells": bottom_cells,
                 "seal_view": seal_view,
                 "ephemeral": ephemeral,
@@ -319,7 +319,7 @@ pub(crate) async fn build_sync_snapshot(
 ///
 /// MIU-SOL-4: the effective set is multi-valued (no last-writer-wins); ALL
 /// effective `identity_event_ids[]` are listed.
-fn roster_members_for_realm(
+pub(super) fn roster_members_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
     session: Option<&SessionRecord>,
@@ -657,7 +657,7 @@ pub(crate) async fn timeline_event_position(
     timestamp_position_with_tie_breaker(timestamp, event_id)
 }
 
-fn timestamp_position_with_tie_breaker(timestamp: DateTime<Utc>, event_id: &str) -> i64 {
+pub(super) fn timestamp_position_with_tie_breaker(timestamp: DateTime<Utc>, event_id: &str) -> i64 {
     timestamp
         .timestamp_micros()
         .saturating_mul(TIMELINE_POSITION_SUBTICKS)
@@ -983,21 +983,21 @@ fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json
 }
 
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
-    // flow_id is always derived from realm_id (one flow per Realm for
+    // strand_id is always derived from realm_id (one strand per Realm for
     // the message timeline) — thread_id is the discussion *track* within
-    // that flow, NOT the flow itself. The legacy top-level `branch` object
+    // that strand, NOT the strand itself. The legacy top-level `branch` object
     // was removed in revision 0a5ab85 (see cokret-spec
     // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
     // `track_name` is the concrete v1 wire field.
-    let flow_id = flow_id_from_realm_id(&message.realm_id);
+    let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
         "kind": "ck.message.create",
         "event_id": message.event_id,
         "message_id": super::super::message_id_from_event_id(&message.event_id),
-        "flow_id": flow_id,
+        "strand_id": strand_id,
         "realm_id": message.realm_id,
-        "track_name": default_discussion_track(&flow_id, &track_id),
+        "track_name": default_discussion_track(&strand_id, &track_id),
         "thread_id": message.thread_id,
         "sender": message.sender,
         "content": message.content,

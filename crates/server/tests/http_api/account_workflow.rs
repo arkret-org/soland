@@ -425,7 +425,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({"body": "hello workflow"}),
         false,
     )
@@ -448,7 +448,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({"kind": "ck.content.composite", "body": "invalid", "parts": [{"kind": "ck.content.image", "body": "image"}]}),
         false,
     )
@@ -460,7 +460,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({"kind": "ck.content.location", "body": "location", "latitude": 31.2304, "longitude": 121.4737}),
         false,
     )
@@ -472,7 +472,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({"body": "bad mention", "mentions": [{"type": "actor", "did": "alice"}]}),
         false,
     )
@@ -484,13 +484,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({
             "kind": "ck.content.composite",
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
-                {"type": "flow", "flow_id": "ck:flow:01904100-0000-7000-8000-170d4f3bfc7b"}
+                {"type": "strand", "strand_id": "ck:strand:01904100-0000-7000-8000-170d4f3bfc7b"}
             ],
             "parts": [
                 {"kind": "ck.content.text", "body": "structured hello"},
@@ -508,7 +508,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "block message response: {block_message}"
     );
 
-    let workflow_thread_id = expected_flow_id_for_scope(&realm_id);
+    let workflow_thread_id = expected_strand_id_for_scope(&realm_id);
     let thread: Value = TestClient::get(format!(
         "http://server/_soland/self/index/thread?thread_id={workflow_thread_id}"
     ))
@@ -592,8 +592,8 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         sent_message["event_id"]
     );
     assert_eq!(
-        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["flow_id"],
-        expected_flow_id_for_scope(&realm_id)
+        sync_with_message["realms"][&realm_id]["timeline"]["events"][0]["strand_id"],
+        expected_strand_id_for_scope(&realm_id)
     );
     // Message v1 exposes the timeline track as the const string `discussion`.
     assert_eq!(
@@ -601,8 +601,8 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         "discussion"
     );
     assert_eq!(
-        sync_with_message["realms"][&realm_id]["summary"]["flow"]["schema"],
-        "ck.schema.flow.v1"
+        sync_with_message["realms"][&realm_id]["summary"]["strand"]["schema"],
+        "ck.schema.strand.v1"
     );
 
     // After the realms-incremental optimisation a fully-quiet realm
@@ -630,7 +630,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         &alice,
         "did:web:alice.example",
         &realm_id,
-        "ck:flow:workflow",
+        "ck:strand:workflow",
         serde_json::json!({"body": "second workflow"}),
         false,
     )

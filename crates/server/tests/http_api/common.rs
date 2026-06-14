@@ -440,15 +440,15 @@ pub(crate) fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
-pub(crate) fn expected_flow_id_for_scope(scope_id: &str) -> String {
+pub(crate) fn expected_strand_id_for_scope(scope_id: &str) -> String {
     scope_id
         .strip_prefix("ck:realm:")
-        .map(|suffix| format!("ck:flow:{suffix}"))
+        .map(|suffix| format!("ck:strand:{suffix}"))
         .unwrap_or_else(|| {
             let digest = Sha256::digest(scope_id.as_bytes());
-            format!("ck:flow:{}", hex::encode(digest))
+            format!("ck:strand:{}", hex::encode(digest))
                 .chars()
-                .take("ck:flow:".len() + 26)
+                .take("ck:strand:".len() + 26)
                 .collect()
         })
 }
@@ -470,7 +470,7 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
-        "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
+        "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
         "track_name": "discussion",
         "content": {
             "kind": "ck.content.text",
@@ -514,7 +514,7 @@ pub(crate) fn signed_message_event_envelope(
     let event_id = new_prefixed_uuid7("ck:event:");
     let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut payload = serde_json::json!({
-        "flow_id": expected_flow_id_for_scope(realm_id),
+        "strand_id": expected_strand_id_for_scope(realm_id),
         "track_name": "discussion",
     });
     if encrypted {
@@ -924,7 +924,7 @@ pub(crate) fn test_sha256_multihash_multibase(bytes: &[u8]) -> String {
 // `standard_entity_types_and_reverse_domain_custom_types_work` and
 // `view_endpoints_project_common_presentation_shapes` were deleted in
 // round 6: the `entity` / `view` abstraction they exercised never landed in
-// `cokret-spec/v1`. Typed objects in the protocol are `ck:flow:` / `ck:space:`
+// `cokret-spec/v1`. Typed objects in the protocol are `ck:strand:` / `ck:space:`
 // / `ck:morph:` / `ck:relation:` / `ck:view:`, each with its own dedicated
 // event kind; presentation concerns belong on `ck.view.*` events going
 // through the reducer, not on a free-form `/_cokret/self/entities` /
@@ -996,21 +996,21 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 // `check_space_container_lifecycle_transition` →
 // `StatusCode::PRECONDITION_FAILED`).
 
-/// Build a signed `ck.flow.*` event envelope for the Flow state-machine
-/// integration test. Mirror of `signed_space_event` with a Flow-specific
+/// Build a signed `ck.strand.*` event envelope for the Strand state-machine
+/// integration test. Mirror of `signed_space_event` with a Strand-specific
 /// schema_id.
-pub(crate) fn signed_flow_event(
+pub(crate) fn signed_strand_event(
     event_id: &str,
     actor_seq: u64,
     kind: &str,
     mut payload: Value,
     prev_refs: Vec<&str>,
 ) -> Value {
-    normalize_flow_payload(kind, &mut payload);
+    normalize_strand_payload(kind, &mut payload);
     let mut event = serde_json::json!({
         "event_id": event_id,
         "kind": kind,
-        "schema_id": "ck.schema.flow.v1",
+        "schema_id": "ck.schema.strand.v1",
         "actor_id": "did:web:alice.example",
         "actor_seq": actor_seq,
         "realm_id": "ck:realm:0196419b-0000-7000-8000-000000000000",
@@ -1034,22 +1034,22 @@ pub(crate) fn signed_flow_event(
     event
 }
 
-pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
+pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     let Some(object) = payload.as_object_mut() else {
         return;
     };
-    if kind == "ck.flow.create" {
-        if let Some(flow) = object.get_mut("object").and_then(Value::as_object_mut) {
-            flow.entry("schema".to_owned())
-                .or_insert_with(|| Value::String("ck.schema.flow.v1".to_owned()));
-            flow.entry("realm_id".to_owned()).or_insert_with(|| {
+    if kind == "ck.strand.create" {
+        if let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut) {
+            strand.entry("schema".to_owned())
+                .or_insert_with(|| Value::String("ck.schema.strand.v1".to_owned()));
+            strand.entry("realm_id".to_owned()).or_insert_with(|| {
                 Value::String("ck:realm:0196419b-0000-7000-8000-000000000000".to_owned())
             });
-            flow.entry("created_at".to_owned())
+            strand.entry("created_at".to_owned())
                 .or_insert_with(|| Value::String("2026-05-17T00:00:00Z".to_owned()));
-            flow.entry("stage".to_owned())
+            strand.entry("stage".to_owned())
                 .or_insert_with(|| Value::String("draft".to_owned()));
-            flow.entry("tracks".to_owned()).or_insert_with(|| {
+            strand.entry("tracks".to_owned()).or_insert_with(|| {
                 serde_json::json!({
                     "discussion": {
                         "is_primary": true,
@@ -1061,11 +1061,11 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
     }
     if matches!(
         kind,
-        "ck.flow.archive" | "ck.flow.restore" | "ck.flow.tombstone"
+        "ck.strand.archive" | "ck.strand.restore" | "ck.strand.tombstone"
     ) {
         if !object.contains_key("target_ref") {
-            if let Some(flow_id) = object.get("flow_id").and_then(Value::as_str) {
-                object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+            if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {
+                object.insert("target_ref".to_owned(), Value::String(strand_id.to_owned()));
             } else if let Some(object_ref) = object.get("object_ref").and_then(Value::as_str) {
                 object.insert(
                     "target_ref".to_owned(),
@@ -1073,16 +1073,16 @@ pub(crate) fn normalize_flow_payload(kind: &str, payload: &mut Value) {
                 );
             }
         }
-        object.remove("flow_id");
+        object.remove("strand_id");
         object.remove("object_ref");
     }
-    if kind == "ck.flow.update" {
+    if kind == "ck.strand.update" {
         if !object.contains_key("target_ref")
-            && let Some(flow_id) = object.get("flow_id").and_then(Value::as_str)
+            && let Some(strand_id) = object.get("strand_id").and_then(Value::as_str)
         {
-            object.insert("target_ref".to_owned(), Value::String(flow_id.to_owned()));
+            object.insert("target_ref".to_owned(), Value::String(strand_id.to_owned()));
         }
-        object.remove("flow_id");
+        object.remove("strand_id");
     }
 }
 
@@ -1252,12 +1252,12 @@ pub(crate) fn signed_relation_event(
     event
 }
 
-// Round 13 — end-to-end check that Flow / Morph lifecycle state-machine
+// Round 13 — end-to-end check that Strand / Morph lifecycle state-machine
 // guards map to HTTP 412 + canonical reason_code per spec §5.1. Combined
-// Flow+Morph in one test to keep the suite small.
+// Strand+Morph in one test to keep the suite small.
 
 /// Build a signed `ck.redaction` event envelope, used by round 14b to
-/// test object-level redaction (Flow / Morph). Mirror of
+/// test object-level redaction (Strand / Morph). Mirror of
 /// `signed_event_envelope` for the redaction kind. The spec schema
 /// registry doesn't carry a dedicated `ck.schema.redaction.v1` —
 /// `ck.redaction` is `category=message` per event-kind-registry, so
@@ -1330,7 +1330,7 @@ pub(crate) async fn persist_test_message(
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
         sender: sender.to_owned(),
-        thread_id: format!("ck:flow:test-{}", event_id),
+        thread_id: format!("ck:strand:test-{}", event_id),
         content: serde_json::json!({"body": body}),
         encrypted: false,
         created_at: chrono::Utc::now(),

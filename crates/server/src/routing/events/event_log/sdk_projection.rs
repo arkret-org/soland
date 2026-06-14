@@ -161,9 +161,9 @@ pub(crate) fn projection_operation_from_event(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     {
-        if target_ref.starts_with("ck:flow:") {
+        if target_ref.starts_with("ck:strand:") {
             payload_object
-                .entry("flow_id".to_owned())
+                .entry("strand_id".to_owned())
                 .or_insert_with(|| Value::String(target_ref.clone()));
         }
         if target_ref.starts_with("ck:morph:") {
@@ -173,12 +173,12 @@ pub(crate) fn projection_operation_from_event(
         }
     }
     if !payload_object.contains_key("thread_id")
-        && let Some(flow_id) = payload_object
-            .get("flow_id")
+        && let Some(strand_id) = payload_object
+            .get("strand_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     {
-        payload_object.insert("thread_id".to_owned(), Value::String(flow_id));
+        payload_object.insert("thread_id".to_owned(), Value::String(strand_id));
     }
     if matches!(
         parsed.kind.as_str(),
@@ -300,19 +300,19 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
 fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     let object = envelope.as_object()?;
     // Server-stamped authoritative scope. For messages this is set at ingest
-    // from the message's Flow (see submit_event_value); it always wins.
+    // from the message's Strand (see submit_event_value); it always wins.
     if let Some(scope) = object.get("effective_scope").and_then(Value::as_str) {
         return Some(scope.to_owned());
     }
-    // Messages NEVER carry their own scope (spec: `scope_circle_id` is a Flow
+    // Messages NEVER carry their own scope (spec: `scope_circle_id` is a Strand
     // field, not a message field). A message's effective circle-scope is the
-    // server-stamped `effective_scope` above, derived from its Flow at ingest.
+    // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
     if object.get("kind").and_then(Value::as_str) == Some(kinds::CK_MESSAGE_CREATE) {
         return None;
     }
-    // Non-message events (e.g. ck.flow.create / ck.flow.update) legitimately
+    // Non-message events (e.g. ck.strand.create / ck.strand.update) legitimately
     // carry the object's own `scope_circle_id`.
     let payload = object.get("payload").and_then(Value::as_object)?;
     if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
@@ -626,7 +626,7 @@ fn sdk_audience(value: &Value) -> Option<Audience> {
 /// SPEC-SOL-003 — pre-acceptance validation for the durable
 /// `ck.device.revoke` Control Move. v1 scaffold scope: only the principal
 /// may revoke its own sibling devices (recovery-service revocation lands
-/// with the recovery flows), and a device MUST NOT revoke itself
+/// with the recovery strands), and a device MUST NOT revoke itself
 /// (`device-lifecycle.md` §2.2 self-lockout rule). The principal-control
 /// realm binding itself is enforced by
 /// `validate_principal_control_realm_binding`; payload field presence by

@@ -381,7 +381,7 @@ impl ProjectionState {
             }
         }
 
-        let flow_relation_ids = self
+        let strand_relation_ids = self
             .relations
             .iter()
             .filter(|(_, relation)| relation.is_active())
@@ -401,13 +401,13 @@ impl ProjectionState {
                 relation
                     .to_ref
                     .as_deref()
-                    .filter(|flow_id| flow_id.starts_with("ck:flow:"))
-                    .map(|flow_id| (relation_id.clone(), flow_id.to_owned()))
+                    .filter(|strand_id| strand_id.starts_with("ck:strand:"))
+                    .map(|strand_id| (relation_id.clone(), strand_id.to_owned()))
             })
             .collect::<Vec<_>>();
 
-        for (relation_id, flow_id) in flow_relation_ids {
-            let Some(flow) = self.flows.get_mut(&flow_id) else {
+        for (relation_id, strand_id) in strand_relation_ids {
+            let Some(strand) = self.strands.get_mut(&strand_id) else {
                 continue;
             };
             let Some(relation) = self.relations.get_mut(&relation_id) else {
@@ -415,12 +415,12 @@ impl ProjectionState {
             };
             match target_state {
                 SpaceContainerLifecycleState::Archived
-                    if flow.state == ObjectLifecycleState::Active =>
+                    if strand.state == ObjectLifecycleState::Active =>
                 {
-                    flow.state = ObjectLifecycleState::Archived;
-                    flow.state_changed_at = Some(now);
-                    flow.updated_by = updated_by.map(ToOwned::to_owned);
-                    flow.updated_at = Some(now);
+                    strand.state = ObjectLifecycleState::Archived;
+                    strand.state_changed_at = Some(now);
+                    strand.updated_by = updated_by.map(ToOwned::to_owned);
+                    strand.updated_at = Some(now);
                     relation.fields.insert(
                         "cascade_archived_by".to_owned(),
                         Value::String(container_space_id.to_owned()),
@@ -428,17 +428,17 @@ impl ProjectionState {
                     relation.updated_at = now;
                 }
                 SpaceContainerLifecycleState::Active
-                    if flow.state == ObjectLifecycleState::Archived
+                    if strand.state == ObjectLifecycleState::Archived
                         && relation
                             .fields
                             .get("cascade_archived_by")
                             .and_then(Value::as_str)
                             == Some(container_space_id) =>
                 {
-                    flow.state = ObjectLifecycleState::Active;
-                    flow.state_changed_at = Some(now);
-                    flow.updated_by = updated_by.map(ToOwned::to_owned);
-                    flow.updated_at = Some(now);
+                    strand.state = ObjectLifecycleState::Active;
+                    strand.state_changed_at = Some(now);
+                    strand.updated_by = updated_by.map(ToOwned::to_owned);
+                    strand.updated_at = Some(now);
                     relation.fields.remove("cascade_archived_by");
                     relation.updated_at = now;
                 }

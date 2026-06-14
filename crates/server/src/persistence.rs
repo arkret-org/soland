@@ -211,7 +211,7 @@ pub trait PersistenceStore: Send + Sync {
     fn key_backups(&self) -> &dyn KeyBackupStore;
     fn multisig_pending(&self) -> &dyn MultisigPendingStore;
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
-    fn flow_projections(&self) -> &dyn FlowProjectionStore;
+    fn strand_projections(&self) -> &dyn StrandProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     // G3.S1: MLS lifecycle stores.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
@@ -265,7 +265,7 @@ pub struct SolandMemoryPersistenceStore {
     key_backups: MemoryKeyBackupStore,
     multisig_pending: MemoryMultisigPendingStore,
     space_container_projections: MemorySpaceContainerProjectionStore,
-    flow_projections: MemoryFlowProjectionStore,
+    strand_projections: MemoryStrandProjectionStore,
     morph_projections: MemoryMorphProjectionStore,
     // G3.S1: MLS lifecycle stores.
     mls_key_packages: MemoryMlsKeyPackageStore,
@@ -317,7 +317,7 @@ impl SolandMemoryPersistenceStore {
             key_backups: MemoryKeyBackupStore::new(),
             multisig_pending: MemoryMultisigPendingStore::new(),
             space_container_projections: MemorySpaceContainerProjectionStore::new(),
-            flow_projections: MemoryFlowProjectionStore::new(),
+            strand_projections: MemoryStrandProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
             // G3.S1: MLS lifecycle stores.
             mls_key_packages: MemoryMlsKeyPackageStore::new(),
@@ -486,8 +486,8 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.space_container_projections
     }
 
-    fn flow_projections(&self) -> &dyn FlowProjectionStore {
-        &self.flow_projections
+    fn strand_projections(&self) -> &dyn StrandProjectionStore {
+        &self.strand_projections
     }
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
@@ -557,7 +557,7 @@ pub struct PgPersistenceStore {
     recovery_receipts: PgRecoveryReceiptStore,
     recovery_sessions: PgRecoverySessionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
-    flow_projections: PgFlowProjectionStore,
+    strand_projections: PgStrandProjectionStore,
     morph_projections: PgMorphProjectionStore,
     projection_events: PgProjectionEventStore,
     applets: PgAppletStore,
@@ -603,7 +603,7 @@ impl PgPersistenceStore {
             recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
             recovery_sessions: PgRecoverySessionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
-            flow_projections: PgFlowProjectionStore { pool: pool.clone() },
+            strand_projections: PgStrandProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             projection_events: PgProjectionEventStore { pool: pool.clone() },
             applets: PgAppletStore { pool: pool.clone() },
@@ -769,8 +769,8 @@ impl PersistenceStore for PgPersistenceStore {
         &self.space_container_projections
     }
 
-    fn flow_projections(&self) -> &dyn FlowProjectionStore {
-        &self.flow_projections
+    fn strand_projections(&self) -> &dyn StrandProjectionStore {
+        &self.strand_projections
     }
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
@@ -822,9 +822,9 @@ pub(crate) async fn pg_conn(pool: &PgPool) -> PersistenceResult<Object<AsyncPgCo
         .map_err(|error| PersistenceError::Internal(format!("database pool error: {error}")))
 }
 
-// ── Pg-backed Space-container/Flow/Morph projection stores ───────────────
-// Mirror the in-memory `ProjectionState::{space_containers,flows,morphs}` onto
-// the `projection_space_containers` / `projection_flows` / `projection_morphs`
+// ── Pg-backed Space-container/Strand/Morph projection stores ───────────────
+// Mirror the in-memory `ProjectionState::{space_containers,strands,morphs}` onto
+// the `projection_space_containers` / `projection_strands` / `projection_morphs`
 // tables. Same upsert shape as PgPolicyDocumentStore.
 
 #[cfg(test)]
@@ -1420,7 +1420,7 @@ mod tests {
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(realm_id.to_owned()).unwrap(),
             "ck.message.create",
-            serde_json::json!({"sender": "did:web:alice", "thread_id": "ck:flow:1"}),
+            serde_json::json!({"sender": "did:web:alice", "thread_id": "ck:strand:1"}),
         );
         op.created_at = Utc::now();
         op
@@ -2105,7 +2105,7 @@ mod tests {
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: "ck:realm:01904100-0000-7000-8000-000000000601".to_owned(),
-            main_flow_id: "ck:flow:01904100-0000-7000-8000-000000000601".to_owned(),
+            main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
             binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
             state: "active".to_owned(),
             created_at: now,

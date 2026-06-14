@@ -806,7 +806,7 @@ pub(crate) fn active_direct_binding(
 /// Spec contact-and-direct-conversation.md §6 step5 / §7 / §8 — resolve(create=true)
 /// stands up a *real event-log* DM Realm: it submits `ck.realm.create`
 /// (DM well-known shape), both participants' `ck.member.state{join}`, and
-/// the main `ck.flow.create`, then writes the direct conversation binding
+/// the main `ck.strand.create`, then writes the direct conversation binding
 /// fact. The realm becomes a true event Realm both sides can submit
 /// `ck.message.create` into (accepted, peer-readable) — not just a
 /// directory entry. Reuses soland's existing local operation acceptance +
@@ -820,9 +820,9 @@ pub(crate) async fn create_direct_binding_with_realm(
 ) -> Result<(DirectConversationBindingRecord, bool), AppError> {
     // Reserve the canonical binding under lock so concurrent resolves for the
     // same pair collapse onto a single realm. The reservation holds the
-    // generated realm/flow ids; we release the lock before the (async) event
+    // generated realm/strand ids; we release the lock before the (async) event
     // submission so projection writes don't deadlock against the guard.
-    let (realm_id, main_flow_id, binding_event_ref, reserved) = {
+    let (realm_id, main_strand_id, binding_event_ref, reserved) = {
         let mut guard = state
             .direct_conversation_bindings
             .lock()
@@ -834,29 +834,29 @@ pub(crate) async fn create_direct_binding_with_realm(
             return Ok((existing.clone(), false));
         }
         let realm_id = crate::ids::generate_realm_id();
-        let main_flow_id = crate::ids::generate("flow");
+        let main_strand_id = crate::ids::generate("strand");
         let binding_event_ref = crate::ids::generate_event_id();
         let binding = DirectConversationBindingRecord {
             participants_unordered: sorted_participants(actor, peer),
             realm_id: realm_id.clone(),
-            main_flow_id: main_flow_id.clone(),
+            main_strand_id: main_strand_id.clone(),
             binding_event_ref: binding_event_ref.clone(),
             state: "active".to_owned(),
             created_at: now(),
             updated_at: now(),
         };
         guard.insert(pair_key.to_owned(), binding.clone());
-        (realm_id, main_flow_id, binding_event_ref, binding)
+        (realm_id, main_strand_id, binding_event_ref, binding)
     };
 
     // Submit the genesis events that turn the reserved ids into a real
     // event-log Realm. The realm creator (`actor`) bootstraps the Realm +
     // its own membership in one event; the peer is added with an explicit
-    // join; the main Flow is created last. If any step is rejected we must
+    // join; the main Strand is created last. If any step is rejected we must
     // not leave a dangling "active" binding pointing at an orphan realm, so
     // we roll back the reservation and surface the failure.
     if let Err(error) =
-        submit_direct_realm_genesis(state, &realm_id, &main_flow_id, actor, peer).await
+        submit_direct_realm_genesis(state, &realm_id, &main_strand_id, actor, peer).await
     {
         let removed = {
             let mut guard = state
@@ -888,7 +888,7 @@ pub(crate) async fn create_direct_binding_with_realm(
     }
 
     // Genesis succeeded — write the binding through to durable storage so the
-    // canonical pair → (realm_id, main_flow_id) projection survives restart.
+    // canonical pair → (realm_id, main_strand_id) projection survives restart.
     if let Err(error) = state
         .persistence
         .direct_conversation_bindings()
@@ -898,9 +898,9 @@ pub(crate) async fn create_direct_binding_with_realm(
         tracing::warn!(%error, pair_key, "failed to persist direct binding to durable storage");
     }
 
-    // Binding fact (spec §6) — the canonical pair → (realm_id, main_flow_id)
+    // Binding fact (spec §6) — the canonical pair → (realm_id, main_strand_id)
     // signed fact / projection. Recorded after the realm + membership + main
-    // Flow are all live so it only ever references a verifiable realm.
+    // Strand are all live so it only ever references a verifiable realm.
     append_audit_log(
         state,
         Some(actor),
@@ -908,7 +908,7 @@ pub(crate) async fn create_direct_binding_with_realm(
         json!({
             "participants_unordered": reserved.participants_unordered,
             "realm_id": realm_id,
-            "main_flow_id": main_flow_id,
+            "main_strand_id": main_strand_id,
             "binding_event_ref": binding_event_ref,
             "created_at": reserved.created_at.to_rfc3339(),
         }),
@@ -927,11 +927,11 @@ fn sorted_participants(actor: &str, peer: &str) -> Vec<String> {
 
 /// Build + accept the DM Realm genesis operations through the canonical
 /// local-operation path. Order matters: realm.create (creator becomes the
-/// first member), peer member.state{join}, then the main flow.create.
+/// first member), peer member.state{join}, then the main strand.create.
 async fn submit_direct_realm_genesis(
     state: &AppState,
     realm_id: &str,
-    main_flow_id: &str,
+    main_strand_id: &str,
     actor: &str,
     peer: &str,
 ) -> Result<(), &'static str> {
@@ -950,10 +950,10 @@ async fn submit_direct_realm_genesis(
     let member_op = direct_member_join_operation(realm_scope.clone(), peer)?;
     crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&member_op)).await?;
 
-    // ck.flow.create — main discussion Flow (spec §8): discussion track is
+    // ck.strand.create — main discussion Strand (spec §8): discussion track is
     // primary; no Circle scope.
-    let flow_op = direct_flow_create_operation(realm_scope, main_flow_id)?;
-    crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&flow_op)).await?;
+    let strand_op = direct_strand_create_operation(realm_scope, main_strand_id)?;
+    crate::routing::accept_local_operations(state, actor, std::slice::from_ref(&strand_op)).await?;
 
     Ok(())
 }
@@ -1038,13 +1038,13 @@ fn direct_member_join_operation(
     ))
 }
 
-fn direct_flow_create_operation(
+fn direct_strand_create_operation(
     realm_scope: cokret_sdk::RealmId,
-    main_flow_id: &str,
+    main_strand_id: &str,
 ) -> Result<cokret_sdk::Operation, &'static str> {
     let payload = json!({
         "object": {
-            "id": main_flow_id,
+            "id": main_strand_id,
             "kind": "discussion",
             "title": "Direct conversation",
         }
@@ -1052,7 +1052,7 @@ fn direct_flow_create_operation(
     Ok(cokret_sdk::Operation::create(
         direct_operation_id()?,
         realm_scope,
-        crate::kinds::CK_FLOW_CREATE,
+        crate::kinds::CK_STRAND_CREATE,
         payload,
     ))
 }
@@ -1060,8 +1060,8 @@ fn direct_flow_create_operation(
 fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversationSummary {
     DirectConversationSummary {
         realm_id: RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
-        main_flow_id: FlowId::new(binding.main_flow_id)
-            .expect("direct conversation flow id is valid"),
+        main_strand_id: StrandId::new(binding.main_strand_id)
+            .expect("direct conversation strand id is valid"),
         binding_event_ref: Some(
             EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
         ),
@@ -1089,8 +1089,8 @@ pub(crate) fn direct_resolve_response(
         realm_id: Some(
             RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
         ),
-        main_flow_id: Some(
-            FlowId::new(binding.main_flow_id).expect("direct conversation flow id is valid"),
+        main_strand_id: Some(
+            StrandId::new(binding.main_strand_id).expect("direct conversation strand id is valid"),
         ),
         binding_event_ref: Some(
             EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),

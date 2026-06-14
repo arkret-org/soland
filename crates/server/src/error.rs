@@ -51,9 +51,9 @@ pub mod reasons {
     // nonce / accountability_grant / delegation / recovery / sender
     // commitment / range completeness / deprecation reason codes. Surfaced
     // by re-export so soland call sites can use the `reasons::` namespace.
-    pub const FLOW_NOT_ACTIVE: &str = core_error::REASON_FLOW_NOT_ACTIVE;
-    pub const FLOW_NOT_ARCHIVED: &str = core_error::REASON_FLOW_NOT_ARCHIVED;
-    pub const FLOW_ALREADY_TERMINAL: &str = core_error::REASON_FLOW_ALREADY_TERMINAL;
+    pub const STRAND_NOT_ACTIVE: &str = core_error::REASON_STRAND_NOT_ACTIVE;
+    pub const STRAND_NOT_ARCHIVED: &str = core_error::REASON_STRAND_NOT_ARCHIVED;
+    pub const STRAND_ALREADY_TERMINAL: &str = core_error::REASON_STRAND_ALREADY_TERMINAL;
     pub const SPACE_NOT_ACTIVE: &str = core_error::REASON_SPACE_NOT_ACTIVE;
     pub const SPACE_NOT_ARCHIVED: &str = core_error::REASON_SPACE_NOT_ARCHIVED;
     pub const SPACE_ALREADY_TERMINAL: &str = core_error::REASON_SPACE_ALREADY_TERMINAL;
@@ -157,7 +157,7 @@ pub mod reasons {
     pub const METADATA_ENCRYPTION_FLOOR_VIOLATION: &str =
         core_error::REASON_METADATA_ENCRYPTION_FLOOR_VIOLATION;
 
-    // ── Reaction model (spec flow-and-message.md §9.8, commit 4d9438f) —
+    // ── Reaction model (spec strand-and-message.md §9.8, commit 4d9438f) —
     // v1 Reaction target-scope sub-reasons. `reaction_target_unsupported`
     // sits under `schema_violation`; `reaction_scope_mismatch` under
     // `failed_precondition`.

@@ -831,7 +831,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 path: "/_cokret/edge/push/register-device".to_owned(),
                 contract: "cokret.rest.principal_push_register.v1".to_owned(),
                 stability: "limited".to_owned(),
-                todo: "unify bearer and session-grant registration paths behind one capability-checked flow.".to_owned(),
+                todo: "unify bearer and session-grant registration paths behind one capability-checked strand.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "device_messages_describe".to_owned(),
@@ -931,7 +931,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             },
         ],
         examples: json!({
-            "compose_flow": {
+            "compose_strand": {
                 "step_1": {"service": "coauth", "path": "/oauth/token", "method": "POST"},
                 "step_2": {"service": "soland", "path": "protected route", "method": "Authorization: Bearer <coauth access token>"},
                 "step_3": {"service": "soland", "path": "/_soland/edge/push/outbound/bridge/fetch", "method": "POST"},

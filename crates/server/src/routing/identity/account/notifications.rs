@@ -375,28 +375,28 @@ fn audience_targets_actor(
 ) -> bool {
     match audience {
         "effective_scope_members" => true,
-        "flow_participants" => flow_participants_include_actor(state, &message.thread_id, actor),
-        "flow_watchers" => flow_watchers_include_actor(state, &message.thread_id, actor),
-        "flow_engaged" => {
-            flow_participants_include_actor(state, &message.thread_id, actor)
-                || flow_watchers_include_actor(state, &message.thread_id, actor)
+        "strand_participants" => strand_participants_include_actor(state, &message.thread_id, actor),
+        "strand_watchers" => strand_watchers_include_actor(state, &message.thread_id, actor),
+        "strand_engaged" => {
+            strand_participants_include_actor(state, &message.thread_id, actor)
+                || strand_watchers_include_actor(state, &message.thread_id, actor)
         }
-        "assigned_actors" => flow_assignees_include_actor(state, &message.thread_id, actor),
+        "assigned_actors" => strand_assignees_include_actor(state, &message.thread_id, actor),
         _ => false,
     }
 }
 
-fn flow_participants_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
+fn strand_participants_include_actor(state: &AppState, strand_id: &str, actor: &str) -> bool {
     state.projection.lock().ok().is_some_and(|projection| {
         projection
-            .messages_for_thread(flow_id)
+            .messages_for_thread(strand_id)
             .into_iter()
             .any(|message| message.sender == actor)
     })
 }
 
-fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
-    let cell_id = format!("ck:cell:ck.component.flow.watch.v1:{flow_id}:{actor}");
+fn strand_watchers_include_actor(state: &AppState, strand_id: &str, actor: &str) -> bool {
+    let cell_id = format!("ck:cell:ck.component.strand.watch.v1:{strand_id}:{actor}");
     state
         .projection
         .lock()
@@ -417,11 +417,11 @@ fn flow_watchers_include_actor(state: &AppState, flow_id: &str, actor: &str) -> 
         })
 }
 
-fn flow_assignees_include_actor(state: &AppState, flow_id: &str, actor: &str) -> bool {
+fn strand_assignees_include_actor(state: &AppState, strand_id: &str, actor: &str) -> bool {
     state.projection.lock().ok().is_some_and(|projection| {
         projection.relations.values().any(|relation| {
             relation.relation_kind == "assigned_to"
-                && relation.from_ref.as_deref() == Some(flow_id)
+                && relation.from_ref.as_deref() == Some(strand_id)
                 && relation.to_ref.as_deref() == Some(actor)
                 && relation.is_active()
         })

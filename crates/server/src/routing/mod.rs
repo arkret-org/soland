@@ -40,9 +40,9 @@ pub(crate) mod realm_policy;
 
 use access::policy::policy_document_to_response;
 use admin::audit::append_audit_log;
-use events::flow::{
-    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_realm_id, flow_projection_for_realm,
+use events::strand::{
+    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
+    strand_id_from_realm_id, strand_projection_for_realm,
 };
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
@@ -327,7 +327,7 @@ fn cokret_openapi_doc(router: &Router) -> OpenApi {
                 // ViewRenderer / AllowedEntityFacetsConstraint /
                 // allowed_entity_facets) was removed alongside the entity
                 // abstraction. View facets are now declared by individual
-                // spec event kinds (`ck.view.*` / `ck.flow.*` / `ck.space.*`)
+                // spec event kinds (`ck.view.*` / `ck.strand.*` / `ck.space.*`)
                 // and bound through cell-family registry mappings.
                 "authz_constraint_kinds": ["allowed_object_facets"],
             }),
@@ -519,11 +519,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "Space lifecycle projection query",
     ),
     (
-        "/_cokret/self/projection/flows",
+        "/_cokret/self/projection/strands",
         PathItemType::Get,
         "projection",
-        "ck.self.projection.flows.query.list",
-        "Flow lifecycle projection query",
+        "ck.self.projection.strands.query.list",
+        "Strand lifecycle projection query",
     ),
     (
         "/_cokret/self/projection/morphs",
@@ -916,28 +916,28 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "MIMI key material",
     ),
     (
-        "/_cokret/open/mimi/flows/{flow_id}/update",
+        "/_cokret/open/mimi/strands/{strand_id}/update",
         PathItemType::Put,
         "mimi",
         "ck.open.mimi.command.update_room",
         "MIMI external room interop update",
     ),
     (
-        "/_cokret/open/mimi/flows/{flow_id}/notify",
+        "/_cokret/open/mimi/strands/{strand_id}/notify",
         PathItemType::Post,
         "mimi",
         "ck.open.mimi.command.notify",
         "MIMI external room interop notify",
     ),
     (
-        "/_cokret/open/mimi/flows/{flow_id}/messages",
+        "/_cokret/open/mimi/strands/{strand_id}/messages",
         PathItemType::Post,
         "mimi",
         "ck.open.mimi.command.submit_message",
         "MIMI external room interop submit message",
     ),
     (
-        "/_cokret/open/mimi/flows/{flow_id}/group-info",
+        "/_cokret/open/mimi/strands/{strand_id}/group-info",
         PathItemType::Get,
         "mimi",
         "ck.open.mimi.query.group_info",
@@ -1987,7 +1987,7 @@ mod operation_conformance_tests {
                 kind: kinds::CK_MESSAGE_CREATE,
                 payload: json!({
                     "message_id": "ck:message:01904100-0000-7000-8000-79a90338768b",
-                    "flow_id": "ck:flow:01904100-0000-7000-8000-6c663fa0205f",
+                    "strand_id": "ck:strand:01904100-0000-7000-8000-6c663fa0205f",
                     "track_name": "discussion",
                     "sender": "did:web:alice.example",
                     "content": {"kind": "ck.content.text", "body": "hello"}
@@ -2027,7 +2027,7 @@ mod operation_conformance_tests {
             OperationVector {
                 name: "relation create",
                 kind: kinds::CK_RELATION_CREATE,
-                payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+                payload: json!({"relation_id": "ck:relation:01904100-0000-7000-8000-71604d58ec0b", "relation_kind": "blocks", "from_ref": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ck:morph:01904100-0000-7000-8000-7191ddd787e5"}),
                 valid: true,
             },
             OperationVector {
@@ -2159,43 +2159,43 @@ mod operation_conformance_tests {
                 payload: json!({"reason": "release_reopened"}),
                 valid: false,
             },
-            // Flow / Morph lifecycle conformance vectors.
+            // Strand / Morph lifecycle conformance vectors.
             OperationVector {
-                name: "flow create",
-                kind: kinds::CK_FLOW_CREATE,
-                payload: json!({"object": {"id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
+                name: "strand create",
+                kind: kinds::CK_STRAND_CREATE,
+                payload: json!({"object": {"id": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "kind": "discussion", "title": "Launch"}}),
                 valid: true,
             },
             OperationVector {
-                name: "flow update",
-                kind: kinds::CK_FLOW_UPDATE,
-                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
+                name: "strand update",
+                kind: kinds::CK_STRAND_UPDATE,
+                payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"title": "Launch v2"}}),
                 valid: true,
             },
             OperationVector {
-                name: "flow archive",
-                kind: kinds::CK_FLOW_ARCHIVE,
-                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                name: "strand archive",
+                kind: kinds::CK_STRAND_ARCHIVE,
+                payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
-                name: "flow restore",
-                kind: kinds::CK_FLOW_RESTORE,
-                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                name: "strand restore",
+                kind: kinds::CK_STRAND_RESTORE,
+                payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: true,
             },
             OperationVector {
-                name: "flow archive missing flow_id",
-                kind: kinds::CK_FLOW_ARCHIVE,
+                name: "strand archive missing strand_id",
+                kind: kinds::CK_STRAND_ARCHIVE,
                 payload: json!({"reason": "stale_room"}),
                 valid: false,
             },
-            // Flow position event vectors.
+            // Strand position event vectors.
             OperationVector {
-                name: "flow move",
-                kind: kinds::CK_FLOW_MOVE,
+                name: "strand move",
+                kind: kinds::CK_STRAND_MOVE,
                 payload: json!({
-                    "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb",
                     "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
                     "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
@@ -2203,10 +2203,10 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "flow reorder",
-                kind: kinds::CK_FLOW_REORDER,
+                name: "strand reorder",
+                kind: kinds::CK_STRAND_REORDER,
                 payload: json!({
-                    "flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb",
+                    "strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb",
                     "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
                     "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                     "rank": "a1",
@@ -2214,14 +2214,14 @@ mod operation_conformance_tests {
                 valid: true,
             },
             OperationVector {
-                name: "flow move missing board_space_id",
-                kind: kinds::CK_FLOW_MOVE,
-                payload: json!({"flow_id": "ck:flow:01904100-0000-7000-8000-ca33616973bb"}),
+                name: "strand move missing board_space_id",
+                kind: kinds::CK_STRAND_MOVE,
+                payload: json!({"strand_id": "ck:strand:01904100-0000-7000-8000-ca33616973bb"}),
                 valid: false,
             },
             OperationVector {
-                name: "flow reorder missing flow_id",
-                kind: kinds::CK_FLOW_REORDER,
+                name: "strand reorder missing strand_id",
+                kind: kinds::CK_STRAND_REORDER,
                 payload: json!({"board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
                 valid: false,
             },

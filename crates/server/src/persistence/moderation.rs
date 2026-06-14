@@ -4,7 +4,7 @@ use super::*;
 ///
 /// Reports and actions are append-only (back-compat). The newer methods
 /// (decisions, appeals, queue items) form the spec-compliant triage
-/// flow: a report becomes a queue item, a queue item gets a decision,
+/// strand: a report becomes a queue item, a queue item gets a decision,
 /// a decision can be appealed (4-state appeal FSM lives in the reducer
 /// `crate::reducer::apply_moderation`).
 ///

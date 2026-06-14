@@ -426,7 +426,7 @@ pub struct SolandHandleClaimProof {
 pub struct IndexQueryRequestBody {
     #[serde(default)]
     pub realm_ids: Vec<String>,
-    /// Filter by typed-id kinds (`space`, `flow`, `message`, …) drawn from the
+    /// Filter by typed-id kinds (`space`, `strand`, `message`, …) drawn from the
     /// spec id-kind-registry. Replaces the round-5 `entity_types[]` field that
     /// referenced the soland-local entity scaffold.
     #[serde(default)]
@@ -499,7 +499,7 @@ pub struct IndexNotificationsOutcome {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexInboxOutcome {
-    pub flows: Vec<Value>,
+    pub strands: Vec<Value>,
     pub next_cursor: Option<String>,
     pub frontier: Value,
 }
@@ -771,7 +771,7 @@ pub struct SendMessageRequestBody {
 // `agent_projection`; `agent_key_pair`/`rotate_key` outcomes are
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
 // `{ok, grant_id}` / `{ok, revoked_at}`; sidecar ensure carries the typed
-// `private_circle_id`/`private_flow_id`/`private_relation_id`. The lifecycle
+// `private_circle_id`/`private_strand_id`/`private_relation_id`. The lifecycle
 // outcome (`agent_lifecycle_state` = `operation_status_outcome` =
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /

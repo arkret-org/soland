@@ -42,9 +42,9 @@ const CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR: &str =
 const CAP_ACTION_MESSAGE_MENTION_BROADCAST: &str = "ck.message.mention.broadcast";
 const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
     "effective_scope_members",
-    "flow_participants",
-    "flow_watchers",
-    "flow_engaged",
+    "strand_participants",
+    "strand_watchers",
+    "strand_engaged",
     "assigned_actors",
 ];
 
@@ -98,11 +98,11 @@ pub fn validate_operation_semantics(
     Ok(())
 }
 
-/// flow-and-message.md §9.8.2 — v1 core reactions may only target a
+/// strand-and-message.md §9.8.2 — v1 core reactions may only target a
 /// `ck:message:`. The reducer keys the OR-Set on the message's storage id
 /// (`ck:event:`), so both the canonical `ck:message:` object ref and the
 /// internal `ck:event:` form are accepted; every other typed object kind
-/// (`ck:flow:`, `ck:morph:`, `ck:circle:`, …) is rejected fail-closed with
+/// (`ck:strand:`, `ck:morph:`, `ck:circle:`, …) is rejected fail-closed with
 /// `reaction_target_unsupported` (a `schema_violation` sub-reason).
 /// Profiles MAY register additional target kinds; v1 core does not.
 fn validate_reaction_target_kind(kind: &str, operation: &Operation) -> Result<(), &'static str> {
@@ -736,32 +736,32 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: SPACE_CONTAINER_PARENT_REQUIREMENTS,
             validate: None,
         },
-        kind if kinds::is_flow_lifecycle_kind(kind) => OperationPayloadSchema {
-            requirements: FLOW_LIFECYCLE_REQUIREMENTS,
+        kind if kinds::is_strand_lifecycle_kind(kind) => OperationPayloadSchema {
+            requirements: STRAND_LIFECYCLE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_CREATE => OperationPayloadSchema {
-            requirements: FLOW_CREATE_REQUIREMENTS,
+        kinds::CK_STRAND_CREATE => OperationPayloadSchema {
+            requirements: STRAND_CREATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_UPDATE => OperationPayloadSchema {
-            requirements: FLOW_UPDATE_REQUIREMENTS,
+        kinds::CK_STRAND_UPDATE => OperationPayloadSchema {
+            requirements: STRAND_UPDATE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_MOVE => OperationPayloadSchema {
-            requirements: FLOW_MOVE_REQUIREMENTS,
+        kinds::CK_STRAND_MOVE => OperationPayloadSchema {
+            requirements: STRAND_MOVE_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_REORDER => OperationPayloadSchema {
-            requirements: FLOW_REORDER_REQUIREMENTS,
+        kinds::CK_STRAND_REORDER => OperationPayloadSchema {
+            requirements: STRAND_REORDER_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_WATCH_SET => OperationPayloadSchema {
-            requirements: FLOW_WATCH_REQUIREMENTS,
+        kinds::CK_STRAND_WATCH_SET => OperationPayloadSchema {
+            requirements: STRAND_WATCH_REQUIREMENTS,
             validate: None,
         },
-        kinds::CK_FLOW_TRACKS_UPDATE => OperationPayloadSchema {
-            requirements: FLOW_TRACKS_UPDATE_REQUIREMENTS,
+        kinds::CK_STRAND_TRACKS_UPDATE => OperationPayloadSchema {
+            requirements: STRAND_TRACKS_UPDATE_REQUIREMENTS,
             validate: None,
         },
         kind if kinds::is_morph_lifecycle_kind(kind) => OperationPayloadSchema {
@@ -926,11 +926,11 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
     if crate::kinds::operation_is_message_create(operation) {
         if operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(Value::as_str)
             .is_none_or(|value| value.trim().is_empty())
         {
-            return Err("message create requires flow_id");
+            return Err("message create requires strand_id");
         }
         let track_name = operation
             .payload
@@ -1088,7 +1088,7 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
                 return Err("read marker read_scope.ref must be omitted for realm");
             }
         }
-        "flow" | "thread" | "view" | "message" | "morph" => {
+        "strand" | "thread" | "view" | "message" | "morph" => {
             if read_scope
                 .get("ref")
                 .and_then(|value| value.as_str())
@@ -1097,8 +1097,8 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
                 return Err("read marker read_scope.ref is required");
             }
         }
-        "flow_discussion" | "flow_synthesis" => {
-            return Err("read marker read_scope.kind removed; use flow plus track_name");
+        "strand_discussion" | "strand_synthesis" => {
+            return Err("read marker read_scope.kind removed; use strand plus track_name");
         }
         _ => return Err("read marker read_scope.kind is invalid"),
     }
@@ -1111,16 +1111,16 @@ fn validate_read_marker_payload(operation: &Operation) -> Result<(), &'static st
             .get("track_scope")
             .and_then(|value| value.as_str()),
     ) {
-        ("flow", Some(track), None) => validate_read_scope_track(track)?,
-        ("flow", None, Some("all")) => {}
-        ("flow", Some(_), Some(_)) => {
+        ("strand", Some(track), None) => validate_read_scope_track(track)?,
+        ("strand", None, Some("all")) => {}
+        ("strand", Some(_), Some(_)) => {
             return Err("read marker read_scope requires exactly one of track_name or track_scope");
         }
-        ("flow", None, None) => {
+        ("strand", None, None) => {
             return Err("read marker read_scope requires track_name or track_scope");
         }
         (_, Some(_), _) | (_, _, Some(_)) => {
-            return Err("read marker read_scope.track_name/track_scope requires kind flow");
+            return Err("read marker read_scope.track_name/track_scope requires kind strand");
         }
         _ => {}
     }
@@ -1522,7 +1522,7 @@ mod direct_conversation_policy_tests {
                         "did:web:bob.example".to_owned(),
                     ],
                     realm_id: realm_id.to_string(),
-                    main_flow_id: "ck:flow:01904100-0000-7000-8000-000000000601".to_owned(),
+                    main_strand_id: "ck:strand:01904100-0000-7000-8000-000000000601".to_owned(),
                     binding_event_ref: "ck:event:01904100-0000-7000-8000-000000000601".to_owned(),
                     state: "active".to_owned(),
                     created_at: now,
@@ -1766,7 +1766,7 @@ async fn validate_audience_mention_operation_policy(
     let realm_id = operation.realm_id.as_str();
     let resource = operation
         .payload
-        .get("flow_id")
+        .get("strand_id")
         .or_else(|| operation.payload.get("target_ref"))
         .and_then(Value::as_str)
         .unwrap_or(realm_id);
@@ -1899,18 +1899,18 @@ fn estimate_audience_recipient_count(
     state: &AppState,
 ) -> usize {
     match audience {
-        "flow_participants" => operation
+        "strand_participants" => operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(Value::as_str)
-            .map(|flow_id| {
+            .map(|strand_id| {
                 state
                     .projection
                     .lock()
                     .ok()
                     .map(|projection| {
                         projection
-                            .messages_for_thread(flow_id)
+                            .messages_for_thread(strand_id)
                             .into_iter()
                             .map(|message| message.sender.as_str())
                             .collect::<std::collections::BTreeSet<_>>()
@@ -2125,8 +2125,8 @@ mod invite_create_schema_tests {
 }
 
 #[cfg(test)]
-#[path = "operations_flow_tracks_update_tests.rs"]
-mod flow_tracks_update_tests;
+#[path = "operations_strand_tracks_update_tests.rs"]
+mod strand_tracks_update_tests;
 
 #[cfg(test)]
 mod message_projection_schema_tests {
@@ -2430,14 +2430,14 @@ mod audience_mention_tests {
     use super::*;
 
     #[test]
-    fn audience_mention_accepts_here_as_flow_engaged() {
+    fn audience_mention_accepts_here_as_strand_engaged() {
         let content = json!({
             "kind": "ck.content.composite",
             "parts": [
                 {"kind": "ck.content.text", "body": "Team heads up"},
                 {
                     "kind": "audience_mention",
-                    "audience": "flow_engaged",
+                    "audience": "strand_engaged",
                     "mention_text_original": "@here"
                 }
             ]
@@ -2451,7 +2451,7 @@ mod audience_mention_tests {
     fn audience_mention_rejects_presence_online_without_profile() {
         let content = json!({
             "kind": "audience_mention",
-            "audience": "flow_engaged",
+            "audience": "strand_engaged",
             "mention_text_original": "@online"
         });
 
@@ -2465,14 +2465,14 @@ mod audience_mention_tests {
     fn audience_mention_policy_requires_finite_limits_and_quota() {
         let policy = json!({
             "enabled": true,
-            "allowed_audiences": ["flow_engaged"],
+            "allowed_audiences": ["strand_engaged"],
             "max_recipients": 5,
             "quota": {"max_operations": 2, "period": "PT1H"}
         });
 
-        audience_mention_policy_allows(&policy, "flow_engaged", 5).unwrap();
+        audience_mention_policy_allows(&policy, "strand_engaged", 5).unwrap();
         assert_eq!(
-            audience_mention_policy_allows(&policy, "flow_engaged", 6),
+            audience_mention_policy_allows(&policy, "strand_engaged", 6),
             Err("audience_mention_recipient_count_exceeds_limit")
         );
     }
@@ -2577,7 +2577,7 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_non_message_target_is_rejected() {
         for target in [
-            "ck:flow:01904100-0000-7000-8000-000000000001",
+            "ck:strand:01904100-0000-7000-8000-000000000001",
             "ck:morph:01904100-0000-7000-8000-000000000001",
             "ck:circle:01904100-0000-7000-8000-000000000001",
         ] {
@@ -2594,7 +2594,7 @@ mod reaction_and_window_policy_tests {
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
             kinds::CK_MESSAGE_CREATE,
-            json!({ "target_ref": "ck:flow:01904100-0000-7000-8000-000000000001" }),
+            json!({ "target_ref": "ck:strand:01904100-0000-7000-8000-000000000001" }),
         );
         assert!(validate_reaction_target_kind(kinds::CK_MESSAGE_CREATE, &op).is_ok());
     }

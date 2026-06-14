@@ -1,4 +1,4 @@
-//! `ProjectionState::apply_*` reducers for flow / morph / circle / applet /
+//! `ProjectionState::apply_*` reducers for strand / morph / circle / applet /
 //! agent object families. Split out of `reducer.rs` (SOL-07-005) — these are
 //! additional inherent-impl blocks on `ProjectionState`; methods resolve by
 //! type, so cross-family `self.apply_*` / `self.check_*` calls are unaffected.
@@ -6,28 +6,28 @@
 use super::*;
 
 impl ProjectionState {
-    /// Apply `ck.flow.create` — populate the `flows` projection from
-    /// the wire `object` field. Spec: common-fields.md §5 + flow schema.
+    /// Apply `ck.strand.create` — populate the `strands` projection from
+    /// the wire `object` field. Spec: common-fields.md §5 + strand schema.
     /// Idempotent: re-create with same id overwrites the existing entry
-    /// (LWW), but the preflight will accept it since `ck.flow.create` has
+    /// (LWW), but the preflight will accept it since `ck.strand.create` has
     /// no source-state guard.
-    pub(crate) fn apply_flow_create(
+    pub(crate) fn apply_strand_create(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let Some(object) = operation.payload.get("object").and_then(|v| v.as_object()) else {
             return ProjectionEffect::Rejected {
-                reason: "flow_create_missing_object".to_owned(),
+                reason: "strand_create_missing_object".to_owned(),
             };
         };
-        let Some(flow_id) = object
+        let Some(strand_id) = object
             .get("id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "flow_create_missing_id".to_owned(),
+                reason: "strand_create_missing_id".to_owned(),
             };
         };
         let metadata = object.get("metadata").and_then(Value::as_object);
@@ -76,8 +76,8 @@ impl ProjectionState {
             })
             .unwrap_or_default();
 
-        let projection = FlowProjection {
-            flow_id: flow_id.clone(),
+        let projection = StrandProjection {
+            strand_id: strand_id.clone(),
             realm_id,
             title,
             summary,
@@ -94,12 +94,12 @@ impl ProjectionState {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
         };
-        self.flows.insert(flow_id.clone(), projection);
+        self.strands.insert(strand_id.clone(), projection);
         if let Some((board_space_id, list_space_id, rank)) =
-            flow_position_from_create_payload(&operation.payload, object)
+            strand_position_from_create_payload(&operation.payload, object)
         {
-            self.store_flow_position_relation(
-                &flow_id,
+            self.store_strand_position_relation(
+                &strand_id,
                 operation.realm_id.as_ref(),
                 &board_space_id,
                 &list_space_id,
@@ -108,38 +108,38 @@ impl ProjectionState {
             );
         }
 
-        ProjectionEffect::FlowLifecycle {
-            flow_id,
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
             new_state: ObjectLifecycleState::Active,
         }
     }
 
-    /// Apply `ck.flow.update` — patch title / summary on an existing Flow.
+    /// Apply `ck.strand.update` — patch title / summary on an existing Strand.
     /// Spec common-fields.md §5.1: update on non-active object MUST fail
-    /// with `flow_not_active`. Unknown Flow tolerated.
-    pub(crate) fn apply_flow_update(
+    /// with `strand_not_active`. Unknown Strand tolerated.
+    pub(crate) fn apply_strand_update(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = flow_id_from_payload(&operation.payload).map(ToOwned::to_owned) else {
+        let Some(strand_id) = strand_id_from_payload(&operation.payload).map(ToOwned::to_owned) else {
             return ProjectionEffect::Rejected {
-                reason: "flow_update_missing_flow_id".to_owned(),
+                reason: "strand_update_missing_strand_id".to_owned(),
             };
         };
         // CKP-0007: `discussion_realm_ref` is a forbidden wire field,
         // rejected at the envelope validator before reaching the reducer.
-        // Flow scope is set at create time; `scope_circle_id` rebinds fail
+        // Strand scope is set at create time; `scope_circle_id` rebinds fail
         // below with `scope_rebind_forbidden`.
-        let Some(flow) = self.flows.get_mut(&flow_id) else {
+        let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };
-        if flow.state != ObjectLifecycleState::Active {
+        if strand.state != ObjectLifecycleState::Active {
             return ProjectionEffect::Rejected {
-                reason: "flow_not_active".to_owned(),
+                reason: "strand_not_active".to_owned(),
             };
         }
-        if let Err(reason) = check_flow_status_patch(flow, &operation.payload) {
+        if let Err(reason) = check_strand_status_patch(strand, &operation.payload) {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
@@ -152,149 +152,149 @@ impl ProjectionState {
                 };
             }
             if let Some(title) = patch_metadata_string_value(patch, "title") {
-                flow.title = title.unwrap_or_default();
+                strand.title = title.unwrap_or_default();
             }
             if let Some(summary) = patch_metadata_string_value(patch, "summary") {
-                flow.summary = summary;
+                strand.summary = summary;
             }
-            apply_flow_fields_patch(&mut flow.fields, patch);
+            apply_strand_fields_patch(&mut strand.fields, patch);
         }
-        flow.updated_by = operation
+        strand.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        flow.updated_at = Some(now);
-        ProjectionEffect::FlowLifecycle {
-            flow_id,
-            new_state: flow.state,
+        strand.updated_at = Some(now);
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
+            new_state: strand.state,
         }
     }
 
-    /// Apply `ck.flow.archive` / `ck.flow.restore`. Spec
+    /// Apply `ck.strand.archive` / `ck.strand.restore`. Spec
     /// `common-fields.md §5.1` + `event-payload.schema.json`
-    /// `object_lifecycle_payload`. Unknown Flow tolerated. The target id is
+    /// `object_lifecycle_payload`. Unknown Strand tolerated. The target id is
     /// carried by `target_ref` per spec; `object_ref` and the legacy
-    /// `flow_id` field are accepted as fallbacks.
-    pub(crate) fn apply_flow_lifecycle(
+    /// `strand_id` field are accepted as fallbacks.
+    pub(crate) fn apply_strand_lifecycle(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
         transition: ObjectLifecycleTransition,
     ) -> ProjectionEffect {
-        let Some(flow_id) = operation
+        let Some(strand_id) = operation
             .payload
             .get("target_ref")
             .or_else(|| operation.payload.get("object_ref"))
-            .or_else(|| operation.payload.get("flow_id"))
+            .or_else(|| operation.payload.get("strand_id"))
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_flow_id".to_owned(),
+                reason: "missing_strand_id".to_owned(),
             };
         };
-        let Some(flow) = self.flows.get_mut(&flow_id) else {
+        let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };
         let (allowed_source, target_state, reason_on_invalid) = match transition {
             ObjectLifecycleTransition::Archive => (
                 &[ObjectLifecycleState::Active][..],
                 ObjectLifecycleState::Archived,
-                "flow_not_active",
+                "strand_not_active",
             ),
             ObjectLifecycleTransition::Restore => (
                 &[ObjectLifecycleState::Archived][..],
                 ObjectLifecycleState::Active,
-                "flow_not_archived",
+                "strand_not_archived",
             ),
         };
-        if !allowed_source.contains(&flow.state) {
+        if !allowed_source.contains(&strand.state) {
             return ProjectionEffect::Rejected {
                 reason: reason_on_invalid.to_owned(),
             };
         }
-        flow.state = target_state;
-        flow.state_changed_at = Some(now);
-        flow.updated_by = operation
+        strand.state = target_state;
+        strand.state_changed_at = Some(now);
+        strand.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        flow.updated_at = Some(now);
-        ProjectionEffect::FlowLifecycle {
-            flow_id,
+        strand.updated_at = Some(now);
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
             new_state: target_state,
         }
     }
 
-    /// Read-only preflight for `ck.flow.tracks.update`. Spec
+    /// Read-only preflight for `ck.strand.tracks.update`. Spec
     /// common-fields.md §5.1 update-on-non-active rule: track mutations
-    /// are a kind of update; parent Flow MUST be Active or the admission
-    /// MUST `failed_precondition` with `flow_not_active` before
-    /// persistence. Unknown Flow tolerated (causal / backfill — matches
+    /// are a kind of update; parent Strand MUST be Active or the admission
+    /// MUST `failed_precondition` with `strand_not_active` before
+    /// persistence. Unknown Strand tolerated (causal / backfill — matches
     /// the lifecycle preflight family). soland's projection doesn't
-    /// carry track-level state (FlowProjection has no `tracks` field by
+    /// carry track-level state (StrandProjection has no `tracks` field by
     /// design — SDK is the source of truth client-side); only the parent
-    /// Flow's lifecycle state matters here.
-    pub fn check_flow_tracks_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+    /// Strand's lifecycle state matters here.
+    pub fn check_strand_tracks_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         let kind = match crate::kinds::canonical_kind_for_operation(operation) {
             Some(k) => k,
             None => return Ok(()),
         };
-        if !crate::kinds::is_flow_tracks_kind(kind) {
+        if !crate::kinds::is_strand_tracks_kind(kind) {
             return Ok(());
         }
-        let Some(flow_id) = operation.payload.get("flow_id").and_then(|v| v.as_str()) else {
-            // Missing flow_id is caught by operation-schema validator
+        let Some(strand_id) = operation.payload.get("strand_id").and_then(|v| v.as_str()) else {
+            // Missing strand_id is caught by operation-schema validator
             // upstream; preflight tolerates absence (responsibilities split).
             return Ok(());
         };
-        let Some(flow) = self.flows.get(flow_id) else {
+        let Some(strand) = self.strands.get(strand_id) else {
             return Ok(());
         };
-        if flow.state != ObjectLifecycleState::Active {
-            return Err("flow_not_active");
+        if strand.state != ObjectLifecycleState::Active {
+            return Err("strand_not_active");
         }
         Ok(())
     }
 
-    /// Apply `ck.flow.move` / `ck.flow.reorder`. These events
-    /// don't affect Flow lifecycle state — they write to the
-    /// `ck.component.flow.position.v1` cell family on the Move/Seal
+    /// Apply `ck.strand.move` / `ck.strand.reorder`. These events
+    /// don't affect Strand lifecycle state — they write to the
+    /// `ck.component.strand.position.v1` cell family on the Move/Seal
     /// pipeline. The Event-Envelope reducer just bumps `updated_at` /
-    /// `updated_by` on the Flow projection so read-after-write sees the
-    /// touch. Unknown Flow is tolerated (causal / backfill).
-    pub(crate) fn apply_flow_position_touch(
+    /// `updated_by` on the Strand projection so read-after-write sees the
+    /// touch. Unknown Strand is tolerated (causal / backfill).
+    pub(crate) fn apply_strand_position_touch(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = operation
+        let Some(strand_id) = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_flow_id".to_owned(),
+                reason: "missing_strand_id".to_owned(),
             };
         };
-        let Some(flow) = self.flows.get_mut(&flow_id) else {
+        let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };
-        flow.updated_by = operation
+        strand.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        flow.updated_at = Some(now);
-        let projected_state = flow.state;
+        strand.updated_at = Some(now);
+        let projected_state = strand.state;
         if let Some((board_space_id, list_space_id, rank)) =
-            flow_position_from_lifecycle_payload(&operation.payload)
+            strand_position_from_lifecycle_payload(&operation.payload)
         {
-            self.store_flow_position_relation(
-                &flow_id,
+            self.store_strand_position_relation(
+                &strand_id,
                 operation.realm_id.as_ref(),
                 &board_space_id,
                 &list_space_id,
@@ -302,82 +302,82 @@ impl ProjectionState {
                 now,
             );
         }
-        ProjectionEffect::FlowLifecycle {
-            flow_id,
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
             new_state: projected_state,
         }
     }
 
-    /// Apply `ck.flow.tracks.update` server-side. State guard runs in
-    /// `check_flow_tracks_transition` preflight; by the time this reducer
-    /// fires, the parent Flow is known to be Active (or unknown, in which
+    /// Apply `ck.strand.tracks.update` server-side. State guard runs in
+    /// `check_strand_tracks_transition` preflight; by the time this reducer
+    /// fires, the parent Strand is known to be Active (or unknown, in which
     /// case the touch is a no-op). The actual track membership lives in
-    /// SDK reducer's Flow.tracks; soland's projection just bumps
-    /// `updated_at` so read-after-write sees the change. Unknown Flow
+    /// SDK reducer's Strand.tracks; soland's projection just bumps
+    /// `updated_at` so read-after-write sees the change. Unknown Strand
     /// tolerated.
-    pub(crate) fn apply_flow_track_touch(
+    pub(crate) fn apply_strand_track_touch(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = operation
+        let Some(strand_id) = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_flow_id".to_owned(),
+                reason: "missing_strand_id".to_owned(),
             };
         };
-        let Some(flow) = self.flows.get_mut(&flow_id) else {
+        let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };
-        // Defence-in-depth: even though check_flow_tracks_transition
+        // Defence-in-depth: even though check_strand_tracks_transition
         // gated this at the admission layer, re-check here so direct
         // reducer callers (tests / replay paths that bypass HTTP) still
         // see the spec invariant enforced.
-        if flow.state != ObjectLifecycleState::Active {
+        if strand.state != ObjectLifecycleState::Active {
             return ProjectionEffect::Rejected {
-                reason: "flow_not_active".to_owned(),
+                reason: "strand_not_active".to_owned(),
             };
         }
-        flow.updated_by = operation
+        strand.updated_by = operation
             .payload
             .get("sender")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        flow.updated_at = Some(now);
-        ProjectionEffect::FlowLifecycle {
-            flow_id,
-            new_state: flow.state,
+        strand.updated_at = Some(now);
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
+            new_state: strand.state,
         }
     }
 
-    /// Apply `ck.flow.watch.set`. Writes the watch cell on the
-    /// Move/Seal pipeline (cas-register `ck.component.flow.watch.v1`);
+    /// Apply `ck.strand.watch.set`. Writes the watch cell on the
+    /// Move/Seal pipeline (cas-register `ck.component.strand.watch.v1`);
     /// the soland projection records the materialised value into
-    /// `projection_flow_watches` via `ProjectionEffect::FlowWatchUpdated`.
-    /// The Flow's `updated_at` is NOT bumped — watch is a per-(flow, actor)
-    /// subscription, not a Flow mutation. Unknown Flow tolerated (causal
+    /// `projection_strand_watches` via `ProjectionEffect::StrandWatchUpdated`.
+    /// The Strand's `updated_at` is NOT bumped — watch is a per-(strand, actor)
+    /// subscription, not a Strand mutation. Unknown Strand tolerated (causal
     /// / backfill).
     ///
     /// Reducer invariant: `payload.watcher_actor_id == operation.sender` unless
-    /// the writer is gated by `ck.flow.watch.set.others` (capability
+    /// the writer is gated by `ck.strand.watch.set.others` (capability
     /// check happens at the routing layer; this projection only records).
-    pub(crate) fn apply_flow_watch_set(
+    pub(crate) fn apply_strand_watch_set(
         &mut self,
         operation: &Operation,
         _now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(flow_id) = operation
+        let Some(strand_id) = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_flow_id".to_owned(),
+                reason: "missing_strand_id".to_owned(),
             };
         };
         let Some(actor_id) = operation
@@ -404,15 +404,15 @@ impl ProjectionState {
             .payload
             .get("level_public")
             .and_then(|v| v.as_bool());
-        ProjectionEffect::FlowWatchUpdated {
-            flow_id,
+        ProjectionEffect::StrandWatchUpdated {
+            strand_id,
             actor_id,
             level,
             level_public,
         }
     }
 
-    /// Apply `ck.morph.create`. Mirror of `apply_flow_create`.
+    /// Apply `ck.morph.create`. Mirror of `apply_strand_create`.
     pub(crate) fn apply_morph_create(
         &mut self,
         operation: &Operation,
@@ -434,7 +434,7 @@ impl ProjectionState {
         };
         // CKP-0007 — when the Morph carries a `scope_circle_id`, the
         // Circle MUST belong to this Realm and be active. Mirrors the
-        // Flow.scope_circle_id validation.
+        // Strand.scope_circle_id validation.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
             && let Err(reason) =
                 self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
@@ -498,7 +498,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ck.morph.update`. Mirror of `apply_flow_update`.
+    /// Apply `ck.morph.update`. Mirror of `apply_strand_update`.
     pub(crate) fn apply_morph_update(
         &mut self,
         operation: &Operation,
@@ -555,7 +555,7 @@ impl ProjectionState {
     }
 
     /// Apply `ck.morph.archive` / `ck.morph.restore`. Mirror of
-    /// `apply_flow_lifecycle`.
+    /// `apply_strand_lifecycle`.
     pub(crate) fn apply_morph_lifecycle(
         &mut self,
         operation: &Operation,
@@ -649,7 +649,7 @@ impl ProjectionState {
             };
         }
         // Parent Realm MUST exist and not be in a terminal state — both
-        // checks rely on the same projection cache the Flow create path
+        // checks rely on the same projection cache the Strand create path
         // uses.
         if self.realm_is_destroyed(&realm_id) {
             return ProjectionEffect::Rejected {
@@ -1071,7 +1071,7 @@ impl ProjectionState {
     /// - `circle_already_terminal`   — Circle is tombstoned
     /// - `circle_unknown`            — `circle_id` is not projected
     ///
-    /// Called from Flow / Morph / Space create + update paths whenever
+    /// Called from Strand / Morph / Space create + update paths whenever
     /// the wire object carries a non-null `scope_circle_id`.
     pub(crate) fn validate_scope_circle_id(
         &self,
@@ -1096,7 +1096,7 @@ impl ProjectionState {
     /// or `None` when the Circle is unknown or already tombstoned. Used by
     /// `/_soland/self/circles/*` route handlers and by `scope_circle_id`
     /// validators that need to confirm the Circle is alive before allowing
-    /// Flow / Space / Morph writes against it.
+    /// Strand / Space / Morph writes against it.
     pub fn circle(&self, circle_id: &str) -> Option<&CircleProjection> {
         let circle = self.circles.get(circle_id)?;
         (circle.state != CircleLifecycleState::Tombstoned).then_some(circle)
@@ -1119,15 +1119,15 @@ impl ProjectionState {
         })
     }
 
-    /// CKP-0007 — resolve the Circle (`ck:circle:…`) a Flow is scoped to, if
-    /// any. A message's effective circle-scope is derived from its Flow via
+    /// CKP-0007 — resolve the Circle (`ck:circle:…`) a Strand is scoped to, if
+    /// any. A message's effective circle-scope is derived from its Strand via
     /// this lookup — never from the message payload (spec: `scope_circle_id`
-    /// is a Flow field). Returns `None` for unknown Flows or Realm-default
+    /// is a Strand field). Returns `None` for unknown Strands or Realm-default
     /// scope.
-    pub fn flow_scope_circle_id(&self, flow_id: &str) -> Option<String> {
-        self.flows
-            .get(flow_id)
-            .and_then(|flow| flow.scope_circle_id.clone())
+    pub fn strand_scope_circle_id(&self, strand_id: &str) -> Option<String> {
+        self.strands
+            .get(strand_id)
+            .and_then(|strand| strand.scope_circle_id.clone())
             .filter(|scope| scope.starts_with("ck:circle:"))
     }
 
@@ -1400,7 +1400,7 @@ impl ProjectionState {
 
     /// Resolve the `realm_id` (effective scope) of a Message by target ref,
     /// accepting the `ck:message:` object-ref or `ck:event:` storage id.
-    /// Used by the flow-and-message.md §9.8.2 reaction scope check. Returns
+    /// Used by the strand-and-message.md §9.8.2 reaction scope check. Returns
     /// `None` for unknown targets (the reducer's dependency handling then
     /// keeps the reaction pending).
     pub fn message_realm(&self, target_ref: &str) -> Option<String> {
@@ -1482,18 +1482,18 @@ impl ProjectionState {
             .collect()
     }
 
-    /// CKP-0007 — list the Flows that point AT `flow_id` via a
+    /// CKP-0007 — list the Strands that point AT `strand_id` via a
     /// `confidential_discussion_of` Relation. Useful for the discovery
     /// surface that resolves the "narrow discussion" companion of a
-    /// "wide synthesis" Flow. Returns the `from_ref` side of each live
+    /// "wide synthesis" Strand. Returns the `from_ref` side of each live
     /// matching relation.
-    pub fn confidential_discussions_of(&self, flow_id: &str) -> Vec<&SolandRelationState> {
+    pub fn confidential_discussions_of(&self, strand_id: &str) -> Vec<&SolandRelationState> {
         self.relations
             .values()
             .filter(|r| {
                 r.is_active()
                     && r.relation_kind == crate::kinds::RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF
-                    && r.to_ref.as_deref() == Some(flow_id)
+                    && r.to_ref.as_deref() == Some(strand_id)
             })
             .collect()
     }

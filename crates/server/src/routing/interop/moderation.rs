@@ -527,7 +527,7 @@ async fn audit_disclosure_policy_for_realm(state: &AppState, realm_id: &str) -> 
 pub struct ModerationAppealSubmitRequestBody {
     /// The `ck.moderation.decision` event being appealed.
     pub decision_ref: String,
-    /// The original moderation target (message / flow / blob / etc.).
+    /// The original moderation target (message / strand / blob / etc.).
     pub target_ref: String,
     /// Realm whose decision is being appealed. MUST equal the
     /// authenticated session's home realm.

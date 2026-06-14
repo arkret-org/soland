@@ -28,7 +28,7 @@ pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str
 pub(crate) fn encryption_profile_requires_content_encryption(profile: Option<&str>) -> bool {
     // Current soland RealmMetaRecord projects the encryption mechanism but not
     // the separate content_encryption_floor field yet. Treat any non-plaintext
-    // profile as content-only E2EE for Flow content admission.
+    // profile as content-only E2EE for Strand content admission.
     profile
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -106,9 +106,9 @@ fn patch_operation_value_has_direct_field(value: &Value, field: &str) -> bool {
         .is_some_and(|object| object.contains_key(field))
 }
 
-pub(crate) fn flow_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
+pub(crate) fn strand_operation_carries_plaintext_private_content(operation: &Operation) -> bool {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(kinds::CK_FLOW_CREATE) => [
+        Some(kinds::CK_STRAND_CREATE) => [
             &["synthesis"][..],
             &["object", "synthesis"][..],
             &["content"][..],
@@ -120,7 +120,7 @@ pub(crate) fn flow_operation_carries_plaintext_private_content(operation: &Opera
         .any(|path| {
             value_at_path(&operation.payload, path).is_some_and(value_is_plaintext_content)
         }),
-        Some(kinds::CK_FLOW_UPDATE) => patch_touches_plaintext_content_path(
+        Some(kinds::CK_STRAND_UPDATE) => patch_touches_plaintext_content_path(
             &operation.payload,
             &["synthesis", "content", "attachments"],
         ),
@@ -156,7 +156,7 @@ fn encrypted_payload_value(value: &Value) -> bool {
     validate_encrypted_payload_envelope(value).is_ok() || sdk_encrypted_payload_value(value)
 }
 
-// Flow content-floor admission only needs to distinguish ciphertext-shaped
+// Strand content-floor admission only needs to distinguish ciphertext-shaped
 // content from plaintext. Message/device validators still enforce the stricter
 // wire envelope shape through `validate_encrypted_payload_envelope`.
 fn sdk_encrypted_payload_value(value: &Value) -> bool {
@@ -262,7 +262,7 @@ pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &s
 // semantics; it only requires a content object so routing and
 // `DeviceMessageEnvelope` materialization succeed. Forcing the MLS
 // `encrypted_envelope` shape here would reject the very `ck.key.verification.*`
-// flow advertised by the device_messages describe surface.
+// strand advertised by the device_messages describe surface.
 pub fn validate_device_message_target(target: &DeviceMessageTarget) -> Result<(), &'static str> {
     if target.kind.trim().is_empty() {
         return Err("device message requires kind");
@@ -310,16 +310,16 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
                 };
                 validate_did(did).map_err(|_| "mention DID is invalid")?;
             }
-            Some("flow") => {
+            Some("strand") => {
                 if !mention
-                    .get("flow_id")
+                    .get("strand_id")
                     .and_then(|value| value.as_str())
-                    .is_some_and(|value| value.starts_with("ck:flow:"))
+                    .is_some_and(|value| value.starts_with("ck:strand:"))
                 {
-                    return Err("flow mention requires flow_id");
+                    return Err("strand mention requires strand_id");
                 }
             }
-            _ => return Err("mention type must be actor or flow"),
+            _ => return Err("mention type must be actor or strand"),
         }
     }
     Ok(())
@@ -406,9 +406,9 @@ fn validate_audience_mention_object(
         .get("mention_text_original")
         .and_then(Value::as_str)
         .is_some_and(|token| token.trim().eq_ignore_ascii_case("@here"))
-        && audience != "flow_engaged"
+        && audience != "strand_engaged"
     {
-        return Err("@here MUST map to audience flow_engaged");
+        return Err("@here MUST map to audience strand_engaged");
     }
     Ok(AudienceMentionNode {
         audience: audience.to_owned(),

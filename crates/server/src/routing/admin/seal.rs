@@ -25,13 +25,13 @@
 //! v1 scope:
 //! - `single_did` reconfigure / `head_in_winner` repair / compaction each invoke the existing
 //!   in-process notary worker (`crate::notary::run_one_signing_pass`) so the new admin Control Move
-//!   / Seal flows through the same `apply_seal` pipeline as everything else. Where Control Move
+//!   / Seal strands through the same `apply_seal` pipeline as everything else. Where Control Move
 //!   construction / signing for a brand-new admin DID needs threading through the admin signer
-//!   flow, we land a structurally correct placeholder response **and** an inline `FUTURE:` seal so
+//!   strand, we land a structurally correct placeholder response **and** an inline `FUTURE:` seal so
 //!   sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
 //!   work.
 //! - `threshold` / `open_set` / `mixed` notary profiles, `Manual` repair (free-form effects), and
-//!   full multi-signer compaction are placeholder-only — these need the admin signer flow +
+//!   full multi-signer compaction are placeholder-only — these need the admin signer strand +
 //!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
 use std::collections::BTreeSet;
@@ -619,7 +619,7 @@ pub(super) async fn admin_reconfigure_notary(
     // (`admin_signer_for`), giving operator attribution in the audit
     // chain. When the operator has no provisioned key, the helper
     // falls back to the service signer with a sticky-warn — keeps
-    // existing dev flows working while production deployments roll out
+    // existing dev strands working while production deployments roll out
     // per-admin keystores.
     let _ = &service_signer_did;
     let signer = admin_signer_for(state, &operator_did)?;
@@ -742,7 +742,7 @@ pub(super) async fn admin_list_bottom_global(
 ///   `value` carrying the winner's value and the `tag` carrying the winner's move id). The `head`
 ///   request payload provides both.
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
-///   non-trivial and lives behind a separate admin signer flow.
+///   non-trivial and lives behind a separate admin signer strand.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.realms.bottom.repair",
     tags("admin", "bottom"),
@@ -788,7 +788,7 @@ pub(super) async fn admin_repair_bottom(
             // Build the head_in Effect. The `tag` carries the winning
             // Move id; `value` carries a placeholder (the canonical
             // resolved value lives on the winner's effect — a fully
-            // wired repair flow would re-fetch and copy that here).
+            // wired repair strand would re-fetch and copy that here).
             let effect = Effect {
                 cell: cell.clone(),
                 op: LatticeOp {
@@ -1043,7 +1043,7 @@ pub(super) async fn admin_get_seal_dag(
 /// v1 implementation: reuse the in-process notary worker to fold any
 /// pending Moves into a fresh Seal; this isn't a *true* compaction
 /// (which would prune historical Seals per MAL-11) but it produces a
-/// structurally-correct response so sodmin's UI flow is unblocked.
+/// structurally-correct response so sodmin's UI strand is unblocked.
 /// `max_control_moves` is honoured via `run_one_signing_pass`.
 #[endpoint(
     operation_id = "org.cokret.soland.admin.spaces.seal_dag.compact",
@@ -1445,7 +1445,7 @@ pub(super) async fn admin_submit_multisig_partial(
     }
 
     // Load (or initialize) the pending row. New rows default to a 1-of-1
-    // membership of just the submitter; real flows should pre-create the
+    // membership of just the submitter; real strands should pre-create the
     // row via the notary worker when threshold signing kicks off, but a
     // defaulted row lets the H'9 UI exercise the full path against a fresh
     // seal_id in dev/test without an explicit pre-create dance.

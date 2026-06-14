@@ -69,7 +69,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 ### participation.set 编排(替换当前 TODO)
 `routing/identity/agents.rs::set_agent_participation` 在落库后:
 1. 由 effective(已算)推导目标 grant:
-   - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/flow,复用 `cokret_sdk::authz::ResourceSelector`)。
+   - `reply=true` → actions `["ck.message.create","ck.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `cokret_sdk::authz::ResourceSelector`)。
    - `act_on_behalf=true` → 追加 CKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
 2. capability_id 确定性派生:`ck:capability:` + `hash(agent_principal_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
 3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., CK_CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., CK_CAPABILITY_REVOKE, {capability_id})`。
@@ -94,15 +94,15 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
   - 写 cell `ck:cell:ck.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
   - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
 
-### Circle / Flow ceiling
-- `apply_circle_update` / `apply_flow_update`:patch 含 `agent_participation` 时,读父级 ceiling(Circle 的父=Realm ceiling;Flow 的父=其 `scope_circle_id` 指向的 Circle ceiling,否则 Realm)→ `validate_agent_participation_tightens(parent, child)` → 写对象字段 + UPSERT ceiling 表行(`scope_key = circle:<r>:<c>` / `flow:<r>:<f>`)。
+### Circle / Strand ceiling
+- `apply_circle_update` / `apply_strand_update`:patch 含 `agent_participation` 时,读父级 ceiling(Circle 的父=Realm ceiling;Strand 的父=其 `scope_circle_id` 指向的 Circle ceiling,否则 Realm)→ `validate_agent_participation_tightens(parent, child)` → 写对象字段 + UPSERT ceiling 表行(`scope_key = circle:<r>:<c>` / `strand:<r>:<f>`)。
 - 复用现有 tighten-only 框架(与 `content_encryption_floor` 同处校验)。
 
 ### ceiling store 写方法
 `persistence.rs::AgentParticipationStore` 增 `put_ceiling(record: Value)`(UPSERT `agent_participation_ceiling`,key=scope_key);内存实现写 `ceilings` Vec(去重 scope_key);Pg 实现 UPSERT。reducer 投影阶段调用(reducer 是同步纯函数 → 经 `ProjectionEffect::AgentParticipationCeilingProjected` 在 `project_accepted_operations_from_device` 的 effect 处理段异步落库,与现有 effect→persistence 落库范式一致)。
 
 ### 验收
-- realm admin 写 `policy_components{agent_participation.native_agent.reply=true, accept_third_party_mention=false}`;controller 对某 flow `participation.set accept_third_party_mention=true` → `agent_participation_exceeds_ceiling` 被拒。
+- realm admin 写 `policy_components{agent_participation.native_agent.reply=true, accept_third_party_mention=false}`;controller 对某 strand `participation.set accept_third_party_mention=true` → `agent_participation_exceeds_ceiling` 被拒。
 - Circle ceiling 试图放宽父 Realm → `agent_participation_ceiling_widen` 被拒。
 
 ---
@@ -141,7 +141,7 @@ pub(crate) async fn dispatch_message_notifications(
 ) -> ();
 ```
 流程:
-1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_id`(direct)与 `audience_mention`(broadcast);从 Flow watch cell 提取 watcher(`ck.flow.watch.set` 已有投影)。
+1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_id`(direct)与 `audience_mention`(broadcast);从 Strand watch cell 提取 watcher(`ck.strand.watch.set` 已有投影)。
 2. **逐 recipient gate**(顺序与 spec §9.4 覆盖序一致):
    - 去重:同 `(actor, source_event_id, type=mention)` 最多一条。
    - 发送者自我 mention 默认不通知。
@@ -168,13 +168,13 @@ pub(crate) async fn dispatch_message_notifications(
 **目标**:agent runtime 换 session 时拿到 resolved 参与契约。当前 `exchange_session_grant` 返回 SDK `SessionLoginOutcome`,无 scope_details、无 agent_key_proof 分支。
 
 ### proof_kind 分支
-`SessionGrantExchangeRequestBody` 增 `proof_kind`(默认 human;`agent_key_proof` 时走 agent 分支)与 `agent_scope_request{realm_ids[], flow_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。`exchange_session_grant`:
+`SessionGrantExchangeRequestBody` 增 `proof_kind`(默认 human;`agent_key_proof` 时走 agent 分支)与 `agent_scope_request{realm_ids[], strand_ids[], track_names[]}`(`ck.profile.agent_auth.v1` overlay,见 CKP-0008 §4.6)。`exchange_session_grant`:
 - `agent_key_proof`:校验 key 被 active 未撤销 `ck.agent.key.authorize` 授权 + challenge/audience/digest/nonce/expiry binding(CKP-0008 §4.6 校验链),不走 coauth human 分支;TTL ≤ 15min。
 - 返回类型扩展:新增 `AgentSessionGrantOutcome`(或给 `SessionLoginOutcome` 加可选 `scope_details`),含 `granted_scope[]` 与:
 
 ```jsonc
 "scope_details": {
-  "realm_ids": [...], "flow_ids": [...],
+  "realm_ids": [...], "strand_ids": [...],
   "participation": [ { "participation_scope": {...}, "reply": true,
                       "accept_third_party_mention": false, "act_on_behalf": false } ]
 }
@@ -205,4 +205,4 @@ S3(notification dispatcher)── 最大,独立子系统;mention gate 依赖 par
 - 每个子系统落地后回填 `_agents_todos.md` 对应项与 commit hash;cotest 真实联调在 S1–S4 就绪后统一跑。
 
 ## 与 spec 的关系
-本设计是 soland 实现侧落点,不改协议语义;CKP-0016 与已 merge 的 normative 文本(capabilities §5.4、flow-and-message §9.4.5、realm-and-space §2、circle 字段表、private-objects §4.1)是真源。若实现中发现 spec 不完善,先改 spec 再改码。
+本设计是 soland 实现侧落点,不改协议语义;CKP-0016 与已 merge 的 normative 文本(capabilities §5.4、strand-and-message §9.4.5、realm-and-space §2、circle 字段表、private-objects §4.1)是真源。若实现中发现 spec 不完善,先改 spec 再改码。

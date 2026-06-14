@@ -10,35 +10,35 @@ use cokret_sdk::Operation;
 // `ck.self.events.command.submit`. The SDK gates this in
 // `kinds::is_reducer_input_event_kind`.
 pub use cokret_sdk::events::kinds::CIRCLE_CREATE as CK_CIRCLE_CREATE;
-// Flow lifecycle (round 13 — Flow projection state machine). spec
-// `common-fields.md §5.1` Flow row: active / archived / redacted / deleted.
-// Flow has no dedicated `ck.flow.tombstone` event (terminal state reached
+// Strand lifecycle (round 13 — Strand projection state machine). spec
+// `common-fields.md §5.1` Strand row: active / archived / redacted / deleted.
+// Strand has no dedicated `ck.strand.tombstone` event (terminal state reached
 // via `ck.redaction`); only archive/restore are state-machine transitions
 // here.
-pub use cokret_sdk::events::kinds::FLOW_CREATE as CK_FLOW_CREATE;
-// Round 14 — Flow position events. Not state-machine transitions; they
-// write to the `ck.component.flow.position.v1` cell family keyed by
-// (board_space_id, flow_id). The Event-Envelope path only validates
-// payload shape and bumps the Flow's updated_at/by; the cell write
+pub use cokret_sdk::events::kinds::STRAND_CREATE as CK_STRAND_CREATE;
+// Round 14 — Strand position events. Not state-machine transitions; they
+// write to the `ck.component.strand.position.v1` cell family keyed by
+// (board_space_id, strand_id). The Event-Envelope path only validates
+// payload shape and bumps the Strand's updated_at/by; the cell write
 // happens on the Move/Seal pipeline (out of scope for the reducer's
 // structured cache).
-pub use cokret_sdk::events::kinds::FLOW_MOVE as CK_FLOW_MOVE;
-// Unified Flow tracks update event. `payload.patch` uses `ck.patch.v1`
-// against the `Flow.tracks` map; atomic across multiple tracks. soland's
-// wire validator enforces payload shape (flow_id + patch | tracks) and
+pub use cokret_sdk::events::kinds::STRAND_MOVE as CK_STRAND_MOVE;
+// Unified Strand tracks update event. `payload.patch` uses `ck.patch.v1`
+// against the `Strand.tracks` map; atomic across multiple tracks. soland's
+// wire validator enforces payload shape (strand_id + patch | tracks) and
 // the spec common-fields.md §5.1 update-on-non-active state guard.
-// FlowProjection doesn't carry `tracks` server-side; the touch just
-// bumps `updated_at` (mirror of ck.flow.move/reorder pattern).
-pub use cokret_sdk::events::kinds::FLOW_TRACKS_UPDATE as CK_FLOW_TRACKS_UPDATE;
-// Round 16 — Flow watch subscription event. Writes the
-// `ck.component.flow.watch.v1` cas-register cell keyed by
-// (flow_id, watcher_actor_id). Spec:
-// cokret-spec/spec/v1/zh/models/flow-and-message.md §8. Like the
-// flow position events the Event-Envelope path only validates payload
-// shape; cell write happens on the Move/Seal pipeline. The Flow
-// projection's updated_at is NOT bumped — watch is a per-(flow, actor)
-// subscription that does not represent a Flow state mutation.
-pub use cokret_sdk::events::kinds::FLOW_WATCH_SET as CK_FLOW_WATCH_SET;
+// StrandProjection doesn't carry `tracks` server-side; the touch just
+// bumps `updated_at` (mirror of ck.strand.move/reorder pattern).
+pub use cokret_sdk::events::kinds::STRAND_TRACKS_UPDATE as CK_STRAND_TRACKS_UPDATE;
+// Round 16 — Strand watch subscription event. Writes the
+// `ck.component.strand.watch.v1` cas-register cell keyed by
+// (strand_id, watcher_actor_id). Spec:
+// cokret-spec/spec/v1/zh/models/strand-and-message.md §8. Like the
+// strand position events the Event-Envelope path only validates payload
+// shape; cell write happens on the Move/Seal pipeline. The Strand
+// projection's updated_at is NOT bumped — watch is a per-(strand, actor)
+// subscription that does not represent a Strand state mutation.
+pub use cokret_sdk::events::kinds::STRAND_WATCH_SET as CK_STRAND_WATCH_SET;
 // Space-container lifecycle (`ck.space.*`). Spec
 // `cokret-spec/spec/v1/zh/models/realm-and-space.md` — the v1 protocol
 // container, distinct from the `ck.realm.*` security boundary below.
@@ -46,9 +46,9 @@ pub use cokret_sdk::events::kinds::SPACE_CREATE as CK_SPACE_CONTAINER_CREATE;
 pub use cokret_sdk::events::kinds::{
     CIRCLE_ARCHIVE as CK_CIRCLE_ARCHIVE, CIRCLE_MEMBER_STATE as CK_CIRCLE_MEMBER_STATE,
     CIRCLE_RESTORE as CK_CIRCLE_RESTORE, CIRCLE_TOMBSTONE as CK_CIRCLE_TOMBSTONE,
-    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, FLOW_ARCHIVE as CK_FLOW_ARCHIVE,
-    FLOW_REORDER as CK_FLOW_REORDER, FLOW_RESTORE as CK_FLOW_RESTORE,
-    FLOW_UPDATE as CK_FLOW_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
+    CIRCLE_UPDATE as CK_CIRCLE_UPDATE, STRAND_ARCHIVE as CK_STRAND_ARCHIVE,
+    STRAND_REORDER as CK_STRAND_REORDER, STRAND_RESTORE as CK_STRAND_RESTORE,
+    STRAND_UPDATE as CK_STRAND_UPDATE, MESSAGE_CREATE as CK_MESSAGE_CREATE,
     MESSAGE_REDACT as CK_MESSAGE_REDACT, MESSAGE_REVISE as CK_MESSAGE_REVISE,
     PIN_ADD as CK_PIN_ADD, PIN_REMOVE as CK_PIN_REMOVE, PIN_REORDER as CK_PIN_REORDER,
     REACTION_ADD as CK_REACTION_ADD, REACTION_REMOVE as CK_REACTION_REMOVE,
@@ -63,24 +63,24 @@ use serde_json::Value;
 
 use crate::artifacts;
 
-// CKP-0007 — typed Relation kind couples a "wide synthesis" Flow (often
-// Realm-default scope) to a "narrow discussion" Flow bound to a
+// CKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
+// Realm-default scope) to a "narrow discussion" Strand bound to a
 // `scope_circle_id` Circle. Stored on `ck.relation.create` /
 // `ck.relation.update` payloads as `relation_kind`. Spec
 // `zh/models/circle.md` §7.2.
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
-// COT-06-004 — Realm default-Flow pointer event. Sets `Realm.default_flow_id`
-// to `payload.flow_id` (which MUST name a Flow already projected in this
+// COT-06-004 — Realm default-Strand pointer event. Sets `Realm.default_strand_id`
+// to `payload.strand_id` (which MUST name a Strand already projected in this
 // Realm, else `failed_precondition`). cell_subject = `realm_id`; the
-// authoritative spec name is `ck.realm.set_default_flow`
-// (event-payload.schema.json `realm_set_default_flow_payload`). Defined
+// authoritative spec name is `ck.realm.set_default_strand`
+// (event-payload.schema.json `realm_set_default_strand_payload`). Defined
 // locally here pending the SDK `cokret_core::events::kinds` re-export; the
 // generic `canonical_kind_for_operation` wildcard already passes the string
 // through, but the dispatch table keys on this constant.
-pub const CK_REALM_SET_DEFAULT_FLOW: &str = "ck.realm.set_default_flow";
+pub const CK_REALM_SET_DEFAULT_STRAND: &str = "ck.realm.set_default_strand";
 
-// Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
+// Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ck.field.position.move` and `ck.field.position.reorder` were removed in
 // revision 0a5ab85 (see cokret-spec
 // `artifacts/registry/removed-event-kinds.json`). Field-level position move
@@ -388,14 +388,14 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_SPACE_CONTAINER_ARCHIVE => Some(CK_SPACE_CONTAINER_ARCHIVE),
         CK_SPACE_CONTAINER_RESTORE => Some(CK_SPACE_CONTAINER_RESTORE),
         CK_SPACE_CONTAINER_TOMBSTONE => Some(CK_SPACE_CONTAINER_TOMBSTONE),
-        CK_FLOW_CREATE => Some(CK_FLOW_CREATE),
-        CK_FLOW_UPDATE => Some(CK_FLOW_UPDATE),
-        CK_FLOW_ARCHIVE => Some(CK_FLOW_ARCHIVE),
-        CK_FLOW_RESTORE => Some(CK_FLOW_RESTORE),
-        CK_FLOW_MOVE => Some(CK_FLOW_MOVE),
-        CK_FLOW_REORDER => Some(CK_FLOW_REORDER),
-        CK_FLOW_WATCH_SET => Some(CK_FLOW_WATCH_SET),
-        CK_FLOW_TRACKS_UPDATE => Some(CK_FLOW_TRACKS_UPDATE),
+        CK_STRAND_CREATE => Some(CK_STRAND_CREATE),
+        CK_STRAND_UPDATE => Some(CK_STRAND_UPDATE),
+        CK_STRAND_ARCHIVE => Some(CK_STRAND_ARCHIVE),
+        CK_STRAND_RESTORE => Some(CK_STRAND_RESTORE),
+        CK_STRAND_MOVE => Some(CK_STRAND_MOVE),
+        CK_STRAND_REORDER => Some(CK_STRAND_REORDER),
+        CK_STRAND_WATCH_SET => Some(CK_STRAND_WATCH_SET),
+        CK_STRAND_TRACKS_UPDATE => Some(CK_STRAND_TRACKS_UPDATE),
         CK_MORPH_CREATE => Some(CK_MORPH_CREATE),
         CK_MORPH_UPDATE => Some(CK_MORPH_UPDATE),
         CK_MORPH_ARCHIVE => Some(CK_MORPH_ARCHIVE),
@@ -482,8 +482,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_MODERATION_APPEAL_CLOSE => Some(CK_MODERATION_APPEAL_CLOSE),
         // G3.S2 — policy server declaration.
         CK_REALM_POLICY_SERVER => Some(CK_REALM_POLICY_SERVER),
-        // COT-06-004 — Realm default-Flow pointer.
-        CK_REALM_SET_DEFAULT_FLOW => Some(CK_REALM_SET_DEFAULT_FLOW),
+        // COT-06-004 — Realm default-Strand pointer.
+        CK_REALM_SET_DEFAULT_STRAND => Some(CK_REALM_SET_DEFAULT_STRAND),
         _ => Some(object_type),
     }
 }
@@ -613,25 +613,25 @@ pub fn is_space_container_lifecycle_kind(kind: &str) -> bool {
     )
 }
 
-/// Flow has no dedicated `ck.flow.tombstone` event in the spec event-kind
+/// Strand has no dedicated `ck.strand.tombstone` event in the spec event-kind
 /// registry — terminal state is reached via `ck.redaction`. Only archive /
 /// restore are lifecycle state-machine transitions here.
-pub fn is_flow_lifecycle_kind(kind: &str) -> bool {
-    matches!(kind, CK_FLOW_ARCHIVE | CK_FLOW_RESTORE)
+pub fn is_strand_lifecycle_kind(kind: &str) -> bool {
+    matches!(kind, CK_STRAND_ARCHIVE | CK_STRAND_RESTORE)
 }
 
-/// Morph has no dedicated tombstone event for the same reason as Flow.
+/// Morph has no dedicated tombstone event for the same reason as Strand.
 pub fn is_morph_lifecycle_kind(kind: &str) -> bool {
     matches!(kind, CK_MORPH_ARCHIVE | CK_MORPH_RESTORE)
 }
 
-/// Flow tracks update events. Distinct from lifecycle events
-/// (`is_flow_lifecycle_kind`) because tracks don't transition Flow.state;
-/// they manage entries in `Flow.tracks`. The state guard is "parent Flow
+/// Strand tracks update events. Distinct from lifecycle events
+/// (`is_strand_lifecycle_kind`) because tracks don't transition Strand.state;
+/// they manage entries in `Strand.tracks`. The state guard is "parent Strand
 /// MUST be Active" (spec §5.1 update rule), enforced via
-/// `check_flow_tracks_transition`.
-pub fn is_flow_tracks_kind(kind: &str) -> bool {
-    matches!(kind, CK_FLOW_TRACKS_UPDATE)
+/// `check_strand_tracks_transition`.
+pub fn is_strand_tracks_kind(kind: &str) -> bool {
+    matches!(kind, CK_STRAND_TRACKS_UPDATE)
 }
 
 // G3.S9: extensions (applet/bot/tsp) — stub event kinds. Wire-accept +

@@ -5,7 +5,7 @@
 //! - `POST /_cokret/find/directory/search-realms`       — fuzzy text + visibility filter
 //! - `POST /_cokret/find/directory/resolve-realm`       — by id / alias / invite_token /
 //!   signed_link
-//! - `POST /_cokret/find/directory/resolve-target`      — Realm / Flow / Message address preview
+//! - `POST /_cokret/find/directory/resolve-target`      — Realm / Strand / Message address preview
 //! - `POST /_cokret/find/directory/search-organizations`
 //! - `POST /_cokret/find/directory/resolve-organization`
 //! - `POST /_cokret/find/directory/search-actors`
@@ -266,7 +266,7 @@ async fn resolve_realm(
 #[endpoint(
     operation_id = "ck.find.directory.query.resolve_target",
     tags("directory"),
-    summary = "Resolve a Realm / Flow / Message share address to a policy-limited preview"
+    summary = "Resolve a Realm / Strand / Message share address to a policy-limited preview"
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.find.directory.query.resolve_target"))]
 async fn resolve_target(
@@ -311,7 +311,7 @@ async fn resolve_target(
             if !invite_token_matches_realm(state, realm_entry.realm_id.as_str(), token).await {
                 return Err(AppError::not_found("not found"));
             }
-            if parsed.flow.is_some()
+            if parsed.strand.is_some()
                 && !optional_structured_token_target_matches(
                     token,
                     &parsed,
@@ -402,8 +402,8 @@ async fn resolve_realm_for_address(
 fn target_kind_for_address(parsed: &cokret_sdk::ParsedAddress) -> TargetKind {
     if parsed.message.is_some() {
         TargetKind::Message
-    } else if parsed.flow.is_some() {
-        TargetKind::Flow
+    } else if parsed.strand.is_some() {
+        TargetKind::Strand
     } else {
         TargetKind::Realm
     }
@@ -620,14 +620,14 @@ fn member_count_bucket_label(count: usize) -> RealmMemberCountBucketLabel {
 }
 
 fn object_preview_for_address(parsed: &cokret_sdk::ParsedAddress) -> Option<Value> {
-    let flow_id = parsed.flow.as_deref().map(|flow| format!("ck:flow:{flow}"));
+    let strand_id = parsed.strand.as_deref().map(|strand| format!("ck:strand:{strand}"));
     let message_id = parsed
         .message
         .as_deref()
         .map(|message| format!("ck:message:{message}"));
-    flow_id.map(|flow_id| {
+    strand_id.map(|strand_id| {
         let mut preview = serde_json::Map::new();
-        preview.insert("flow_id".to_owned(), json!(flow_id));
+        preview.insert("strand_id".to_owned(), json!(strand_id));
         if let Some(message_id) = message_id {
             preview.insert("message_id".to_owned(), json!(message_id));
         }
@@ -712,7 +712,7 @@ fn optional_structured_token_target_matches(
             token_target_matches_claim(&claim, parsed, realm_id, effective_link_type)
         }
         Some(_) => false,
-        None => parsed.flow.is_none() && parsed.message.is_none(),
+        None => parsed.strand.is_none() && parsed.message.is_none(),
     }
 }
 

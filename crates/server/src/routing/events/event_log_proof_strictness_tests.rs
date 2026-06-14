@@ -307,7 +307,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
 
     let encrypted_envelope = |visibility: &str| {
         json!({
-            "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls-rfc9420",
@@ -397,7 +397,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
         cokret_sdk::RealmId::new(realm_id.to_owned()).unwrap(),
         kinds::CK_MESSAGE_CREATE,
         json!({
-            "flow_id": "ck:flow:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ck:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls-rfc9420",
@@ -537,18 +537,18 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let state = make_state(true);
     let envelope = json!({
         "payload": {
-            "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001"
+            "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001"
         }
     });
     let object = envelope.as_object().unwrap();
     let err = validate_event_schema_and_payload(
         &state,
-        "ck.flow.move",
+        "ck.strand.move",
         "ck.schema.event.v1",
         &envelope,
         object,
     )
-    .expect_err("flow.move without target/rank must fail payload validation");
+    .expect_err("strand.move without target/rank must fail payload validation");
     assert_eq!(err.code, "schema_violation");
 }
 
@@ -575,12 +575,12 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
 }
 
 #[test]
-fn event_payload_validator_enforces_flow_update_object_patch_schema() {
+fn event_payload_validator_enforces_strand_update_object_patch_schema() {
     let state = make_state(true);
-    let flow_id = "ck:flow:01904100-0000-7000-8000-f10dc0000001";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-f10dc0000001";
     let valid = json!({
         "payload": {
-            "target_ref": flow_id,
+            "target_ref": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "set",
@@ -591,16 +591,16 @@ fn event_payload_validator_enforces_flow_update_object_patch_schema() {
     });
     validate_event_schema_and_payload(
         &state,
-        "ck.flow.update",
+        "ck.strand.update",
         "ck.schema.event.v1",
         &valid,
         valid.as_object().unwrap(),
     )
-    .expect("canonical ck.flow.update object_patch_payload should validate");
+    .expect("canonical ck.strand.update object_patch_payload should validate");
 
     let invalid_patch_op = json!({
         "payload": {
-            "target_ref": flow_id,
+            "target_ref": strand_id,
             "patch": {
                 "fields.document": {
                     "$op": "replace",
@@ -611,12 +611,12 @@ fn event_payload_validator_enforces_flow_update_object_patch_schema() {
     });
     let err = validate_event_schema_and_payload(
         &state,
-        "ck.flow.update",
+        "ck.strand.update",
         "ck.schema.event.v1",
         &invalid_patch_op,
         invalid_patch_op.as_object().unwrap(),
     )
-    .expect_err("ck.flow.update patch operations must match ck.patch.v1 exactly");
+    .expect_err("ck.strand.update patch operations must match ck.patch.v1 exactly");
     assert_eq!(err.code, "schema_violation");
 }
 
@@ -644,7 +644,7 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
     let catalog = cokret_sdk::schema::event_payload_validator_catalog();
     let object_patch_kinds = [
         "ck.realm.update",
-        "ck.flow.update",
+        "ck.strand.update",
         "ck.morph.update",
         "ck.space.update",
         "ck.profile.update",
@@ -656,7 +656,7 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
     );
 
     for event_kind in object_patch_kinds {
-        let patch = if matches!(event_kind, "ck.flow.update" | "ck.morph.update") {
+        let patch = if matches!(event_kind, "ck.strand.update" | "ck.morph.update") {
             json!({ "metadata.title": { "$op": "set", "value": "Roadmap" } })
         } else {
             json!({ "title": { "$op": "set", "value": "Roadmap" } })
@@ -665,7 +665,7 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
             .validate_payload(
                 event_kind,
                 &json!({
-                        "target_ref": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
+                        "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                         "patch": patch
                 }),
             )
@@ -677,7 +677,7 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
                 .validate_payload(
                     event_kind,
                     &json!({
-                        "target_ref": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
+                        "target_ref": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                         "patch": {
                             "title": { "$op": "replace", "value": "Roadmap" }
                         }
@@ -706,9 +706,9 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
 
     catalog
         .validate_payload(
-            "ck.flow.tracks.update",
+            "ck.strand.tracks.update",
             &json!({
-                "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
+                "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                 "tracks": {
                     "discussion": {
                         "enabled": true,
@@ -718,19 +718,19 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
             }),
         )
         .unwrap_or_else(|err| {
-            panic!("ck.flow.tracks.update must accept canonical tracks map payload: {err}");
+            panic!("ck.strand.tracks.update must accept canonical tracks map payload: {err}");
         });
     assert!(
         catalog
             .validate_payload(
-                "ck.flow.tracks.update",
+                "ck.strand.tracks.update",
                 &json!({
                     "type": "legacy_track_update",
-                    "flow_id": "ck:flow:01904100-0000-7000-8000-f10dc0000001",
+                    "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                 }),
             )
             .is_err(),
-        "ck.flow.tracks.update must still reject retired `type` discriminators"
+        "ck.strand.tracks.update must still reject retired `type` discriminators"
     );
 }
 

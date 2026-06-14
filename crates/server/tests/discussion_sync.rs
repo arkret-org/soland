@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use soland::config::{AppConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::reducer::{
-    CircleLifecycleState, CircleProjection, FlowProjection, ObjectLifecycleState,
+    CircleLifecycleState, CircleProjection, StrandProjection, ObjectLifecycleState,
 };
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
@@ -206,7 +206,7 @@ async fn admit_member(
 
 async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) {
     let payload = json!({
-        "flow_id": flow_id_for_realm(realm_id),
+        "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {
             "kind": "ck.content.text",
@@ -290,13 +290,13 @@ fn install_projected_circle_scope(
         );
 }
 
-/// CKP-0007 — bind a Flow to a Circle scope in the projection. A message
-/// posted to this Flow inherits the Circle scope server-side (spec:
-/// `scope_circle_id` is a Flow field, never carried on the message).
-fn install_projected_flow_scope(
+/// CKP-0007 — bind a Strand to a Circle scope in the projection. A message
+/// posted to this Strand inherits the Circle scope server-side (spec:
+/// `scope_circle_id` is a Strand field, never carried on the message).
+fn install_projected_strand_scope(
     state: &AppState,
     realm_id: &str,
-    flow_id: &str,
+    strand_id: &str,
     circle_id: &str,
     created_by: &str,
 ) {
@@ -305,11 +305,11 @@ fn install_projected_flow_scope(
         .projection
         .lock()
         .expect("projection mutex")
-        .flows
+        .strands
         .insert(
-            flow_id.to_owned(),
-            FlowProjection {
-                flow_id: flow_id.to_owned(),
+            strand_id.to_owned(),
+            StrandProjection {
+                strand_id: strand_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 title: "Confidential discussion".to_owned(),
                 summary: None,
@@ -336,9 +336,9 @@ async fn send_circle_scoped_encrypted_message(
     // Spec-conforming encrypted message: `encrypted_content` (not the retired
     // `encrypted_payload`), `track_name`, and an aad carrying ONLY realm_id +
     // event_kind. The message does NOT carry scope_circle_id — its circle
-    // scope is derived server-side from the Flow (install_projected_flow_scope).
+    // scope is derived server-side from the Strand (install_projected_strand_scope).
     let payload = json!({
-        "flow_id": flow_id_for_realm(realm_id),
+        "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "encrypted_content": {
             "scheme": "mls-rfc9420",
@@ -498,11 +498,11 @@ fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
-fn flow_id_for_realm(realm_id: &str) -> String {
+fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ck:realm:")
-        .map(|suffix| format!("ck:flow:{suffix}"))
-        .unwrap_or_else(|| "ck:flow:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .map(|suffix| format!("ck:strand:{suffix}"))
+        .unwrap_or_else(|| "ck:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 fn event_canonical_digest(event: &Value) -> String {
@@ -668,12 +668,12 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         alice_did,
         &[alice_did, bob_did],
     );
-    // Bind the discussion Flow to the Circle. The message posted below carries
-    // NO scope_circle_id — soland derives its effective scope from this Flow.
-    install_projected_flow_scope(
+    // Bind the discussion Strand to the Circle. The message posted below carries
+    // NO scope_circle_id — soland derives its effective scope from this Strand.
+    install_projected_strand_scope(
         &state,
         &realm_id,
-        &flow_id_for_realm(&realm_id),
+        &strand_id_for_realm(&realm_id),
         &circle_id,
         alice_did,
     );
@@ -717,7 +717,7 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await
         .unwrap();
     assert_eq!(bob_read["event"]["event_id"], event_id);
-    // The Circle scope is server-derived from the Flow and surfaced as the
+    // The Circle scope is server-derived from the Strand and surfaced as the
     // authoritative `effective_scope` — NOT carried inside the encrypted
     // envelope's aad (spec: messages don't carry scope_circle_id).
     assert_eq!(bob_read["event"]["effective_scope"], circle_id);
@@ -763,7 +763,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.text",
@@ -788,7 +788,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "reply_to": root_message_ref.clone(),
             "content": {
@@ -925,7 +925,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll",
@@ -949,7 +949,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -968,7 +968,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -987,7 +987,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",
@@ -1022,7 +1022,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.close",
@@ -1040,7 +1040,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
         &realm_id,
         "ck.message.create",
         json!({
-            "flow_id": flow_id_for_realm(&realm_id),
+            "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
             "content": {
                 "kind": "ck.content.poll.response",

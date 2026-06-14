@@ -302,7 +302,7 @@ mod tests {
         assert!(is_write(&salvo::http::Method::DELETE));
         assert!(!is_write(&salvo::http::Method::GET));
         assert!(is_sensitive_read("/_cokret/self/keys/backups"));
-        assert!(is_sensitive_read("/_cokret/self/projection/flows"));
+        assert!(is_sensitive_read("/_cokret/self/projection/strands"));
         assert!(!is_sensitive_read("/_cokret/self/realms/r1/links"));
     }
 }

@@ -272,7 +272,7 @@ async fn snapshot_v1_multi_chunk_fixture_verifies_non_empty_audit_path() {
             &token,
             "did:web:alice.example",
             &realm_id,
-            &format!("ck:flow:multi-chunk-{:02}", seq % 4),
+            &format!("ck:strand:multi-chunk-{:02}", seq % 4),
             serde_json::json!({"body": body_text, "msgtype": "m.text", "seq": seq}),
             false,
         )

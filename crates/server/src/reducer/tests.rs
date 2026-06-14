@@ -274,7 +274,7 @@ fn message_create_and_query() {
         serde_json::json!({
             "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
             "sender": "did:web:alice",
-            "thread_id": "ck:flow:1",
+            "thread_id": "ck:strand:1",
             "content": {"kind": "ck.content.text", "body": "hello"}
         }),
     );
@@ -301,7 +301,7 @@ fn redaction_hides_message() {
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
-                "thread_id": "ck:flow:1",
+                "thread_id": "ck:strand:1",
                 "content": {"kind": "ck.content.text", "body": "hello"}
             }),
         ),
@@ -357,7 +357,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
             serde_json::json!({
                 "event_id": event_id,
                 "sender": "did:web:alice",
-                "thread_id": "ck:flow:1",
+                "thread_id": "ck:strand:1",
                 "content": {"kind": "ck.content.text", "body": "hello"}
             }),
         ),
@@ -602,7 +602,7 @@ fn message_revise_creates_chain() {
             serde_json::json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
-                "thread_id": "ck:flow:1",
+                "thread_id": "ck:strand:1",
                 "content": {"kind": "ck.content.text", "body": "original"}
             }),
         ),
@@ -1588,7 +1588,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
     let board_id = "ck:space:01904100-0000-7000-8000-0000000000b0";
     let list_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-0000000000f1";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-0000000000f1";
 
     state.apply(
         &make_operation(
@@ -1626,11 +1626,11 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": {
                         "title": "Review PR",
@@ -1655,12 +1655,12 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         ),
         &hlc,
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
-        .expect("flow position relation");
+        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),
         Some("r007")
@@ -1681,12 +1681,12 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         ),
         &hlc,
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
-        .expect("flow position relation");
+        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),
         Some("r007")
@@ -1701,7 +1701,7 @@ fn board_archive_cascades_child_lists_and_cards() {
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
     let board_id = "ck:space:01904100-0000-7000-8000-0000000000b0";
     let list_id = "ck:space:01904100-0000-7000-8000-0000000000a1";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-0000000000f1";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-0000000000f1";
 
     state.apply(
         &make_operation(
@@ -1739,11 +1739,11 @@ fn board_archive_cascades_child_lists_and_cards() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": {
                         "title": "Review PR",
@@ -1776,7 +1776,7 @@ fn board_archive_cascades_child_lists_and_cards() {
         state.space_containers[list_id].state,
         SpaceContainerLifecycleState::Archived
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
 
     state.apply(
         &make_operation(
@@ -1790,37 +1790,37 @@ fn board_archive_cascades_child_lists_and_cards() {
         state.space_containers[list_id].state,
         SpaceContainerLifecycleState::Active
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(flow_id))
-        .expect("flow position relation");
+        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),
         Some("r007")
     );
 }
 
-// ── Flow lifecycle state-machine tests ──
+// ── Strand lifecycle state-machine tests ──
 
-/// End-to-end Flow lifecycle through the dispatcher: create → archive →
-/// restore (no tombstone for Flow per spec). Verifies projection state
+/// End-to-end Strand lifecycle through the dispatcher: create → archive →
+/// restore (no tombstone for Strand per spec). Verifies projection state
 /// transitions correctly and effects carry the new state.
 #[test]
-fn flow_lifecycle_round_trip() {
+fn strand_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-1fb50799ad50";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-1fb50799ad50";
 
     let create_effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Payment refactor",
                     "created_by": "did:web:alice.example",
@@ -1831,65 +1831,65 @@ fn flow_lifecycle_round_trip() {
     );
     assert!(matches!(
         create_effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Active,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
 
     let archive_effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_ARCHIVE,
+            crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "strand_id": strand_id, "sender": "did:web:alice.example" }),
         ),
         &hlc,
     );
     assert!(matches!(
         archive_effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Archived,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
 
     let restore_effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_RESTORE,
+            crate::kinds::CK_STRAND_RESTORE,
             realm_id,
-            serde_json::json!({ "flow_id": flow_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "strand_id": strand_id, "sender": "did:web:alice.example" }),
         ),
         &hlc,
     );
     assert!(matches!(
         restore_effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Active,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
 }
 
-/// Preflight `check_flow_lifecycle_transition` rejects illegal
+/// Preflight `check_strand_lifecycle_transition` rejects illegal
 /// transitions with the spec-canonical reason codes per
 /// `common-fields.md §5.1`.
 #[test]
-fn flow_lifecycle_preflight_rejects_illegal_transitions() {
+fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-1fb50799ad51";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-1fb50799ad51";
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Refactor",
                     "created_by": "did:web:alice.example",
@@ -1899,61 +1899,61 @@ fn flow_lifecycle_preflight_rejects_illegal_transitions() {
         &hlc,
     );
 
-    // restore on Active → flow_not_archived
+    // restore on Active → strand_not_archived
     let restore_op = make_operation(
-        crate::kinds::CK_FLOW_RESTORE,
+        crate::kinds::CK_STRAND_RESTORE,
         realm_id,
-        serde_json::json!({ "flow_id": flow_id }),
+        serde_json::json!({ "strand_id": strand_id }),
     );
     assert_eq!(
-        state.check_flow_lifecycle_transition(&restore_op),
-        Err("flow_not_archived")
+        state.check_strand_lifecycle_transition(&restore_op),
+        Err("strand_not_archived")
     );
 
-    // Archive then re-archive → flow_not_active
+    // Archive then re-archive → strand_not_active
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_ARCHIVE,
+            crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "flow_id": flow_id }),
+            serde_json::json!({ "strand_id": strand_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
-        crate::kinds::CK_FLOW_ARCHIVE,
+        crate::kinds::CK_STRAND_ARCHIVE,
         realm_id,
-        serde_json::json!({ "flow_id": flow_id }),
+        serde_json::json!({ "strand_id": strand_id }),
     );
     assert_eq!(
-        state.check_flow_lifecycle_transition(&archive_again),
-        Err("flow_not_active")
+        state.check_strand_lifecycle_transition(&archive_again),
+        Err("strand_not_active")
     );
 
-    // Update on Archived → flow_not_active
+    // Update on Archived → strand_not_active
     let update_op = make_operation(
-        crate::kinds::CK_FLOW_UPDATE,
+        crate::kinds::CK_STRAND_UPDATE,
         realm_id,
         serde_json::json!({
-            "flow_id": flow_id,
+            "strand_id": strand_id,
             "patch": { "title": "Edit while archived" }
         }),
     );
     assert_eq!(
-        state.check_flow_lifecycle_transition(&update_op),
-        Err("flow_not_active")
+        state.check_strand_lifecycle_transition(&update_op),
+        Err("strand_not_active")
     );
 }
 
 #[test]
-fn flow_lifecycle_preflight_tolerates_unknown_flow() {
+fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        crate::kinds::CK_FLOW_ARCHIVE,
+        crate::kinds::CK_STRAND_ARCHIVE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "flow_id": "ck:flow:nope-not-here" }),
+        serde_json::json!({ "strand_id": "ck:strand:nope-not-here" }),
     );
     assert_eq!(
-        state.check_flow_lifecycle_transition(&archive_unknown),
+        state.check_strand_lifecycle_transition(&archive_unknown),
         Ok(())
     );
 }
@@ -2095,26 +2095,26 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     );
 }
 
-// ── Flow position events (move / reorder) ──
+// ── Strand position events (move / reorder) ──
 
-/// `ck.flow.move` / `ck.flow.reorder` touch the Flow projection's
+/// `ck.strand.move` / `ck.strand.reorder` touch the Strand projection's
 /// `updated_at` / `updated_by` but do NOT change state. Cell-write
 /// happens on the Move/Seal pipeline (out of scope here).
 #[test]
-fn flow_position_events_touch_projection_without_changing_state() {
+fn strand_position_events_touch_projection_without_changing_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-2fb50799ad50";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-2fb50799ad50";
     let board_space_id = "ck:space:01904100-0000-7000-8000-c10dc0000001";
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Launch",
                     "created_by": "did:web:alice.example",
@@ -2123,21 +2123,21 @@ fn flow_position_events_touch_projection_without_changing_state() {
         ),
         &hlc,
     );
-    let created_state = state.flows[flow_id].state;
-    let created_updated_at = state.flows[flow_id].updated_at;
+    let created_state = state.strands[strand_id].state;
+    let created_updated_at = state.strands[strand_id].updated_at;
     assert_eq!(created_state, ObjectLifecycleState::Active);
     assert!(
         created_updated_at.is_none(),
         "create does not set updated_at"
     );
 
-    // ck.flow.move — state unchanged, updated_at advances.
+    // ck.strand.move — state unchanged, updated_at advances.
     let move_effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_MOVE,
+            crate::kinds::CK_STRAND_MOVE,
             realm_id,
             serde_json::json!({
-                "flow_id": flow_id,
+                "strand_id": strand_id,
                 "board_space_id": board_space_id,
                 "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a1",
@@ -2148,28 +2148,28 @@ fn flow_position_events_touch_projection_without_changing_state() {
     );
     assert!(matches!(
         move_effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Active,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
     assert!(
-        state.flows[flow_id].updated_at.is_some(),
+        state.strands[strand_id].updated_at.is_some(),
         "move bumps updated_at"
     );
     assert_eq!(
-        state.flows[flow_id].updated_by.as_deref(),
+        state.strands[strand_id].updated_by.as_deref(),
         Some("did:web:alice.example")
     );
 
-    // ck.flow.reorder — same family, same effect.
+    // ck.strand.reorder — same family, same effect.
     let reorder_effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_REORDER,
+            crate::kinds::CK_STRAND_REORDER,
             realm_id,
             serde_json::json!({
-                "flow_id": flow_id,
+                "strand_id": strand_id,
                 "board_space_id": board_space_id,
                 "space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a2",
@@ -2180,26 +2180,26 @@ fn flow_position_events_touch_projection_without_changing_state() {
     );
     assert!(matches!(
         reorder_effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Active,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
 }
 
-/// Unknown Flow tolerated by the position-touch helper, same convention
+/// Unknown Strand tolerated by the position-touch helper, same convention
 /// as the lifecycle helpers (causal / backfill ordering).
 #[test]
-fn flow_position_events_tolerate_unknown_flow() {
+fn strand_position_events_tolerate_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_MOVE,
+            crate::kinds::CK_STRAND_MOVE,
             "ck:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "flow_id": "ck:flow:nope-not-here",
+                "strand_id": "ck:strand:nope-not-here",
                 "board_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000001",
                 "target_space_id": "ck:space:01904100-0000-7000-8000-c10dc0000002",
                 "rank": "a1",
@@ -2210,34 +2210,34 @@ fn flow_position_events_tolerate_unknown_flow() {
     assert!(matches!(effect, ProjectionEffect::Ignored));
 }
 
-// ── ck.redaction -> Flow / Morph terminal-state push ──
+// ── ck.redaction -> Strand / Morph terminal-state push ──
 
-/// `ck.redaction` carrying `object_ref: ck:flow:...` flips the
-/// FlowProjection state to Redacted (terminal) per spec
+/// `ck.redaction` carrying `object_ref: ck:strand:...` flips the
+/// StrandProjection state to Redacted (terminal) per spec
 /// common-fields.md §5.1.
 #[test]
-fn redaction_with_flow_object_ref_flips_to_redacted() {
+fn redaction_with_strand_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-3fb50799ad50";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-3fb50799ad50";
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Sensitive flow",
+                    "title": "Sensitive strand",
                     "created_by": "did:web:alice.example",
                 }
             }),
         ),
         &hlc,
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
 
     let effect = state.apply(
         &make_operation(
@@ -2245,7 +2245,7 @@ fn redaction_with_flow_object_ref_flips_to_redacted() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000001",
-                "object_ref": flow_id,
+                "object_ref": strand_id,
                 "by": "did:web:alice.example",
                 "reason": "policy violation",
             }),
@@ -2254,13 +2254,13 @@ fn redaction_with_flow_object_ref_flips_to_redacted() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Redacted,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Redacted);
-    assert!(state.flows[flow_id].state.is_terminal());
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Redacted);
+    assert!(state.strands[strand_id].state.is_terminal());
 }
 
 /// Same for Morph via `object_ref: ck:morph:...`.
@@ -2310,25 +2310,25 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
 }
 
 /// Preflight rejects `ck.redaction` against an already-terminal
-/// Flow with `flow_already_terminal`. Mirror for Morph also covered.
+/// Strand with `strand_already_terminal`. Mirror for Morph also covered.
 #[test]
 fn redaction_preflight_rejects_against_already_terminal() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-3fb50799ad51";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-3fb50799ad51";
     let morph_id = "ck:morph:01904100-0000-7000-8000-3fb50799ad61";
 
-    // Materialise + redact a Flow once (legal first redaction).
+    // Materialise + redact a Strand once (legal first redaction).
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
-                    "title": "Flow",
+                    "title": "Strand",
                     "created_by": "did:web:alice.example",
                 }
             }),
@@ -2341,25 +2341,25 @@ fn redaction_preflight_rejects_against_already_terminal() {
             realm_id,
             serde_json::json!({
                 "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000003",
-                "object_ref": flow_id,
+                "object_ref": strand_id,
             }),
         ),
         &hlc,
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Redacted);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Redacted);
 
-    // Second redaction against the now-Redacted Flow → preflight rejects.
+    // Second redaction against the now-Redacted Strand → preflight rejects.
     let second_redact = make_operation(
         crate::kinds::CK_REDACTION,
         realm_id,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000004",
-            "object_ref": flow_id,
+            "object_ref": strand_id,
         }),
     );
     assert_eq!(
         state.check_redaction_target_transition(&second_redact),
-        Err("flow_already_terminal")
+        Err("strand_already_terminal")
     );
 
     // Same path for Morph.
@@ -2404,26 +2404,26 @@ fn redaction_preflight_rejects_against_already_terminal() {
     );
 }
 
-// ── Flow tracks update ──
+// ── Strand tracks update ──
 
-/// `ck.flow.tracks.update` touches Flow.updated_at but never flips
-/// lifecycle state. Parent Flow must be Active or the touch is
-/// rejected with `flow_not_active` (defence-in-depth in the reducer,
+/// `ck.strand.tracks.update` touches Strand.updated_at but never flips
+/// lifecycle state. Parent Strand must be Active or the touch is
+/// rejected with `strand_not_active` (defence-in-depth in the reducer,
 /// mirroring the admission preflight).
 #[test]
-fn flow_tracks_update_touches_active_flow_only() {
+fn strand_tracks_update_touches_active_strand_only() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-4fb50799ad50";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad50";
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Launch",
                     "created_by": "did:web:alice.example",
@@ -2435,10 +2435,10 @@ fn flow_tracks_update_touches_active_flow_only() {
 
     let effect = state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_TRACKS_UPDATE,
+            crate::kinds::CK_STRAND_TRACKS_UPDATE,
             realm_id,
             serde_json::json!({
-                "flow_id": flow_id,
+                "strand_id": strand_id,
                 "patch": {
                     "tracks": {
                         "synthesis": {"profile": "synthesis"}
@@ -2451,32 +2451,32 @@ fn flow_tracks_update_touches_active_flow_only() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::FlowLifecycle {
+        ProjectionEffect::StrandLifecycle {
             new_state: ObjectLifecycleState::Active,
             ..
         }
     ));
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Active);
-    assert!(state.flows[flow_id].updated_at.is_some());
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Active);
+    assert!(state.strands[strand_id].updated_at.is_some());
 }
 
-/// Preflight returns `flow_not_active` when parent Flow is archived
+/// Preflight returns `strand_not_active` when parent Strand is archived
 /// (or any non-Active state). Reducer-level enforcement is also
 /// present as defence-in-depth — both verified here.
 #[test]
-fn flow_tracks_preflight_rejects_when_flow_archived() {
+fn strand_tracks_preflight_rejects_when_strand_archived() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ck:realm:01904100-0000-7000-8000-cfc039892036";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-4fb50799ad51";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-4fb50799ad51";
 
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_CREATE,
+            crate::kinds::CK_STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
-                    "id": flow_id,
+                    "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Refactor",
                     "created_by": "did:web:alice.example",
@@ -2487,48 +2487,48 @@ fn flow_tracks_preflight_rejects_when_flow_archived() {
     );
     state.apply(
         &make_operation(
-            crate::kinds::CK_FLOW_ARCHIVE,
+            crate::kinds::CK_STRAND_ARCHIVE,
             realm_id,
-            serde_json::json!({ "flow_id": flow_id }),
+            serde_json::json!({ "strand_id": strand_id }),
         ),
         &hlc,
     );
-    assert_eq!(state.flows[flow_id].state, ObjectLifecycleState::Archived);
+    assert_eq!(state.strands[strand_id].state, ObjectLifecycleState::Archived);
 
     let tracks_op = make_operation(
-        crate::kinds::CK_FLOW_TRACKS_UPDATE,
+        crate::kinds::CK_STRAND_TRACKS_UPDATE,
         realm_id,
         serde_json::json!({
-            "flow_id": flow_id,
+            "strand_id": strand_id,
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
     );
     assert_eq!(
-        state.check_flow_tracks_transition(&tracks_op),
-        Err("flow_not_active")
+        state.check_strand_tracks_transition(&tracks_op),
+        Err("strand_not_active")
     );
 
     // Reducer-level defence: also rejects directly.
     let effect = state.apply(&tracks_op, &hlc);
     assert!(matches!(
         effect,
-        ProjectionEffect::Rejected { ref reason } if reason == "flow_not_active"
+        ProjectionEffect::Rejected { ref reason } if reason == "strand_not_active"
     ));
 }
 
-/// Unknown Flow tolerated at the preflight (causal / backfill).
+/// Unknown Strand tolerated at the preflight (causal / backfill).
 #[test]
-fn flow_tracks_preflight_tolerates_unknown_flow() {
+fn strand_tracks_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let tracks_op = make_operation(
-        crate::kinds::CK_FLOW_TRACKS_UPDATE,
+        crate::kinds::CK_STRAND_TRACKS_UPDATE,
         "ck:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
-            "flow_id": "ck:flow:nope-not-here",
+            "strand_id": "ck:strand:nope-not-here",
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
     );
-    assert_eq!(state.check_flow_tracks_transition(&tracks_op), Ok(()));
+    assert_eq!(state.check_strand_tracks_transition(&tracks_op), Ok(()));
 }
 
 /// Preflight tolerates redactions against unknown objects (causal /
@@ -2544,7 +2544,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         realm_id,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-1d10dc000007",
-            "object_ref": "ck:flow:nope-not-here",
+            "object_ref": "ck:strand:nope-not-here",
         }),
     );
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));

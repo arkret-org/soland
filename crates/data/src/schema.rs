@@ -370,13 +370,13 @@ diesel::table! {
     }
 }
 
-// Flow / Morph projection state for ck.flow.* / ck.morph.* lifecycle
+// Strand / Morph projection state for ck.strand.* / ck.morph.* lifecycle
 // events. Spec: cokret-spec/v1/zh/models/common-fields.md §5.1
 // (canonical state-transition table). State enum mirrors ObjectState
 // from cokret-sdk: active / archived / deleted / redacted (no
-// "tombstoned" — Flow / Morph have no dedicated tombstone event).
+// "tombstoned" — Strand / Morph have no dedicated tombstone event).
 diesel::table! {
-    projection_flows (id) {
+    projection_strands (id) {
         id -> Uuid,
         realm_id -> Uuid,
         title -> Text,
@@ -464,7 +464,7 @@ diesel::table! {
         participants_key -> Text,
         participants_unordered -> Array<Text>,
         realm_id -> Uuid,
-        main_flow_id -> Uuid,
+        main_strand_id -> Uuid,
         binding_event_ref -> Text,
         state -> Text,
         created_at -> Timestamptz,
@@ -508,7 +508,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     space_state_events,
     account_datas,
     projection_spaces,
-    projection_flows,
+    projection_strands,
     projection_morphs,
     projection_events,
     contacts,

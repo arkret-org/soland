@@ -426,7 +426,7 @@ pub(crate) async fn validate_event_envelope(
     let authorized_refs = event_semantic_refs(object, state, MAX_EVENT_REFS)?;
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let canonical_digest = event_digest(&canonical_bytes);
-    validate_flow_watch_audit_pair(
+    validate_strand_watch_audit_pair(
         state,
         &kind,
         object,
@@ -454,7 +454,7 @@ pub(crate) async fn validate_event_envelope(
     })
 }
 
-async fn projected_media_plaintext_service_present(
+pub(super) async fn projected_media_plaintext_service_present(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
@@ -485,7 +485,7 @@ pub(crate) fn payload_declares_media_plaintext_service(payload: &Value, service_
         })
 }
 
-fn projected_mls_governance_binding_covers_policy_root(
+pub(super) fn projected_mls_governance_binding_covers_policy_root(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
@@ -604,7 +604,7 @@ fn mls_governance_value_covers_policy_root(
     })
 }
 
-fn validate_event_critical_features(
+pub(super) fn validate_event_critical_features(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
     let supported = [
@@ -959,7 +959,7 @@ fn required_payload_string(
         })
 }
 
-async fn validate_flow_watch_audit_pair(
+async fn validate_strand_watch_audit_pair(
     state: &AppState,
     kind: &str,
     object: &serde_json::Map<String, Value>,
@@ -967,7 +967,7 @@ async fn validate_flow_watch_audit_pair(
     actor_id: &str,
     canonical_digest: &str,
 ) -> Result<(), EventValidationError> {
-    if kind != kinds::CK_FLOW_WATCH_SET {
+    if kind != kinds::CK_STRAND_WATCH_SET {
         return Ok(());
     }
     let payload = object
@@ -977,7 +977,7 @@ async fn validate_flow_watch_audit_pair(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "flow watch payload must be an object",
+                "strand watch payload must be an object",
             )
         })?;
     let target_actor = payload
@@ -987,7 +987,7 @@ async fn validate_flow_watch_audit_pair(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "flow watch payload requires watcher_actor_id",
+                "strand watch payload requires watcher_actor_id",
             )
         })?;
     if target_actor == actor_id {
@@ -1002,18 +1002,18 @@ async fn validate_flow_watch_audit_pair(
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
             MANAGE_OTHERS_AUDIT_MISSING,
-            "manage_others flow watch writes cannot set muted or public levels",
+            "manage_others strand watch writes cannot set muted or public levels",
         ));
     }
     let audit_refs = event_refs_with_role(object, "audit_pair")?;
     let Some(audit_ref) = audit_refs.first() else {
         return Err(manage_others_audit_error(
-            "cross-actor flow watch writes require refs[role=audit_pair]",
+            "cross-actor strand watch writes require refs[role=audit_pair]",
         ));
     };
     if audit_refs.len() != 1 {
         return Err(manage_others_audit_error(
-            "cross-actor flow watch writes require exactly one audit_pair ref",
+            "cross-actor strand watch writes require exactly one audit_pair ref",
         ));
     }
     let audit_record = state
@@ -1033,19 +1033,19 @@ async fn validate_flow_watch_audit_pair(
         .get("payload")
         .and_then(Value::as_object)
         .ok_or_else(|| manage_others_audit_error("audit_pair payload is invalid"))?;
-    let flow_id = payload.get("flow_id").and_then(Value::as_str).unwrap_or("");
+    let strand_id = payload.get("strand_id").and_then(Value::as_str).unwrap_or("");
     let checks = [
         ("access_kind", "watch_set_others"),
         ("writer_did", actor_id),
         ("target_actor_id", target_actor),
-        ("target_ref", flow_id),
+        ("target_ref", strand_id),
         ("paired_event_id", event_id),
         ("paired_event_digest", canonical_digest),
     ];
     for (field, expected) in checks {
         if audit_payload.get(field).and_then(Value::as_str) != Some(expected) {
             return Err(manage_others_audit_error(
-                "audit_pair payload does not match the flow watch event",
+                "audit_pair payload does not match the strand watch event",
             ));
         }
     }
@@ -1093,7 +1093,7 @@ fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError
     )
 }
 
-fn validate_event_time_fields(
+pub(super) fn validate_event_time_fields(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
@@ -1154,7 +1154,7 @@ fn validate_event_time_fields(
     Ok(())
 }
 
-fn validate_event_schema_and_payload(
+pub(super) fn validate_event_schema_and_payload(
     state: &AppState,
     kind: &str,
     _schema_id: &str,
@@ -1256,7 +1256,7 @@ fn wire_rejection_to_validation_error(
     event_validation_error(StatusCode::BAD_REQUEST, rejection.reason, rejection.message)
 }
 
-fn validate_member_identity_proof(
+pub(super) fn validate_member_identity_proof(
     state: &AppState,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
@@ -1518,7 +1518,7 @@ fn validate_space_container_lifecycle_payload(payload: &Value) -> Result<(), Eve
     Ok(())
 }
 
-fn event_requirements_schema_id(
+pub(super) fn event_requirements_schema_id(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
@@ -1589,7 +1589,7 @@ fn validate_event_audience_fields(
     Ok(())
 }
 
-async fn validate_event_proofs(
+pub(super) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
     session: &SessionRecord,

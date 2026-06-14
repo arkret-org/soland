@@ -1,12 +1,12 @@
-//! Flow ID derivation + discussion-track projection helpers.
+//! Strand ID derivation + discussion-track projection helpers.
 //!
-//! Flow IDs are derived from Realm IDs via typed-id → `ck:flow:` re-tagging
+//! Strand IDs are derived from Realm IDs via typed-id → `ck:strand:` re-tagging
 //! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
 //! discussion track as the const string `discussion`.
 //!
 //! All fns are `pub` because sync/projection writers consume them.
 //! This is a derivation layer the server fakes for clients that already
-//! speak the flow protocol; a future real `ck.flow.*` reducer state
+//! speak the strand protocol; a future real `ck.strand.*` reducer state
 //! will replace it once the wire schema lands.
 
 use serde_json::json;
@@ -20,13 +20,13 @@ pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option
         .map(|suffix| format!("{to_prefix}{suffix}"))
 }
 
-pub fn derived_flow_id(seed: &str) -> String {
+pub fn derived_strand_id(seed: &str) -> String {
     let digest = sha256_hex(seed.as_bytes());
-    format!("ck:flow:{}", &digest[..26])
+    format!("ck:strand:{}", &digest[..26])
 }
 
-pub fn flow_id_from_realm_id(realm_id: &str) -> String {
-    retag_typed_id(realm_id, "ck:realm:", "ck:flow:").unwrap_or_else(|| derived_flow_id(realm_id))
+pub fn strand_id_from_realm_id(realm_id: &str) -> String {
+    retag_typed_id(realm_id, "ck:realm:", "ck:strand:").unwrap_or_else(|| derived_strand_id(realm_id))
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {
@@ -34,33 +34,33 @@ pub fn message_id_from_event_id(event_id: &str) -> String {
         .unwrap_or_else(|| format!("ck:message:{event_id}"))
 }
 
-pub fn default_discussion_track(_flow_id: &str, _track_id: &str) -> serde_json::Value {
+pub fn default_discussion_track(_strand_id: &str, _track_id: &str) -> serde_json::Value {
     json!("discussion")
 }
 
-pub fn flow_id_for_projection_event(event: &ProjectionEventRecord) -> Option<String> {
+pub fn strand_id_for_projection_event(event: &ProjectionEventRecord) -> Option<String> {
     event
         .payload
-        .get("flow_id")
+        .get("strand_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .or_else(|| Some(flow_id_from_realm_id(&event.realm_id)))
+        .or_else(|| Some(strand_id_from_realm_id(&event.realm_id)))
 }
 
 pub fn discussion_track_for_projection_event(
     event: &ProjectionEventRecord,
-    flow_id: Option<&str>,
+    strand_id: Option<&str>,
 ) -> Option<serde_json::Value> {
-    let flow_id = flow_id?;
+    let strand_id = strand_id?;
     let track_id = event
         .payload
         .get("thread_id")
         .and_then(|value| value.as_str())
         .unwrap_or(event.realm_id.as_str());
-    Some(default_discussion_track(flow_id, track_id))
+    Some(default_discussion_track(strand_id, track_id))
 }
 
-pub async fn flow_history_visibility_for_realm(state: &AppState, realm_id: &str) -> &'static str {
+pub async fn strand_history_visibility_for_realm(state: &AppState, realm_id: &str) -> &'static str {
     if realm_discoverability(state, realm_id).await == "public" {
         "shared"
     } else {
@@ -68,7 +68,7 @@ pub async fn flow_history_visibility_for_realm(state: &AppState, realm_id: &str)
     }
 }
 
-pub async fn flow_projection_for_realm(
+pub async fn strand_projection_for_realm(
     state: &AppState,
     realm_id: &str,
     title: &str,
@@ -94,16 +94,16 @@ pub async fn flow_projection_for_realm(
         .map(|meta| meta.updated_at)
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
-    let history_visibility = flow_history_visibility_for_realm(state, realm_id).await;
+    let history_visibility = strand_history_visibility_for_realm(state, realm_id).await;
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
     // (see cokret-spec `artifacts/registry/forbidden-wire-fields.json`
     // entries `kind=room` and `room_kind`); Realm is the v1 boundary and
-    // the Flow.kind discriminator MUST be a v1 value (e.g. "discussion").
+    // the Strand.kind discriminator MUST be a v1 value (e.g. "discussion").
     json!({
-        "id": flow_id_from_realm_id(realm_id),
-        "flow_id": flow_id_from_realm_id(realm_id),
-        "type": "flow",
-        "schema": "ck.schema.flow.v1",
+        "id": strand_id_from_realm_id(realm_id),
+        "strand_id": strand_id_from_realm_id(realm_id),
+        "type": "strand",
+        "schema": "ck.schema.strand.v1",
         "realm_id": realm_id,
         "kind": "discussion",
         "title": title,

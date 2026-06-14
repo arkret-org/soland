@@ -24,14 +24,14 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
-        // CKP-0007: derive the message's circle scope from its Flow, never
-        // from the message payload (spec: scope_circle_id is a Flow field).
-        let flow_scope = operation
+        // CKP-0007: derive the message's circle scope from its Strand, never
+        // from the message payload (spec: scope_circle_id is a Strand field).
+        let strand_scope = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(Value::as_str)
-            .and_then(|flow_id| self.flow_scope_circle_id(flow_id));
-        let content = message_content_from_payload(&operation.payload, flow_scope);
+            .and_then(|strand_id| self.strand_scope_circle_id(strand_id));
+        let content = message_content_from_payload(&operation.payload, strand_scope);
         let encrypted = operation
             .payload
             .get("encrypted")
@@ -276,7 +276,7 @@ impl ProjectionState {
     /// resets the cas-register and removes the tombstone.
     ///
     /// When the payload also carries `object_ref` / `target_object_ref`
-    /// naming a `ck:flow:` or `ck:morph:` typed-id, the redaction
+    /// naming a `ck:strand:` or `ck:morph:` typed-id, the redaction
     /// additionally flips the corresponding projection's state to
     /// `ObjectLifecycleState::Redacted` per spec common-fields.md §5.1.
     /// Space containers are intentionally excluded — they have no Redacted
@@ -335,7 +335,7 @@ impl ProjectionState {
             msg.redacted_at = Some(operation.created_at);
         }
 
-        // Flow / Morph object-level redaction. If payload
+        // Strand / Morph object-level redaction. If payload
         // carries an `object_ref` (or fallback `target_object_ref`)
         // naming a typed-id, push the projection to the Redacted terminal
         // state. State-machine guard against terminal source is policed
@@ -349,13 +349,13 @@ impl ProjectionState {
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
         if let Some(object_ref) = redaction_object_ref(operation) {
-            if let Some(flow) = self.flows.get_mut(&object_ref) {
-                flow.state = ObjectLifecycleState::Redacted;
-                flow.state_changed_at = Some(operation.created_at);
-                flow.updated_by.clone_from(&updated_by);
-                flow.updated_at = Some(operation.created_at);
-                return ProjectionEffect::FlowLifecycle {
-                    flow_id: object_ref,
+            if let Some(strand) = self.strands.get_mut(&object_ref) {
+                strand.state = ObjectLifecycleState::Redacted;
+                strand.state_changed_at = Some(operation.created_at);
+                strand.updated_by.clone_from(&updated_by);
+                strand.updated_at = Some(operation.created_at);
+                return ProjectionEffect::StrandLifecycle {
+                    strand_id: object_ref,
                     new_state: ObjectLifecycleState::Redacted,
                 };
             }
@@ -596,7 +596,7 @@ impl ProjectionState {
         };
         if matches!(
             read_scope.kind.as_str(),
-            "flow_discussion" | "flow_synthesis"
+            "strand_discussion" | "strand_synthesis"
         ) {
             return ProjectionEffect::Ignored;
         }

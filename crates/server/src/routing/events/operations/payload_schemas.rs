@@ -234,27 +234,27 @@ pub(crate) const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
         "space parent operation requires expected_parent_space_id",
     ),
 ];
-// Flow / Morph lifecycle payload requirements. The spec
+// Strand / Morph lifecycle payload requirements. The spec
 // `event-payload.schema.json` `object_lifecycle_payload` shape requires one
 // of `target_ref` / `object_ref` / `status`; soland additionally accepts the
-// legacy `flow_id` field name for backwards compatibility with older
+// legacy `strand_id` field name for backwards compatibility with older
 // builders. The first field present (in spec-canonical order) names the
-// target Flow; `apply_flow_lifecycle` reads them with the same precedence.
-pub(crate) const FLOW_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref", "flow_id"];
-pub(crate) const FLOW_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
-    FLOW_LIFECYCLE_ID_FIELDS,
-    "flow lifecycle operation requires target_ref (or flow_id)",
+// target Strand; `apply_strand_lifecycle` reads them with the same precedence.
+pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref", "strand_id"];
+pub(crate) const STRAND_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
+    STRAND_LIFECYCLE_ID_FIELDS,
+    "strand lifecycle operation requires target_ref (or strand_id)",
 )];
-pub(crate) const FLOW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
+pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::Required(
     "object",
-    "flow create operation requires object",
+    "strand create operation requires object",
 )];
-pub(crate) const FLOW_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
-        &["target_ref", "flow_id"],
-        "flow update operation requires target_ref",
+        &["target_ref", "strand_id"],
+        "strand update operation requires target_ref",
     ),
-    PayloadRequirement::Required("patch", "flow update operation requires patch"),
+    PayloadRequirement::Required("patch", "strand update operation requires patch"),
 ];
 // `ck.morph.archive` / `ck.morph.restore` payload: just `morph_id`.
 pub(crate) const MORPH_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
@@ -292,58 +292,58 @@ pub(crate) const MORPH_SCHEMA_MIGRATE_REQUIREMENTS: &[PayloadRequirement] = &[
         "morph schema_migrate operation requires compatibility_class",
     ),
 ];
-// Flow position events (ck.flow.move / ck.flow.reorder).
-pub(crate) const FLOW_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id"];
-pub(crate) const FLOW_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id"];
-pub(crate) const FLOW_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id"];
-pub(crate) const FLOW_MOVE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
+// Strand position events (ck.strand.move / ck.strand.reorder).
+pub(crate) const STRAND_POSITION_BOARD_FIELDS: &[&str] = &["board_space_id"];
+pub(crate) const STRAND_MOVE_TARGET_FIELDS: &[&str] = &["target_space_id"];
+pub(crate) const STRAND_REORDER_SPACE_FIELDS: &[&str] = &["space_id", "list_space_id"];
+pub(crate) const STRAND_MOVE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("strand_id", "strand position operation requires strand_id"),
     PayloadRequirement::AnyOf(
-        FLOW_POSITION_BOARD_FIELDS,
-        "flow position operation requires board_space_id",
+        STRAND_POSITION_BOARD_FIELDS,
+        "strand position operation requires board_space_id",
     ),
     PayloadRequirement::AnyOf(
-        FLOW_MOVE_TARGET_FIELDS,
-        "flow move operation requires target_space_id",
+        STRAND_MOVE_TARGET_FIELDS,
+        "strand move operation requires target_space_id",
     ),
-    PayloadRequirement::Required("rank", "flow move operation requires rank"),
+    PayloadRequirement::Required("rank", "strand move operation requires rank"),
 ];
-pub(crate) const FLOW_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow position operation requires flow_id"),
+pub(crate) const STRAND_REORDER_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("strand_id", "strand position operation requires strand_id"),
     PayloadRequirement::AnyOf(
-        FLOW_POSITION_BOARD_FIELDS,
-        "flow position operation requires board_space_id",
+        STRAND_POSITION_BOARD_FIELDS,
+        "strand position operation requires board_space_id",
     ),
     PayloadRequirement::AnyOf(
-        FLOW_REORDER_SPACE_FIELDS,
-        "flow reorder operation requires space_id",
+        STRAND_REORDER_SPACE_FIELDS,
+        "strand reorder operation requires space_id",
     ),
-    PayloadRequirement::Required("rank", "flow reorder operation requires rank"),
+    PayloadRequirement::Required("rank", "strand reorder operation requires rank"),
 ];
-// Flow watch event (ck.flow.watch.set).
-// Spec event-kind-registry sets `cell_subject` = (flow_id, watcher_actor_id);
+// Strand watch event (ck.strand.watch.set).
+// Spec event-kind-registry sets `cell_subject` = (strand_id, watcher_actor_id);
 // both fields are MUST-present in the payload. `level` is also required
 // (null = clear); enum + level_public validation lives at the
-// flow_watch_set_payload schema layer.
-pub(crate) const FLOW_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow watch operation requires flow_id"),
+// strand_watch_set_payload schema layer.
+pub(crate) const STRAND_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("strand_id", "strand watch operation requires strand_id"),
     PayloadRequirement::Required(
         "watcher_actor_id",
-        "flow watch operation requires watcher_actor_id",
+        "strand watch operation requires watcher_actor_id",
     ),
     PayloadRequirement::Required(
         "level",
-        "flow watch operation requires level (use null to clear)",
+        "strand watch operation requires level (use null to clear)",
     ),
 ];
-// Flow tracks update event. Required fields per SDK schema:
-//   `ck.flow.tracks.update` -> flow_id + (patch | tracks)
-pub(crate) const FLOW_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
-pub(crate) const FLOW_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("flow_id", "flow tracks update requires flow_id"),
+// Strand tracks update event. Required fields per SDK schema:
+//   `ck.strand.tracks.update` -> strand_id + (patch | tracks)
+pub(crate) const STRAND_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
+pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
+    PayloadRequirement::Required("strand_id", "strand tracks update requires strand_id"),
     PayloadRequirement::AnyOf(
-        FLOW_TRACKS_UPDATE_FIELDS,
-        "flow tracks update requires patch or tracks",
+        STRAND_TRACKS_UPDATE_FIELDS,
+        "strand tracks update requires patch or tracks",
     ),
 ];
 // Applet protocol family.

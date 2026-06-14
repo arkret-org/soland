@@ -15,7 +15,7 @@ pub use cokret_sdk::lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, CapabilityDelegate, CapabilityDerived, CapabilityGrant,
     CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog, CoveredSeals,
     CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate, DevicePushRoute,
-    DirectConversationBinding, FlowPosition, FlowStage, KeyBackupActiveSeries,
+    DirectConversationBinding, StrandPosition, StrandStage, KeyBackupActiveSeries,
     MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
     NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
     RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,

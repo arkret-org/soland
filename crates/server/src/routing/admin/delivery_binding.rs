@@ -11,7 +11,7 @@
 //! The cell value itself is read off the in-process reducer via
 //! [`crate::reducer::ProjectionState::realm_delivery_binding_policy_cell_value`]
 //! (keyed by the Realm boundary id). Operator mutation (PATCH / PUT) is
-//! intentionally not exposed here yet; policy changes flow through the
+//! intentionally not exposed here yet; policy changes strand through the
 //! regular `ck.realm.delivery_binding_policy` event submit path.
 
 use cokret_sdk::RealmId;

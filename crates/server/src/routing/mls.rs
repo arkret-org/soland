@@ -323,7 +323,7 @@ async fn claim_keypackage(
     let mls_group_ref = body
         .mls_group_id
         .clone()
-        .or_else(|| body.flow_id.as_ref().map(ToString::to_string))
+        .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
         .unwrap_or_else(|| body.intended_realm_id.to_string());
 
     // Build the canonical op so the reducer sees the same shape as a
@@ -603,7 +603,7 @@ async fn pending_welcomes(
 // submitted via the regular events pipeline as `ck.mls.commit` durable
 // events through `POST /_cokret/self/events` (op `ck.self.events.command.submit`). The
 // reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
-// invoked from the events submission flow; no dedicated REST surface.
+// invoked from the events submission strand; no dedicated REST surface.
 
 // ── helpers ───────────────────────────────────────────────────────────
 
@@ -650,7 +650,7 @@ fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
 fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
     body.mls_group_id
         .clone()
-        .or_else(|| body.flow_id.as_ref().map(ToString::to_string))
+        .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
         .or_else(|| body.realm_id.as_ref().map(ToString::to_string))
         .or_else(|| body.welcome_ref.clone())
         .unwrap_or_else(|| "manual-consume".to_owned())

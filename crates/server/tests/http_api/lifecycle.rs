@@ -157,24 +157,24 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 }
 
 #[tokio::test]
-async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
+async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "ck:flow:01904100-0000-7000-8000-e10dc0000001";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-e10dc0000001";
     let morph_id = "ck:morph:01904100-0000-7000-8000-e20dc0000001";
 
-    // ── Flow path ────────────────────────────────────────────────────
+    // ── Strand path ────────────────────────────────────────────────────
 
-    // 1) flow create — Active.
-    let create_flow = signed_flow_event(
+    // 1) strand create — Active.
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
-                "metadata": { "title": "Launch flow" },
+                "metadata": { "title": "Launch strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -182,7 +182,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
     );
     let response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -190,12 +190,12 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .unwrap();
     assert_eq!(response["status"], "accepted");
 
-    // 2) flow restore on Active → 412 flow_not_archived.
-    let bad_restore = signed_flow_event(
+    // 2) strand restore on Active → 412 strand_not_archived.
+    let bad_restore = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000002",
         2,
-        "ck.flow.restore",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.restore",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-e10ec0000001"],
     );
     let mut resp = TestClient::post("http://server/_cokret/self/events")
@@ -205,14 +205,14 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_not_archived");
+    assert_eq!(body["error"]["code"], "strand_not_archived");
 
-    // 3) flow archive — legal.
-    let archive = signed_flow_event(
+    // 3) strand archive — legal.
+    let archive = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000003",
         3,
-        "ck.flow.archive",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.archive",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-e10ec0000001"],
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
@@ -223,14 +223,14 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
+    assert_eq!(resp["status"], "accepted", "redact strand response: {resp}");
 
-    // 4) flow archive again on Archived → 412 flow_not_active.
-    let bad_archive = signed_flow_event(
+    // 4) strand archive again on Archived → 412 strand_not_active.
+    let bad_archive = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000004",
         4,
-        "ck.flow.archive",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.archive",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let mut resp = TestClient::post("http://server/_cokret/self/events")
@@ -240,16 +240,16 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "strand_not_active");
 
-    // 5) flow update on Archived → 412 flow_not_active.
-    let bad_update = signed_flow_event(
+    // 5) strand update on Archived → 412 strand_not_active.
+    let bad_update = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000005",
         5,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": flow_id,
-            "flow_id": flow_id,
+            "target_ref": strand_id,
+            "strand_id": strand_id,
             "patch": { "metadata": { "title": "Edit while archived" } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
@@ -261,14 +261,14 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "strand_not_active");
 
-    // 6) flow restore — legal now.
-    let good_restore = signed_flow_event(
+    // 6) strand restore — legal now.
+    let good_restore = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e10ec0000006",
         6,
-        "ck.flow.restore",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.restore",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-e10ec0000003"],
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
@@ -279,7 +279,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
+    assert_eq!(resp["status"], "accepted", "redact strand response: {resp}");
 
     // ── Morph path ───────────────────────────────────────────────────
 
@@ -366,7 +366,7 @@ async fn flow_morph_lifecycle_state_machine_returns_412_for_illegal_transitions(
 }
 
 #[tokio::test]
-async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist() {
+async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let now = chrono::Utc::now();
@@ -397,7 +397,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
     // Content admission is decoupled from `encryption_profile` (the MLS
     // mechanism) and gated on the effective `content_encryption_floor`. The
     // Realm raises its floor to `e2ee_required` via `ck.realm.policy_components`;
-    // the reducer projection then rejects plaintext private Flow content.
+    // the reducer projection then rejects plaintext private Strand content.
     {
         let hlc = soland::hlc::ServerHlc::new("lifecycle-test");
         let mut projection = state.projection.lock().expect("projection lock");
@@ -413,14 +413,14 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         );
     }
 
-    let flow_id = "ck:flow:01904100-0000-7000-8000-e30dc0000001";
-    let create_flow = signed_flow_event(
+    let strand_id = "ck:strand:01904100-0000-7000-8000-e30dc0000001";
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e30ec0000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Encrypted realm metadata title" },
                 "created_by": "did:web:alice.example",
@@ -430,7 +430,7 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
     );
     let response: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -438,13 +438,13 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
         .unwrap();
     assert_eq!(response["status"], "accepted");
 
-    let plaintext_body_update = signed_flow_event(
+    let plaintext_body_update = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-e30ec0000002",
         2,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": flow_id,
-            "flow_id": flow_id,
+            "target_ref": strand_id,
+            "strand_id": strand_id,
             "patch": {
                 "content": {
                     "$op": "set",
@@ -475,19 +475,19 @@ async fn encrypted_realm_rejects_plaintext_flow_content_before_event_log_persist
 }
 
 #[tokio::test]
-async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
+async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let task_flow_id = "ck:flow:01904100-0000-7000-8000-f51dc0000001";
-    let incident_flow_id = "ck:flow:01904100-0000-7000-8000-f51dc0000002";
+    let task_strand_id = "ck:strand:01904100-0000-7000-8000-f51dc0000001";
+    let incident_strand_id = "ck:strand:01904100-0000-7000-8000-f51dc0000002";
 
-    let create_task = signed_flow_event(
+    let create_task = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": task_flow_id,
+                "id": task_strand_id,
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
                 "created_by": "did:web:alice.example",
@@ -505,13 +505,13 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let bad_done = signed_flow_event(
+    let bad_done = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000002",
         2,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_flow_id,
-            "flow_id": task_flow_id,
+            "target_ref": task_strand_id,
+            "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-f51ec0000001"],
@@ -523,15 +523,15 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .await;
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(resp.status_code.unwrap().as_u16(), 412, "{body}");
-    assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
+    assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
 
-    let good_in_progress = signed_flow_event(
+    let good_in_progress = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000003",
         3,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_flow_id,
-            "flow_id": task_flow_id,
+            "target_ref": task_strand_id,
+            "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-f51ec0000001"],
@@ -546,13 +546,13 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let good_done = signed_flow_event(
+    let good_done = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000004",
         4,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": task_flow_id,
-            "flow_id": task_flow_id,
+            "target_ref": task_strand_id,
+            "strand_id": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-f51ec0000003"],
@@ -567,13 +567,13 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let create_incident = signed_flow_event(
+    let create_incident = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000005",
         5,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": incident_flow_id,
+                "id": incident_strand_id,
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
                 "created_by": "did:web:alice.example",
@@ -591,13 +591,13 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let bad_resolved = signed_flow_event(
+    let bad_resolved = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f51ec0000006",
         6,
-        "ck.flow.update",
+        "ck.strand.update",
         serde_json::json!({
-            "target_ref": incident_flow_id,
-            "flow_id": incident_flow_id,
+            "target_ref": incident_strand_id,
+            "strand_id": incident_strand_id,
             "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),
         vec!["ck:event:01904100-0000-7000-8000-f51ec0000005"],
@@ -609,7 +609,7 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_status_transition_invalid");
+    assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
 
     let audit_events: Value = TestClient::get(
         "http://server/_soland/admin/audit/events?actor=did:web:alice.example&limit=50",
@@ -636,8 +636,8 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(status_transitions[0]["outcome"], "accepted");
     assert_eq!(first_transition["kind"], "incident.status.transition");
     assert_eq!(first_transition["actor"], "did:web:alice.example");
-    assert_eq!(first_transition["flow_id"], task_flow_id);
-    assert_eq!(first_transition["incident_id"], task_flow_id);
+    assert_eq!(first_transition["strand_id"], task_strand_id);
+    assert_eq!(first_transition["incident_id"], task_strand_id);
     assert_eq!(first_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(first_transition["from"], "todo");
     assert_eq!(first_transition["to"], "in_progress");
@@ -645,8 +645,8 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
 
     let second_transition = &status_transitions[1]["payload"];
     assert_eq!(second_transition["actor"], "did:web:alice.example");
-    assert_eq!(second_transition["flow_id"], task_flow_id);
-    assert_eq!(second_transition["incident_id"], task_flow_id);
+    assert_eq!(second_transition["strand_id"], task_strand_id);
+    assert_eq!(second_transition["incident_id"], task_strand_id);
     assert_eq!(second_transition["realm_id"], DEMO_REALM_ID);
     assert_eq!(second_transition["from"], "in_progress");
     assert_eq!(second_transition["to"], "done");
@@ -654,23 +654,23 @@ async fn flow_update_status_fsm_rejects_skipped_terminal_transitions() {
 }
 
 #[tokio::test]
-async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_repeat() {
+async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "ck:flow:01904100-0000-7000-8000-f10dc0000001";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-f10dc0000001";
     let morph_id = "ck:morph:01904100-0000-7000-8000-f20dc0000001";
 
-    // ── Flow path ────────────────────────────────────────────────────
+    // ── Strand path ────────────────────────────────────────────────────
 
-    let create_flow = signed_flow_event(
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
-                "metadata": { "title": "Sensitive flow" },
+                "metadata": { "title": "Sensitive strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -678,7 +678,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -692,7 +692,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         2,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-f10ec0000001",
-            "object_ref": flow_id,
+            "object_ref": strand_id,
             "by": "did:web:alice.example",
             "reason": "policy",
         }),
@@ -706,26 +706,26 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted", "redact flow response: {resp}");
+    assert_eq!(resp["status"], "accepted", "redact strand response: {resp}");
 
     // Confirm projection flipped to Redacted.
     {
         let proj = state.projection.lock().unwrap();
-        let flow = proj.flows.get(flow_id).expect("flow projection");
+        let strand = proj.strands.get(strand_id).expect("strand projection");
         assert_eq!(
-            flow.state.as_str(),
+            strand.state.as_str(),
             "redacted",
-            "Flow MUST be in Redacted terminal state after ck.redaction with object_ref"
+            "Strand MUST be in Redacted terminal state after ck.redaction with object_ref"
         );
     }
 
-    // Second redaction against terminal Flow → 412 flow_already_terminal.
+    // Second redaction against terminal Strand → 412 strand_already_terminal.
     let redact2 = signed_redaction_event(
         "ck:event:01904100-0000-7000-8000-f10ec0000003",
         3,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-f10ec0000001",
-            "object_ref": flow_id,
+            "object_ref": strand_id,
         }),
         vec!["ck:event:01904100-0000-7000-8000-f10ec0000002"],
     );
@@ -736,7 +736,7 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_already_terminal");
+    assert_eq!(body["error"]["code"], "strand_already_terminal");
 
     // ── Morph path ───────────────────────────────────────────────────
 
@@ -810,20 +810,20 @@ async fn redaction_targeting_flow_morph_flips_to_redacted_and_rejects_terminal_r
 }
 
 #[tokio::test]
-async fn flow_tracks_update_rejected_when_parent_flow_archived() {
+async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
-    let flow_id = "ck:flow:01904100-0000-7000-8000-aabbccdd0001";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-aabbccdd0001";
 
-    let create_flow = signed_flow_event(
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-aabbcc000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
-                "metadata": { "title": "Launch flow" },
+                "metadata": { "title": "Launch strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -831,7 +831,7 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -839,12 +839,12 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let tracks_active = signed_flow_event(
+    let tracks_active = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-aabbcc000002",
         2,
-        "ck.flow.tracks.update",
+        "ck.strand.tracks.update",
         serde_json::json!({
-            "flow_id": flow_id,
+            "strand_id": strand_id,
             "patch": {"tracks": {"discussion": {"profile": "discussion"}}}
         }),
         vec!["ck:event:01904100-0000-7000-8000-aabbcc000001"],
@@ -859,11 +859,11 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let archive = signed_flow_event(
+    let archive = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-aabbcc000003",
         3,
-        "ck.flow.archive",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.archive",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-aabbcc000002"],
     );
     let resp: Value = TestClient::post("http://server/_cokret/self/events")
@@ -876,12 +876,12 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let tracks_archived = signed_flow_event(
+    let tracks_archived = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-aabbcc000004",
         4,
-        "ck.flow.tracks.update",
+        "ck.strand.tracks.update",
         serde_json::json!({
-            "flow_id": flow_id,
+            "strand_id": strand_id,
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
         vec!["ck:event:01904100-0000-7000-8000-aabbcc000003"],
@@ -893,5 +893,5 @@ async fn flow_tracks_update_rejected_when_parent_flow_archived() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "flow_not_active");
+    assert_eq!(body["error"]["code"], "strand_not_active");
 }

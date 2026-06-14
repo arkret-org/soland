@@ -5,19 +5,19 @@ pub(super) mod applet_bridge;
 pub(super) mod event_log;
 pub(super) mod frontier;
 pub(super) mod peer;
-// Flow + projection helpers are `pub(crate)` so the MIMI interop
-// facade can reuse the canonical space→flow mapping + projection-event
+// Strand + projection helpers are `pub(crate)` so the MIMI interop
+// facade can reuse the canonical space→strand mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Cokret timeline.
-pub(crate) mod flow;
+pub(crate) mod strand;
 pub(super) mod notify;
 pub(super) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(super) mod sync;
 
-use flow::{
-    default_discussion_track, discussion_track_for_projection_event, flow_id_for_projection_event,
-    flow_id_from_realm_id, flow_projection_for_realm, message_id_from_event_id,
+use strand::{
+    default_discussion_track, discussion_track_for_projection_event, strand_id_for_projection_event,
+    strand_id_from_realm_id, strand_projection_for_realm, message_id_from_event_id,
 };
 use operations::{
     validate_agent_participation_ceiling, validate_agent_reply_participation,

@@ -1,7 +1,7 @@
 //! Integration tests — resumable (tus 1.0.0) blob upload binding.
 //!
 //! Spec: crypto-media/media-and-blob.md §2.1. Covers the OPTIONS probe,
-//! the chunked create → PATCH → HEAD → finalize flow (asserting the
+//! the chunked create → PATCH → HEAD → finalize strand (asserting the
 //! content-addressing invariant against the canonical single-shot
 //! upload), offset conflicts, incomplete finalize, version negotiation
 //! and cross-actor isolation.

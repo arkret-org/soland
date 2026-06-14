@@ -11,11 +11,11 @@ pub trait RealmMetaStore: Send + Sync {
 
 // ── Projection persistence traits ─────────────────────────────────────────
 // Mirror the in-memory
-// `reducer::ProjectionState::{space_containers,flows,morphs}`
+// `reducer::ProjectionState::{space_containers,strands,morphs}`
 // maps onto durable storage. The reducer continues to own the in-memory
 // authoritative state; routing layers write through to these stores
 // after each accepted state-changing event, and `AppState::new` hydrates
-// from them on startup so restart doesn't lose Space-container/Flow/Morph
+// from them on startup so restart doesn't lose Space-container/Strand/Morph
 // lifecycle state.
 
 /// Durable Space-container projection store (mirror of
@@ -35,14 +35,14 @@ pub trait SpaceContainerProjectionStore: Send + Sync {
     async fn delete(&self, container_space_id: &str) -> PersistenceResult<()>;
 }
 
-/// Durable Flow projection store (mirror of `projection_flows` table).
+/// Durable Strand projection store (mirror of `projection_strands` table).
 #[async_trait]
-pub trait FlowProjectionStore: Send + Sync {
-    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>>;
-    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()>;
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>>;
-    async fn delete(&self, flow_id: &str) -> PersistenceResult<()>;
+pub trait StrandProjectionStore: Send + Sync {
+    async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>>;
+    async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()>;
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>>;
+    async fn delete(&self, strand_id: &str) -> PersistenceResult<()>;
 }
 
 /// Durable Morph projection store (mirror of `projection_morphs` table).
@@ -78,8 +78,8 @@ pub struct SpaceContainerProjectionRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FlowProjectionRecord {
-    pub flow_id: String,
+pub struct StrandProjectionRecord {
+    pub strand_id: String,
     pub realm_id: String,
     pub title: String,
     pub summary: Option<String>,
@@ -90,7 +90,7 @@ pub struct FlowProjectionRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CKP-0007 — the Circle (`ck:circle:…`) this Flow is scoped to, if any.
+    /// CKP-0007 — the Circle (`ck:circle:…`) this Strand is scoped to, if any.
     /// Durable so circle-scoped message visibility survives restart.
     pub scope_circle_id: Option<String>,
 }
@@ -158,7 +158,7 @@ impl RealmMetaStore for MemoryRealmMetaStore {
     }
 }
 
-// ── Memory impls for Space-container/Flow/Morph projection stores ────────
+// ── Memory impls for Space-container/Strand/Morph projection stores ────────
 
 pub(crate) struct MemorySpaceContainerProjectionStore {
     data: Arc<Mutex<BTreeMap<String, SpaceContainerProjectionRecord>>>,
@@ -212,11 +212,11 @@ impl SpaceContainerProjectionStore for MemorySpaceContainerProjectionStore {
     }
 }
 
-pub(crate) struct MemoryFlowProjectionStore {
-    data: Arc<Mutex<BTreeMap<String, FlowProjectionRecord>>>,
+pub(crate) struct MemoryStrandProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, StrandProjectionRecord>>>,
 }
 
-impl MemoryFlowProjectionStore {
+impl MemoryStrandProjectionStore {
     pub(crate) fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
@@ -225,19 +225,19 @@ impl MemoryFlowProjectionStore {
 }
 
 #[async_trait]
-impl FlowProjectionStore for MemoryFlowProjectionStore {
-    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+impl StrandProjectionStore for MemoryStrandProjectionStore {
+    async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>> {
         let data = self.data.lock().expect("lock");
-        Ok(data.get(flow_id).cloned())
+        Ok(data.get(strand_id).cloned())
     }
 
-    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.insert(record.flow_id.clone(), record.clone());
+        data.insert(record.strand_id.clone(), record.clone());
         Ok(())
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data
             .values()
@@ -246,14 +246,14 @@ impl FlowProjectionStore for MemoryFlowProjectionStore {
             .collect())
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let data = self.data.lock().expect("lock");
         Ok(data.values().cloned().collect())
     }
 
-    async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, strand_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock().expect("lock");
-        data.remove(flow_id);
+        data.remove(strand_id);
         Ok(())
     }
 }
@@ -492,14 +492,14 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
     }
 }
 
-pub(crate) struct PgFlowProjectionStore {
+pub(crate) struct PgStrandProjectionStore {
     pub(crate) pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct FlowProjectionRow {
+struct StrandProjectionRow {
     #[diesel(sql_type = SqlUuid)]
-    flow_id: Uuid,
+    strand_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
     #[diesel(sql_type = Text)]
@@ -522,10 +522,10 @@ struct FlowProjectionRow {
     scope_circle_id: Option<Uuid>,
 }
 
-impl From<FlowProjectionRow> for FlowProjectionRecord {
-    fn from(row: FlowProjectionRow) -> Self {
+impl From<StrandProjectionRow> for StrandProjectionRecord {
+    fn from(row: StrandProjectionRow) -> Self {
         Self {
-            flow_id: ids::format_typed_uuid("flow", &row.flow_id),
+            strand_id: ids::format_typed_uuid("strand", &row.strand_id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             title: row.title,
             summary: row.summary,
@@ -542,28 +542,28 @@ impl From<FlowProjectionRow> for FlowProjectionRecord {
     }
 }
 
-const FLOW_PROJECTION_COLUMNS: &str = "id AS flow_id, realm_id, title, summary, state, \
+const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, title, summary, state, \
      state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, updated_at, scope_circle_id";
 
 #[async_trait]
-impl FlowProjectionStore for PgFlowProjectionStore {
-    async fn get(&self, flow_id: &str) -> PersistenceResult<Option<FlowProjectionRecord>> {
+impl StrandProjectionStore for PgStrandProjectionStore {
+    async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows WHERE id = $1"
+            "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
-        .get_result::<FlowProjectionRow>(&mut *conn)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(strand_id))
+        .get_result::<StrandProjectionRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(FlowProjectionRecord::from))
+        .map(|row| row.map(StrandProjectionRecord::from))
         .map_err(PersistenceError::from)
     }
 
-    async fn put(&self, record: &FlowProjectionRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &StrandProjectionRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
-            "INSERT INTO projection_flows \
+            "INSERT INTO projection_strands \
              (id, realm_id, title, summary, state, state_changed_at, \
               created_by_id, created_at, updated_by_id, updated_at, scope_circle_id) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
@@ -577,7 +577,7 @@ impl FlowProjectionStore for PgFlowProjectionStore {
                 updated_at = EXCLUDED.updated_at, \
                 scope_circle_id = EXCLUDED.scope_circle_id",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.flow_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.strand_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
         .bind::<Text, _>(&record.title)
         .bind::<Nullable<Text>, _>(&record.summary)
@@ -599,34 +599,34 @@ impl FlowProjectionStore for PgFlowProjectionStore {
         .map_err(PersistenceError::from)
     }
 
-    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows \
+            "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands \
              WHERE realm_id = $1 ORDER BY id"
         ))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(realm_id))
-        .load::<FlowProjectionRow>(&mut *conn)
+        .load::<StrandProjectionRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
+        .map(|rows| rows.into_iter().map(StrandProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<FlowProjectionRecord>> {
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "SELECT {FLOW_PROJECTION_COLUMNS} FROM projection_flows ORDER BY id"
+            "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands ORDER BY id"
         ))
-        .load::<FlowProjectionRow>(&mut *conn)
+        .load::<StrandProjectionRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(FlowProjectionRecord::from).collect())
+        .map(|rows| rows.into_iter().map(StrandProjectionRecord::from).collect())
         .map_err(PersistenceError::from)
     }
 
-    async fn delete(&self, flow_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, strand_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query("DELETE FROM projection_flows WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(flow_id))
+        sql_query("DELETE FROM projection_strands WHERE id = $1")
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(strand_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())

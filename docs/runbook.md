@@ -212,12 +212,12 @@ Common ops actions:
 | `proof_invalid` on pairing | Canonical-digest mismatch — usually a client serializer bug | Pull the raw payload from `agent_pairing_attempts` table and diff JCS bytes |
 | `verification_method_principal_mismatch` | DID resolved to a different principal than payload claims | Likely DID-doc misalignment in `coauth`; coordinate with that team |
 
-Recovery flow / migration story for an agent that drifts: see `coauth`
+Recovery strand / migration story for an agent that drifts: see `coauth`
 runbook + `docs/admin-onboarding.md` in sodmin.
 
-### Recovery flow (policy + receipt issuance lifecycle)
+### Recovery strand (policy + receipt issuance lifecycle)
 
-R3 surfaces recovery as a first-class wire flow. Lifecycle:
+R3 surfaces recovery as a first-class wire strand. Lifecycle:
 
 ```text
 [client]                  [soland]                              [witnesses]

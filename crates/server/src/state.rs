@@ -1470,7 +1470,7 @@ pub struct ConsentCellRecord {
 pub struct DirectConversationBindingRecord {
     pub participants_unordered: Vec<String>,
     pub realm_id: String,
-    pub main_flow_id: String,
+    pub main_strand_id: String,
     pub binding_event_ref: String,
     pub state: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -2170,7 +2170,7 @@ impl AppState {
         }
         let admin_keystore = Arc::new(admin_keystore);
 
-        // Space-container/Flow/Morph projections are hydrated from durable
+        // Space-container/Strand/Morph projections are hydrated from durable
         // persistence in [`AppState::hydrate`] (an explicit async boot step)
         // rather than here, because the persistence store is now async. The
         // write-through path in `routing::events::projection.rs::
@@ -2243,7 +2243,7 @@ impl AppState {
     /// Touch the (now async) persistence store to finish boot:
     ///   * seed the demo account + Realm metadata when `seed_demo_data` is on,
     ///   * hydrate the Realm directory from persisted `ck.realm.create` events,
-    ///   * hydrate Space-container/Flow/Morph projections from durable rows.
+    ///   * hydrate Space-container/Strand/Morph projections from durable rows.
     ///
     /// Extracted out of the synchronous `new` constructor so the DB work runs
     /// in an async context (driven from `main`); see the diesel-async
@@ -2308,7 +2308,7 @@ impl AppState {
         {
             let mut proj = self.projection.lock().expect("projection lock");
             proj.space_containers.extend(proj_updates.space_containers);
-            proj.flows.extend(proj_updates.flows);
+            proj.strands.extend(proj_updates.strands);
             proj.morphs.extend(proj_updates.morphs);
         }
 
@@ -2619,7 +2619,7 @@ pub(crate) fn getrandom_seed(out: &mut [u8; 32]) {
     rand::rng().fill(out);
 }
 
-/// Read Space-container / Flow / Morph projection rows from durable
+/// Read Space-container / Strand / Morph projection rows from durable
 /// persistence into the supplied `ProjectionState`. Called at
 /// `AppState::new` so restart picks up the lifecycle state the
 /// write-through path stamped down on the way in. Unknown state
@@ -2630,7 +2630,7 @@ async fn hydrate_projections_from_persistence(
     proj: &mut ProjectionState,
 ) {
     use crate::reducer::{
-        AppletProjection, FlowProjection, MorphProjection, ObjectLifecycleState,
+        AppletProjection, StrandProjection, MorphProjection, ObjectLifecycleState,
         SpaceContainerLifecycleState, SpaceContainerProjection,
     };
 
@@ -2693,20 +2693,20 @@ async fn hydrate_projections_from_persistence(
             );
         }
     }
-    if let Ok(rows) = persistence.flow_projections().snapshot_all().await {
+    if let Ok(rows) = persistence.strand_projections().snapshot_all().await {
         for record in rows {
             let Some(state) = parse_object_state(&record.state) else {
                 tracing::warn!(
-                    flow_id = %record.flow_id,
+                    strand_id = %record.strand_id,
                     state = %record.state,
-                    "skipping flow projection row with unknown state during hydrate"
+                    "skipping strand projection row with unknown state during hydrate"
                 );
                 continue;
             };
-            proj.flows.insert(
-                record.flow_id.clone(),
-                FlowProjection {
-                    flow_id: record.flow_id,
+            proj.strands.insert(
+                record.strand_id.clone(),
+                StrandProjection {
+                    strand_id: record.strand_id,
                     realm_id: record.realm_id,
                     title: record.title,
                     summary: record.summary,

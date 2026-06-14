@@ -1062,7 +1062,7 @@ pub(in crate::routing) async fn submit_event_value(
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
-    let mut flow_status_audit_payload = None;
+    let mut strand_status_audit_payload = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::new(
@@ -1132,22 +1132,22 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
-            if let Err(reason) = proj.check_flow_lifecycle_transition(operation) {
+            if let Err(reason) = proj.check_strand_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,
                     reason,
                 ));
             }
-            if let Err(reason) = proj.check_flow_status_transition(operation) {
+            if let Err(reason) = proj.check_strand_status_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,
                     reason,
                 ));
             }
-            flow_status_audit_payload =
-                proj.flow_status_transition_audit_payload(operation, &parsed.actor_id);
+            strand_status_audit_payload =
+                proj.strand_status_transition_audit_payload(operation, &parsed.actor_id);
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1162,7 +1162,7 @@ pub(in crate::routing) async fn submit_event_value(
                     reason,
                 ));
             }
-            if let Err(reason) = proj.check_flow_tracks_transition(operation) {
+            if let Err(reason) = proj.check_strand_tracks_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,
@@ -1256,16 +1256,16 @@ pub(in crate::routing) async fn submit_event_value(
         .await;
     }
 
-    // CKP-0007: a message's effective circle-scope is derived from its Flow
-    // (spec: `scope_circle_id` is a Flow field, never carried on the message).
+    // CKP-0007: a message's effective circle-scope is derived from its Strand
+    // (spec: `scope_circle_id` is a Strand field, never carried on the message).
     // Stamp the authoritative top-level `effective_scope` onto the stored
     // envelope so read-path visibility gating hides circle-scoped messages
-    // from realm members outside the Circle. The Flow scope is durable
-    // (projection_flows.scope_circle_id), so this survives restart.
+    // from realm members outside the Circle. The Strand scope is durable
+    // (projection_strands.scope_circle_id), so this survives restart.
     if parsed.kind == kinds::CK_MESSAGE_CREATE
-        && let Some(flow_id) = envelope
+        && let Some(strand_id) = envelope
             .get("payload")
-            .and_then(|payload| payload.get("flow_id"))
+            .and_then(|payload| payload.get("strand_id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     {
@@ -1273,7 +1273,7 @@ pub(in crate::routing) async fn submit_event_value(
             .projection
             .lock()
             .ok()
-            .and_then(|proj| proj.flow_scope_circle_id(&flow_id));
+            .and_then(|proj| proj.strand_scope_circle_id(&strand_id));
         if let Some(scope) = scope
             && let Some(object) = envelope.as_object_mut()
         {
@@ -1316,7 +1316,7 @@ pub(in crate::routing) async fn submit_event_value(
     if !session.token_hash.starts_with("federation:") {
         enqueue_peer_event_fanout(state, &parsed, &envelope_for_bootstrap).await;
     }
-    if let Some(payload) = flow_status_audit_payload {
+    if let Some(payload) = strand_status_audit_payload {
         append_audit_log(
             state,
             Some(&parsed.actor_id),

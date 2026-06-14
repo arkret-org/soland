@@ -205,8 +205,8 @@ pub(crate) async fn introspect_admin_scopes(
 }
 
 /// Gate the calling admin operation on a specific scope. Production
-/// flow: introspect the bearer, ensure the grant carries `scope`. Dev
-/// flow: synthetic grant accepts every well-known scope.
+/// strand: introspect the bearer, ensure the grant carries `scope`. Dev
+/// strand: synthetic grant accepts every well-known scope.
 pub(crate) async fn require_admin_scope(
     state: &AppState,
     req: &Request,

@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 use super::{
     accept_local_operations, append_audit_log, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
-    flow_projection_for_realm, policy_document_to_response, projection_event_from_operation,
+    discussion_track_for_projection_event, strand_id_for_projection_event, strand_id_from_realm_id,
+    strand_projection_for_realm, policy_document_to_response, projection_event_from_operation,
 };
 use crate::error::{AppError, ErrorCode};
 use crate::result::{JsonResult, json_ok};
@@ -130,8 +130,8 @@ fn remove_string_field(fields: &mut serde_json::Map<String, Value>, field: &str)
 pub(super) struct AdminRealmItem {
     kind: String,
     id: String,
-    flow: Value,
-    flow_id: String,
+    strand: Value,
+    strand_id: String,
     realm_id: String,
     title: String,
     topic: Option<String>,
@@ -513,7 +513,7 @@ async fn admin_realm_items(state: &AppState) -> Vec<Value> {
         .into_iter()
         .collect();
     // Snapshot the Realm registry under lock, then drop it: downstream
-    // helpers (`flow_projection_for_realm` → plaintext-service policy)
+    // helpers (`strand_projection_for_realm` → plaintext-service policy)
     // reach back into `state.realms`, and `Mutex` is non-reentrant — holding
     // the guard across the map closure deadlocks on the second resource pass.
     let realm_snapshot: Vec<RealmDirectoryEntry> = {
@@ -600,14 +600,14 @@ async fn admin_realm_item_value(
     realm_meta: Option<RealmMetaRecord>,
 ) -> AdminRealmItem {
     let realm_id = realm.realm_id.as_str().to_owned();
-    let flow =
-        flow_projection_for_realm(state, &realm_id, &realm.title, realm.description.as_deref())
+    let strand =
+        strand_projection_for_realm(state, &realm_id, &realm.title, realm.description.as_deref())
             .await;
     AdminRealmItem {
         kind: "realm".to_owned(),
         id: realm_id.clone(),
-        flow,
-        flow_id: flow_id_from_realm_id(&realm_id),
+        strand,
+        strand_id: strand_id_from_realm_id(&realm_id),
         realm_id,
         title: realm.title,
         topic: realm.description,
@@ -741,10 +741,10 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
                 "realm_id": operation.realm_id,
                 "operation_type": operation.operation_type,
                 "canonical_kind": kinds::canonical_kind_string(&operation),
-                "flow_id": flow_id_for_projection_event(&projected),
+                "strand_id": strand_id_for_projection_event(&projected),
                 "track": discussion_track_for_projection_event(
                     &projected,
-                    flow_id_for_projection_event(&projected).as_deref(),
+                    strand_id_for_projection_event(&projected).as_deref(),
                 ),
                 "digest": operation.operation_digest().ok(),
                 "created_at": operation.created_at,

@@ -113,7 +113,7 @@ async fn configured_cors_allows_blob_upload_headers() {
 
 #[tokio::test]
 async fn seed_member_invite_event_surfaces_via_authz_invites() {
-    // The Realm bootstrap flow in yougen emits a
+    // The Realm bootstrap strand in yougen emits a
     // `ck.member.state{membership="invite"}` event for each seed member
     // (see cokret-rust-sdk + yougen/src/api.rs `build_realm_bootstrap_events`).
     // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then

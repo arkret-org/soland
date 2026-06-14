@@ -309,7 +309,7 @@ pub fn handle_for_did(did: &str) -> String {
 // ── Discoverability validator ───────────────────────────────────────────────
 //
 // (The `entity` abstraction never landed in `cokret-spec/v1`; typed
-// objects in the protocol are `ck:space:` / `ck:flow:` / `ck:morph:` /
+// objects in the protocol are `ck:space:` / `ck:strand:` / `ck:morph:` /
 // `ck:relation:` / `ck:view:`, each driven by its own dedicated event
 // kind.)
 

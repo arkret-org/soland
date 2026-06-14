@@ -22,8 +22,8 @@ pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
 use super::system::util;
 use super::{
     AuthArgs, accept_local_operations, demo_actors, device_inventory_to_json,
-    discussion_track_for_projection_event, flow_id_for_projection_event, flow_id_from_realm_id,
-    flow_projection_for_realm, now, policy_document_to_response, projection_event_from_operation,
+    discussion_track_for_projection_event, strand_id_for_projection_event, strand_id_from_realm_id,
+    strand_projection_for_realm, now, policy_document_to_response, projection_event_from_operation,
     realm_has_member,
 };
 use crate::error::{AppError, ErrorCode};

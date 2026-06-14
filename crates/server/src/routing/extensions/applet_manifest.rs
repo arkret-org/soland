@@ -45,16 +45,16 @@ use crate::result::{JsonResult, json_ok};
 /// kept narrow on purpose - the spec defers the full capability lattice
 /// to a follow-up.
 pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
-    "ck.flow.create",
-    "ck.flow.read",
-    "ck.flow.update",
+    "ck.strand.create",
+    "ck.strand.read",
+    "ck.strand.update",
     "ck.message.create",
     "ck.morph.read",
     "ck.morph.update",
 ];
 
 /// On-wire applet manifest envelope. The bot/ghost actor registration
-/// flow in `applet-integration.md` Section 4 takes one of these, verifies it,
+/// strand in `applet-integration.md` Section 4 takes one of these, verifies it,
 /// and (if accepted) mints a `bot_actor_id` bound to the manifest.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct AppletManifest {
@@ -329,7 +329,7 @@ mod tests {
             signer_did: signer_did.to_owned(),
             signature: String::new(),
             signer_public_key: pubkey_b64,
-            requested_capabilities: vec!["ck.message.create".to_owned(), "ck.flow.read".to_owned()],
+            requested_capabilities: vec!["ck.message.create".to_owned(), "ck.strand.read".to_owned()],
             schema_hash: current_applet_schema_hash(),
             metadata: json!({"namespace": "bridge.demo"}),
         };

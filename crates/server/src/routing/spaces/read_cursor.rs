@@ -142,7 +142,7 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
                 ));
             }
         }
-        ReadScopeKind::Flow
+        ReadScopeKind::Strand
         | ReadScopeKind::Thread
         | ReadScopeKind::View
         | ReadScopeKind::Message
@@ -160,21 +160,21 @@ fn validate_read_scope(scope: &ReadScope) -> Result<(), AppError> {
         scope.track.as_deref(),
         scope.track_scope.as_ref(),
     ) {
-        (ReadScopeKind::Flow, Some(track), None) => validate_track(track)?,
-        (ReadScopeKind::Flow, None, Some(_)) => {}
-        (ReadScopeKind::Flow, Some(_), Some(_)) => {
+        (ReadScopeKind::Strand, Some(track), None) => validate_track(track)?,
+        (ReadScopeKind::Strand, None, Some(_)) => {}
+        (ReadScopeKind::Strand, Some(_), Some(_)) => {
             return Err(AppError::invalid_param(
                 "read_scope must carry exactly one of track_name or track_scope",
             ));
         }
-        (ReadScopeKind::Flow, None, None) => {
+        (ReadScopeKind::Strand, None, None) => {
             return Err(AppError::invalid_param(
-                "read_scope requires track_name or track_scope when kind is flow",
+                "read_scope requires track_name or track_scope when kind is strand",
             ));
         }
         (_, Some(_), _) | (_, _, Some(_)) => {
             return Err(AppError::invalid_param(
-                "read_scope.track_name/track_scope is only valid when kind is flow",
+                "read_scope.track_name/track_scope is only valid when kind is strand",
             ));
         }
         _ => {}

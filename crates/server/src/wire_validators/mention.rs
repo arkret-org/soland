@@ -1,7 +1,7 @@
 //! HC-SOL-3 / SEC-SOL-1 (R3.2, cokret-spec @ b56cab1) — mention
 //! reference shape v2 validator.
 //!
-//! The spec mention node (`models/flow-and-message.md §9.4`,
+//! The spec mention node (`models/strand-and-message.md §9.4`,
 //! `identity/identity-handles.md §3.8.1`) was rewritten wire-breaking:
 //!
 //! - Authoritative field: `subject_id` (principal DID). It is the ONLY field that participates in
@@ -15,7 +15,7 @@
 //!   `mention_reference_legacy_shape`.
 //!
 //! NOTE: soland also accepts a separate deployment-local message-mention
-//! convention (`{type: "actor"|"flow", ...}`) validated by
+//! convention (`{type: "actor"|"strand", ...}`) validated by
 //! `routing::events::operations::validate_mentions`; that shape is left
 //! intact. This validator targets the spec actor mention-reference object
 //! (the one carrying `subject_id`).
@@ -32,7 +32,7 @@ const LEGACY_MENTION_FIELDS: &[&str] = &["subject", "handle", "display_snapshot"
 /// Validate one mention-reference object. A mention reference is only
 /// subject to this check when it looks like the spec subject-reference
 /// shape — i.e. it carries `subject_id` and/or one of the legacy fields.
-/// Other object shapes (the soland `{type: "actor"|"flow"}` convention)
+/// Other object shapes (the soland `{type: "actor"|"strand"}` convention)
 /// are passed through untouched.
 pub fn validate_mention_reference(mention: &Value) -> Result<(), WireRejection> {
     let Some(map) = mention.as_object() else {

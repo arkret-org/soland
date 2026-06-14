@@ -535,7 +535,7 @@ async fn move_on_soland_registered_cell_family_passes_verify() {
 
 /// The notary worker takes one or more
 /// pending Moves and produces a signed Seal. This is the END-TO-END
-/// proof of the Move → Seal flow without requiring the client to
+/// proof of the Move → Seal strand without requiring the client to
 /// hand-craft a Seal: the client submits a Move, then triggers the
 /// admin signing endpoint, and a Seal pops out with the correct
 /// state_root.

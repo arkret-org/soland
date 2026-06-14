@@ -362,10 +362,10 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
     let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
-    let flow_id = new_prefixed_uuid7("ck:flow:");
-    let flow_uuid = flow_id.strip_prefix("ck:flow:").unwrap();
+    let strand_id = new_prefixed_uuid7("ck:strand:");
+    let strand_uuid = strand_id.strip_prefix("ck:strand:").unwrap();
     let address = format!(
-        "web+cokret:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+        "web+cokret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(
         &state,
@@ -420,10 +420,10 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .unwrap();
 
     let realm_uuid = realm_id.strip_prefix("ck:realm:").unwrap();
-    let flow_id = new_prefixed_uuid7("ck:flow:");
-    let flow_uuid = flow_id.strip_prefix("ck:flow:").unwrap();
+    let strand_id = new_prefixed_uuid7("ck:strand:");
+    let strand_uuid = strand_id.strip_prefix("ck:strand:").unwrap();
     let address = format!(
-        "web+cokret:realm/{realm_uuid}/flow/{flow_uuid}?via=did:web:soland.local&lt=preview"
+        "web+cokret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:web:soland.local&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
     let resolved: Value = TestClient::post("http://server/_cokret/find/directory/resolve-target")
@@ -437,7 +437,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .await
         .unwrap();
 
-    assert_eq!(resolved["target_kind"], "flow");
+    assert_eq!(resolved["target_kind"], "strand");
     assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
     assert_eq!(
         resolved["realm_preview"]["preview"]["title"],
@@ -447,7 +447,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         resolved["realm_preview"]["preview"]["history_visibility"],
         "joined"
     );
-    assert_eq!(resolved["object_preview"]["flow_id"], flow_id);
+    assert_eq!(resolved["object_preview"]["strand_id"], strand_id);
     assert_eq!(
         resolved["join_candidates"].as_array().map(Vec::len),
         Some(0)
@@ -538,13 +538,13 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
     assert_eq!(object["object"]["kind"], "space");
 
     let thread: Value =
-        TestClient::get("http://server/_soland/self/index/thread?thread_id=ck:flow:demo")
+        TestClient::get("http://server/_soland/self/index/thread?thread_id=ck:strand:demo")
             .send(&app())
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(thread["thread"]["thread_id"], "ck:flow:demo");
+    assert_eq!(thread["thread"]["thread_id"], "ck:strand:demo");
     assert!(thread["events"].as_array().unwrap().is_empty());
 
     let notifications: Value = TestClient::get(
@@ -563,8 +563,8 @@ async fn index_product_endpoints_return_demo_projection_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(inbox["flows"].as_array().unwrap().len(), 1);
-    assert_eq!(inbox["flows"][0]["flow"]["schema"], "ck.schema.flow.v1");
+    assert_eq!(inbox["strands"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["strands"][0]["strand"]["schema"], "ck.schema.strand.v1");
 
     let search: Value = TestClient::post("http://server/_soland/self/index/search")
         .json(&serde_json::json!({"query": "demo", "object_kinds": ["space"], "limit": 5}))

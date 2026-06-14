@@ -58,7 +58,7 @@ pub async fn validate_operation_policy(
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_member_state_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
-        validate_set_default_flow_policy(state, operation).await?;
+        validate_set_default_strand_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
@@ -199,7 +199,9 @@ fn validate_disappearing_message_policy(
     Ok(())
 }
 
-fn minimal_metadata_aad_visibility(envelope: &Value) -> Option<cokret_sdk::mls::AadVisibility> {
+pub(super) fn minimal_metadata_aad_visibility(
+    envelope: &Value,
+) -> Option<cokret_sdk::mls::AadVisibility> {
     use cokret_sdk::mls::AadVisibility;
     // The discriminator lives at the envelope root; tolerate a nested
     // `envelope` wrapper as shown in the spec wire example.
@@ -215,7 +217,7 @@ fn minimal_metadata_aad_visibility(envelope: &Value) -> Option<cokret_sdk::mls::
     }
 }
 
-/// flow-and-message.md §9.8.2 — a reaction MUST target an object inside its
+/// strand-and-message.md §9.8.2 — a reaction MUST target an object inside its
 /// own effective scope. soland's effective scope is the Realm, so a
 /// `ck.reaction.*` whose `target_ref` resolves to a Message in a different
 /// Realm is rejected with `reaction_scope_mismatch` (a `failed_precondition`
@@ -271,7 +273,9 @@ const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
 /// control-stream event MUST land on its principal's deterministic control realm
 /// (`principal_control_realm_for_did(payload.principal_id)`); it cannot be
 /// written into a collaboration realm or another principal's control realm.
-fn validate_principal_control_realm_binding(operation: &Operation) -> Result<(), &'static str> {
+pub(super) fn validate_principal_control_realm_binding(
+    operation: &Operation,
+) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind_string(operation);
     if !PRINCIPAL_CONTROL_EVENT_KINDS.contains(&kind.as_str()) {
         return Ok(());
@@ -492,7 +496,7 @@ pub async fn validate_content_encryption_floor(
             }
             _ => {}
         }
-        if flow_operation_carries_plaintext_private_content(operation)
+        if strand_operation_carries_plaintext_private_content(operation)
             && realm_content_floor_requires_e2ee(state, operation.realm_id.as_str())
         {
             return Err(CONTENT_ENCRYPTION_FLOOR_VIOLATION);
@@ -511,7 +515,7 @@ fn ap_bool(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// Extract the agent_participation ceiling a realm-policy / circle / flow
+/// Extract the agent_participation ceiling a realm-policy / circle / strand
 /// operation carries, plus the parent scope_key chain to validate
 /// tighten-only against. Returns `(scope_kind, scope_key, child_ceiling,
 /// parent_scope_keys)` or None when the operation carries no ceiling.
@@ -593,12 +597,12 @@ fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(kinds::CK_FLOW_CREATE) | Some(kinds::CK_FLOW_UPDATE) => {
+        Some(kinds::CK_STRAND_CREATE) | Some(kinds::CK_STRAND_UPDATE) => {
             let value = find(false)?;
-            let flow_uuid = ap_uuid_part(&id_of("flow_id")?).to_owned();
+            let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
-                "flow",
-                format!("flow:{realm_uuid}:{flow_uuid}"),
+                "strand",
+                format!("strand:{realm_uuid}:{strand_uuid}"),
                 to_part(&value),
                 vec![format!("realm:{realm_uuid}")],
             ))
@@ -667,7 +671,7 @@ fn ap_effective_reply(selection: &Value, ceiling: cokret_sdk::model::AgentPartic
 /// only author `ck.message.create` / `ck.reaction.add` in a scope where
 /// its effective participation `reply` bit is true (selection ∩ ceiling).
 /// Non-agent actors are unaffected — they fall through to standard authz.
-/// The agent's most-specific selection (flow over realm) governs; an agent
+/// The agent's most-specific selection (strand over realm) governs; an agent
 /// with no reply-enabled selection covering the scope is rejected
 /// (least-privilege, CKP-0008 §4.9).
 pub async fn validate_agent_reply_participation(
@@ -697,12 +701,12 @@ pub async fn validate_agent_reply_participation(
         }
         let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
         let realm_key = format!("realm:{realm_uuid}");
-        let flow_key = operation
+        let strand_key = operation
             .payload
-            .get("flow_id")
+            .get("strand_id")
             .and_then(Value::as_str)
             .or_else(|| operation.payload.get("thread_id").and_then(Value::as_str))
-            .map(|f| format!("flow:{realm_uuid}:{}", ap_uuid_part(f)));
+            .map(|f| format!("strand:{realm_uuid}:{}", ap_uuid_part(f)));
         let selections = state
             .persistence
             .agent_participation()
@@ -715,7 +719,7 @@ pub async fn validate_agent_reply_participation(
                 .find(|r| r.get("scope_key").and_then(Value::as_str) == Some(key))
                 .cloned()
         };
-        let selection = flow_key
+        let selection = strand_key
             .as_deref()
             .and_then(find)
             .or_else(|| find(&realm_key));
@@ -838,16 +842,16 @@ async fn validate_member_state_policy(
     Err("missing_capability")
 }
 
-/// COT-06-004 — capability gate for `ck.realm.set_default_flow`. Mirrors the
+/// COT-06-004 — capability gate for `ck.realm.set_default_strand`. Mirrors the
 /// ban / moderation gates: the actor MUST own the Realm or hold
-/// `ck.realm.set_default_flow` (or the broader `ck.realm.admin`) on it.
+/// `ck.realm.set_default_strand` (or the broader `ck.realm.admin`) on it.
 /// fail-closed `missing_capability` otherwise. Peer/service-originated
 /// federation operations (no `sender`) stay accepted for convergence/backfill.
-async fn validate_set_default_flow_policy(
+async fn validate_set_default_strand_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_SET_DEFAULT_FLOW) {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_SET_DEFAULT_STRAND) {
         return Ok(());
     }
     let Some(actor) = operation
@@ -865,8 +869,8 @@ async fn validate_set_default_flow_policy(
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ck.realm.admin` aggregates Realm governance, so
-    // an admin holder need not also hold the narrow set_default_flow action.
-    for action in ["ck.realm.set_default_flow", "ck.realm.admin"] {
+    // an admin holder need not also hold the narrow set_default_strand action.
+    for action in ["ck.realm.set_default_strand", "ck.realm.admin"] {
         if state
             .authz
             .check(

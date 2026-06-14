@@ -172,7 +172,7 @@ async fn send_plaintext_message(
     body: &str,
 ) -> Value {
     let payload = json!({
-        "flow_id": flow_id_for_realm(realm_id),
+        "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "content": {"kind": "ck.content.text", "body": body}
     });
@@ -296,8 +296,8 @@ fn read_cursor_payload(
         "device_id": device_id,
         "realm_id": realm_id,
         "read_scope": {
-            "kind": "flow",
-            "ref": flow_id_for_realm(realm_id),
+            "kind": "strand",
+            "ref": strand_id_for_realm(realm_id),
             "track_name": "discussion"
         },
         "position": {
@@ -347,11 +347,11 @@ fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
-fn flow_id_for_realm(realm_id: &str) -> String {
+fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ck:realm:")
-        .map(|suffix| format!("ck:flow:{suffix}"))
-        .unwrap_or_else(|| "ck:flow:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .map(|suffix| format!("ck:strand:{suffix}"))
+        .unwrap_or_else(|| "ck:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]

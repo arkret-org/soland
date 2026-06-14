@@ -134,17 +134,17 @@ async fn events_describe_and_single_event_submit_work() {
         .unwrap();
     assert_eq!(second_submitted["status"], "accepted");
 
-    // Round 13: `ck.flow.create` now has a schema requirement (payload
+    // Round 13: `ck.strand.create` now has a schema requirement (payload
     // MUST carry `object`) because it's in the canonical-kind registry;
-    // prior to round 13 it passed as an opaque envelope. Use a real Flow
+    // prior to round 13 it passed as an opaque envelope. Use a real Strand
     // object payload so this smoke test still exercises the cross-family
     // accept path (kind/schema combo distinct from `ck.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
-            "id": "ck:flow:01904100-0000-7000-8000-aa11ccff0001",
-            "schema": "ck.schema.flow.v1",
+            "id": "ck:strand:01904100-0000-7000-8000-aa11ccff0001",
+            "schema": "ck.schema.strand.v1",
             "realm_id": DEMO_REALM_ID,
-            "metadata": { "title": "Onboarding flow" },
+            "metadata": { "title": "Onboarding strand" },
             "stage": "draft",
             "tracks": {
                 "discussion": {
@@ -161,8 +161,8 @@ async fn events_describe_and_single_event_submit_work() {
         3,
         Vec::new(),
     );
-    artifact_kind_event["kind"] = Value::String("ck.flow.create".to_owned());
-    artifact_kind_event["schema_id"] = Value::String("ck.schema.flow.v1".to_owned());
+    artifact_kind_event["kind"] = Value::String("ck.strand.create".to_owned());
+    artifact_kind_event["schema_id"] = Value::String("ck.schema.strand.v1".to_owned());
     artifact_kind_event["payload"] = artifact_kind_payload.clone();
     artifact_kind_event["proofs"][0]["payload_digest"] =
         Value::String(sha256_json(&artifact_kind_payload));
@@ -416,7 +416,7 @@ async fn index_reducer_debug_reports_projection_frontier() {
         &token,
         "did:web:alice.example",
         realm_id,
-        "ck:flow:debug-reducer",
+        "ck:strand:debug-reducer",
         serde_json::json!({"body": "debug reducer"}),
         false,
     )
@@ -543,7 +543,7 @@ async fn sync_backfill_exposes_prev_cursor_and_limited_timeline_pages() {
             &token,
             "did:web:alice.example",
             realm_id,
-            "ck:flow:backfill-pages",
+            "ck:strand:backfill-pages",
             serde_json::json!({"body": body}),
             false,
         )

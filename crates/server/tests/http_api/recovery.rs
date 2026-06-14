@@ -52,7 +52,7 @@ async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
     let signing = SigningKey::from_bytes(&[71u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
 
-    // Authorize a device via the full recovery flow (persists the policy + the
+    // Authorize a device via the full recovery strand (persists the policy + the
     // device's accepted public key).
     let (policy_id, device_id) =
         authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;

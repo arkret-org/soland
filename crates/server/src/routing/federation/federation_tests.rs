@@ -286,7 +286,7 @@ async fn local_invite_membership_and_message_operations_enqueue_push_bodies_idem
         json!({
             "event_id": "ck:event:01904100-0000-7000-8000-000000000054",
             "sender": "did:web:alice.example",
-            "thread_id": "ck:flow:01904100-0000-7000-8000-000000000051",
+            "thread_id": "ck:strand:01904100-0000-7000-8000-000000000051",
             "content": {"kind": "ck.content.text", "body": "hello federation"}
         }),
     );

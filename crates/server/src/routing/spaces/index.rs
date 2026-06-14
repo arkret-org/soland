@@ -256,8 +256,8 @@ async fn index_describe(depot: &mut Depot, res: &mut Response) {
 fn object_kind_for(object_id: &str) -> Option<&'static str> {
     if object_id.starts_with("ck:space:") {
         Some("space")
-    } else if object_id.starts_with("ck:flow:") {
-        Some("flow")
+    } else if object_id.starts_with("ck:strand:") {
+        Some("strand")
     } else if object_id.starts_with("ck:morph:") {
         Some("morph")
     } else if object_id.starts_with("ck:actor_profile:") {
@@ -477,15 +477,15 @@ fn value_is_sender(value: &Value, sender: &str) -> bool {
 #[tracing::instrument(skip_all, fields(op = "index_inbox"))]
 async fn index_inbox(depot: &mut Depot, res: &mut Response) {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let flow_id = super::flow_id_from_realm_id(DEMO_REALM_ID);
+    let strand_id = super::strand_id_from_realm_id(DEMO_REALM_ID);
     res.render(Json(json!({
         "service_did": state.config.service_did.clone(),
-        "flows": [{
-            "flow": {
-                "flow_id": flow_id,
-                "schema": "ck.schema.flow.v1",
+        "strands": [{
+            "strand": {
+                "strand_id": strand_id,
+                "schema": "ck.schema.strand.v1",
                 "realm_id": DEMO_REALM_ID,
-                "track": super::default_discussion_track(&flow_id, &flow_id),
+                "track": super::default_discussion_track(&strand_id, &strand_id),
             },
         }],
         "next_cursor": Value::Null,

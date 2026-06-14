@@ -1,4 +1,4 @@
-//! Read-side HTTP handlers for the server-side Space-container / Flow / Morph
+//! Read-side HTTP handlers for the server-side Space-container / Strand / Morph
 //! lifecycle projection state maintained by `reducer::ProjectionState`.
 //!
 //! These endpoints let yougen (and other clients) re-hydrate the
@@ -9,13 +9,13 @@
 //! - `GET /_cokret/self/projection/spaces?realm_id=...` — canonical projection endpoint listing
 //!   Space containers in a Realm scope, with `state` ∈ {active, archived, tombstoned} (spec
 //!   `common-fields.md §5.1`).
-//! - `GET /_cokret/self/projection/flows?realm_id=...` — same for Flows (state ∈ {active, archived,
+//! - `GET /_cokret/self/projection/strands?realm_id=...` — same for Strands (state ∈ {active, archived,
 //!   redacted}).
-//! - `GET /_cokret/self/projection/morphs?realm_id=...` — same for Morphs (same enum as Flows).
+//! - `GET /_cokret/self/projection/morphs?realm_id=...` — same for Morphs (same enum as Strands).
 //!
 //! All three endpoints are authenticated. Resource visibility check
 //! piggy-backs on `realm_id_accessible` so a non-member can't probe
-//! Space-container / Flow / Morph lifecycle state via this surface.
+//! Space-container / Strand / Morph lifecycle state via this surface.
 //!
 //! Handlers use the SDK response DTOs so generated OpenAPI stays aligned with
 //! the spec artifact registry.
@@ -23,7 +23,7 @@
 //! Terminal-state visibility filter: each endpoint accepts an optional
 //! `include_terminal=true|false` query parameter. Default is `false`:
 //!   - Space container: tombstoned rows excluded.
-//!   - Flow / Morph: redacted rows excluded.
+//!   - Strand / Morph: redacted rows excluded.
 //!
 //! Spec rationale: tombstoned / redacted are unrecoverable terminals per
 //! common-fields.md §5.1; clients hydrating a kanban view shouldn't see them by
@@ -31,7 +31,7 @@
 //! debugging UIs.
 
 use cokret_sdk::{
-    Did, FlowId, MorphId, ProjectionAssignedToRelation, ProjectionFlowList, ProjectionFlowRow,
+    Did, StrandId, MorphId, ProjectionAssignedToRelation, ProjectionStrandList, ProjectionStrandRow,
     ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
     ProjectionSpaceRow, ProjectionSpaceState, RealmId, RelationId, SpaceId,
 };
@@ -54,21 +54,21 @@ use crate::state::AppState;
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
-        .push(Router::with_path("projection/flows").get(list_flow_projections))
+        .push(Router::with_path("projection/strands").get(list_strand_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
 }
 
 pub(super) fn legacy_router() -> Router {
     Router::new()
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
-        .push(Router::with_path("projection/flows").get(list_flow_projections))
+        .push(Router::with_path("projection/strands").get(list_strand_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
         .push(Router::with_path("projection/documents/{morph_id}").get(read_document_projection))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-/// Terminal-state check for Flow / Morph. Mirror of
+/// Terminal-state check for Strand / Morph. Mirror of
 /// `ObjectLifecycleState::is_terminal` but inlined here so the
 /// `filter` chain in the handlers reads as
 /// `!is_object_terminal(f.state)` for symmetry with the Space-container
@@ -124,16 +124,16 @@ fn relation_string_field<'a>(
         .filter(|value| !value.trim().is_empty())
 }
 
-fn flow_position_relation<'a>(
+fn strand_position_relation<'a>(
     projection: &'a ProjectionState,
-    flow_id: &str,
+    strand_id: &str,
 ) -> Option<&'a SolandRelationState> {
     projection
         .relations
         .values()
         .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "contains")
-        .filter(|relation| relation.to_ref.as_deref() == Some(flow_id))
+        .filter(|relation| relation.to_ref.as_deref() == Some(strand_id))
         .filter(|relation| relation_string_field(relation, "board_space_id").is_some())
         .filter(|relation| {
             relation_string_field(relation, "list_space_id")
@@ -147,7 +147,7 @@ fn flow_position_relation<'a>(
         })
 }
 
-type FlowPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
+type StrandPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
 
 #[derive(Debug, Serialize, ToSchema)]
 struct DocumentProjectionOutcome {
@@ -198,11 +198,11 @@ struct DocumentProjectionRelation {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-fn flow_position_fields(
+fn strand_position_fields(
     projection: &ProjectionState,
-    flow_id: &str,
-) -> Result<FlowPositionFields, AppError> {
-    let Some(relation) = flow_position_relation(projection, flow_id) else {
+    strand_id: &str,
+) -> Result<StrandPositionFields, AppError> {
+    let Some(relation) = strand_position_relation(projection, strand_id) else {
         return Ok((None, None, None));
     };
     let board_space_id = relation_string_field(relation, "board_space_id")
@@ -216,16 +216,16 @@ fn flow_position_fields(
     Ok((board_space_id, list_space_id, rank))
 }
 
-fn flow_assigned_to_relations(
+fn strand_assigned_to_relations(
     projection: &ProjectionState,
-    flow_id: &str,
+    strand_id: &str,
 ) -> Result<Vec<ProjectionAssignedToRelation>, AppError> {
     let mut relation_refs = projection
         .relations
         .values()
         .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "assigned_to")
-        .filter(|relation| relation.from_ref.as_deref() == Some(flow_id))
+        .filter(|relation| relation.from_ref.as_deref() == Some(strand_id))
         .filter_map(|relation| {
             relation
                 .to_ref
@@ -479,18 +479,18 @@ async fn list_space_container_projections(
 }
 
 #[endpoint(
-    operation_id = "ck.self.projection.flows.query.list",
+    operation_id = "ck.self.projection.strands.query.list",
     tags("projection"),
-    summary = "List Flow lifecycle projection state for a Realm"
+    summary = "List Strand lifecycle projection state for a Realm"
 )]
-#[tracing::instrument(skip_all, fields(op = "ck.self.projection.flows.query.list"))]
-async fn list_flow_projections(
+#[tracing::instrument(skip_all, fields(op = "ck.self.projection.strands.query.list"))]
+async fn list_strand_projections(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
     realm_id: QueryParam<String, true>,
     include_terminal: QueryParam<bool, false>,
-) -> JsonResult<ProjectionFlowList> {
+) -> JsonResult<ProjectionStrandList> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
@@ -511,28 +511,28 @@ async fn list_flow_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
-    // COT-06-004 — the Realm's default-Flow pointer drives each row's
-    // derived `is_default` flag (no per-Flow stored column).
-    let default_flow_id = proj
+    // COT-06-004 — the Realm's default-Strand pointer drives each row's
+    // derived `is_default` flag (no per-Strand stored column).
+    let default_strand_id = proj
         .realm_states
         .get(&realm_id)
-        .and_then(|realm| realm.default_flow_id.clone());
-    let flows: Vec<ProjectionFlowRow> = proj
-        .flows
+        .and_then(|realm| realm.default_strand_id.clone());
+    let strands: Vec<ProjectionStrandRow> = proj
+        .strands
         .values()
         .filter(|f| f.realm_id == realm_id)
         .filter(|f| include_terminal || !is_object_terminal(f.state))
         .map(|f| {
-            let (board_space_id, list_space_id, rank) = flow_position_fields(&proj, &f.flow_id)?;
-            let assigned_to_relations = flow_assigned_to_relations(&proj, &f.flow_id)?;
+            let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &f.strand_id)?;
+            let assigned_to_relations = strand_assigned_to_relations(&proj, &f.strand_id)?;
             let mut assigned_actor_ids = assigned_to_relations
                 .iter()
                 .map(|relation| relation.actor_id.clone())
                 .collect::<Vec<_>>();
             assigned_actor_ids.sort();
             assigned_actor_ids.dedup();
-            Ok(ProjectionFlowRow {
-                flow_id: parse_projection_id::<FlowId>(&f.flow_id, "flow_id")?,
+            Ok(ProjectionStrandRow {
+                strand_id: parse_projection_id::<StrandId>(&f.strand_id, "strand_id")?,
                 realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
                 state: projection_object_state(f.state),
                 state_changed_at: f.state_changed_at,
@@ -546,15 +546,15 @@ async fn list_flow_projections(
                 created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
                 updated_at: f.updated_at,
-                is_default: default_flow_id.as_deref() == Some(f.flow_id.as_str()),
+                is_default: default_strand_id.as_deref() == Some(f.strand_id.as_str()),
             })
         })
         .collect::<Result<_, AppError>>()?;
     drop(proj);
-    let total = total_count(flows.len())?;
-    json_ok(ProjectionFlowList {
+    let total = total_count(strands.len())?;
+    json_ok(ProjectionStrandList {
         realm_id: response_realm_id,
-        flows,
+        strands,
         total,
         next_cursor: None,
         has_more: false,

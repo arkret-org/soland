@@ -27,7 +27,7 @@ use cokret_sdk::http::{
 use cokret_sdk::model::InviteReceivePolicy;
 use cokret_sdk::{
     AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody, AccountView,
-    DeviceId, Did, ErrorCode, EventId, FlowId, RealmId,
+    DeviceId, Did, ErrorCode, EventId, StrandId, RealmId,
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
@@ -1510,7 +1510,7 @@ async fn direct_conversation_resolve(
         return json_ok(DirectConversationResolveOutcome {
             state: DirectConversationResolveState::NotFound,
             realm_id: None,
-            main_flow_id: None,
+            main_strand_id: None,
             binding_event_ref: None,
             created: Some(false),
         });

@@ -732,7 +732,7 @@ struct DirectConversationBindingRow {
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
-    main_flow_id: Uuid,
+    main_strand_id: Uuid,
     #[diesel(sql_type = Text)]
     binding_event_ref: String,
     #[diesel(sql_type = Text)]
@@ -750,7 +750,7 @@ impl DirectConversationBindingRow {
             DirectConversationBindingRecord {
                 participants_unordered: self.participants_unordered,
                 realm_id: ids::format_typed_uuid("realm", &self.realm_id),
-                main_flow_id: ids::format_typed_uuid("flow", &self.main_flow_id),
+                main_strand_id: ids::format_typed_uuid("strand", &self.main_strand_id),
                 binding_event_ref: self.binding_event_ref,
                 state: self.state,
                 created_at: self.created_at,
@@ -761,7 +761,7 @@ impl DirectConversationBindingRow {
 }
 
 const DIRECT_BINDING_COLUMNS: &str = "participants_key, participants_unordered, realm_id, \
-     main_flow_id, binding_event_ref, state, created_at, updated_at";
+     main_strand_id, binding_event_ref, state, created_at, updated_at";
 
 #[async_trait]
 impl DirectConversationBindingStore for PgDirectConversationBindingStore {
@@ -789,13 +789,13 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "INSERT INTO direct_conversation_bindings \
-             (participants_key, participants_unordered, realm_id, main_flow_id, \
+             (participants_key, participants_unordered, realm_id, main_strand_id, \
               binding_event_ref, state, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (participants_key) DO UPDATE SET \
                 participants_unordered = EXCLUDED.participants_unordered, \
                 realm_id = EXCLUDED.realm_id, \
-                main_flow_id = EXCLUDED.main_flow_id, \
+                main_strand_id = EXCLUDED.main_strand_id, \
                 binding_event_ref = EXCLUDED.binding_event_ref, \
                 state = EXCLUDED.state, \
                 updated_at = EXCLUDED.updated_at",
@@ -803,7 +803,7 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         .bind::<Text, _>(participants_key)
         .bind::<Array<Text>, _>(&record.participants_unordered)
         .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.realm_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.main_flow_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_or_panic(&record.main_strand_id))
         .bind::<Text, _>(&record.binding_event_ref)
         .bind::<Text, _>(&record.state)
         .bind::<Timestamptz, _>(record.created_at)

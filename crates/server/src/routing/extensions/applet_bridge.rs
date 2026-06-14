@@ -30,7 +30,7 @@ use super::bot_actor::{self, BotActor, KIND_BOT, KIND_GHOST};
 use crate::error::AppError;
 use crate::reducer::AppletProjection;
 use crate::result::{JsonResult, json_ok};
-use crate::routing::events::flow::flow_id_from_realm_id;
+use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::routing::events::projection::projection_event_json;
 use crate::routing::system::extract::AuthArgs;
 use crate::routing::system::util::sha256_hex;
@@ -1766,7 +1766,7 @@ async fn append_portal_message(
     }
     let operation_id = ids::generate_operation_id();
     let event_id = ids::generate_event_id();
-    let thread_id = flow_id_from_realm_id(realm_id);
+    let thread_id = strand_id_from_realm_id(realm_id);
     let created_at = chrono::Utc::now();
     let content_with_portal = enrich_content_with_portal_metadata(content, applet, ghost);
     let message_record = MessageRecord {
@@ -1816,7 +1816,7 @@ async fn append_portal_message(
         return Err(AppError::internal("failed to persist portal projection"));
     }
     Ok(AppletPortalMessageOutcome {
-        message_id: crate::routing::events::flow::message_id_from_event_id(&event_id),
+        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
         event_id,
         operation_id,
         realm_id: realm_id.to_owned(),

@@ -481,7 +481,7 @@ base64-standard-padded). Recommended cadence and ceremony:
   cross-Realm discussion routing column; the next two land the
   `projection_circles` / `projection_circle_members` mirror tables and the
   `scope_circle_id` / `default_scope_circle_id` / `child_scope_policy` /
-  `effective_scope` columns on the Flow / Morph / Space / Events mirrors.
+  `effective_scope` columns on the Strand / Morph / Space / Events mirrors.
   All three are forward-only in spirit — the down migrations are provided
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
   CKP-0007 cutover would violate the forbidden-wire-fields contract.

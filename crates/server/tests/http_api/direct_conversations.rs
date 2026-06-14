@@ -137,10 +137,10 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
             .starts_with("ck:realm:")
     );
     assert!(
-        created["main_flow_id"]
+        created["main_strand_id"]
             .as_str()
             .unwrap()
-            .starts_with("ck:flow:")
+            .starts_with("ck:strand:")
     );
 
     let found: Value = TestClient::post("http://server/_cokret/self/direct-conversations/resolve")
@@ -153,7 +153,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .unwrap();
     assert_eq!(found["state"], "found");
     assert_eq!(found["realm_id"], created["realm_id"]);
-    assert_eq!(found["main_flow_id"], created["main_flow_id"]);
+    assert_eq!(found["main_strand_id"], created["main_strand_id"]);
 }
 
 #[tokio::test]
@@ -220,7 +220,7 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
 
     let (first, second): (Value, Value) = tokio::join!(create_a, create_b);
     assert_eq!(first["realm_id"], second["realm_id"]);
-    assert_eq!(first["main_flow_id"], second["main_flow_id"]);
+    assert_eq!(first["main_strand_id"], second["main_strand_id"]);
     assert_eq!(first["binding_event_ref"], second["binding_event_ref"]);
     assert_eq!(
         [

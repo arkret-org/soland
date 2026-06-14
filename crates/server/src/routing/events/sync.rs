@@ -45,7 +45,7 @@ use super::projection::{
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
     backfill_gap_events, default_discussion_track, device_message_envelopes_after,
-    flow_id_from_realm_id, flow_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref,
+    strand_id_from_realm_id, strand_projection_for_realm, is_realm_deleted, now, parse_snapshot_ref,
     projected_event_page, projection_event_json, prune_expired_typing, query_param,
     realm_discoverability, realm_event_visible_to_session, realm_has_member,
     realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
@@ -1394,7 +1394,7 @@ async fn persist_ephemeral_typing(
         let scope_id = envelope
             .payload
             .get("scope_id")
-            .or_else(|| envelope.payload.get("flow_id"))
+            .or_else(|| envelope.payload.get("strand_id"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned);

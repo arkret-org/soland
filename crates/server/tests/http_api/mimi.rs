@@ -69,7 +69,7 @@ async fn mimi_provider_facade_contracts_work() {
     );
 
     let room_binding: Value =
-        TestClient::put("http://server/_cokret/open/mimi/flows/01JSMIMI/update")
+        TestClient::put("http://server/_cokret/open/mimi/strands/01JSMIMI/update")
             .json(&serde_json::json!({
                 "room_binding": {
                     "mimi_room_uri": "mimi://soland.local/rooms/01JSMIMI",
@@ -86,7 +86,7 @@ async fn mimi_provider_facade_contracts_work() {
     assert_eq!(room_binding["ok"], true);
 
     let group_info: Value =
-        TestClient::get("http://server/_cokret/open/mimi/flows/01JSMIMI/group-info")
+        TestClient::get("http://server/_cokret/open/mimi/strands/01JSMIMI/group-info")
             .send(&service)
             .await
             .take_json()
@@ -118,7 +118,7 @@ async fn mimi_provider_facade_contracts_work() {
         false
     );
 
-    let mapped: Value = TestClient::post("http://server/_cokret/open/mimi/flows/01JSMIMI/messages")
+    let mapped: Value = TestClient::post("http://server/_cokret/open/mimi/strands/01JSMIMI/messages")
         .json(&serde_json::json!({
             "source_format": "text/markdown;variant=GFM-MIMI",
             "body": "hello from MIMI"
@@ -176,7 +176,7 @@ async fn mimi_provider_facade_contracts_work() {
 }
 
 #[tokio::test]
-async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
+async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
@@ -186,7 +186,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 1: post a room_update carrying a room_binding block.
     let update_resp: Value = TestClient::put(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/update"
+        "http://server/_cokret/open/mimi/strands/{room_id}/update"
     ))
     .json(&serde_json::json!({
         "room_binding": {
@@ -194,7 +194,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
                 "realm_id": demo_realm,
-                "flow_id": null,
+                "strand_id": null,
             },
             "hub_provider": "did:web:test.local",
             "local_provider_role": "hub",
@@ -223,7 +223,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
 
     // Step 2: submit_message into the same room.
     let msg_resp: Value = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "text/plain;charset=utf-8",
@@ -357,7 +357,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     // updates the dispatch lookup. The most-recently-recorded
     // binding wins per `mimi_bound_realm_id` semantics.
     let _: Value = TestClient::put(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/update"
+        "http://server/_cokret/open/mimi/strands/{room_id}/update"
     ))
     .json(&serde_json::json!({
         "room_binding": {
@@ -365,7 +365,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
                 "realm_id": custom_realm,
-                "flow_id": null,
+                "strand_id": null,
             },
             "hub_provider": "did:web:test.local",
             "local_provider_role": "hub",
@@ -382,7 +382,7 @@ async fn mimi_facade_writes_flow_into_canonical_reducer_chain() {
     .unwrap();
 
     let msg_resp_2: Value = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -413,7 +413,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let room_id = "01JSMIMI-P75-POLICY";
 
     let update_resp: Value = TestClient::put(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/update"
+        "http://server/_cokret/open/mimi/strands/{room_id}/update"
     ))
     .json(&serde_json::json!({
         "room_binding": {
@@ -421,7 +421,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
             "mimi_room_uri": format!("mimi://soland.local/rooms/{room_id}"),
             "binding_scope": {
                 "realm_id": realm_id,
-                "flow_id": null,
+                "strand_id": null,
             },
             "content_profile": "application/mimi-content",
         },
@@ -435,7 +435,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     assert_eq!(update_resp["ok"], true);
 
     let mut unmarked = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -459,7 +459,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     );
 
     let downgrade_resp: Value = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -491,7 +491,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let transcript_resp: Value = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",
@@ -525,7 +525,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .to_owned();
 
     let quarantine_resp: Value = TestClient::post(format!(
-        "http://server/_cokret/open/mimi/flows/{room_id}/messages"
+        "http://server/_cokret/open/mimi/strands/{room_id}/messages"
     ))
     .json(&serde_json::json!({
         "source_format": "application/mimi-content",

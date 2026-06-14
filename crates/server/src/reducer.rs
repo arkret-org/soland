@@ -23,7 +23,7 @@
 //! path that pre-dates the Move/Seal model. As Seal projection lands,
 //! the structured fields migrate to a single `cells` map.
 
-// SOL-07-005: flow/morph/circle/applet/agent `apply_*` reducers (additional
+// SOL-07-005: strand/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
 mod apply_capability;
 mod apply_messages;
@@ -161,12 +161,12 @@ pub struct ProjectionState {
     /// `ck.space.create` / update / parent / archive / restore / tombstone;
     /// mirror table is the `projection_space_containers` durable table.
     pub space_containers: BTreeMap<String, SpaceContainerProjection>,
-    /// Server-side Flow projection. Mirrors the canonical state-machine
-    /// for ck.flow.create / update / archive / restore. Unlike Space
-    /// there is no dedicated `ck.flow.tombstone` event; terminal state
-    /// is reached via `ck.redaction`. Mirror table is `projection_flows`
+    /// Server-side Strand projection. Mirrors the canonical state-machine
+    /// for ck.strand.create / update / archive / restore. Unlike Space
+    /// there is no dedicated `ck.strand.tombstone` event; terminal state
+    /// is reached via `ck.redaction`. Mirror table is `projection_strands`
     /// (durable).
-    pub flows: BTreeMap<String, FlowProjection>,
+    pub strands: BTreeMap<String, StrandProjection>,
     /// CKP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `ck.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
@@ -174,7 +174,7 @@ pub struct ProjectionState {
     /// the struct so the wire layer can enforce
     /// `Circle.members ⊆ Realm.members` without an extra DB hop.
     pub circles: BTreeMap<String, CircleProjection>,
-    /// Server-side Morph projection. Same shape as Flow. Mirror table
+    /// Server-side Morph projection. Same shape as Strand. Mirror table
     /// is `projection_morphs` (durable).
     pub morphs: BTreeMap<String, MorphProjection>,
     /// Server-side Applet registry projection, keyed by `service_did`
@@ -565,7 +565,7 @@ pub struct SpaceContainerProjection {
     /// `ck.realm.destroy` cascade when this container's home Realm is
     /// destroyed. Spec `realm-and-space.md` §2.5.1 ¶6: orphaned
     /// containers become read-only locked projections; no
-    /// `ck.flow.move` / `ck.space.parent` / `ck.space.update` may
+    /// `ck.strand.move` / `ck.space.parent` / `ck.space.update` may
     /// revive them. Defaults to `false`.
     pub orphaned: bool,
     /// Stream-F (Wave 2C) — cross-Realm `parent_ref` lazy-link lock.
@@ -576,7 +576,7 @@ pub struct SpaceContainerProjection {
     /// capability / history / E2EE / retention from the destroyed
     /// Realm. UI / navigation surfaces SHOULD render this as a locked
     /// lazy link and defer to the local reparent / archive / tombstone
-    /// flow inside the policy window. Spec `realm-and-space.md`
+    /// strand inside the policy window. Spec `realm-and-space.md`
     /// §2.5.1 ¶6. Defaults to `false`.
     pub parent_ref_locked: bool,
 }
@@ -606,10 +606,10 @@ impl SpaceContainerLifecycleState {
     }
 }
 
-/// Server-side Flow state cache. Mirrors `projection_flows` table.
+/// Server-side Strand state cache. Mirrors `projection_strands` table.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FlowProjection {
-    pub flow_id: String,
+pub struct StrandProjection {
+    pub strand_id: String,
     pub realm_id: String,
     pub title: String,
     pub summary: Option<String>,
@@ -620,9 +620,9 @@ pub struct FlowProjection {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// CKP-0007 — the Circle this Flow is scoped to, if any (`ck:circle:…`).
-    /// A message's effective circle-scope is derived from its Flow's
-    /// `scope_circle_id` (spec: `scope_circle_id` is a Flow field, not a
+    /// CKP-0007 — the Circle this Strand is scoped to, if any (`ck:circle:…`).
+    /// A message's effective circle-scope is derived from its Strand's
+    /// `scope_circle_id` (spec: `scope_circle_id` is a Strand field, not a
     /// message field); messages never carry their own scope.
     pub scope_circle_id: Option<String>,
 }
@@ -675,7 +675,7 @@ pub struct CircleProjection {
 /// CKP-0007 — Circle lifecycle state. Matches spec `circle.schema.json`
 /// `state` enum (active / archived / tombstoned). Distinct from
 /// [`ObjectLifecycleState`] (which carries the redacted/deleted forms used
-/// by Flow / Morph); Circle has no redaction path because the canonical
+/// by Strand / Morph); Circle has no redaction path because the canonical
 /// terminal action is `ck.circle.tombstone`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CircleLifecycleState {
@@ -776,9 +776,9 @@ pub struct SolandAgentProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// State enum shared by Flow and Morph projections (mirrors SDK
+/// State enum shared by Strand and Morph projections (mirrors SDK
 /// `cokret_sdk::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
-/// a single `Tombstoned` terminal, Flow / Morph use `Redacted` as their terminal
+/// a single `Tombstoned` terminal, Strand / Morph use `Redacted` as their terminal
 /// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ObjectLifecycleState {
@@ -797,7 +797,7 @@ impl ObjectLifecycleState {
         }
     }
 
-    /// Terminal state per spec §5.1: Flow / Morph use `redacted` as their
+    /// Terminal state per spec §5.1: Strand / Morph use `redacted` as their
     /// unrecoverable terminal.
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Redacted)
@@ -968,12 +968,12 @@ fn pin_scope_key(pin_scope: &Value) -> Option<String> {
     Some(format!("{kind}:{id}"))
 }
 
-/// Build the stored message content. `scope_circle_id` is the Flow-derived
+/// Build the stored message content. `scope_circle_id` is the Strand-derived
 /// circle scope (spec: messages never carry their own scope — it is resolved
-/// from the message's Flow by the caller via
-/// [`ProjectionState::flow_scope_circle_id`]). Any client-supplied
+/// from the message's Strand by the caller via
+/// [`ProjectionState::strand_scope_circle_id`]). Any client-supplied
 /// `scope_circle_id` on the message is dropped and replaced by the authoritative
-/// Flow scope.
+/// Strand scope.
 fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>) -> Value {
     let mut content = payload
         .get("content")
@@ -994,7 +994,7 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
                 object.insert(key.to_owned(), value.clone());
             }
         }
-        // Never trust a client-supplied scope; stamp the Flow-derived one.
+        // Never trust a client-supplied scope; stamp the Strand-derived one.
         object.remove("scope_circle_id");
         if let Some(value) = scope_circle_id {
             object.insert("scope_circle_id".to_owned(), Value::String(value));
@@ -1203,15 +1203,15 @@ pub struct SolandRealmState {
     pub terminal_state: Option<String>,
     /// Stream-F (Wave 1B) — for `ck.realm.tombstone` only: the
     /// `ck:realm:<uuid>` of the successor Realm that takes over child
-    /// Space/Flow placement. `None` for live or destroyed Realms.
+    /// Space/Strand placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
-    /// COT-06-004 — the Realm's default Flow pointer (`ck:flow:<UUIDv7>`).
-    /// Set by `ck.realm.set_default_flow` (`apply_realm_set_default_flow`);
-    /// the Flow it names MUST already be projected in this Realm. A Flow's
+    /// COT-06-004 — the Realm's default Strand pointer (`ck:strand:<UUIDv7>`).
+    /// Set by `ck.realm.set_default_strand` (`apply_realm_set_default_strand`);
+    /// the Strand it names MUST already be projected in this Realm. A Strand's
     /// derived `is_default` flag is computed at query time as
-    /// `flow_id == realm.default_flow_id` — there is no separate stored
-    /// per-Flow column.
-    pub default_flow_id: Option<String>,
+    /// `strand_id == realm.default_strand_id` — there is no separate stored
+    /// per-Strand column.
+    pub default_strand_id: Option<String>,
 }
 
 /// The effect of applying an operation to the projection state.
@@ -1257,11 +1257,11 @@ pub enum ProjectionEffect {
         realm_id: String,
         action: String,
     },
-    /// COT-06-004 — `ck.realm.set_default_flow` projected. The Realm's
-    /// `default_flow_id` now points at `flow_id`.
-    RealmDefaultFlowSet {
+    /// COT-06-004 — `ck.realm.set_default_strand` projected. The Realm's
+    /// `default_strand_id` now points at `strand_id`.
+    RealmDefaultStrandSet {
         realm_id: String,
-        flow_id: String,
+        strand_id: String,
     },
     /// Space-container lifecycle transition accepted; new state is reflected in
     /// `ProjectionState::space_containers` and (when persisted) `projection_space_containers`.
@@ -1269,13 +1269,13 @@ pub enum ProjectionEffect {
         container_space_id: String,
         new_state: SpaceContainerLifecycleState,
     },
-    /// Flow lifecycle transition accepted. Mirror of `SpaceContainerLifecycle`
-    /// for `ProjectionState::flows`.
-    FlowLifecycle {
-        flow_id: String,
+    /// Strand lifecycle transition accepted. Mirror of `SpaceContainerLifecycle`
+    /// for `ProjectionState::strands`.
+    StrandLifecycle {
+        strand_id: String,
         new_state: ObjectLifecycleState,
     },
-    /// Morph lifecycle transition accepted. Same shape as Flow.
+    /// Morph lifecycle transition accepted. Same shape as Strand.
     MorphLifecycle {
         morph_id: String,
         new_state: ObjectLifecycleState,
@@ -1299,14 +1299,14 @@ pub enum ProjectionEffect {
         member: String,
         target_state: String,
     },
-    /// Flow watch cell touched. Cell write itself is owned by the
+    /// Strand watch cell touched. Cell write itself is owned by the
     /// Move/Seal pipeline (cas-register at SDK layer); the projection
-    /// only records that a watch change happened for `(flow_id, actor_id)`
+    /// only records that a watch change happened for `(strand_id, actor_id)`
     /// so downstream listeners (notification dispatcher, watcher list
     /// projection) can react. `level` is `None` when the effect clears
     /// the cell.
-    FlowWatchUpdated {
-        flow_id: String,
+    StrandWatchUpdated {
+        strand_id: String,
         actor_id: String,
         level: Option<String>,
         level_public: Option<bool>,
@@ -1523,7 +1523,7 @@ pub(crate) enum SpaceContainerLifecycleTransition {
     Tombstone,
 }
 
-/// Flow / Morph lifecycle transition picker. Mirror of
+/// Strand / Morph lifecycle transition picker. Mirror of
 /// `SpaceContainerLifecycleTransition` but for the two-event family (no tombstone).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ObjectLifecycleTransition {
@@ -1695,12 +1695,12 @@ fn apply_realm_destroy_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_DESTROY)
 }
-fn apply_realm_set_default_flow_dispatch(
+fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_set_default_flow(op, op.created_at)
+    s.apply_realm_set_default_strand(op, op.created_at)
 }
 fn apply_erasure_receipt_dispatch(
     s: &mut ProjectionState,
@@ -1770,54 +1770,54 @@ fn apply_space_container_tombstone_dispatch(
         SpaceContainerLifecycleTransition::Tombstone,
     )
 }
-fn apply_flow_create_dispatch(
+fn apply_strand_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_create(op, op.created_at)
+    s.apply_strand_create(op, op.created_at)
 }
-fn apply_flow_update_dispatch(
+fn apply_strand_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_update(op, op.created_at)
+    s.apply_strand_update(op, op.created_at)
 }
-fn apply_flow_archive_dispatch(
+fn apply_strand_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_lifecycle(op, op.created_at, ObjectLifecycleTransition::Archive)
+    s.apply_strand_lifecycle(op, op.created_at, ObjectLifecycleTransition::Archive)
 }
-fn apply_flow_restore_dispatch(
+fn apply_strand_restore_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
+    s.apply_strand_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
 }
-fn apply_flow_position_touch_dispatch(
+fn apply_strand_position_touch_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_position_touch(op, op.created_at)
+    s.apply_strand_position_touch(op, op.created_at)
 }
-fn apply_flow_watch_set_dispatch(
+fn apply_strand_watch_set_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_watch_set(op, op.created_at)
+    s.apply_strand_watch_set(op, op.created_at)
 }
-fn apply_flow_track_touch_dispatch(
+fn apply_strand_track_touch_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_flow_track_touch(op, op.created_at)
+    s.apply_strand_track_touch(op, op.created_at)
 }
 
 fn apply_morph_create_dispatch(
@@ -3045,10 +3045,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_REALM_ARCHIVE, apply_realm_archive_dispatch);
     m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
     m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
-    // COT-06-004 — Realm default-Flow pointer.
+    // COT-06-004 — Realm default-Strand pointer.
     m.insert(
-        CK_REALM_SET_DEFAULT_FLOW,
-        apply_realm_set_default_flow_dispatch,
+        CK_REALM_SET_DEFAULT_STRAND,
+        apply_realm_set_default_strand_dispatch,
     );
     m.insert(CK_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(CK_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
@@ -3076,18 +3076,18 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         CK_SPACE_CONTAINER_TOMBSTONE,
         apply_space_container_tombstone_dispatch,
     );
-    m.insert(CK_FLOW_CREATE, apply_flow_create_dispatch);
-    m.insert(CK_FLOW_UPDATE, apply_flow_update_dispatch);
-    m.insert(CK_FLOW_ARCHIVE, apply_flow_archive_dispatch);
-    m.insert(CK_FLOW_RESTORE, apply_flow_restore_dispatch);
-    m.insert(CK_FLOW_MOVE, apply_flow_position_touch_dispatch);
-    m.insert(CK_FLOW_REORDER, apply_flow_position_touch_dispatch);
-    m.insert(CK_FLOW_WATCH_SET, apply_flow_watch_set_dispatch);
+    m.insert(CK_STRAND_CREATE, apply_strand_create_dispatch);
+    m.insert(CK_STRAND_UPDATE, apply_strand_update_dispatch);
+    m.insert(CK_STRAND_ARCHIVE, apply_strand_archive_dispatch);
+    m.insert(CK_STRAND_RESTORE, apply_strand_restore_dispatch);
+    m.insert(CK_STRAND_MOVE, apply_strand_position_touch_dispatch);
+    m.insert(CK_STRAND_REORDER, apply_strand_position_touch_dispatch);
+    m.insert(CK_STRAND_WATCH_SET, apply_strand_watch_set_dispatch);
     // Unified tracks patch. Payload-shape validation (presence of `tracks`
     // patch map) lives in the wire validator. TODO: apply patch ops
-    // against soland-side Flow.tracks projection once the server-side
+    // against soland-side Strand.tracks projection once the server-side
     // projection carries the tracks map.
-    m.insert(CK_FLOW_TRACKS_UPDATE, apply_flow_track_touch_dispatch);
+    m.insert(CK_STRAND_TRACKS_UPDATE, apply_strand_track_touch_dispatch);
     m.insert(CK_MORPH_CREATE, apply_morph_create_dispatch);
     m.insert(CK_MORPH_UPDATE, apply_morph_update_dispatch);
     m.insert(CK_MORPH_ARCHIVE, apply_morph_archive_dispatch);
@@ -3358,8 +3358,8 @@ fn object_field_string(
     object: &serde_json::Map<String, Value>,
     field_name: &str,
 ) -> Option<String> {
-    // spec 9dabf26: Flow profile fields live under `metadata.fields`, not at
-    // the object root. The Flow-position component (board_space_id /
+    // spec 9dabf26: Strand profile fields live under `metadata.fields`, not at
+    // the object root. The Strand-position component (board_space_id /
     // list_space_id / rank) is read from there.
     object
         .get("metadata")
@@ -3390,22 +3390,22 @@ fn component_field_string(payload: &Value, family: &str, field_name: &str) -> Op
         .map(ToOwned::to_owned)
 }
 
-fn flow_position_from_create_payload(
+fn strand_position_from_create_payload(
     payload: &Value,
     object: &serde_json::Map<String, Value>,
 ) -> Option<(String, String, Option<String>)> {
     let board_space_id = object_field_string(object, "board_space_id").or_else(|| {
-        component_field_string(payload, "ck.component.flow.position.v1", "board_space_id")
+        component_field_string(payload, "ck.component.strand.position.v1", "board_space_id")
     })?;
     let list_space_id = object_field_string(object, "list_space_id").or_else(|| {
-        component_field_string(payload, "ck.component.flow.position.v1", "list_space_id")
+        component_field_string(payload, "ck.component.strand.position.v1", "list_space_id")
     })?;
     let rank = object_field_string(object, "rank")
-        .or_else(|| component_field_string(payload, "ck.component.flow.position.v1", "rank"));
+        .or_else(|| component_field_string(payload, "ck.component.strand.position.v1", "rank"));
     Some((board_space_id, list_space_id, rank))
 }
 
-fn flow_position_from_lifecycle_payload(
+fn strand_position_from_lifecycle_payload(
     payload: &Value,
 ) -> Option<(String, String, Option<String>)> {
     let board_space_id = payload
@@ -3465,7 +3465,7 @@ fn patch_string_value(
     }
 }
 
-fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static str> {
+fn strand_status_patch_target(payload: &Value) -> Result<Option<String>, &'static str> {
     let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
         return Ok(None);
     };
@@ -3497,8 +3497,8 @@ fn flow_status_patch_target(payload: &Value) -> Result<Option<String>, &'static 
             .as_str()
             .filter(|value| !value.trim().is_empty())
             .map(|value| Some(value.to_owned()))
-            .ok_or("flow_status_invalid"),
-        PatchAction::Unset => Err("flow_status_invalid"),
+            .ok_or("strand_status_invalid"),
+        PatchAction::Unset => Err("strand_status_invalid"),
         PatchAction::Ignore => Ok(None),
     }
 }
@@ -3525,7 +3525,7 @@ fn patch_metadata_string_value(
         })
 }
 
-fn flow_metadata_fields_value(value: &Value) -> Option<BTreeMap<String, Value>> {
+fn strand_metadata_fields_value(value: &Value) -> Option<BTreeMap<String, Value>> {
     value.as_object().map(|fields| {
         fields
             .iter()
@@ -3535,14 +3535,14 @@ fn flow_metadata_fields_value(value: &Value) -> Option<BTreeMap<String, Value>> 
 }
 
 fn apply_metadata_fields_value(fields: &mut BTreeMap<String, Value>, value: &Value) {
-    if let Some(values) = flow_metadata_fields_value(value) {
+    if let Some(values) = strand_metadata_fields_value(value) {
         for (field_name, field_value) in values {
             fields.insert(field_name, field_value);
         }
     }
 }
 
-fn flow_status_transition_allowed(current: &str, next: &str) -> bool {
+fn strand_status_transition_allowed(current: &str, next: &str) -> bool {
     if current == next {
         return true;
     }
@@ -3556,32 +3556,32 @@ fn flow_status_transition_allowed(current: &str, next: &str) -> bool {
     }
 }
 
-fn flow_id_from_payload(payload: &Value) -> Option<&str> {
+fn strand_id_from_payload(payload: &Value) -> Option<&str> {
     payload
-        .get("flow_id")
+        .get("strand_id")
         .or_else(|| payload.get("target_ref"))
         .or_else(|| payload.get("object_ref"))
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ck:flow:"))
+        .filter(|value| value.starts_with("ck:strand:"))
 }
 
-fn check_flow_status_patch(
-    flow: &FlowProjection,
+fn check_strand_status_patch(
+    strand: &StrandProjection,
     payload: &Value,
 ) -> Result<Option<String>, &'static str> {
-    let Some(next_status) = flow_status_patch_target(payload)? else {
+    let Some(next_status) = strand_status_patch_target(payload)? else {
         return Ok(None);
     };
-    let Some(current_status) = flow.fields.get("status").and_then(Value::as_str) else {
+    let Some(current_status) = strand.fields.get("status").and_then(Value::as_str) else {
         return Ok(Some(next_status));
     };
-    if flow_status_transition_allowed(current_status, &next_status) {
+    if strand_status_transition_allowed(current_status, &next_status) {
         return Ok(Some(next_status));
     }
-    Err("flow_status_transition_invalid")
+    Err("strand_status_transition_invalid")
 }
 
-fn apply_flow_fields_patch(
+fn apply_strand_fields_patch(
     fields: &mut BTreeMap<String, Value>,
     patch: &serde_json::Map<String, Value>,
 ) {
@@ -3624,7 +3624,7 @@ fn apply_flow_fields_patch(
     }
 }
 
-/// Apply a `ck.flow.update`-style patch to a Morph's `fields` map. Unlike Flow
+/// Apply a `ck.strand.update`-style patch to a Morph's `fields` map. Unlike Strand
 /// (whose profile fields moved under `metadata.fields` in spec 9dabf26), the
 /// Morph object keeps `fields` at the object root (morph.schema.json), so its
 /// patch paths are root-level `fields` / `fields.<name>`.
@@ -4074,16 +4074,16 @@ impl ProjectionState {
         })
     }
 
-    fn store_flow_position_relation(
+    fn store_strand_position_relation(
         &mut self,
-        flow_id: &str,
+        strand_id: &str,
         realm_id: &str,
         board_space_id: &str,
         list_space_id: &str,
         rank: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
-        let relation_id = format!("ck:relation:kanban.position:{board_space_id}:{flow_id}");
+        let relation_id = format!("ck:relation:kanban.position:{board_space_id}:{strand_id}");
         let relation = self
             .relations
             .entry(relation_id.clone())
@@ -4092,7 +4092,7 @@ impl ProjectionState {
                 realm_id: realm_id.to_owned(),
                 relation_kind: "contains".to_owned(),
                 from_ref: Some(list_space_id.to_owned()),
-                to_ref: Some(flow_id.to_owned()),
+                to_ref: Some(strand_id.to_owned()),
                 fields: BTreeMap::new(),
                 state: "active".to_owned(),
                 created_at: now,
@@ -4101,7 +4101,7 @@ impl ProjectionState {
         relation.realm_id = realm_id.to_owned();
         relation.relation_kind = "contains".to_owned();
         relation.from_ref = Some(list_space_id.to_owned());
-        relation.to_ref = Some(flow_id.to_owned());
+        relation.to_ref = Some(strand_id.to_owned());
         relation.fields.insert(
             "board_space_id".to_owned(),
             Value::String(board_space_id.to_owned()),
@@ -4148,7 +4148,7 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// Per-kind dispatch flows through [`APPLY_REGISTRY`] — a static
+    /// Per-kind dispatch strands through [`APPLY_REGISTRY`] — a static
     /// `HashMap<canonical_kind, ApplyFn>` built by
     /// [`default_apply_registry`]. This replaced a 30-arm `match` that
     /// directly delegated to `ProjectionState::apply_*` helpers; the
@@ -4238,14 +4238,14 @@ impl ProjectionState {
         }
     }
 
-    // ── Flow / Morph projection state machine ──
+    // ── Strand / Morph projection state machine ──
 
-    /// Read-only state-machine preflight for a `ck.flow.*` lifecycle event.
+    /// Read-only state-machine preflight for a `ck.strand.*` lifecycle event.
     /// Mirror of `check_space_container_lifecycle_transition` — used by
     /// `event_log::submit_event` to short-circuit HTTP admission with 412
-    /// failed_precondition. Unknown Flow returns `Ok` (causal/backfill
+    /// failed_precondition. Unknown Strand returns `Ok` (causal/backfill
     /// tolerance per common-fields.md §5.1).
-    pub fn check_flow_lifecycle_transition(
+    pub fn check_strand_lifecycle_transition(
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
@@ -4254,77 +4254,77 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        // `ck.flow.create` is unconditional (no current state to validate).
-        // `ck.flow.update` requires Active source.
-        // `ck.flow.archive` requires Active source.
-        // `ck.flow.restore` requires Archived source.
+        // `ck.strand.create` is unconditional (no current state to validate).
+        // `ck.strand.update` requires Active source.
+        // `ck.strand.archive` requires Active source.
+        // `ck.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            CK_FLOW_CREATE => return Ok(()),
-            CK_FLOW_UPDATE => (&[ObjectLifecycleState::Active], "flow_not_active"),
-            CK_FLOW_ARCHIVE => (&[ObjectLifecycleState::Active], "flow_not_active"),
-            CK_FLOW_RESTORE => (&[ObjectLifecycleState::Archived], "flow_not_archived"),
+            CK_STRAND_CREATE => return Ok(()),
+            CK_STRAND_UPDATE => (&[ObjectLifecycleState::Active], "strand_not_active"),
+            CK_STRAND_ARCHIVE => (&[ObjectLifecycleState::Active], "strand_not_active"),
+            CK_STRAND_RESTORE => (&[ObjectLifecycleState::Archived], "strand_not_archived"),
             _ => return Ok(()),
         };
-        let Some(flow_id) = flow_id_from_payload(&operation.payload) else {
-            // Missing flow_id is caught upstream by the operation-schema
+        let Some(strand_id) = strand_id_from_payload(&operation.payload) else {
+            // Missing strand_id is caught upstream by the operation-schema
             // validator; preflight tolerates absence to keep responsibilities
             // separate.
             return Ok(());
         };
-        let Some(flow) = self.flows.get(flow_id) else {
+        let Some(strand) = self.strands.get(strand_id) else {
             return Ok(());
         };
-        if !allowed_source.contains(&flow.state) {
+        if !allowed_source.contains(&strand.state) {
             return Err(reason);
         }
         Ok(())
     }
 
-    /// Read-only preflight for profile-level Flow status FSM stored at
+    /// Read-only preflight for profile-level Strand status FSM stored at
     /// `fields.status`. This guards common workflow statuses while leaving
     /// unknown/custom statuses to Realm profiles.
-    pub fn check_flow_status_transition(&self, operation: &Operation) -> Result<(), &'static str> {
+    pub fn check_strand_status_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_FLOW_UPDATE)
+            != Some(crate::kinds::CK_STRAND_UPDATE)
         {
             return Ok(());
         }
-        let Some(flow_id) = flow_id_from_payload(&operation.payload) else {
+        let Some(strand_id) = strand_id_from_payload(&operation.payload) else {
             return Ok(());
         };
-        let Some(flow) = self.flows.get(flow_id) else {
+        let Some(strand) = self.strands.get(strand_id) else {
             return Ok(());
         };
-        check_flow_status_patch(flow, &operation.payload).map(|_| ())
+        check_strand_status_patch(strand, &operation.payload).map(|_| ())
     }
 
-    /// Return the audit payload for an accepted Flow `fields.status`
+    /// Return the audit payload for an accepted Strand `fields.status`
     /// transition. Callers invoke this before projection is applied so
     /// `from` is read from the current reducer state.
-    pub fn flow_status_transition_audit_payload(
+    pub fn strand_status_transition_audit_payload(
         &self,
         operation: &Operation,
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(crate::kinds::CK_FLOW_UPDATE)
+            != Some(crate::kinds::CK_STRAND_UPDATE)
         {
             return None;
         }
-        let flow_id = flow_id_from_payload(&operation.payload)?;
-        let flow = self.flows.get(flow_id)?;
-        let next_status = flow_status_patch_target(&operation.payload)
+        let strand_id = strand_id_from_payload(&operation.payload)?;
+        let strand = self.strands.get(strand_id)?;
+        let next_status = strand_status_patch_target(&operation.payload)
             .ok()
             .flatten()?;
-        let current_status = flow.fields.get("status").and_then(Value::as_str)?;
+        let current_status = strand.fields.get("status").and_then(Value::as_str)?;
         if current_status == next_status {
             return None;
         }
         Some(serde_json::json!({
             "actor": actor_id,
-            "flow_id": flow_id,
-            "incident_id": flow_id,
-            "realm_id": flow.realm_id,
+            "strand_id": strand_id,
+            "incident_id": strand_id,
+            "realm_id": strand.realm_id,
             "from": current_status,
             "to": next_status,
             "timestamp": operation.created_at.to_rfc3339(),
@@ -4333,7 +4333,7 @@ impl ProjectionState {
     }
 
     /// Read-only preflight for `ck.redaction` events that
-    /// target a Flow / Morph via `object_ref`. Per spec common-fields.md
+    /// target a Strand / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;
     /// terminal source MUST `failed_precondition` with
     /// `<kind>_already_terminal`. Unknown object tolerated (causal /
@@ -4350,9 +4350,9 @@ impl ProjectionState {
         let Some(object_ref) = redaction_object_ref(operation) else {
             return Ok(());
         };
-        if let Some(flow) = self.flows.get(&object_ref) {
-            if flow.state.is_terminal() {
-                return Err("flow_already_terminal");
+        if let Some(strand) = self.strands.get(&object_ref) {
+            if strand.state.is_terminal() {
+                return Err("strand_already_terminal");
             }
             return Ok(());
         }
@@ -4366,7 +4366,7 @@ impl ProjectionState {
     }
 
     /// Read-only state-machine preflight for a `ck.morph.*` lifecycle event.
-    /// Same shape as `check_flow_lifecycle_transition`.
+    /// Same shape as `check_strand_lifecycle_transition`.
     pub fn check_morph_lifecycle_transition(
         &self,
         operation: &Operation,

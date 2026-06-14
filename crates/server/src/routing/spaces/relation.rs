@@ -56,7 +56,7 @@ async fn create_relation(
     }
     // Spec: models/relation.md §3.2 — structural relations (`contains`,
     // `parent_of`) MUST stay within a single Realm. When `from` / `to`
-    // refs resolve to known Flow projections from a different Realm
+    // refs resolve to known Strand projections from a different Realm
     // than the relation's `realm_id`, reject up front.
     let structural_kinds: &[&str] = &["contains", "parent_of", "child_of"];
     if structural_kinds.contains(&body.relation_kind.as_str()) {
@@ -65,9 +65,9 @@ async fn create_relation(
             let Some(ref_id) = ref_opt.as_deref() else {
                 continue;
             };
-            if ref_id.starts_with("ck:flow:")
-                && let Some(flow) = proj.flows.get(ref_id)
-                && flow.realm_id != body.realm_id
+            if ref_id.starts_with("ck:strand:")
+                && let Some(strand) = proj.strands.get(ref_id)
+                && strand.realm_id != body.realm_id
             {
                 return Err(AppError::invalid_param(
                     "structural relation refs MUST belong to the same Realm as the relation",

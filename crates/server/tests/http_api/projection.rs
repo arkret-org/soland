@@ -128,24 +128,24 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 }
 
 #[tokio::test]
-async fn projection_flows_endpoint_reports_lifecycle_state() {
+async fn projection_strands_endpoint_reports_lifecycle_state() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let realm_id = DEMO_REALM_ID;
-    let flow_id = "ck:flow:01904100-0000-7000-8000-f20dc0000001";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-f20dc0000001";
     let board_space_id = "ck:space:01904100-0000-7000-8000-f20dc0000100";
     let list_space_id = "ck:space:01904100-0000-7000-8000-f20dc0000200";
 
-    let create_event = signed_flow_event(
+    let create_event = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f20ec0000001",
         1,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": realm_id,
                 "metadata": {
-                    "title": "Hydration flow",
+                    "title": "Hydration strand",
                     "fields": {
                         "board_space_id": board_space_id,
                         "list_space_id": list_space_id,
@@ -167,11 +167,11 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    let archive_event = signed_flow_event(
+    let archive_event = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-f20ec0000002",
         2,
-        "ck.flow.archive",
-        serde_json::json!({ "flow_id": flow_id }),
+        "ck.strand.archive",
+        serde_json::json!({ "strand_id": strand_id }),
         vec!["ck:event:01904100-0000-7000-8000-f20ec0000001"],
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
@@ -185,7 +185,7 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     assert_eq!(r["status"], "accepted");
 
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/strands?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -193,12 +193,12 @@ async fn projection_flows_endpoint_reports_lifecycle_state() {
     .take_json()
     .await
     .unwrap();
-    let row = body["flows"]
+    let row = body["strands"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["flow_id"] == flow_id)
-        .expect("flow not in projection response");
+        .find(|f| f["strand_id"] == strand_id)
+        .expect("strand not in projection response");
     assert_eq!(row["state"], "archived");
     assert_eq!(row["board_space_id"], board_space_id);
     assert_eq!(row["list_space_id"], list_space_id);
@@ -387,7 +387,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     let realm_id = DEMO_REALM_ID;
     let morph_id = "ck:morph:01904100-0000-7000-8000-d21dc0000001";
     let relation_id = "ck:relation:01904100-0000-7000-8000-d21dc0000001";
-    let incident_ref = "ck:flow:01904100-0000-7000-8000-d21dc0000100";
+    let incident_ref = "ck:strand:01904100-0000-7000-8000-d21dc0000100";
 
     let initial_body = serde_json::json!({
         "schema_version": 1,
@@ -572,7 +572,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     let token = dev_token(state.clone()).await;
     let realm_id = "ck:realm:0196419b-0000-7000-8000-000000000000";
     let container_space_id = "ck:space:01904100-0000-7000-8000-c15d70000001";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-c15d70000002";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-c15d70000002";
 
     // Create + tombstone a Space container.
     let create_space = signed_space_event(
@@ -654,16 +654,16 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         .expect("tombstoned Space container MUST appear when include_terminal=true");
     assert_eq!(row["state"], "tombstoned");
 
-    // Create a Flow + redact it.
-    let create_flow = signed_flow_event(
+    // Create a Strand + redact it.
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-c15d70020001",
         3,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": realm_id,
-                "metadata": { "title": "Doomed Flow" },
+                "metadata": { "title": "Doomed Strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -671,7 +671,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -679,18 +679,18 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    let redact_flow = signed_redaction_event(
+    let redact_strand = signed_redaction_event(
         "ck:event:01904100-0000-7000-8000-c15d70020002",
         4,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-c15d70020001",
-            "object_ref": flow_id,
+            "object_ref": strand_id,
         }),
         vec!["ck:event:01904100-0000-7000-8000-c15d70020001"],
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&redact_flow)
+        .json(&redact_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -698,9 +698,9 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         .unwrap();
     assert_eq!(r["status"], "accepted");
 
-    // Default Flow listing — redacted Flow hidden.
+    // Default Strand listing — redacted Strand hidden.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={realm_id}"
+        "http://server/_cokret/self/projection/strands?realm_id={realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -709,17 +709,17 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .await
     .unwrap();
     assert!(
-        body["flows"]
+        body["strands"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|f| f["flow_id"] != flow_id),
-        "redacted Flow MUST be hidden from default projection listing"
+            .all(|f| f["strand_id"] != strand_id),
+        "redacted Strand MUST be hidden from default projection listing"
     );
 
-    // Explicit include_terminal=true — redacted Flow visible.
+    // Explicit include_terminal=true — redacted Strand visible.
     let body: Value = TestClient::get(format!(
-        "http://server/_cokret/self/projection/flows?realm_id={realm_id}&include_terminal=true"
+        "http://server/_cokret/self/projection/strands?realm_id={realm_id}&include_terminal=true"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -727,12 +727,12 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     .take_json()
     .await
     .unwrap();
-    let row = body["flows"]
+    let row = body["strands"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["flow_id"] == flow_id)
-        .expect("redacted Flow MUST appear when include_terminal=true");
+        .find(|f| f["strand_id"] == strand_id)
+        .expect("redacted Strand MUST appear when include_terminal=true");
     assert_eq!(row["state"], "redacted");
 }
 
@@ -741,7 +741,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
     let container_space_id = "ck:space:01904100-0000-7000-8000-15a15a000001";
-    let flow_id = "ck:flow:01904100-0000-7000-8000-15a15a000002";
+    let strand_id = "ck:strand:01904100-0000-7000-8000-15a15a000002";
     let morph_id = "ck:morph:01904100-0000-7000-8000-15a15a000003";
 
     // Space container: create + archive → persistence has state=archived.
@@ -822,16 +822,16 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
             .any(|p| p.container_space_id == container_space_id)
     );
 
-    // Flow: create + redact → persistence has state=redacted.
-    let create_flow = signed_flow_event(
+    // Strand: create + redact → persistence has state=redacted.
+    let create_strand = signed_strand_event(
         "ck:event:01904100-0000-7000-8000-15a15af00001",
         3,
-        "ck.flow.create",
+        "ck.strand.create",
         serde_json::json!({
             "object": {
-                "id": flow_id,
+                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
-                "metadata": { "title": "Persistent Flow" },
+                "metadata": { "title": "Persistent Strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
@@ -839,51 +839,51 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_flow)
+        .json(&create_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(r["status"], "accepted");
-    let flow_row = state
+    let strand_row = state
         .persistence
-        .flow_projections()
-        .get(flow_id)
+        .strand_projections()
+        .get(strand_id)
         .await
         .unwrap()
-        .expect("flow projection MUST be mirrored to persistence after create");
-    assert_eq!(flow_row.state, "active");
-    assert_eq!(flow_row.title, "Persistent Flow");
+        .expect("strand projection MUST be mirrored to persistence after create");
+    assert_eq!(strand_row.state, "active");
+    assert_eq!(strand_row.title, "Persistent Strand");
 
-    let redact_flow = signed_redaction_event(
+    let redact_strand = signed_redaction_event(
         "ck:event:01904100-0000-7000-8000-15a15af00002",
         4,
         serde_json::json!({
             "target_event_id": "ck:event:01904100-0000-7000-8000-15a15af00001",
-            "object_ref": flow_id,
+            "object_ref": strand_id,
         }),
         vec!["ck:event:01904100-0000-7000-8000-15a15af00001"],
     );
     let r: Value = TestClient::post("http://server/_cokret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&redact_flow)
+        .json(&redact_strand)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(r["status"], "accepted");
-    let flow_row = state
+    let strand_row = state
         .persistence
-        .flow_projections()
-        .get(flow_id)
+        .strand_projections()
+        .get(strand_id)
         .await
         .unwrap()
-        .expect("flow projection MUST still exist after redaction");
+        .expect("strand projection MUST still exist after redaction");
     assert_eq!(
-        flow_row.state, "redacted",
-        "ck.redaction with object_ref MUST flip flow projection in persistence too"
+        strand_row.state, "redacted",
+        "ck.redaction with object_ref MUST flip strand projection in persistence too"
     );
 
     // Morph: create + archive → persistence has state=archived.

@@ -563,7 +563,7 @@ fn push_notification_leaks_private_payload(
                     | "event_id"
                     | "realm_id"
                     | "space_id"
-                    | "flow_id"
+                    | "strand_id"
                     | "thread_id"
                     | "sender"
                     | "sender_actor_display_name"

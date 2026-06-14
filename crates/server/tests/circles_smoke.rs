@@ -2,7 +2,7 @@
 //! primitive lifecycle and membership invariants.
 //!
 //! The full HTTP integration round-trip
-//! (create → add member → emit Flow with scope_circle_id → archive)
+//! (create → add member → emit Strand with scope_circle_id → archive)
 //! is exercised by the cotest joint-test suite (P5). This smoke test
 //! seals the reducer's invariants in soland-local CI so a regression
 //! on the projection-side state machine surfaces immediately:
@@ -12,7 +12,7 @@
 //!    CKP-0007 reason `circle_member_must_be_realm_member`;
 //! 3. After the actor joins the parent Realm, the same membership write is accepted and the Circle
 //!    members set is updated;
-//! 4. A Flow create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
+//! 4. A Strand create with `scope_circle_id` pointing at a Circle in a different Realm is rejected
 //!    with `circle_realm_mismatch`;
 //! 5. `ck.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use soland::hlc::ServerHlc;
 use soland::kinds::{
     CK_CIRCLE_CREATE, CK_CIRCLE_MEMBER_STATE, CK_CIRCLE_TOMBSTONE, CK_CIRCLE_UPDATE,
-    CK_FLOW_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
+    CK_STRAND_CREATE, CK_MESSAGE_CREATE, CK_REALM_CREATE, CK_REALM_POLICY_COMPONENTS,
 };
 use soland::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
@@ -32,7 +32,7 @@ const REALM_A: &str = "ck:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_B: &str = "ck:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
 const CIRCLE_A: &str = "ck:circle:01904100-0000-7000-8000-c11111111111";
 const CIRCLE_B: &str = "ck:circle:01904100-0000-7000-8000-c22222222222";
-const FLOW_X: &str = "ck:flow:01904100-0000-7000-8000-f11111111111";
+const STRAND_X: &str = "ck:strand:01904100-0000-7000-8000-f11111111111";
 const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
@@ -438,18 +438,18 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         );
     }
 
-    // CKP-0007: a Message's Circle scope is derived from its Flow, never from
-    // the message payload (spec: scope_circle_id is a Flow field). Bind a Flow
-    // to the Circle, then post a message to that Flow WITHOUT any scope field.
-    let flow_created = state.apply(
+    // CKP-0007: a Message's Circle scope is derived from its Strand, never from
+    // the message payload (spec: scope_circle_id is a Strand field). Bind a Strand
+    // to the Circle, then post a message to that Strand WITHOUT any scope field.
+    let strand_created = state.apply(
         &op(
-            CK_FLOW_CREATE,
+            CK_STRAND_CREATE,
             REALM_A,
             json!({
                 "object": {
-                    "id": FLOW_X,
+                    "id": STRAND_X,
                     "realm_id": REALM_A,
-                    "title": "Circle-scoped Flow",
+                    "title": "Circle-scoped Strand",
                     "scope_circle_id": CIRCLE_A,
                 }
             }),
@@ -457,8 +457,8 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         &hlc,
     );
     assert!(
-        !matches!(flow_created, ProjectionEffect::Rejected { .. }),
-        "circle-scoped Flow create must succeed, got {flow_created:?}"
+        !matches!(strand_created, ProjectionEffect::Rejected { .. }),
+        "circle-scoped Strand create must succeed, got {strand_created:?}"
     );
 
     let effect = state.apply(
@@ -467,7 +467,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
             REALM_A,
             json!({
                 "event_id": "ck:event:01904100-0000-7000-8000-c1c1eeee0001",
-                "flow_id": FLOW_X,
+                "strand_id": STRAND_X,
                 "sender": ALICE,
                 "content": {
                     "body": "circle-only ciphertext placeholder",
@@ -483,7 +483,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     };
     assert_eq!(
         message.content["scope_circle_id"], CIRCLE_A,
-        "projection must derive Circle scope from the Flow so sync/event readers can filter"
+        "projection must derive Circle scope from the Strand so sync/event readers can filter"
     );
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, ALICE));
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, BOB));
@@ -494,7 +494,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
 }
 
 #[test]
-fn flow_scope_circle_id_rejects_cross_realm() {
+fn strand_scope_circle_id_rejects_cross_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("circles-cross-realm-test");
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
@@ -516,18 +516,18 @@ fn flow_scope_circle_id_rejects_cross_realm() {
         &hlc,
     );
 
-    // Flow in Realm A pointing at a Circle in Realm B MUST be rejected
+    // Strand in Realm A pointing at a Circle in Realm B MUST be rejected
     // with the canonical CKP-0007 schema-violation reason
     // `circle_realm_mismatch`.
     let rejected = state.apply(
         &op(
-            CK_FLOW_CREATE,
+            CK_STRAND_CREATE,
             REALM_A,
             json!({
                 "object": {
-                    "id": FLOW_X,
+                    "id": STRAND_X,
                     "realm_id": REALM_A,
-                    "title": "Cross-Realm Flow",
+                    "title": "Cross-Realm Strand",
                     "scope_circle_id": CIRCLE_B,
                 }
             }),

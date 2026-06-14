@@ -228,7 +228,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "payload": {
-                "scope_id": "ck:flow:demo",
+                "scope_id": "ck:strand:demo",
                 "typing": true
             }
         }))
@@ -248,7 +248,7 @@ async fn push_profile_and_moderation_contracts_work() {
         .unwrap();
     assert_eq!(active_typing.len(), 1);
     assert_eq!(active_typing[0].actor, "did:web:alice.example");
-    assert_eq!(active_typing[0].scope_id.as_deref(), Some("ck:flow:demo"));
+    assert_eq!(active_typing[0].scope_id.as_deref(), Some("ck:strand:demo"));
 
     let stop_sent_at = chrono::Utc::now();
     let stop_expires_at = stop_sent_at + chrono::Duration::seconds(30);

@@ -416,7 +416,7 @@ impl SolandAuthzEngine {
         }
 
         if members.iter().any(|m| m == actor) {
-            let member_actions = ["ck.flow.read", "ck.message.create"];
+            let member_actions = ["ck.strand.read", "ck.message.create"];
             if member_actions.contains(&action) {
                 return AuthzResult {
                     allowed: true,
@@ -445,7 +445,7 @@ impl Default for SolandAuthzEngine {
 /// Check if a grant resource pattern matches the requested resource.
 ///
 /// CKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) —
-/// the spec resource-selector enum admits `realm`, `space`, `flow`,
+/// the spec resource-selector enum admits `realm`, `space`, `strand`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
 /// `ck:circle:<uuid>` typed-id form alongside the existing space /
 /// realm forms, plus a `circle` keyword selector that resolves to
@@ -473,8 +473,8 @@ fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "space" {
         return resource.starts_with("ck:space:");
     }
-    if pattern == "flow" {
-        return resource.starts_with("ck:flow:");
+    if pattern == "strand" {
+        return resource.starts_with("ck:strand:");
     }
     if pattern == "morph" {
         return resource.starts_with("ck:morph:");
@@ -613,7 +613,7 @@ fn evaluate_constraint(
             // facet-bound and an unfaceted target falls outside its scope.
             //
             // The check works on any spec-typed object resource that
-            // carries a `facets` field; `ck:flow:` / `ck:space:` /
+            // carries a `facets` field; `ck:strand:` / `ck:space:` /
             // `ck:morph:` projections all surface facets through the
             // same cell-family registry.
             if allowed.is_empty() {

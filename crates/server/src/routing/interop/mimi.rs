@@ -4,11 +4,11 @@
 //! `mimi-protocol-directory`. Writes from the MIMI side map into the
 //! canonical Cokret reducer chain:
 //!
-//!   * `POST /mimi/flows/{flow_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
+//!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ck.message.create`
 //!     projection event so the MIMI ingress shows up on the canonical Cokret timeline.
-//!   * `PUT  /mimi/flows/{flow_id}/update` -> emits a `ck.mimi.room_binding` projection event
+//!   * `PUT  /mimi/strands/{strand_id}/update` -> emits a `ck.mimi.room_binding` projection event
 //!     whenever the update body carries a `room_binding` block.
-//!   * `POST /mimi/flows/{flow_id}/notify` -> broadcasts a synthetic `ck.open.mimi.command.notify`
+//!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic `ck.open.mimi.command.notify`
 //!     projection event so live subscribers observe MIMI fanout.
 //!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
 //!     `ck.self.moderation.report` projection event so the audit timeline reflects the report.
@@ -45,10 +45,10 @@ pub(super) fn router() -> Router {
     Router::with_path("mimi")
         .push(Router::with_path("provider-directory").get(mimi_provider_directory))
         .push(Router::with_path("key-material").post(mimi_key_material))
-        .push(Router::with_path("flows/{flow_id}/update").put(mimi_room_update))
-        .push(Router::with_path("flows/{flow_id}/notify").post(mimi_notify))
-        .push(Router::with_path("flows/{flow_id}/messages").post(mimi_room_message))
-        .push(Router::with_path("flows/{flow_id}/group-info").get(mimi_group_info))
+        .push(Router::with_path("strands/{strand_id}/update").put(mimi_room_update))
+        .push(Router::with_path("strands/{strand_id}/notify").post(mimi_notify))
+        .push(Router::with_path("strands/{strand_id}/messages").post(mimi_room_message))
+        .push(Router::with_path("strands/{strand_id}/group-info").get(mimi_group_info))
         .push(Router::with_path("consent/request").post(mimi_consent_request))
         .push(Router::with_path("consent/update").post(mimi_consent_update))
         .push(Router::with_path("identifiers/query").post(mimi_identifiers_query))
@@ -97,7 +97,7 @@ async fn mimi_key_material(
         .get("target_identifier")
         .or_else(|| body.get("target_did"))
         .or_else(|| body.get("mimi_room_uri"))
-        .or_else(|| body.get("flow_id"))
+        .or_else(|| body.get("strand_id"))
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     let _receipt = mimi_receipt(
@@ -124,12 +124,12 @@ async fn mimi_key_material(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.update_room"))]
 async fn mimi_room_update(
-    flow_id: PathParam<String>,
+    strand_id: PathParam<String>,
     body: JsonBody<MimiRoomUpdateRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<MimiRoomUpdateOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = flow_id.into_inner();
+    let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi room update")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
@@ -198,12 +198,12 @@ async fn mimi_room_update(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.notify"))]
 async fn mimi_notify(
-    flow_id: PathParam<String>,
+    strand_id: PathParam<String>,
     body: JsonBody<MimiNotifyRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<MimiNotifyOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = flow_id.into_inner();
+    let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi notify")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
@@ -267,12 +267,12 @@ async fn mimi_notify(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.command.submit_message"))]
 async fn mimi_room_message(
-    flow_id: PathParam<String>,
+    strand_id: PathParam<String>,
     body: JsonBody<MimiSubmitMessageRequestBody>,
     depot: &mut Depot,
 ) -> JsonResult<MimiSubmitMessageOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = flow_id.into_inner();
+    let room_id = strand_id.into_inner();
     let body = typed_body_value(body.into_inner(), "mimi submit message")?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
@@ -334,7 +334,7 @@ async fn mimi_room_message(
         .get("thread_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| crate::routing::events::flow::flow_id_from_realm_id(&realm_id));
+        .unwrap_or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id));
     let created_at = chrono::Utc::now();
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",
@@ -445,11 +445,11 @@ async fn mimi_room_message(
 )]
 #[tracing::instrument(skip_all, fields(op = "ck.open.mimi.query.group_info"))]
 async fn mimi_group_info(
-    flow_id: PathParam<String>,
+    strand_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<MimiGroupInfoOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
-    let room_id = flow_id.into_inner();
+    let room_id = strand_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
@@ -679,7 +679,7 @@ async fn mimi_report_abuse(
         .get("mimi_room_uri")
         .and_then(Value::as_str)
         .and_then(|uri| uri.rsplit('/').next())
-        .or_else(|| body.get("flow_id").and_then(Value::as_str))
+        .or_else(|| body.get("strand_id").and_then(Value::as_str))
         .map(str::to_owned);
     let bound_realm = match mimi_room_id.as_deref() {
         Some(id) => mimi_bound_realm_id(state, id).await,
@@ -1246,9 +1246,9 @@ async fn emit_mimi_room_binding_event(
             "mimi_room_id": room_id,
             "binding_scope": {
                 "realm_id": realm_id,
-                "flow_id": binding
+                "strand_id": binding
                     .get("binding_scope")
-                    .and_then(|s| s.get("flow_id"))
+                    .and_then(|s| s.get("strand_id"))
                     .cloned()
                     .unwrap_or(Value::Null),
             },

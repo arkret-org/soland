@@ -56,7 +56,7 @@ CREATE TABLE public.agent_participation (
     accept_third_party_mention boolean DEFAULT false NOT NULL,
     act_on_behalf boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_participation_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'flow'::text])))
+    CONSTRAINT agent_participation_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'strand'::text])))
 );
 
 CREATE TABLE public.agent_participation_ceiling (
@@ -67,7 +67,7 @@ CREATE TABLE public.agent_participation_ceiling (
     accept_third_party_mention boolean DEFAULT false NOT NULL,
     act_on_behalf boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_participation_ceiling_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'flow'::text])))
+    CONSTRAINT agent_participation_ceiling_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'strand'::text])))
 );
 
 CREATE TABLE public.agent_principals (
@@ -244,7 +244,7 @@ CREATE TABLE public.direct_conversation_bindings (
     participants_key text NOT NULL,
     participants_unordered text[] NOT NULL,
     realm_id uuid NOT NULL,
-    main_flow_id uuid NOT NULL,
+    main_strand_id uuid NOT NULL,
     binding_event_ref text NOT NULL,
     state text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -516,17 +516,17 @@ CREATE SEQUENCE public.projection_events_ordinal_seq
 
 ALTER SEQUENCE public.projection_events_ordinal_seq OWNED BY public.projection_events.id;
 
-CREATE TABLE public.projection_flow_watches (
+CREATE TABLE public.projection_strand_watches (
     id uuid NOT NULL,
-    flow_id uuid NOT NULL,
+    strand_id uuid NOT NULL,
     actor_id text NOT NULL,
     level text,
     level_public boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT projection_flow_watches_level_check CHECK (((level IS NULL) OR (level = ANY (ARRAY['mentions_only'::text, 'participating'::text, 'all'::text, 'muted'::text]))))
+    CONSTRAINT projection_strand_watches_level_check CHECK (((level IS NULL) OR (level = ANY (ARRAY['mentions_only'::text, 'participating'::text, 'all'::text, 'muted'::text]))))
 );
 
-CREATE TABLE public.projection_flows (
+CREATE TABLE public.projection_strands (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
     scope_circle_id uuid,
@@ -538,7 +538,7 @@ CREATE TABLE public.projection_flows (
     created_at timestamp with time zone NOT NULL,
     updated_by_id text,
     updated_at timestamp with time zone,
-    CONSTRAINT projection_flows_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
+    CONSTRAINT projection_strands_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 
 CREATE TABLE public.projection_morphs (
@@ -944,14 +944,14 @@ ALTER TABLE ONLY public.projection_circles
 ALTER TABLE ONLY public.projection_events
     ADD CONSTRAINT projection_events_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.projection_flow_watches
-    ADD CONSTRAINT projection_flow_watches_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.projection_strand_watches
+    ADD CONSTRAINT projection_strand_watches_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.projection_flow_watches
-    ADD CONSTRAINT projection_flow_watches_flow_id_actor_id_key UNIQUE (flow_id, actor_id);
+ALTER TABLE ONLY public.projection_strand_watches
+    ADD CONSTRAINT projection_strand_watches_strand_id_actor_id_key UNIQUE (strand_id, actor_id);
 
-ALTER TABLE ONLY public.projection_flows
-    ADD CONSTRAINT projection_flows_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.projection_strands
+    ADD CONSTRAINT projection_strands_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.projection_morphs
     ADD CONSTRAINT projection_morphs_pkey PRIMARY KEY (id);
@@ -1147,15 +1147,15 @@ CREATE INDEX projection_events_effective_scope_idx ON public.projection_events U
 
 CREATE INDEX projection_events_space_idx ON public.projection_events USING btree (realm_id);
 
-CREATE INDEX projection_flow_watches_actor_idx ON public.projection_flow_watches USING btree (actor_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
+CREATE INDEX projection_strand_watches_actor_idx ON public.projection_strand_watches USING btree (actor_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
 
-CREATE INDEX projection_flow_watches_flow_idx ON public.projection_flow_watches USING btree (flow_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
+CREATE INDEX projection_strand_watches_strand_idx ON public.projection_strand_watches USING btree (strand_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
 
-CREATE INDEX projection_flows_realm_idx ON public.projection_flows USING btree (realm_id);
+CREATE INDEX projection_strands_realm_idx ON public.projection_strands USING btree (realm_id);
 
-CREATE INDEX projection_flows_scope_circle_id_idx ON public.projection_flows USING btree (scope_circle_id);
+CREATE INDEX projection_strands_scope_circle_id_idx ON public.projection_strands USING btree (scope_circle_id);
 
-CREATE INDEX projection_flows_state_idx ON public.projection_flows USING btree (state);
+CREATE INDEX projection_strands_state_idx ON public.projection_strands USING btree (state);
 
 CREATE INDEX projection_morphs_realm_idx ON public.projection_morphs USING btree (realm_id);
 

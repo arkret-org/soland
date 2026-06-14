@@ -47,15 +47,15 @@ fn mention_subjects(payload: &Value) -> Vec<String> {
 }
 
 /// Effective `accept_third_party_mention` for an agent in the message
-/// scope = most-specific selection (flow over realm) ∩ ceiling.
+/// scope = most-specific selection (strand over realm) ∩ ceiling.
 async fn agent_accepts_third_party_mention(
     state: &AppState,
     agent: &str,
     realm_uuid: &str,
-    flow_id: Option<&str>,
+    strand_id: Option<&str>,
 ) -> bool {
     let realm_key = format!("realm:{realm_uuid}");
-    let flow_key = flow_id.map(|f| format!("flow:{realm_uuid}:{}", uuid_tail(f)));
+    let strand_key = strand_id.map(|f| format!("strand:{realm_uuid}:{}", uuid_tail(f)));
     let selections = state
         .persistence
         .agent_participation()
@@ -63,7 +63,7 @@ async fn agent_accepts_third_party_mention(
         .await
         .unwrap_or_default();
     let mut selection = None;
-    if let Some(fk) = flow_key.as_deref() {
+    if let Some(fk) = strand_key.as_deref() {
         selection = selections
             .iter()
             .find(|r| r.get("scope_key").and_then(Value::as_str) == Some(fk))
@@ -118,8 +118,8 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let flow_id = payload
-        .get("flow_id")
+    let strand_id = payload
+        .get("strand_id")
         .and_then(Value::as_str)
         .or_else(|| payload.get("thread_id").and_then(Value::as_str))
         .map(ToOwned::to_owned);
@@ -138,7 +138,7 @@ pub(crate) async fn dispatch_message_notifications(
                     state,
                     &subject,
                     &realm_uuid,
-                    flow_id.as_deref(),
+                    strand_id.as_deref(),
                 )
                 .await
             {

@@ -189,7 +189,7 @@ fn agent_view_from_record(record: &Value) -> AgentView {
 // the REAL ceiling check via the shared `cokret_sdk` validators so the
 // "inner scope MUST NOT exceed the outer ceiling" invariant is enforced
 // at the edge. Persistence into `agent_participation`, ceiling
-// resolution from the realm/circle/flow policy projection,
+// resolution from the realm/circle/strand policy projection,
 // capability-grant materialization (`ck.capability.grant` / `revoke`),
 // and the dispatcher mention gate are P2-impl — matching the rest of
 // this surface.
@@ -207,12 +207,12 @@ fn participation_scope_kind(scope: &AgentParticipationScope) -> &'static str {
     match scope {
         AgentParticipationScope::Realm { .. } => "realm",
         AgentParticipationScope::Circle { .. } => "circle",
-        AgentParticipationScope::Flow { .. } => "flow",
+        AgentParticipationScope::Strand { .. } => "strand",
     }
 }
 
 /// The enclosing scope_key chain for ceiling resolution: the Realm key
-/// always applies; Circle / Flow additionally contribute their own key.
+/// always applies; Circle / Strand additionally contribute their own key.
 fn enclosing_scope_keys(scope: &AgentParticipationScope) -> Vec<String> {
     let realm_key = AgentParticipationScope::Realm {
         realm_id: scope.realm_id().clone(),
@@ -220,7 +220,7 @@ fn enclosing_scope_keys(scope: &AgentParticipationScope) -> Vec<String> {
     .scope_key();
     match scope {
         AgentParticipationScope::Realm { .. } => vec![realm_key],
-        AgentParticipationScope::Circle { .. } | AgentParticipationScope::Flow { .. } => {
+        AgentParticipationScope::Circle { .. } | AgentParticipationScope::Strand { .. } => {
             vec![realm_key, scope.scope_key()]
         }
     }
@@ -241,7 +241,7 @@ fn participation_from_value(row: &Value) -> AgentParticipation {
 }
 
 /// Effective ceiling for a scope = fold(deployment ⊇ Realm ⊇ Circle ⊇
-/// Flow). Reads the `agent_participation_ceiling` projection for the
+/// Strand). Reads the `agent_participation_ceiling` projection for the
 /// enclosing scope_key chain and intersects each row over the deployment
 /// default; a scope with no ceiling rows inherits the deployment default
 /// (CKP-0010 §4.4, fail-closed by intersection).
@@ -1008,15 +1008,15 @@ async fn ensure_sidecar_thread_impl(
     let _sidecar_denied_reason: &str = crate::error::reasons::SIDECAR_CREATE_DENIED;
     let _pairing_expired_reason: &str = crate::error::reasons::PAIRING_REQUEST_EXPIRED;
     // spec `agent_sidecar_thread_ensure_outcome` =
-    // `{ok, private_circle_id, private_flow_id, private_relation_id,
-    //   pending_member_reconciliations?}`. The private Circle / Flow / Relation
+    // `{ok, private_circle_id, private_strand_id, private_relation_id,
+    //   pending_member_reconciliations?}`. The private Circle / Strand / Relation
     // ids are minted here; P2-impl: derive the deterministic
     // controller_agent_circle_key for true idempotent creation and enforce the
     // context-realm-preferred sidecar home policy.
     let private_circle_id = cokret_sdk::CircleId::new(ids::generate_circle_id())
         .map_err(|err| AppError::internal(format!("generated circle id invalid: {err}")))?;
-    let private_flow_id = cokret_sdk::FlowId::new(ids::generate("flow"))
-        .map_err(|err| AppError::internal(format!("generated flow id invalid: {err}")))?;
+    let private_strand_id = cokret_sdk::StrandId::new(ids::generate("strand"))
+        .map_err(|err| AppError::internal(format!("generated strand id invalid: {err}")))?;
     let private_relation_id = cokret_sdk::RelationId::new(ids::generate_relation_id())
         .map_err(|err| AppError::internal(format!("generated relation id invalid: {err}")))?;
     append_audit_log(
@@ -1035,7 +1035,7 @@ async fn ensure_sidecar_thread_impl(
     json_ok(AgentSidecarThreadEnsureOutcome {
         ok: true,
         private_circle_id,
-        private_flow_id,
+        private_strand_id,
         private_relation_id,
         pending_member_reconciliations: Vec::new(),
     })

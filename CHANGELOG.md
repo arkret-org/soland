@@ -42,10 +42,10 @@ Aggressive mode; no compatibility shim. Tracks the SDK's P1 baseline
 kinds, six `ck.circle.*` capability actions, and six new failed-precondition
 reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 
-- **BREAKING** `Flow.discussion_realm_ref` is no longer accepted on the wire.
+- **BREAKING** `Strand.discussion_realm_ref` is no longer accepted on the wire.
   The legacy cross-Realm discussion routing has been removed (CKP-0007 hard
   delete; intra-Realm discussion boundaries now live on a Circle via
-  `scope_circle_id`). The reducer's `flow_discussion_realms` projection
+  `scope_circle_id`). The reducer's `strand_discussion_realms` projection
   field, the `discussion_realm_patch` dispatch, and the `ck.realm.destroy`
   cross-Realm discussion-edge cascade have all been deleted outright.
 - The wire validator (`POST /api/v1/events`) now hard-rejects any payload
@@ -55,7 +55,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
   `default_scope_ref`, `retention_policy_ref`, `disclosure_policy_ref`,
   `rate_limit_policy_ref`). Returns 400 `forbidden_wire_field`.
 - Migration `20260526000000_drop_discussion_realm_ref` defensively drops the
-  legacy `projection_flows.discussion_realm_ref` column when present (the
+  legacy `projection_strands.discussion_realm_ref` column when present (the
   main-line schema never persisted it; this protects vendor deployments that
   carried it in a prior fork).
 - New `/api/v1/circles/*` admin surface
@@ -71,7 +71,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 - New diesel migrations:
   `20260526010000_add_circles` (`projection_circles` +
   `projection_circle_members`), `20260526020000_add_scope_circle_id`
-  (`scope_circle_id` on Flow / Morph / Space; `default_scope_circle_id`
+  (`scope_circle_id` on Strand / Morph / Space; `default_scope_circle_id`
   + `child_scope_policy` on Space; `effective_scope` on
   `projection_events`). Bidirectional migrations; `down` is provided for
   diesel symmetry only — see `DEPLOYMENT.md` §11 for the disk-sizing
@@ -87,7 +87,7 @@ reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 - Read path now surfaces `effective_scope` on event metadata when the
   envelope or payload pins a `scope_circle_id`.
 - `confidential_discussion_of` Relation kind accepted by the reducer
-  with a new `confidential_discussions_of(flow_id)` query helper.
+  with a new `confidential_discussions_of(strand_id)` query helper.
 - Dockerfile gains `HEALTHCHECK`, `tini` PID-1 init, and a
   `SOLAND_METRICS_BIND` default so the metrics endpoint surfaces under
   the new sidecar port `9698`.
@@ -143,8 +143,8 @@ on the reducer / federation / state-machine surfaces. See
   shapes; legacy top-level `target_ref` rejects as `schema_violation`.
 - **BREAKING** `ConsentRevoke` reducer requires `observed_dots[]`; implicit
   cascade rejects as `schema_violation`.
-- **BREAKING** `ck.flow.update` / `ck.flow.tracks_patch` reducer uses
-  CAS-register semantics on cell-subject `flow_id` (bottom=reject; empty
+- **BREAKING** `ck.strand.update` / `ck.strand.tracks_patch` reducer uses
+  CAS-register semantics on cell-subject `strand_id` (bottom=reject; empty
   field-set rejects).
 - **Added** Late key recovery path emits
   `ck.audit.policy_access{access_kind=e2ee_late_recovery,
