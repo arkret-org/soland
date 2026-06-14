@@ -1412,6 +1412,37 @@ async fn did_recovery_backup_rejects_recovery_policy_mismatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn did_recovery_backup_rejects_unverified_session_device() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let signing = SigningKey::from_bytes(&[124u8; 32]);
+    let (principal_id, vm) = did_key_principal(&signing);
+    let _first = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+    let second = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE_B,
+        "Recovery Browser",
+    )
+    .await;
+
+    let policy_id = seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
+    let backup_id = "ck:backup:01964137-0000-7000-8000-0000000000c8";
+    let mut backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
+    backup["auth_data"]["device_id"] = serde_json::json!(RECOVERY_TEST_DEVICE_B);
+    backup["auth_data"]["verification_method"] =
+        serde_json::json!(format!("{principal_id}#{RECOVERY_TEST_DEVICE_B}"));
+
+    let body = put_key_backup(state, &second, backup_id, &backup, StatusCode::FORBIDDEN).await;
+    assert_eq!(body["error"]["code"], "device_not_authorized");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn key_backup_delete_rejects_active_did_recovery_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[122u8; 32]);

@@ -5,28 +5,25 @@
 //! "holds a bearer token" into "holds the bound signing key" for the
 //! authenticated self surface:
 //!
-//! - When the client presents an RFC 9421 HTTP Message Signature, it MUST
-//!   verify against the session's `session_public_key`: covered components,
-//!   `content-digest` over the body, the `created`/`expires` window (≤300s,
-//!   ±30s skew, same scale as the federation rail) and the `keyid` binding.
-//!   Any failure is rejected as `unauthenticated`.
-//! - On a high-security deployment (`sovereign_enclave_enabled`), writes and
-//!   sensitive reads MUST be PoP-presented; bare bearer is rejected. On the
-//!   default profile, bare bearer remains an accepted downgrade for low
-//!   sensitivity / legacy clients.
+//! - When the client presents an RFC 9421 HTTP Message Signature, it MUST verify against the
+//!   session's `session_public_key`: covered components, `content-digest` over the body, the
+//!   `created`/`expires` window (≤300s, ±30s skew, same scale as the federation rail) and the
+//!   `keyid` binding. Any failure is rejected as `unauthenticated`.
+//! - On a high-security deployment (`sovereign_enclave_enabled`), writes and sensitive reads MUST
+//!   be PoP-presented; bare bearer is rejected. On the default profile, bare bearer remains an
+//!   accepted downgrade for low sensitivity / legacy clients.
 //!
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use salvo::prelude::*;
-use sha2::{Digest, Sha256};
-
 use cokret_sdk::http_signature::{
     Component, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
     verify_signed_http_message,
 };
+use salvo::prelude::*;
+use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ErrorCode};
 use crate::routing::federation::{signature_authority, signature_target_uri};
@@ -61,10 +58,7 @@ pub async fn verify_session_pop(
     res: &mut Response,
     ctrl: &mut FlowCtrl,
 ) {
-    let state = depot
-        .obtain::<AppState>()
-        .expect("state injected")
-        .clone();
+    let state = depot.obtain::<AppState>().expect("state injected").clone();
     match enforce_session_pop(&state, req).await {
         Ok(()) => {
             ctrl.call_next(req, depot, res).await;
@@ -148,7 +142,9 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         &target_uri,
         &authority,
         &path,
-        headers.iter().map(|(name, value)| (name.as_str(), value.as_str())),
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())),
         &body,
         &public_key,
         &policy,
@@ -175,8 +171,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     // client that selects by thumbprint and one that echoes the issued kid both
     // satisfy the binding.
     let key_id = &verified.signature_input.key_id;
-    let key_id_bound =
-        *key_id == thumbprint || explicit_kid.as_deref() == Some(key_id.as_str());
+    let key_id_bound = *key_id == thumbprint || explicit_kid.as_deref() == Some(key_id.as_str());
     if !key_id_bound {
         return Err(AppError::unauthenticated(
             "PoP signature keyid is not bound to the session signing key",
@@ -214,8 +209,14 @@ fn is_sensitive_read(path: &str) -> bool {
 fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, Option<String>, String), AppError> {
     let value: serde_json::Value = serde_json::from_str(jwk)
         .map_err(|_| AppError::unauthenticated("session signing key is not valid JWK JSON"))?;
-    let kty = value.get("kty").and_then(|value| value.as_str()).unwrap_or_default();
-    let crv = value.get("crv").and_then(|value| value.as_str()).unwrap_or_default();
+    let kty = value
+        .get("kty")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let crv = value
+        .get("crv")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
     if kty != "OKP" || crv != "Ed25519" {
         return Err(AppError::unauthenticated(
             "session signing key is not an Ed25519 OKP JWK",

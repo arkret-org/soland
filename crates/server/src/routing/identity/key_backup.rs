@@ -717,6 +717,39 @@ async fn enforce_recovery_policy_ref(
     Ok(())
 }
 
+async fn ensure_key_backup_writer_device_authorized(
+    state: &AppState,
+    actor_id: &str,
+    session_device_id: &str,
+    backup: &Value,
+) -> Result<(), AppError> {
+    let unauthorized = || {
+        AppError::capability_denied(
+            "key backup write requires the authenticated session device to be verified",
+        )
+        .with_wire_code("device_not_authorized")
+    };
+    let auth_device_id = backup
+        .get("auth_data")
+        .and_then(|auth| auth.get("device_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(unauthorized)?;
+    if auth_device_id != session_device_id {
+        return Err(unauthorized());
+    }
+    let device = state
+        .persistence
+        .devices()
+        .get(actor_id, session_device_id)
+        .await
+        .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
+        .ok_or_else(unauthorized)?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(unauthorized());
+    }
+    Ok(())
+}
+
 /// key-management.md §7.4.1 (normative): a device signature alone cannot defend
 /// against a malicious/compromised server injecting or substituting a backup
 /// envelope signed by a revoked old device key. Before a receiver trusts/uses an
@@ -1633,6 +1666,15 @@ async fn put_key_backup(
     })?;
     let backup = backup.into_inner();
     validate_key_backup_body(&backup_id, &session.actor, &backup)?;
+    if backup.get("backup_class").and_then(Value::as_str) == Some("did_recovery") {
+        ensure_key_backup_writer_device_authorized(
+            state,
+            &session.actor,
+            &session.device_id,
+            &backup,
+        )
+        .await?;
+    }
     enforce_key_backup_series_chain(state, &session.actor, &backup).await?;
     enforce_recovery_policy_ref(state, &session.actor, &backup).await?;
     let ciphertext_digest = backup

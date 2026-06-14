@@ -28,6 +28,50 @@ async fn account_viewer_returns_device_summaries() {
     );
     assert_eq!(devices[0]["display_name"], "Alice Desktop");
     assert_eq!(devices[0]["status"], "active");
+    assert!(devices[0].get("authorized_at").is_some());
+}
+
+#[tokio::test]
+async fn account_viewer_does_not_authorize_unverified_session_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let first_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let second_device = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+    let _first = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        first_device,
+        "Alice Desktop",
+    )
+    .await;
+    let second = dev_token_for_device(
+        state.clone(),
+        "did:web:alice.example",
+        second_device,
+        "Alice Browser",
+    )
+    .await;
+
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {second}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let devices = viewer["devices"].as_array().expect("viewer devices array");
+    let first = devices
+        .iter()
+        .find(|device| device["device_id"] == first_device)
+        .expect("first device summary");
+    let second = devices
+        .iter()
+        .find(|device| device["device_id"] == second_device)
+        .expect("second device summary");
+    assert_eq!(first["status"], "active");
+    assert!(first.get("authorized_at").is_some());
+    assert_eq!(second["status"], "unknown");
+    assert!(second.get("authorized_at").is_none());
 }
 
 #[tokio::test]

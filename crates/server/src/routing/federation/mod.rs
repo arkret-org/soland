@@ -7,11 +7,11 @@ pub(crate) mod move_seal;
 pub mod outbox;
 pub(crate) mod stubs;
 
-pub use stubs::well_known_cokret_router;
 // SPEC-CR-001 — reused by `identity::session_pop` so self-PoP and the
 // federation rail reconstruct the signed `@target-uri` / `@authority`
 // identically.
 pub(in crate::routing) use federation::{signature_authority, signature_target_uri};
+pub use stubs::well_known_cokret_router;
 
 use super::{
     AuthArgs, ingest_federation_operations, now, operation_is_visible,

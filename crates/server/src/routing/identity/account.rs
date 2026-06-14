@@ -1573,17 +1573,20 @@ fn account_device_summary(device: DeviceInventoryRecord) -> Result<AccountDevice
         .display_name
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
+    let authorized = device.revoked_at.is_none() && device.verification_state == "verified";
     let status = if device.revoked_at.is_some() {
         "revoked"
-    } else {
+    } else if authorized {
         "active"
+    } else {
+        "unknown"
     };
     Ok(AccountDeviceSummary {
         device_id,
         status: status.to_owned(),
         display_name,
         authorized_event_ref: None,
-        authorized_at: Some(device.created_at),
+        authorized_at: authorized.then_some(device.created_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,
     })
