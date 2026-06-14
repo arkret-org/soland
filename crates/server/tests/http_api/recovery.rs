@@ -1006,7 +1006,7 @@ fn signed_device_recovery_receipt(
         "completed_at": "2026-05-30T00:00:01Z",
         "auth_data": {
             "verification_method": format!("{principal_id}#{new_device_id}"),
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signed_fields": signed_fields,
             "signature": ""
         }
@@ -1336,16 +1336,27 @@ fn did_recovery_backup_body(principal_id: &str, backup_id: &str, policy_id: &str
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         },
+        "domain_separation": {
+            "hkdf_info": "cokret-key-backup/did_recovery/recovery_policy/v1",
+            "subdomain": "recovery_policy",
+            "aead_aad": {
+                "schema": "ck.schema.key_backup.v1",
+                "actor_id": principal_id,
+                "device_id": "did:web:alice.example#recovery",
+                "backup_class": "did_recovery",
+                "backup_version": "kb_1",
+                "created_at": "2026-05-30T00:00:00Z",
+                "item_types": ["recovery_key_share"]
+            }
+        },
         "contents": [{ "item_type": "recovery_key_share", "secret_id": "test-secret" }],
         "ciphertext": "AAAA",
         "ciphertext_digest":
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "key_commitment":
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "auth_data": {
             "device_id": RECOVERY_TEST_DEVICE,
             "verification_method": format!("{principal_id}#device"),
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
             "ssk_generation": 1,
             "signed_fields": [
@@ -1357,6 +1368,7 @@ fn did_recovery_backup_body(principal_id: &str, backup_id: &str, policy_id: &str
                 "series_seq",
                 "supersedes",
                 "encryption",
+                "domain_separation",
                 "contents",
                 "ciphertext_digest",
                 "recovery_policy_ref"
@@ -1608,7 +1620,7 @@ async fn seed_recovery_policy(
         "expires_at": "2026-06-30T00:00:00Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signed_fields": POLICY_FIELDS,
             "signature": "c2lnbmF0dXJl"
         }
@@ -1763,7 +1775,7 @@ fn signed_recovery_policy(
         "expires_at": "2026-06-30T00:00:00Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signed_fields": signed_fields,
             "signature": ""
         }
@@ -1808,7 +1820,7 @@ fn signed_recovery_receipt(
         "completed_at": "2026-05-30T00:00:01Z",
         "auth_data": {
             "verification_method": verification_method,
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signed_fields": signed_fields,
             "signature": ""
         }

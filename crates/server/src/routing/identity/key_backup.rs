@@ -2,7 +2,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::{BackupId, DeviceId, Did};
+use cokret_sdk::{BackupClass, BackupId, DeviceId, Did, KeyBackup, KeyBackupRecipientMethod};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -16,6 +16,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RecoveryPolicyRecord, RecoverySessionRecord};
 use crate::wire::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsPutOutcome,
+    KeysBackupsPutRequestBody,
 };
 
 pub(super) fn protocol_router() -> Router {
@@ -40,25 +41,6 @@ pub(super) fn legacy_router() -> Router {
         .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
-
-const REQUIRED_KEY_BACKUP_FIELDS: &[&str] = &[
-    "backup_id",
-    "actor_id",
-    "backup_class",
-    "backup_version",
-    "created_at",
-    "encryption",
-    "contents",
-    "ciphertext",
-    "ciphertext_digest",
-];
-
-// CKP-0008 / CKP-0009 (B-C, spec head 37ce729) — series-chain fields are
-// required on every key-backup envelope: `series_id` + `series_seq`. Genesis
-// envelopes use `series_seq == 0` (no `supersedes`); successors carry
-// `supersedes` pointing at the prior backup_id + `supersedes_digest` over
-// the predecessor envelope canonical bytes.
-const REQUIRED_KEY_BACKUP_SERIES_FIELDS: &[&str] = &["series_id", "series_seq"];
 
 const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
@@ -105,6 +87,7 @@ const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "series_id",
     "series_seq",
     "encryption",
+    "domain_separation",
     "contents",
     "ciphertext_digest",
 ];
@@ -143,200 +126,11 @@ fn schema_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::SchemaViolation, message)
 }
 
-fn required_object<'a>(
-    parent: &'a Value,
-    field: &str,
-) -> Result<&'a serde_json::Map<String, Value>, AppError> {
-    parent
-        .get(field)
-        .and_then(Value::as_object)
-        .ok_or_else(|| schema_error(format!("key backup `{field}` must be an object")))
-}
-
 fn required_u64(parent: &Value, field: &str) -> Result<u64, AppError> {
     parent
         .get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| schema_error(format!("key backup kdf.params `{field}` is required")))
-}
-
-fn validate_key_backup_encryption(
-    backup: &Value,
-    backup_class: &str,
-    encryption: &Value,
-) -> Result<(), AppError> {
-    let method = encryption
-        .get("recipient_method")
-        .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("key backup encryption.recipient_method is required"))?;
-    match method {
-        "passphrase_kdf" => {
-            if backup_class == "did_recovery" {
-                return Err(schema_error(
-                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, or satisfy threshold/hardware factors in the recovery policy proof layer",
-                ));
-            }
-            if backup_class == "mls_history" {
-                return Err(schema_error(
-                    "mls_history key backups must use secret_storage_key or recovery_public_key",
-                ));
-            }
-            validate_key_backup_kdf(backup, encryption)?;
-            // Spec key-management.md §7.5: passphrase_kdf MUST carry a
-            // producer-generated `nonce_salt` (deterministic nonce transcript)
-            // and a top-level `key_commitment` (wrong-passphrase fail-fast).
-            let nonce_salt = encryption
-                .get("aead")
-                .and_then(|aead| aead.get("nonce_salt"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !is_base64url_token(nonce_salt) {
-                return Err(schema_error(
-                    "passphrase_kdf key backup requires base64url encryption.aead.nonce_salt",
-                ));
-            }
-            let key_commitment = backup
-                .get("key_commitment")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !is_sha_digest(key_commitment) {
-                return Err(schema_error(
-                    "passphrase_kdf key backup requires a sha-digest key_commitment",
-                ));
-            }
-            Ok(())
-        }
-        "secret_storage_key" => {
-            // mls_history (and secret_storage caches) are wrapped under a named
-            // secret_storage key (recovered after the secret_storage root is
-            // unlocked). recipient_key_ref names that key id, not a device id;
-            // no passphrase KDF travels on the wire. The legacy
-            // `device_snapshot_secret` wire value was removed (not in the
-            // ck.schema.key_backup.v1 enum).
-            if !matches!(backup_class, "mls_history" | "secret_storage") {
-                return Err(schema_error(
-                    "secret_storage_key is only valid for mls_history or secret_storage key backups",
-                ));
-            }
-            if encryption.get("kdf").is_some() {
-                return Err(schema_error(
-                    "secret_storage_key key backups must not carry encryption.kdf",
-                ));
-            }
-            let recipient = encryption
-                .get("recipient_key_ref")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if recipient.trim().is_empty() {
-                return Err(schema_error(
-                    "secret_storage_key key backup requires a non-empty recipient_key_ref",
-                ));
-            }
-            Ok(())
-        }
-        "recovery_public_key" => {
-            // Spec key-management.md §7.5.2: HPKE base-mode to the recovery
-            // public key. The KEM encapsulation rides in `encryption.aead.enc`;
-            // no passphrase KDF, no wire nonce. Valid for any backup_class.
-            let recipient = encryption
-                .get("recipient_key_ref")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if recipient.trim().is_empty() {
-                return Err(schema_error(
-                    "recovery_public_key key backup requires a non-empty recipient_key_ref",
-                ));
-            }
-            let enc = encryption
-                .get("aead")
-                .and_then(|aead| aead.get("enc"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !is_base64url_token(enc) {
-                return Err(schema_error(
-                    "recovery_public_key key backup requires base64url encryption.aead.enc",
-                ));
-            }
-            if encryption.get("kdf").is_some() {
-                return Err(schema_error(
-                    "recovery_public_key key backups must not carry encryption.kdf",
-                ));
-            }
-            Ok(())
-        }
-        other => Err(schema_error(format!(
-            "unsupported key backup recipient_method `{other}`"
-        ))),
-    }
-}
-
-fn validate_key_backup_kdf(backup: &Value, encryption: &Value) -> Result<(), AppError> {
-    let kdf = encryption
-        .get("kdf")
-        .ok_or_else(|| schema_error("passphrase_kdf key backup requires encryption.kdf"))?;
-    let params = required_object(kdf, "params")?;
-    match kdf.get("name").and_then(Value::as_str) {
-        Some("argon2id") => {
-            let memory_floor = if backup
-                .get("mixed_secret_storage")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                262_144
-            } else {
-                65_536
-            };
-            let iteration_floor = if memory_floor == 262_144 { 4 } else { 3 };
-            if required_u64(&Value::Object(params.clone()), "memory_kib")? < memory_floor {
-                return Err(schema_error(format!(
-                    "argon2id params.memory_kib must be >= {memory_floor}"
-                )));
-            }
-            if required_u64(&Value::Object(params.clone()), "iterations")? < iteration_floor {
-                return Err(schema_error(format!(
-                    "argon2id params.iterations must be >= {iteration_floor}"
-                )));
-            }
-            if required_u64(&Value::Object(params.clone()), "parallelism")? < 1 {
-                return Err(schema_error("argon2id params.parallelism must be >= 1"));
-            }
-        }
-        Some("pbkdf2") => {
-            if params.get("hash").is_some() {
-                return Err(schema_error(
-                    "pbkdf2 params.hash is forbidden; use digest_algorithm",
-                ));
-            }
-            if required_u64(&Value::Object(params.clone()), "iterations")? < 600_000 {
-                return Err(schema_error("pbkdf2 params.iterations must be >= 600000"));
-            }
-            let digest_algorithm = params
-                .get("digest_algorithm")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if !matches!(digest_algorithm, "sha256" | "sha384" | "sha512") {
-                return Err(schema_error(
-                    "pbkdf2 params.digest_algorithm must be sha256, sha384, or sha512",
-                ));
-            }
-            if kdf
-                .get("degraded_profile_reason")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-            {
-                return Err(schema_error(
-                    "pbkdf2 key backup requires degraded_profile_reason",
-                ));
-            }
-        }
-        Some(other) => {
-            return Err(schema_error(format!(
-                "unsupported key backup kdf name `{other}`"
-            )));
-        }
-        None => return Err(schema_error("key backup kdf.name is required")),
-    }
-    Ok(())
 }
 
 fn is_base64url_token(value: &str) -> bool {
@@ -359,75 +153,103 @@ fn is_sha_digest(value: &str) -> bool {
             .is_some_and(|h| hex_ok(h, 128))
 }
 
-fn validate_key_backup_body(
-    backup_id: &str,
-    actor_id: &str,
-    backup: &Value,
-) -> Result<(), AppError> {
-    let Some(object) = backup.as_object() else {
-        return Err(AppError::invalid_param(
-            "key backup payload must be a JSON object",
-        ));
+fn backup_class_wire(backup_class: BackupClass) -> &'static str {
+    match backup_class {
+        BackupClass::DidRecovery => "did_recovery",
+        BackupClass::SecretStorage => "secret_storage",
+        BackupClass::MlsHistory => "mls_history",
+    }
+}
+
+fn key_backup_extra_str<'a>(backup: &'a KeyBackup, field: &str) -> Option<&'a str> {
+    backup.extra.get(field).and_then(Value::as_str)
+}
+
+fn is_x_extension_key(key: &str) -> bool {
+    let Some(rest) = key.strip_prefix("x_") else {
+        return false;
     };
-    // CKP-0008 / CKP-0009 — reject the legacy `ck.secret_storage.v1` wire
-    // envelope shape. Senders MUST switch to the chained
-    // `ck.schema.key_backup.v1` form with `series_id` / `series_seq`.
-    if let Some(schema) = object.get("schema").and_then(Value::as_str)
-        && schema == "ck.secret_storage.v1"
-    {
+    let mut chars = rest.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && rest.len() <= 64
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn validate_extra_keys(
+    path: &str,
+    extra: &std::collections::BTreeMap<String, Value>,
+) -> Result<(), AppError> {
+    for key in extra.keys() {
+        if !is_x_extension_key(key) {
+            return Err(schema_error(format!(
+                "{path}.{key} is not defined by ck.schema.key_backup.v1"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_key_backup_extension_extras_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    validate_extra_keys("key backup", &backup.extra)?;
+    validate_extra_keys("key backup encryption", &backup.encryption.extra)?;
+    validate_extra_keys(
+        "key backup domain_separation",
+        &backup.domain_separation.extra,
+    )?;
+    validate_extra_keys(
+        "key backup domain_separation.aead_aad",
+        &backup.domain_separation.aead_aad.extra,
+    )?;
+    if let Some(kdf) = &backup.encryption.kdf {
+        validate_extra_keys("key backup encryption.kdf", &kdf.extra)?;
+        if let Some(params) = kdf.params.as_object() {
+            for key in params.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "memory_kib" | "iterations" | "parallelism" | "digest_algorithm"
+                ) && !is_x_extension_key(key)
+                {
+                    return Err(schema_error(format!(
+                        "key backup encryption.kdf.params.{key} is not defined by ck.schema.key_backup.v1"
+                    )));
+                }
+            }
+        }
+    }
+    validate_extra_keys("key backup encryption.aead", &backup.encryption.aead.extra)?;
+    for (idx, item) in backup.contents.iter().enumerate() {
+        validate_extra_keys(&format!("key backup contents[{idx}]"), &item.extra)?;
+    }
+    if let Some(auth_data) = &backup.auth_data {
+        validate_extra_keys("key backup auth_data", &auth_data.extra)?;
+    }
+    if let Some(retention) = &backup.retention {
+        validate_extra_keys("key backup retention", &retention.extra)?;
+    }
+    Ok(())
+}
+
+fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError> {
+    serde_json::to_value(backup)
+        .map_err(|error| AppError::internal(format!("key backup body re-encode failed: {error}")))
+}
+
+fn validate_key_backup_body_typed(
+    backup_id: &BackupId,
+    actor_id: &str,
+    backup: &KeyBackup,
+) -> Result<(), AppError> {
+    if key_backup_extra_str(backup, "schema") == Some("ck.secret_storage.v1") {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "legacy ck.secret_storage.v1 wire form: senders MUST use ck.schema.key_backup.v1",
         )
         .with_wire_code("key_backup_wire_schema_required"));
     }
-    // Also reject the embedded `ck:secret_storage:` typed-id form that
-    // marked the pre-series wire envelopes.
-    if backup_id.starts_with("ck:secret_storage:") {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "legacy ck:secret_storage: id form: senders MUST use the chained key-backup envelope",
-        )
-        .with_wire_code("key_backup_wire_schema_required"));
-    }
-    for field in REQUIRED_KEY_BACKUP_FIELDS {
-        if !object.contains_key(*field) {
-            return Err(AppError::new(
-                crate::error::ErrorCode::SchemaViolation,
-                format!("key backup payload missing `{field}`"),
-            ));
-        }
-    }
-    for field in REQUIRED_KEY_BACKUP_SERIES_FIELDS {
-        if !object.contains_key(*field) {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
-                format!("key backup payload missing `{field}`"),
-            ));
-        }
-    }
-    let series_id = object
-        .get("series_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !series_id.starts_with("ck:backup_series:") {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "series_id must be a ck:backup_series:<uuidv7> typed id",
-        ));
-    }
-    let series_seq = object.get("series_seq").and_then(Value::as_u64);
-    if series_seq.is_none() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "series_seq must be a non-negative integer",
-        ));
-    }
-    // CKP-0008 / CKP-0009 — recovery policy / receipt schemas are first-
-    // class payloads on this surface; accept them when present without
-    // forcing the rest of the chained-envelope shape onto policy-only
-    // documents. TODO(P2-impl): wire to the SDK schema validator.
-    if let Some(payload_schema) = object.get("payload_schema").and_then(Value::as_str)
+    if let Some(payload_schema) = key_backup_extra_str(backup, "payload_schema")
         && !matches!(
             payload_schema,
             "ck.schema.recovery_policy.v1"
@@ -440,112 +262,366 @@ fn validate_key_backup_body(
             format!("unsupported key backup payload_schema `{payload_schema}`"),
         ));
     }
-    if backup.get("backup_id").and_then(Value::as_str) != Some(backup_id) {
+    if backup.backup_id.as_str() != backup_id.as_str() {
         return Err(AppError::new(
-            crate::error::ErrorCode::SchemaViolation,
+            ErrorCode::SchemaViolation,
             "path backup_id must match body backup_id",
         ));
     }
-    if backup.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
+    if backup.actor_id.as_str() != actor_id {
         return Err(AppError::capability_denied(
             "backup actor_id must match authenticated actor",
         ));
     }
-    let backup_class = backup
-        .get("backup_class")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !KEY_BACKUP_CLASSES.contains(&backup_class) {
-        return Err(schema_error(format!(
-            "unsupported key backup backup_class `{backup_class}`"
-        )));
+    validate_key_backup_extension_extras_typed(backup)?;
+    validate_key_backup_encryption_typed(backup)?;
+    validate_key_backup_domain_separation_typed(backup)?;
+    if backup.backup_class == BackupClass::MlsHistory {
+        validate_mls_history_opaque_only_typed(backup)?;
     }
-    let encryption = backup
-        .get("encryption")
-        .ok_or_else(|| schema_error("key backup encryption is required"))?;
-    validate_key_backup_encryption(backup, backup_class, encryption)?;
-    if backup_class == "mls_history" {
-        validate_mls_history_opaque_only(backup)?;
-    }
-    validate_recovery_policy_ref_shape(backup, backup_class)?;
-    validate_key_backup_auth_data(backup)?;
-
-    let contents = backup
-        .get("contents")
-        .and_then(Value::as_array)
-        .ok_or_else(|| schema_error("key backup contents must be an array"))?;
-    if contents.is_empty() {
+    validate_recovery_policy_ref_shape_typed(backup)?;
+    validate_key_backup_auth_data_typed(backup)?;
+    if backup.contents.is_empty() {
         return Err(schema_error("key backup contents must not be empty"));
     }
-    for item in contents {
-        let item_type = item
-            .get("item_type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !KEY_BACKUP_CONTENT_TYPES.contains(&item_type) {
+    for item in &backup.contents {
+        if !KEY_BACKUP_CONTENT_TYPES.contains(&item.item_type.as_str()) {
             return Err(schema_error(format!(
-                "unsupported key backup contents.item_type `{item_type}`"
+                "unsupported key backup contents.item_type `{}`",
+                item.item_type
             )));
         }
     }
     Ok(())
 }
 
-fn validate_mls_history_opaque_only(backup: &Value) -> Result<(), AppError> {
-    fn scan(value: &Value, path: &str) -> Result<(), AppError> {
-        match value {
-            Value::Object(map) => {
-                for (key, child) in map {
-                    let key_lower = key.to_ascii_lowercase();
-                    if matches!(
-                        key_lower.as_str(),
-                        "plaintext"
-                            | "plain_text"
-                            | "serialized_state"
-                            | "state_bytes"
-                            | "group_state"
-                            | "passphrase"
-                            | "mls_passphrase"
-                            | "snapshot_secret"
-                    ) {
-                        return Err(schema_error(format!(
-                            "mls_history key backups must not carry plaintext field {path}/{key}"
-                        )));
-                    }
-                    let child_path = if path.is_empty() {
-                        format!("/{key}")
-                    } else {
-                        format!("{path}/{key}")
-                    };
-                    scan(child, &child_path)?;
-                }
-                Ok(())
+fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    match backup.encryption.recipient_method {
+        KeyBackupRecipientMethod::PassphraseKdf => {
+            if backup.backup_class == BackupClass::DidRecovery {
+                return Err(schema_error(
+                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, or satisfy threshold/hardware factors in the recovery policy proof layer",
+                ));
             }
-            Value::Array(items) => {
-                for (idx, child) in items.iter().enumerate() {
-                    scan(child, &format!("{path}/{idx}"))?;
-                }
-                Ok(())
+            if backup.backup_class == BackupClass::MlsHistory {
+                return Err(schema_error(
+                    "mls_history key backups must use secret_storage_key or recovery_public_key",
+                ));
             }
-            _ => Ok(()),
+            validate_key_backup_kdf_typed(backup)?;
+            let nonce_salt = backup
+                .encryption
+                .aead
+                .nonce_salt
+                .as_deref()
+                .unwrap_or_default();
+            if !is_base64url_token(nonce_salt) {
+                return Err(schema_error(
+                    "passphrase_kdf key backup requires base64url encryption.aead.nonce_salt",
+                ));
+            }
+            let key_commitment = backup
+                .encryption
+                .key_commitment
+                .as_deref()
+                .unwrap_or_default();
+            if !is_sha_digest(key_commitment) {
+                return Err(schema_error(
+                    "passphrase_kdf key backup requires a sha-digest encryption.key_commitment",
+                ));
+            }
+            Ok(())
+        }
+        KeyBackupRecipientMethod::SecretStorageKey => {
+            if !matches!(
+                backup.backup_class,
+                BackupClass::MlsHistory | BackupClass::SecretStorage
+            ) {
+                return Err(schema_error(
+                    "secret_storage_key is only valid for mls_history or secret_storage key backups",
+                ));
+            }
+            if backup.encryption.kdf.is_some() {
+                return Err(schema_error(
+                    "secret_storage_key key backups must not carry encryption.kdf",
+                ));
+            }
+            if backup
+                .encryption
+                .recipient_key_ref
+                .as_deref()
+                .is_none_or(|recipient| recipient.trim().is_empty())
+            {
+                return Err(schema_error(
+                    "secret_storage_key key backup requires a non-empty recipient_key_ref",
+                ));
+            }
+            Ok(())
+        }
+        KeyBackupRecipientMethod::RecoveryPublicKey => {
+            if backup
+                .encryption
+                .recipient_key_ref
+                .as_deref()
+                .is_none_or(|recipient| recipient.trim().is_empty())
+            {
+                return Err(schema_error(
+                    "recovery_public_key key backup requires a non-empty recipient_key_ref",
+                ));
+            }
+            let enc = backup.encryption.aead.enc.as_deref().unwrap_or_default();
+            if !is_base64url_token(enc) {
+                return Err(schema_error(
+                    "recovery_public_key key backup requires base64url encryption.aead.enc",
+                ));
+            }
+            if backup.encryption.kdf.is_some() {
+                return Err(schema_error(
+                    "recovery_public_key key backups must not carry encryption.kdf",
+                ));
+            }
+            Ok(())
         }
     }
-
-    scan(backup, "")
 }
 
-/// C-P5 (key-backup.schema.json `recovery_policy_ref`) — structural check.
-///
-/// `did_recovery` backups MUST carry a top-level `recovery_policy_ref{policy_id,
-/// policy_version}` and MUST cover it in `auth_data.signed_fields`. Other classes
-/// MAY carry it as a signed hint; when present it MUST be well-formed and also
-/// covered by `signed_fields`. The value-vs-active-policy comparison happens in
-/// the put handler (`enforce_recovery_policy_ref`), which has store access.
-fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Result<(), AppError> {
-    let policy_ref = backup.get("recovery_policy_ref");
-    let present = policy_ref.is_some_and(|v| !v.is_null());
+fn valid_key_backup_subdomain(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && value.len() <= 64
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
 
-    if backup_class == "did_recovery" && !present {
+fn validate_key_backup_domain_separation_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    let domain = &backup.domain_separation;
+    if !valid_key_backup_subdomain(&domain.subdomain) {
+        return Err(schema_error(
+            "domain_separation.subdomain must match [a-z][a-z0-9_]{0,63}",
+        ));
+    }
+    let expected_hkdf_info = format!(
+        "cokret-key-backup/{}/{}/v1",
+        backup_class_wire(backup.backup_class),
+        domain.subdomain
+    );
+    if domain.hkdf_info != expected_hkdf_info {
+        return Err(schema_error(
+            "domain_separation.hkdf_info does not match backup_class/subdomain",
+        ));
+    }
+    let aad = &domain.aead_aad;
+    if aad.schema != "ck.schema.key_backup.v1" {
+        return Err(schema_error("domain_separation.aead_aad.schema mismatch"));
+    }
+    if aad.actor_id.as_str() != backup.actor_id.as_str() {
+        return Err(schema_error(
+            "domain_separation.aead_aad.actor_id must match actor_id",
+        ));
+    }
+    if aad.backup_class != backup.backup_class {
+        return Err(schema_error(
+            "domain_separation.aead_aad.backup_class must match backup_class",
+        ));
+    }
+    if aad.backup_version != backup.backup_version {
+        return Err(schema_error(
+            "domain_separation.aead_aad.backup_version must match backup_version",
+        ));
+    }
+    if aad.created_at != backup.created_at {
+        return Err(schema_error(
+            "domain_separation.aead_aad.created_at must match created_at",
+        ));
+    }
+    let expected_device = backup
+        .device_id
+        .as_ref()
+        .map(|device_id| device_id.as_str())
+        .or(backup.encryption.recipient_key_ref.as_deref())
+        .unwrap_or_default();
+    if aad.device_id != expected_device {
+        return Err(schema_error(
+            "domain_separation.aead_aad.device_id must match device_id or recipient_key_ref",
+        ));
+    }
+    let expected_item_types: Vec<&str> = backup
+        .contents
+        .iter()
+        .map(|item| item.item_type.as_str())
+        .collect();
+    if aad
+        .item_types
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != expected_item_types
+    {
+        return Err(schema_error(
+            "domain_separation.aead_aad.item_types must match contents[].item_type",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_key_backup_kdf_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    let kdf = backup
+        .encryption
+        .kdf
+        .as_ref()
+        .ok_or_else(|| schema_error("passphrase_kdf key backup requires encryption.kdf"))?;
+    let params = kdf
+        .params
+        .as_object()
+        .ok_or_else(|| schema_error("key backup `params` must be an object"))?;
+    let params = Value::Object(params.clone());
+    match kdf.name.as_str() {
+        "argon2id" => {
+            let memory_floor = if backup.mixed_secret_storage {
+                262_144
+            } else {
+                65_536
+            };
+            let iteration_floor = if memory_floor == 262_144 { 4 } else { 3 };
+            if required_u64(&params, "memory_kib")? < memory_floor {
+                return Err(schema_error(format!(
+                    "argon2id params.memory_kib must be >= {memory_floor}"
+                )));
+            }
+            if required_u64(&params, "iterations")? < iteration_floor {
+                return Err(schema_error(format!(
+                    "argon2id params.iterations must be >= {iteration_floor}"
+                )));
+            }
+            if required_u64(&params, "parallelism")? < 1 {
+                return Err(schema_error("argon2id params.parallelism must be >= 1"));
+            }
+        }
+        "pbkdf2" => {
+            if params.get("hash").is_some() {
+                return Err(schema_error(
+                    "pbkdf2 params.hash is forbidden; use digest_algorithm",
+                ));
+            }
+            if required_u64(&params, "iterations")? < 600_000 {
+                return Err(schema_error("pbkdf2 params.iterations must be >= 600000"));
+            }
+            let digest_algorithm = params
+                .get("digest_algorithm")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !matches!(digest_algorithm, "sha256" | "sha384" | "sha512") {
+                return Err(schema_error(
+                    "pbkdf2 params.digest_algorithm must be sha256, sha384, or sha512",
+                ));
+            }
+            if kdf
+                .degraded_profile_reason
+                .as_deref()
+                .is_none_or(str::is_empty)
+            {
+                return Err(schema_error(
+                    "pbkdf2 key backup requires degraded_profile_reason",
+                ));
+            }
+        }
+        other => {
+            return Err(schema_error(format!(
+                "unsupported key backup kdf name `{other}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn scan_mls_history_opaque_value(value: &Value, path: &str) -> Result<(), AppError> {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                scan_mls_history_opaque_field(key, child, path)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for (idx, child) in items.iter().enumerate() {
+                scan_mls_history_opaque_value(child, &format!("{path}/{idx}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn scan_mls_history_opaque_field(key: &str, child: &Value, path: &str) -> Result<(), AppError> {
+    let key_lower = key.to_ascii_lowercase();
+    if matches!(
+        key_lower.as_str(),
+        "plaintext"
+            | "plain_text"
+            | "serialized_state"
+            | "state_bytes"
+            | "group_state"
+            | "passphrase"
+            | "mls_passphrase"
+            | "snapshot_secret"
+    ) {
+        return Err(schema_error(format!(
+            "mls_history key backups must not carry plaintext field {path}/{key}"
+        )));
+    }
+    let child_path = if path.is_empty() {
+        format!("/{key}")
+    } else {
+        format!("{path}/{key}")
+    };
+    scan_mls_history_opaque_value(child, &child_path)
+}
+
+fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    for (key, value) in &backup.extra {
+        scan_mls_history_opaque_field(key, value, "")?;
+    }
+    for (key, value) in &backup.encryption.extra {
+        scan_mls_history_opaque_field(key, value, "/encryption")?;
+    }
+    if let Some(kdf) = &backup.encryption.kdf {
+        scan_mls_history_opaque_value(&kdf.params, "/encryption/kdf/params")?;
+        for (key, value) in &kdf.extra {
+            scan_mls_history_opaque_field(key, value, "/encryption/kdf")?;
+        }
+    }
+    for (key, value) in &backup.encryption.aead.extra {
+        scan_mls_history_opaque_field(key, value, "/encryption/aead")?;
+    }
+    for (idx, item) in backup.contents.iter().enumerate() {
+        for (key, value) in &item.extra {
+            scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;
+        }
+    }
+    if let Some(auth_data) = &backup.auth_data {
+        for (key, value) in &auth_data.extra {
+            scan_mls_history_opaque_field(key, value, "/auth_data")?;
+        }
+    }
+    if let Some(retention) = &backup.retention {
+        for (key, value) in &retention.extra {
+            scan_mls_history_opaque_field(key, value, "/retention")?;
+        }
+    }
+    Ok(())
+}
+
+fn typed_recovery_policy_ref(backup: &KeyBackup) -> Option<(&str, u64)> {
+    let policy_ref = backup.recovery_policy_ref.as_ref()?;
+    Some((policy_ref.policy_id.as_str(), policy_ref.policy_version))
+}
+
+fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    let present = backup.recovery_policy_ref.is_some();
+
+    if backup.backup_class == BackupClass::DidRecovery && !present {
         return Err(schema_error(
             "did_recovery key backups MUST carry recovery_policy_ref{policy_id, policy_version}",
         ));
@@ -554,38 +630,25 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
         return Ok(());
     }
 
-    let obj = policy_ref
-        .and_then(Value::as_object)
+    let (policy_id, version) = typed_recovery_policy_ref(backup)
         .ok_or_else(|| schema_error("recovery_policy_ref must be an object"))?;
-    let policy_id = obj
-        .get("policy_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("recovery_policy_ref.policy_id is required"))?;
     if !policy_id.starts_with("ck:policy:") {
         return Err(schema_error(format!(
             "recovery_policy_ref.policy_id `{policy_id}` must start with ck:policy:"
         )));
     }
-    let version = obj
-        .get("policy_version")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| schema_error("recovery_policy_ref.policy_version is required (>=1)"))?;
     if version < 1 {
         return Err(schema_error(
             "recovery_policy_ref.policy_version must be >= 1",
         ));
     }
 
-    // signed_fields MUST cover recovery_policy_ref whenever it is present.
-    let covered = backup
-        .get("auth_data")
-        .and_then(|a| a.get("signed_fields"))
-        .and_then(Value::as_array)
-        .is_some_and(|fields| {
-            fields
-                .iter()
-                .any(|f| f.as_str() == Some("recovery_policy_ref"))
-        });
+    let covered = backup.auth_data.as_ref().is_some_and(|auth_data| {
+        auth_data
+            .signed_fields
+            .iter()
+            .any(|field| field == "recovery_policy_ref")
+    });
     if !covered {
         return Err(schema_error(
             "auth_data.signed_fields MUST cover recovery_policy_ref when it is present",
@@ -594,99 +657,72 @@ fn validate_recovery_policy_ref_shape(backup: &Value, backup_class: &str) -> Res
     Ok(())
 }
 
-fn validate_key_backup_auth_data(backup: &Value) -> Result<(), AppError> {
+fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<(), AppError> {
     let auth = backup
-        .get("auth_data")
-        .and_then(Value::as_object)
+        .auth_data
+        .as_ref()
         .ok_or_else(|| schema_error("key backup auth_data is required"))?;
-    let device_id = auth
-        .get("device_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !device_id.starts_with("ck:device:") {
-        return Err(schema_error(
-            "auth_data.device_id must be a ck:device:<uuidv7> typed id",
-        ));
-    }
-    if auth
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
+    if auth.verification_method.trim().is_empty() {
         return Err(schema_error("auth_data.verification_method is required"));
     }
     if !matches!(
-        auth.get("signature_algorithm").and_then(Value::as_str),
-        Some("EdDSA" | "Ed25519")
+        auth.signature_algorithm.as_str(),
+        "Ed25519" | "ES256" | "ML-DSA-65"
     ) {
         return Err(schema_error(
-            "auth_data.signature_algorithm must be EdDSA or Ed25519",
+            "auth_data.signature_algorithm must be Ed25519, ES256, or ML-DSA-65",
         ));
     }
-    let signature = auth
-        .get("signature")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !is_base64url_token(signature) {
+    if !is_base64url_token(&auth.signature) {
         return Err(schema_error(
             "auth_data.signature must be a non-empty base64url token",
         ));
     }
-    let ssk_generation = auth.get("ssk_generation").and_then(Value::as_u64);
-    if !ssk_generation.is_some_and(|generation| generation >= 1) {
+    if !auth
+        .ssk_generation
+        .is_some_and(|generation| generation >= 1)
+    {
         return Err(schema_error("auth_data.ssk_generation must be >= 1"));
     }
-    let signed_fields = auth
-        .get("signed_fields")
-        .and_then(Value::as_array)
-        .ok_or_else(|| schema_error("auth_data.signed_fields must be an array"))?;
     for field in KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS {
-        if !signed_fields
+        if !auth
+            .signed_fields
             .iter()
-            .any(|candidate| candidate.as_str() == Some(*field))
+            .any(|candidate| candidate.as_str() == *field)
         {
             return Err(schema_error(format!(
                 "auth_data.signed_fields must cover `{field}`"
             )));
         }
     }
-    for optional in [
-        "supersedes",
-        "supersedes_digest",
-        "frontier_ref",
-        "recovery_policy_ref",
+    for (field, present) in [
+        ("supersedes", backup.supersedes.is_some()),
+        ("supersedes_digest", backup.supersedes_digest.is_some()),
+        ("frontier_ref", backup.frontier_ref.is_some()),
+        ("recovery_policy_ref", backup.recovery_policy_ref.is_some()),
     ] {
-        if backup.get(optional).is_some_and(|value| !value.is_null())
-            && !signed_fields
+        if present
+            && !auth
+                .signed_fields
                 .iter()
-                .any(|candidate| candidate.as_str() == Some(optional))
+                .any(|candidate| candidate.as_str() == field)
         {
             return Err(schema_error(format!(
-                "auth_data.signed_fields must cover `{optional}` when present"
+                "auth_data.signed_fields must cover `{field}` when present"
             )));
         }
     }
     Ok(())
 }
 
-/// C-P5 value-level binding: a backup's `recovery_policy_ref` MUST match the
-/// actor's currently accepted recovery policy `(policy_id, version)`.
-///
-/// `did_recovery` MUST carry it (structural check already enforced) and MUST
-/// match the active policy; absence of an active policy yields
-/// `recovery_policy_missing`. Other classes MAY carry it as a hint; when present
-/// it MUST also match (`recovery_policy_mismatch`) but does not replace
-/// series/frontier/Realm checks.
-async fn enforce_recovery_policy_ref(
+async fn enforce_recovery_policy_ref_typed(
     state: &AppState,
     actor_id: &str,
-    backup: &Value,
+    backup: &KeyBackup,
 ) -> Result<(), AppError> {
-    let Some(policy_ref) = backup.get("recovery_policy_ref").filter(|v| !v.is_null()) else {
+    let Some((ref_policy_id, ref_version)) = typed_recovery_policy_ref(backup) else {
         return Ok(());
     };
-    let ref_policy_id = policy_ref.get("policy_id").and_then(Value::as_str);
-    let ref_version = policy_ref.get("policy_version").and_then(Value::as_u64);
 
     let active = state
         .persistence
@@ -704,9 +740,7 @@ async fn enforce_recovery_policy_ref(
             .with_wire_code("recovery_policy_mismatch")
         })?;
 
-    if ref_policy_id != Some(active.policy_id.as_str())
-        || ref_version != Some(active.version as u64)
-    {
+    if ref_policy_id != active.policy_id.as_str() || ref_version != active.version as u64 {
         return Err(AppError::conflict(format!(
             "recovery_policy_ref {ref_policy_id:?} v{ref_version:?} does not match active policy \
              `{}` v{}",
@@ -721,7 +755,7 @@ async fn ensure_key_backup_writer_device_authorized(
     state: &AppState,
     actor_id: &str,
     session_device_id: &str,
-    backup: &Value,
+    backup: &KeyBackup,
 ) -> Result<(), AppError> {
     let unauthorized = || {
         AppError::capability_denied(
@@ -730,9 +764,9 @@ async fn ensure_key_backup_writer_device_authorized(
         .with_wire_code("device_not_authorized")
     };
     let auth_device_id = backup
-        .get("auth_data")
-        .and_then(|auth| auth.get("device_id"))
-        .and_then(Value::as_str)
+        .auth_data
+        .as_ref()
+        .map(|auth_data| auth_data.device_id.as_str())
         .ok_or_else(unauthorized)?;
     if auth_device_id != session_device_id {
         return Err(unauthorized());
@@ -991,11 +1025,6 @@ fn validate_key_backup_unlock_proof_shape(
         .get("auth_data")
         .and_then(Value::as_object)
         .ok_or_else(|| schema_error("key backup unlock proof auth_data is required"))?;
-    if auth.get("device_id").and_then(Value::as_str) != Some(session_device_id) {
-        return Err(AppError::capability_denied(
-            "key backup unlock proof auth_data.device_id must match authenticated session device",
-        ));
-    }
     if auth
         .get("verification_method")
         .and_then(Value::as_str)
@@ -1007,10 +1036,10 @@ fn validate_key_backup_unlock_proof_shape(
     }
     if !matches!(
         auth.get("signature_algorithm").and_then(Value::as_str),
-        Some("EdDSA" | "Ed25519")
+        Some("Ed25519" | "ES256" | "ML-DSA-65")
     ) {
         return Err(schema_error(
-            "key backup unlock proof auth_data.signature_algorithm must be EdDSA or Ed25519",
+            "key backup unlock proof auth_data.signature_algorithm must be Ed25519, ES256, or ML-DSA-65",
         ));
     }
     let signature = auth
@@ -1151,15 +1180,8 @@ async fn verify_key_backup_unlock_proof(
     verify_key_backup_unlock_proof_signature(state, proof)
 }
 
-/// Spec `identity/key-management.md` §7.6 — genesis envelopes
-/// (`series_seq == 0`) MUST NOT carry `supersedes` and MUST NOT carry
-/// `supersedes_digest`. A genesis claiming a predecessor (in either field)
-/// is a malformed chain → canonical 409 `series_chain_broken`.
-fn validate_series_genesis_shape(backup: &Value) -> Result<(), AppError> {
-    if backup
-        .get("supersedes")
-        .is_some_and(|value| !value.is_null())
-    {
+fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    if backup.supersedes.is_some() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
@@ -1167,10 +1189,7 @@ fn validate_series_genesis_shape(backup: &Value) -> Result<(), AppError> {
         .with_status(StatusCode::CONFLICT)
         .with_wire_code("series_chain_broken"));
     }
-    if backup
-        .get("supersedes_digest")
-        .is_some_and(|value| !value.is_null())
-    {
+    if backup.supersedes_digest.is_some() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes_digest`",
@@ -1181,37 +1200,20 @@ fn validate_series_genesis_shape(backup: &Value) -> Result<(), AppError> {
     Ok(())
 }
 
-/// CKP-0008 / CKP-0009 (spec head 37ce729) — series monotonicity check
-/// for `PUT /_cokret/self/keys/backups/{backup_id}`. Returns one of the three
-/// canonical 409 reasons:
-/// - `series_chain_broken`     — supersedes_digest is missing/empty when `series_seq > 0`
-/// - `series_seq_not_monotonic`— the new envelope's `series_seq` does not immediately follow the
-///   latest persisted seq for the series
-/// - `series_predecessor_not_found` — the envelope claims a predecessor (`supersedes`) that is not
-///   persisted
-async fn enforce_key_backup_series_chain(
+async fn enforce_key_backup_series_chain_typed(
     state: &AppState,
     actor_id: &str,
-    backup: &Value,
+    backup: &KeyBackup,
 ) -> Result<(), AppError> {
-    let series_id = backup
-        .get("series_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let series_seq = backup
-        .get("series_seq")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-
+    let series_id = backup.series_id.as_str();
+    let series_seq = backup.series_seq;
     let store = state.persistence.key_backups();
     let mut max_existing_seq: Option<u64> = None;
     let mut predecessor: Option<Value> = None;
     let supersedes = backup
-        .get("supersedes")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    // Fail closed on DB read errors: an empty snapshot would silently let a
-    // non-monotonic / duplicate-genesis envelope pass the chain guard.
+        .supersedes
+        .as_ref()
+        .map(|backup_id| backup_id.as_str().to_owned());
     let snapshot = store.snapshot_all().await.map_err(|error| {
         AppError::internal(format!("key backup series chain lookup failed: {error}"))
     })?;
@@ -1233,8 +1235,7 @@ async fn enforce_key_backup_series_chain(
     }
 
     if series_seq == 0 {
-        validate_series_genesis_shape(backup)?;
-        // Genesis envelope is fine if no prior entries exist for the series.
+        validate_series_genesis_shape_typed(backup)?;
         if let Some(existing_seq) = max_existing_seq {
             return Err(AppError::new(
                 ErrorCode::SchemaViolation,
@@ -1248,12 +1249,7 @@ async fn enforce_key_backup_series_chain(
         return Ok(());
     }
 
-    // Successor envelope: MUST carry `supersedes` + `supersedes_digest`,
-    // and `series_seq` MUST equal `max(existing) + 1`.
-    let supersedes_digest = backup
-        .get("supersedes_digest")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let supersedes_digest = backup.supersedes_digest.as_deref().unwrap_or_default();
     if supersedes.is_none() || supersedes_digest.is_empty() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
@@ -1445,7 +1441,6 @@ fn key_backup_duplicate_for_actor(
 fn key_backup_metadata_for_list(mut backup: Value) -> Value {
     if let Some(object) = backup.as_object_mut() {
         object.remove("ciphertext");
-        object.remove("key_commitment");
         if let Some(auth_data) = object.get_mut("auth_data").and_then(Value::as_object_mut) {
             auth_data.remove("signature");
         }
@@ -1646,7 +1641,7 @@ async fn ensure_key_backup_delete_allowed(
 async fn put_key_backup(
     aa: AuthArgs,
     backup_id: PathParam<String>,
-    backup: JsonBody<Value>,
+    backup: JsonBody<KeysBackupsPutRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsPutOutcome> {
@@ -1664,9 +1659,9 @@ async fn put_key_backup(
             "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
         ))
     })?;
-    let backup = backup.into_inner();
-    validate_key_backup_body(&backup_id, &session.actor, &backup)?;
-    if backup.get("backup_class").and_then(Value::as_str) == Some("did_recovery") {
+    let backup = backup.into_inner().0;
+    validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
+    if backup.backup_class == BackupClass::DidRecovery {
         ensure_key_backup_writer_device_authorized(
             state,
             &session.actor,
@@ -1675,18 +1670,15 @@ async fn put_key_backup(
         )
         .await?;
     }
-    enforce_key_backup_series_chain(state, &session.actor, &backup).await?;
-    enforce_recovery_policy_ref(state, &session.actor, &backup).await?;
-    let ciphertext_digest = backup
-        .get("ciphertext_digest")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+    enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
+    enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
+    let ciphertext_digest = backup.ciphertext_digest.clone();
+    let backup_value = key_backup_to_value(&backup)?;
     let store = state.persistence.key_backups();
     let existing = store.get(&backup_id).await.ok().flatten();
     let duplicate = key_backup_duplicate_for_actor(existing.as_ref(), &session.actor)?;
     store
-        .put(backup_id.clone(), backup.clone())
+        .put(backup_id.clone(), backup_value)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(KeysBackupsPutOutcome {
@@ -1928,8 +1920,30 @@ mod tests {
     const BACKUP_ID: &str = "ck:backup:01964137-0000-7000-8000-000000000001";
     const DEVICE_ID: &str = "ck:device:01964137-0000-7000-8000-000000000001";
 
+    fn validate_key_backup_body(
+        backup_id: &str,
+        actor_id: &str,
+        body: &Value,
+    ) -> Result<(), AppError> {
+        let typed_backup_id = BackupId::new(backup_id.to_owned()).map_err(|error| {
+            AppError::invalid_param(format!(
+                "backup_id must be a ck:backup:<uuidv7> typed id: {error}"
+            ))
+        })?;
+        let backup = typed_key_backup_body(body)?;
+        validate_key_backup_body_typed(&typed_backup_id, actor_id, &backup)
+    }
+
+    fn typed_key_backup_body(body: &Value) -> Result<KeyBackup, AppError> {
+        serde_json::from_value(body.clone()).map_err(|error| {
+            schema_error(format!(
+                "key backup payload failed SDK type validation: {error}"
+            ))
+        })
+    }
+
     fn key_backup_body(backup_class: &str, item_type: &str, encryption: Value) -> Value {
-        json!({
+        let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
             "backup_class": backup_class,
@@ -1944,11 +1958,23 @@ mod tests {
             }],
             "ciphertext": "AAAA",
             "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "key_commitment": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "domain_separation": {
+                "hkdf_info": format!("cokret-key-backup/{backup_class}/test/v1"),
+                "subdomain": "test",
+                "aead_aad": {
+                    "schema": "ck.schema.key_backup.v1",
+                    "actor_id": ACTOR,
+                    "device_id": DEVICE_ID,
+                    "backup_class": backup_class,
+                    "backup_version": "kb_1",
+                    "created_at": "2026-05-30T00:00:00Z",
+                    "item_types": [item_type]
+                }
+            },
             "auth_data": {
                 "device_id": DEVICE_ID,
                 "verification_method": "did:web:alice.example#device",
-                "signature_algorithm": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
                 "ssk_generation": 1,
                 "signed_fields": [
@@ -1959,11 +1985,17 @@ mod tests {
                     "series_id",
                     "series_seq",
                     "encryption",
+                    "domain_separation",
                     "contents",
                     "ciphertext_digest"
                 ]
             }
-        })
+        });
+        if body["encryption"]["recipient_method"].as_str() == Some("passphrase_kdf") {
+            body["encryption"]["key_commitment"] =
+                json!("sha256:2222222222222222222222222222222222222222222222222222222222222222");
+        }
+        body
     }
 
     fn passphrase_encryption() -> Value {
@@ -2089,6 +2121,7 @@ mod tests {
             "series_seq",
             "supersedes",
             "encryption",
+            "domain_separation",
             "contents",
             "ciphertext_digest",
             "recovery_policy_ref"
@@ -2099,7 +2132,7 @@ mod tests {
         json!({
             "device_id": DEVICE_ID,
             "verification_method": "did:web:alice.example#device",
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
             "ssk_generation": 1,
             "signed_fields": did_recovery_signed_fields()
@@ -2132,7 +2165,7 @@ mod tests {
         body["auth_data"] = json!({
             "device_id": DEVICE_ID,
             "verification_method": "did:web:alice.example#device",
-            "signature_algorithm": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
             "ssk_generation": 1,
             "signed_fields": ["backup_id", "encryption"]
@@ -2169,7 +2202,10 @@ mod tests {
         // Drop key_commitment -> reject.
         let mut body2 =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
-        body2.as_object_mut().unwrap().remove("key_commitment");
+        body2["encryption"]
+            .as_object_mut()
+            .unwrap()
+            .remove("key_commitment");
         let err2 = validate_key_backup_body(BACKUP_ID, ACTOR, &body2)
             .expect_err("passphrase_kdf without key_commitment must be rejected");
         assert!(err2.message.contains("key_commitment"));
@@ -2184,7 +2220,7 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("unknown recipient methods must not pass schema validation");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("recipient_method"));
+        assert!(err.message.contains("legacy_magic_key"));
     }
 
     #[test]
@@ -2221,7 +2257,7 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("soland must store only opaque MLS backup ciphertext");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("plaintext field"));
+        assert!(err.message.contains("plaintext"));
     }
 
     #[test]
@@ -2412,7 +2448,8 @@ mod tests {
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
         body["supersedes"] = json!("ck:backup:01964137-0000-7000-8000-0000000000ff");
 
-        let err = validate_series_genesis_shape(&body)
+        let backup = typed_key_backup_body(&body).expect("typed key backup");
+        let err = validate_series_genesis_shape_typed(&backup)
             .expect_err("genesis envelope carrying `supersedes` must be series_chain_broken");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
@@ -2432,7 +2469,8 @@ mod tests {
         body["supersedes_digest"] =
             json!("sha256:3333333333333333333333333333333333333333333333333333333333333333");
 
-        let err = validate_series_genesis_shape(&body).expect_err(
+        let backup = typed_key_backup_body(&body).expect("typed key backup");
+        let err = validate_series_genesis_shape_typed(&backup).expect_err(
             "genesis envelope carrying `supersedes_digest` must be series_chain_broken",
         );
         assert_eq!(err.code, ErrorCode::SchemaViolation);
@@ -2453,7 +2491,8 @@ mod tests {
         body["supersedes"] = Value::Null;
         body["supersedes_digest"] = Value::Null;
 
-        validate_series_genesis_shape(&body)
+        let backup = typed_key_backup_body(&body).expect("typed key backup");
+        validate_series_genesis_shape_typed(&backup)
             .expect("explicit null predecessor fields are equivalent to absence");
     }
 
@@ -2495,7 +2534,7 @@ mod tests {
         ));
 
         assert!(metadata.get("ciphertext").is_none());
-        assert!(metadata.get("key_commitment").is_none());
+        assert!(metadata.pointer("/encryption/key_commitment").is_none());
         assert_eq!(
             metadata["encryption"]["recipient_method"],
             json!("passphrase_kdf")

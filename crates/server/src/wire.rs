@@ -857,7 +857,7 @@ pub use cokret_sdk::model::{
 };
 pub use cokret_sdk::{
     CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, IdentityLogOutcome,
-    IdentityReceiptsOutcome,
+    IdentityReceiptsOutcome, KeysBackupsPutRequestBody,
 };
 
 // Recovery policy / receipt endpoints (`recovery_policy_put` /
