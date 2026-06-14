@@ -1205,6 +1205,13 @@ pub struct SolandRealmState {
     /// `ck:realm:<uuid>` of the successor Realm that takes over child
     /// Space/Flow placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
+    /// COT-06-004 — the Realm's default Flow pointer (`ck:flow:<UUIDv7>`).
+    /// Set by `ck.realm.set_default_flow` (`apply_realm_set_default_flow`);
+    /// the Flow it names MUST already be projected in this Realm. A Flow's
+    /// derived `is_default` flag is computed at query time as
+    /// `flow_id == realm.default_flow_id` — there is no separate stored
+    /// per-Flow column.
+    pub default_flow_id: Option<String>,
 }
 
 /// The effect of applying an operation to the projection state.
@@ -1249,6 +1256,12 @@ pub enum ProjectionEffect {
     RealmLifecycle {
         realm_id: String,
         action: String,
+    },
+    /// COT-06-004 — `ck.realm.set_default_flow` projected. The Realm's
+    /// `default_flow_id` now points at `flow_id`.
+    RealmDefaultFlowSet {
+        realm_id: String,
+        flow_id: String,
     },
     /// Space-container lifecycle transition accepted; new state is reflected in
     /// `ProjectionState::space_containers` and (when persisted) `projection_space_containers`.
@@ -1681,6 +1694,13 @@ fn apply_realm_destroy_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, crate::kinds::CK_REALM_DESTROY)
+}
+fn apply_realm_set_default_flow_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_set_default_flow(op, op.created_at)
 }
 fn apply_erasure_receipt_dispatch(
     s: &mut ProjectionState,
@@ -3025,6 +3045,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_REALM_ARCHIVE, apply_realm_archive_dispatch);
     m.insert(CK_REALM_TOMBSTONE, apply_realm_tombstone_dispatch);
     m.insert(CK_REALM_DESTROY, apply_realm_destroy_dispatch);
+    // COT-06-004 — Realm default-Flow pointer.
+    m.insert(
+        CK_REALM_SET_DEFAULT_FLOW,
+        apply_realm_set_default_flow_dispatch,
+    );
     m.insert(CK_CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(CK_AUDIT_ERASURE_RECEIPT, apply_erasure_receipt_dispatch);
     m.insert(

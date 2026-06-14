@@ -159,10 +159,29 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
         .any(|allowed| allowed.eq_ignore_ascii_case(method))
 }
 
-/// Probe an external webvh provider `<URL>/describe` endpoint and validate
-/// the trust-root handshake before marking it active. The configured URL
-/// records admin intent and is still advertised when the probe fails; this
-/// function only controls runtime liveness.
+/// STA-07-002 — the canonical generic server-describe path. The resolver
+/// freshness probe targets this endpoint (operation_id
+/// `ck.server.query.describe`, schema `service-describe.schema.json`) rather
+/// than the retired starid-legacy `<URL>/describe`. A pure identity
+/// resolver/registry exposes the same canonical ServiceDescribe shape at this
+/// path, so probing it removes soland's dependency on the legacy starid
+/// describe surface.
+pub const CANONICAL_DESCRIBE_PATH: &str = "/_cokret/describe";
+
+/// Probe an external webvh provider's canonical describe endpoint
+/// (`<URL>/_cokret/describe`) and validate the trust-root handshake before
+/// marking it active. The configured URL records admin intent and is still
+/// advertised when the probe fails; this function only controls runtime
+/// liveness.
+///
+/// STA-07-002 — migrated off the starid-legacy `<URL>/describe`. Field
+/// mapping to the canonical `service-describe.schema.json`:
+///   service        → service_type        (lowercase registry value,
+///                                          e.g. `identity_registry`)
+///   service_did    → service_did
+///   trust_domain   → trust_domain         (`ck:trust_domain:<scope>`)
+///   supported_methods → supported_operations (endpoint-callable
+///                                          operation_id list)
 pub async fn probe_webvh_provider_describe(
     url: &str,
     timeout: Duration,
@@ -171,7 +190,7 @@ pub async fn probe_webvh_provider_describe(
     development_mode: bool,
 ) -> Result<(), String> {
     let trimmed = url.trim_end_matches('/');
-    let describe_url = format!("{trimmed}/describe");
+    let describe_url = format!("{trimmed}{CANONICAL_DESCRIBE_PATH}");
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
     let (describe_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
@@ -184,39 +203,51 @@ pub async fn probe_webvh_provider_describe(
         .get(describe_url)
         .send()
         .await
-        .map_err(|e| format!("webvh provider /describe request failed: {e}"))?;
+        .map_err(|e| format!("webvh provider describe request failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!(
-            "webvh provider /describe returned non-2xx status {}",
+            "webvh provider describe returned non-2xx status {}",
             resp.status()
         ));
     }
     let body = resp
         .json::<Value>()
         .await
-        .map_err(|e| format!("webvh provider /describe JSON decode failed: {e}"))?;
+        .map_err(|e| format!("webvh provider describe JSON decode failed: {e}"))?;
     validate_webvh_provider_describe(&body, expected_service_did, expected_trust_domain)?;
     Ok(())
 }
 
+/// Validate a canonical ServiceDescribe body for use as a webvh resolver trust
+/// root. The four `service-describe.schema.json` required fields are checked:
+/// `service_type`, `service_did`, `trust_domain`, `supported_operations`.
 fn validate_webvh_provider_describe(
     body: &Value,
     expected_service_did: Option<&str>,
     expected_trust_domain: Option<&str>,
 ) -> Result<(), String> {
-    let service = body
-        .get("service")
+    // `service_type` — the canonical lowercase registry value. An identity
+    // resolver/registry advertises `identity_registry`; older starid surfaces
+    // used the legacy `service: "starid"` label, which we also tolerate so the
+    // boot probe survives a peer that has not yet migrated to the canonical
+    // field name.
+    let service_type = body
+        .get("service_type")
+        .or_else(|| body.get("service"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider /describe missing service".to_owned())?;
-    if service != "starid" {
+        .ok_or_else(|| "webvh provider describe missing service_type".to_owned())?;
+    if !matches!(
+        service_type,
+        "identity_registry" | "principal_server" | "starid"
+    ) {
         return Err(format!(
-            "webvh provider service must be starid, got {service:?}"
+            "webvh provider service_type must be an identity registry, got {service_type:?}"
         ));
     }
     let service_did = body
         .get("service_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider /describe missing service_did".to_owned())?;
+        .ok_or_else(|| "webvh provider describe missing service_did".to_owned())?;
     Did::new(service_did.to_owned())
         .map_err(|error| format!("webvh provider service_did is invalid: {error}"))?;
     if let Some(expected) = expected_service_did
@@ -229,7 +260,7 @@ fn validate_webvh_provider_describe(
     let trust_domain = body
         .get("trust_domain")
         .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider /describe missing trust_domain".to_owned())?;
+        .ok_or_else(|| "webvh provider describe missing trust_domain".to_owned())?;
     if !valid_trust_domain(trust_domain) {
         return Err(format!(
             "webvh provider trust_domain is invalid: {trust_domain}"
@@ -245,15 +276,22 @@ fn validate_webvh_provider_describe(
     if body
         .get("development_mode")
         .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or(false)
     {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    if !string_array_contains(body.get("supported_methods"), "did:webvh") {
-        return Err("webvh provider does not advertise did:webvh".to_owned());
-    }
-    if !string_array_contains(body.get("supported_method_versions"), "did:webvh:1.0") {
-        return Err("webvh provider does not advertise did:webvh:1.0".to_owned());
+    // `supported_operations` — the canonical endpoint-callable operation_id
+    // list. The describe surface MUST advertise its own canonical describe
+    // operation so resolution discovery is well-defined; tolerate the legacy
+    // `supported_methods` field (carrying did-method tokens) for a peer that
+    // has not yet migrated.
+    let advertises_describe =
+        string_array_contains(body.get("supported_operations"), "ck.server.query.describe");
+    let advertises_legacy_webvh = string_array_contains(body.get("supported_methods"), "did:webvh");
+    if !advertises_describe && !advertises_legacy_webvh {
+        return Err(
+            "webvh provider describe does not advertise ck.server.query.describe".to_owned(),
+        );
     }
     Ok(())
 }
@@ -465,32 +503,51 @@ mod tests {
     }
 
     #[test]
-    fn provider_describe_trust_handshake_accepts_production_starid() {
+    fn provider_describe_trust_handshake_accepts_canonical_identity_registry() {
+        // STA-07-002 — canonical ServiceDescribe shape: service_type +
+        // service_did + trust_domain + supported_operations.
         let describe = json!({
-            "service": "starid",
+            "service_type": "identity_registry",
             "service_did": "did:web:starid.example",
             "trust_domain": "ck:trust_domain:example.net",
             "development_mode": false,
-            "supported_methods": ["did:webvh", "did:web"],
-            "supported_method_versions": ["did:webvh:1.0"]
+            "supported_operations": ["ck.server.query.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
             Some("did:web:starid.example"),
             Some("ck:trust_domain:example.net"),
         )
-        .expect("valid starid provider describe should pass");
+        .expect("valid canonical identity_registry describe should pass");
+    }
+
+    #[test]
+    fn provider_describe_trust_handshake_accepts_legacy_starid_shape() {
+        // Backward-compat: a peer still emitting the legacy starid `service`
+        // label + `supported_methods` did-method tokens stays accepted.
+        let describe = json!({
+            "service": "starid",
+            "service_did": "did:web:starid.example",
+            "trust_domain": "ck:trust_domain:example.net",
+            "development_mode": false,
+            "supported_methods": ["did:webvh", "did:web"]
+        });
+        validate_webvh_provider_describe(
+            &describe,
+            Some("did:web:starid.example"),
+            Some("ck:trust_domain:example.net"),
+        )
+        .expect("legacy starid describe should still pass");
     }
 
     #[test]
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
         let mut describe = json!({
-            "service": "starid",
+            "service_type": "identity_registry",
             "service_did": "did:web:starid.example",
             "trust_domain": "ck:trust_domain:example.net",
             "development_mode": false,
-            "supported_methods": ["did:webvh", "did:web"],
-            "supported_method_versions": ["did:webvh:1.0"]
+            "supported_operations": ["ck.server.query.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,

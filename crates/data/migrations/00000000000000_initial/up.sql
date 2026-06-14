@@ -308,7 +308,17 @@ CREATE TABLE public.key_backups (
     account_id text,
     scheme text,
     version integer DEFAULT 0 NOT NULL,
-    key_material_encrypted bytea
+    key_material_encrypted bytea,
+    -- SOL-02-004: identity of the backup series this envelope belongs to,
+    -- projected out of the JSONB payload as stored generated columns. They
+    -- back the UNIQUE(series_actor_id, series_id, series_seq) constraint below
+    -- which makes the §7.6 series-monotonicity check race-free: two concurrent
+    -- successor PUTs that both compute the same series_seq can no longer both
+    -- land — the second insert is rejected by the unique violation rather than
+    -- relying on a read-then-write (TOCTOU) snapshot check.
+    series_actor_id text GENERATED ALWAYS AS ((payload ->> 'actor_id')) STORED,
+    series_id text GENERATED ALWAYS AS ((payload ->> 'series_id')) STORED,
+    series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED
 );
 
 CREATE TABLE public.mls_commits (
@@ -856,6 +866,14 @@ ALTER TABLE ONLY public.invite_receive_policies
 
 ALTER TABLE ONLY public.key_backups
     ADD CONSTRAINT key_backups_pkey PRIMARY KEY (id);
+
+-- SOL-02-004: enforce series_seq monotonicity at the storage layer. A given
+-- (actor, series) may hold at most one envelope per sequence number; the
+-- receive path depends on this constraint so concurrent successor PUTs cannot
+-- double-write the same seq (TOCTOU). NULLs (non-series backups) are exempt
+-- because Postgres treats NULL as distinct in a UNIQUE index.
+ALTER TABLE ONLY public.key_backups
+    ADD CONSTRAINT key_backups_series_seq_key UNIQUE (series_actor_id, series_id, series_seq);
 
 ALTER TABLE ONLY public.mls_commits
     ADD CONSTRAINT mls_commits_pkey PRIMARY KEY (id);

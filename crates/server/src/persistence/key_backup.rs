@@ -1,5 +1,25 @@
 use super::*;
 
+/// SOL-02-004 — classify a `key_backups` INSERT failure. A unique violation on
+/// `key_backups_series_seq_key` means a concurrent successor PUT already
+/// claimed this `(actor_id, series_id, series_seq)` tuple; surface it as a
+/// [`PersistenceError::Conflict`] so the receive path can reject the loser of
+/// the race with the §7.6 `series_seq_not_monotonic` wire code instead of a
+/// generic 5xx. Every other diesel error stays a `Database` error.
+fn map_key_backup_put_error(error: diesel::result::Error) -> PersistenceError {
+    use diesel::result::{DatabaseErrorKind, Error as DieselError};
+    if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error {
+        let constraint = info.constraint_name().unwrap_or_default();
+        if constraint.is_empty() || constraint == "key_backups_series_seq_key" {
+            return PersistenceError::Conflict(format!(
+                "series_seq_not_monotonic: {}",
+                info.message()
+            ));
+        }
+    }
+    PersistenceError::from(error)
+}
+
 /// Encrypted key-backup envelopes (one row per `backup_id`).
 #[async_trait]
 pub trait KeyBackupStore: Send + Sync {
@@ -115,7 +135,7 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Jsonb, _>(&payload)
         .execute(&mut *conn).await
         .map(|_| ())
-        .map_err(PersistenceError::from)
+        .map_err(map_key_backup_put_error)
     }
 
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {

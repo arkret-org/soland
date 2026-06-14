@@ -247,6 +247,12 @@ diesel::table! {
         payload -> Jsonb,
         created_at -> Timestamptz,
         last_accessed_at -> Nullable<Timestamptz>,
+        // SOL-02-004: stored generated columns projected from `payload`,
+        // backing UNIQUE(series_actor_id, series_id, series_seq). Read-only —
+        // writes go through `payload` only.
+        series_actor_id -> Nullable<Text>,
+        series_id -> Nullable<Text>,
+        series_seq -> Nullable<Int8>,
     }
 }
 

@@ -58,6 +58,7 @@ pub async fn validate_operation_policy(
         validate_direct_conversation_realm_policy(state, operation)?;
         validate_member_state_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
+        validate_set_default_flow_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation)?;
@@ -833,6 +834,54 @@ async fn validate_member_state_policy(
         .allowed
     {
         return Ok(());
+    }
+    Err("missing_capability")
+}
+
+/// COT-06-004 — capability gate for `ck.realm.set_default_flow`. Mirrors the
+/// ban / moderation gates: the actor MUST own the Realm or hold
+/// `ck.realm.set_default_flow` (or the broader `ck.realm.admin`) on it.
+/// fail-closed `missing_capability` otherwise. Peer/service-originated
+/// federation operations (no `sender`) stay accepted for convergence/backfill.
+async fn validate_set_default_flow_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation) != Some(kinds::CK_REALM_SET_DEFAULT_FLOW) {
+        return Ok(());
+    }
+    let Some(actor) = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let realm_id = operation.realm_id.as_str();
+    if realm_owner_matches(state, realm_id, actor).await {
+        return Ok(());
+    }
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    // A grant of either the precise action or the broad realm-admin action
+    // authorizes the write. `ck.realm.admin` aggregates Realm governance, so
+    // an admin holder need not also hold the narrow set_default_flow action.
+    for action in ["ck.realm.set_default_flow", "ck.realm.admin"] {
+        if state
+            .authz
+            .check(
+                actor,
+                action,
+                realm_id,
+                realm_id,
+                owner.as_deref(),
+                &members,
+                &[],
+            )
+            .allowed
+        {
+            return Ok(());
+        }
     }
     Err("missing_capability")
 }

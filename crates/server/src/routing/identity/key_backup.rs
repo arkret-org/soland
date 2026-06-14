@@ -1665,7 +1665,19 @@ async fn put_key_backup(
     store
         .put(backup_id.clone(), backup_value)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| match error {
+            // SOL-02-004 — the UNIQUE(series_actor_id, series_id, series_seq)
+            // constraint rejected a concurrent successor double-write. The
+            // storage layer is now the authoritative race guard for §7.6
+            // monotonicity; the loser is told the seq is already taken.
+            crate::persistence::PersistenceError::Conflict(message) => AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("series_seq_not_monotonic: {message}"),
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("series_seq_not_monotonic"),
+            other => AppError::internal(other.to_string()),
+        })?;
     json_ok(KeysBackupsReplaceOutcome {
         status: if duplicate {
             KeyBackupPutStatus::Duplicate

@@ -70,6 +70,16 @@ use crate::artifacts;
 // `zh/models/circle.md` §7.2.
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
+// COT-06-004 — Realm default-Flow pointer event. Sets `Realm.default_flow_id`
+// to `payload.flow_id` (which MUST name a Flow already projected in this
+// Realm, else `failed_precondition`). cell_subject = `realm_id`; the
+// authoritative spec name is `ck.realm.set_default_flow`
+// (event-payload.schema.json `realm_set_default_flow_payload`). Defined
+// locally here pending the SDK `cokret_core::events::kinds` re-export; the
+// generic `canonical_kind_for_operation` wildcard already passes the string
+// through, but the dispatch table keys on this constant.
+pub const CK_REALM_SET_DEFAULT_FLOW: &str = "ck.realm.set_default_flow";
+
 // Morph lifecycle (round 13). Same shape as Flow — no dedicated tombstone.
 // `ck.field.position.move` and `ck.field.position.reorder` were removed in
 // revision 0a5ab85 (see cokret-spec
@@ -472,6 +482,8 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         CK_MODERATION_APPEAL_CLOSE => Some(CK_MODERATION_APPEAL_CLOSE),
         // G3.S2 — policy server declaration.
         CK_REALM_POLICY_SERVER => Some(CK_REALM_POLICY_SERVER),
+        // COT-06-004 — Realm default-Flow pointer.
+        CK_REALM_SET_DEFAULT_FLOW => Some(CK_REALM_SET_DEFAULT_FLOW),
         _ => Some(object_type),
     }
 }

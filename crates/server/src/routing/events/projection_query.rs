@@ -460,6 +460,12 @@ async fn list_flow_projections(
         )
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
+    // COT-06-004 — the Realm's default-Flow pointer drives each row's
+    // derived `is_default` flag (no per-Flow stored column).
+    let default_flow_id = proj
+        .realm_states
+        .get(&realm_id)
+        .and_then(|realm| realm.default_flow_id.clone());
     let flows: Vec<ProjectionFlowRow> = proj
         .flows
         .values()
@@ -489,6 +495,7 @@ async fn list_flow_projections(
                 created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
                 updated_at: f.updated_at,
+                is_default: default_flow_id.as_deref() == Some(f.flow_id.as_str()),
             })
         })
         .collect::<Result<_, AppError>>()?;

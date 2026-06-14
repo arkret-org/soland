@@ -813,7 +813,16 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "default": default_provider_id.as_deref() == Some(external_id),
             "active": state.config.external_webvh_provider_active,
             "base_url": url,
-            "describe_url": format!("{}/describe", url.trim_end_matches('/')),
+            // STA-07-002 — advertise the canonical generic server-describe
+            // endpoint (operation_id ck.server.query.describe) the resolver
+            // freshness probe now targets, not the retired starid-legacy
+            // `<URL>/describe`.
+            "describe_url": format!(
+                "{}{}",
+                url.trim_end_matches('/'),
+                crate::state::did_resolver_chain::CANONICAL_DESCRIBE_PATH
+            ),
+            "freshness_probe": crate::state::did_resolver_chain::CANONICAL_DESCRIBE_PATH,
             "health": {
                 "active": state.config.external_webvh_provider_active,
                 "probe": if state.config.external_webvh_provider_active {

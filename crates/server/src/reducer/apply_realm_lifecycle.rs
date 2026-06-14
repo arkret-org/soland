@@ -154,6 +154,92 @@ impl ProjectionState {
         }
     }
 
+    /// COT-06-004 — apply `ck.realm.set_default_flow`. Points the Realm's
+    /// `default_flow_id` at `payload.flow_id`. The named Flow MUST already be
+    /// projected in this Realm (else `failed_precondition` — no dangling
+    /// pointer). Optional `expected_default_flow_id` is an optimistic-
+    /// concurrency CAS guard: when present it MUST equal the current
+    /// `default_flow_id` (or both null), else `cas_mismatch`.
+    ///
+    /// Authorization (actor holds `ck.realm.set_default_flow` / `ck.realm.admin`
+    /// on the Realm, or owns it) is enforced at ingest in
+    /// `routing::events::operations::policy::validate_set_default_flow_policy`,
+    /// mirroring the ban / moderation capability gates. The reducer does the
+    /// structural acceptance check only.
+    pub(crate) fn apply_realm_set_default_flow(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        let Some(flow_id) = operation
+            .payload
+            .get("flow_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "set_default_flow_flow_id_missing".to_owned(),
+            };
+        };
+
+        // failed_precondition: the target Flow MUST already be projected in
+        // this Realm. Prevents a dangling default pointer.
+        match self.flows.get(&flow_id) {
+            Some(flow) if flow.realm_id == realm_id => {}
+            Some(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "set_default_flow_flow_realm_mismatch".to_owned(),
+                };
+            }
+            None => {
+                return ProjectionEffect::Rejected {
+                    reason: "failed_precondition".to_owned(),
+                };
+            }
+        }
+
+        // Optimistic-concurrency CAS guard. `expected_default_flow_id` is
+        // `oneOf[flow_id, null]`: when the field is present (including an
+        // explicit JSON null), it MUST match the current pointer.
+        if let Some(expected) = operation.payload.get("expected_default_flow_id") {
+            let current = self
+                .realm_states
+                .get(&realm_id)
+                .and_then(|realm| realm.default_flow_id.as_deref());
+            let expected = expected.as_str();
+            if expected != current {
+                return ProjectionEffect::Rejected {
+                    reason: "cas_mismatch".to_owned(),
+                };
+            }
+        }
+
+        // Structured cache: set the Realm default-Flow pointer. Create a
+        // minimal Realm row if we somehow haven't projected a create yet
+        // (federation backfill ordering tolerance).
+        let realm = self
+            .realm_states
+            .entry(realm_id.clone())
+            .or_insert_with(|| SolandRealmState {
+                realm_id: realm_id.clone(),
+                owner: None,
+                title: None,
+                deleted: false,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_flow_id: None,
+            });
+        realm.default_flow_id = Some(flow_id.clone());
+        realm.updated_at = now;
+
+        ProjectionEffect::RealmDefaultFlowSet { realm_id, flow_id }
+    }
+
     pub(crate) fn realm_organization_cell_id(realm_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
             "ck:cell:ck.component.realm.organization.v1:{realm_id}"
@@ -373,6 +459,7 @@ impl ProjectionState {
                         trust_domain: None,
                         terminal_state: None,
                         successor_realm_id: None,
+                        default_flow_id: None,
                     });
                 entry.title = Some(title.to_owned());
                 entry.updated_at = now;
@@ -639,6 +726,7 @@ impl ProjectionState {
                 trust_domain: payload_trust_domain.clone(),
                 terminal_state: None,
                 successor_realm_id: None,
+                default_flow_id: None,
             });
         // Lock trust_domain on first observation (ck.realm.create). The
         // mismatch case is already rejected above; here we only set the
