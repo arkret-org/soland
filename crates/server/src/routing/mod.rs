@@ -434,13 +434,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "device logout: revoke bearer + device session record + to-device",
     ),
     (
-        "/_soland/gate/auth/logout",
-        PathItemType::Post,
-        "auth",
-        "org.cokret.soland.auth.logout",
-        "device logout (gateway-reachable product path for ck.gate.account.command.logout; /_cokret/gate/* routes to coauth)",
-    ),
-    (
         "/_cokret/describe",
         PathItemType::Get,
         "server",

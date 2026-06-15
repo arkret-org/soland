@@ -7,10 +7,8 @@
 //! - `POST /_cokret/gate/account/session-grants` — coauth session-grant bridge
 //! - `POST /_cokret/gate/account/session-grants/revoke` — spec
 //!   `ck.gate.account.command.revoke_session`
-//! - `POST /_cokret/gate/account/logout` + `POST /_soland/gate/auth/logout` —
-//!   spec `ck.gate.account.command.logout`: revoke the bearer + the bound
-//!   device session record + queued to-device (the `/_soland` path is the
-//!   gateway-reachable one — see `local_router`)
+//! - `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`:
+//!   revoke the bearer + the bound device session record + queued to-device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
@@ -84,25 +82,23 @@ pub(super) fn protocol_account_router() -> Router {
         // Spec `ck.gate.account.command.logout` — Principal Server device
         // logout (account-lifecycle §4.1): revoke this session's bearer, mark
         // its local device session record revoked, drop the device's queued
-        // to-device. Protocol-surface mount of the same handler historically
-        // exposed only at the product-private `/_soland/gate/auth/logout`, so
-        // clients depend on `/_cokret` rather than a product path.
+        // to-device. Canonical `/_cokret/gate/account/logout`; deployment
+        // gateways route this longer prefix to soland even though `/_cokret/gate/`
+        // otherwise goes to the Auth Server.
         .push(Router::with_path("logout").post(logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
 }
 
 pub(super) fn local_router() -> Router {
+    // Device logout is the spec op `ck.gate.account.command.logout`, served at
+    // the canonical `/_cokret/gate/account/logout` (see `protocol_account_router`).
+    // Deployment gateways route that longer prefix to soland (the Principal
+    // Server) even though `/_cokret/gate/` otherwise goes to the Auth Server, so
+    // no `/_soland/gate/auth/logout` product alias is needed.
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
         .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
-        // `/_soland/gate/auth/logout` — product-surface device logout. NOT a
-        // dead alias: deployment gateways route `/_cokret/gate/*` to the Auth
-        // Server (coauth), so the canonical `/_cokret/gate/account/logout`
-        // (a Principal Server op) is unreachable through them and 404s. This
-        // product path is the only one that reaches soland's logout until the
-        // gateway adds a longer-prefix exception. Shares the `logout` handler.
-        .push(Router::with_path("logout").post(logout))
 }
 
 #[endpoint(
