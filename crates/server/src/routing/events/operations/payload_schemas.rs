@@ -109,6 +109,12 @@ pub(crate) const REALM_LINK_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
     PayloadRequirement::AnyOf(REALM_LINK_KIND_FIELDS, "ck.realm.link requires link_kind"),
 ];
+pub(crate) const CAPABILITY_GRANT_ID_FIELDS: &[&str] = &["grant_id"];
+pub(crate) const CAPABILITY_GRANT_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::AnyOf(
+        CAPABILITY_GRANT_ID_FIELDS,
+        "capability lifecycle operation requires grant_id",
+    )];
 pub(crate) const VIEW_ID_FIELDS: &[&str] = &["view_id"];
 pub(crate) const VIEW_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[PayloadRequirement::AnyOf(
     VIEW_ID_FIELDS,
