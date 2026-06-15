@@ -6,8 +6,9 @@
 //! the issue and verify sides byte-for-byte symmetric this module is the single
 //! definition of:
 //!
-//! - the binding's canonical-JSON field set (`binding_canonical_value`), and
-//! - the domain-separated Ed25519 signing input (`binding_signing_input`).
+//! - the binding's signed canonical-JSON field set (`binding_canonical_value`,
+//!   exactly the seven authoritative fields), and
+//! - the label-prefixed Ed25519 signing input (`binding_signing_input`).
 //!
 //! The CKP-0010 token issuer ([`super::webrtc`]) builds the signing input here
 //! and signs it with the notary key; the operation-admission path
@@ -15,6 +16,21 @@
 //! the wire binding and verifies the detached signature with the same notary
 //! verifying key. Any drift between the two would surface as a verification
 //! failure rather than a silent mismatch.
+//!
+//! `media-service-binding.md` §3 fixes the cross-implementation signing input:
+//!
+//! ```text
+//! signing_input =
+//!   "ck.media.participant_binding.v1" || 0x00 ||
+//!   canonical_json({ actor_id, call_id, device_id, expires_at,
+//!                    focus_id, participant_identity, realm_id })
+//! ```
+//!
+//! The label is the fixed ASCII `scheme` value (verbatim bytes), followed by a
+//! single `0x00`, followed by the canonical JSON of **only** the seven
+//! authoritative fields. `scheme` / `issuer_kid` / `issued_at` are unsigned
+//! metadata and MUST NOT enter the signing input. `service_signature.sig` signs
+//! the identical bytes.
 
 use std::collections::BTreeSet;
 
@@ -26,45 +42,34 @@ use serde_json::{Value, json};
 
 use crate::state::AppState;
 
-/// Domain-separation tag prefixed (NUL-delimited) before the canonical binding
-/// bytes. MUST match the issuer and verifier verbatim.
-pub(crate) const BINDING_SIGNING_DOMAIN: &[u8] = b"soland-media-participant-binding-v1";
+/// Fixed ASCII domain-separation label prefixed (NUL-delimited) before the
+/// canonical binding bytes. Equals the `scheme` value verbatim; MUST match the
+/// issuer and verifier byte-for-byte (`media-service-binding.md` §3).
+pub(crate) const BINDING_SIGNING_LABEL: &[u8] = cokret_sdk::PARTICIPANT_BINDING_SCHEMA.as_bytes();
 
-// The authoritative binding fields, in the exact set the issuer signs.
-//
-// `media-service-binding.md` §7.3 fixes the权威元组 as `(realm_id, call_id,
-// focus_id, actor_id, device_id, participant_identity, expires_at)`; the soland
-// issuer additionally folds the self-describing `scheme`, `issuer_kid` and
-// `issued_at` into the signed object (§3 response carries `issued_at`). The
-// signing input字段集合与名称 "以 §3 为准" — i.e. exactly the keys the issuer
-// wrote — so `binding_canonical_value` assembles all ten verbatim values and
-// lets the canonical-JSON encoder sort the keys deterministically.
-
-/// Build the canonical-JSON binding value the issuer signs over. Every value is
-/// taken verbatim (no re-parsing of timestamps), so a verifier that reads the
+/// Build the canonical-JSON value the issuer signs over: exactly the seven
+/// authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
+/// participant_identity, realm_id)` (`media-service-binding.md` §3). Every value
+/// is taken verbatim (no re-parsing of timestamps), so a verifier that reads the
 /// same wire fields reconstructs identical canonical bytes after key sorting.
+/// The unsigned metadata (`scheme` / `issuer_kid` / `issued_at`) MUST NOT appear
+/// here.
 pub(crate) fn binding_canonical_value(
-    scheme: &str,
-    issuer_kid: &Value,
     realm_id: &Value,
     call_id: &Value,
     focus_id: &Value,
     actor_id: &Value,
     device_id: &Value,
     participant_identity: &Value,
-    issued_at: &Value,
     expires_at: &Value,
 ) -> Value {
     json!({
-        "scheme": scheme,
-        "issuer_kid": issuer_kid,
         "realm_id": realm_id,
         "call_id": call_id,
         "focus_id": focus_id,
         "actor_id": actor_id,
         "device_id": device_id,
         "participant_identity": participant_identity,
-        "issued_at": issued_at,
         "expires_at": expires_at,
     })
 }
@@ -75,11 +80,12 @@ pub(crate) fn binding_canonical_bytes(binding: &Value) -> Vec<u8> {
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
-/// Domain-separated Ed25519 signing input: `DOMAIN \0 canonical_bytes`.
+/// Label-prefixed Ed25519 signing input: `LABEL \0 canonical_bytes`
+/// (`media-service-binding.md` §3).
 pub(crate) fn binding_signing_input(canonical_bytes: &[u8]) -> Vec<u8> {
     let mut signing_input =
-        Vec::with_capacity(BINDING_SIGNING_DOMAIN.len() + canonical_bytes.len() + 1);
-    signing_input.extend_from_slice(BINDING_SIGNING_DOMAIN);
+        Vec::with_capacity(BINDING_SIGNING_LABEL.len() + canonical_bytes.len() + 1);
+    signing_input.extend_from_slice(BINDING_SIGNING_LABEL);
     signing_input.push(0);
     signing_input.extend_from_slice(canonical_bytes);
     signing_input
@@ -369,24 +375,20 @@ fn field_mismatch_reason(field: &str) -> &'static str {
     }
 }
 
-/// Rebuild the canonical binding value from the wire object, taking the ten
-/// signed fields verbatim. Key sorting in `canonical_json_bytes` makes this
-/// byte-identical to the issuer's `binding_canonical_value`.
+/// Rebuild the canonical binding value from the wire object, taking the seven
+/// authoritative signed fields verbatim (`media-service-binding.md` §3). Key
+/// sorting in `canonical_json_bytes` makes this byte-identical to the issuer's
+/// `binding_canonical_value`. The unsigned metadata (`scheme` / `issuer_kid` /
+/// `issued_at`) is deliberately excluded.
 fn canonical_value_from_wire(binding: &Value) -> Value {
     let pick = |field: &str| binding.get(field).cloned().unwrap_or(Value::Null);
     binding_canonical_value(
-        binding
-            .get("scheme")
-            .and_then(Value::as_str)
-            .unwrap_or(cokret_sdk::PARTICIPANT_BINDING_SCHEMA),
-        &pick("issuer_kid"),
         &pick("realm_id"),
         &pick("call_id"),
         &pick("focus_id"),
         &pick("actor_id"),
         &pick("device_id"),
         &pick("participant_identity"),
-        &pick("issued_at"),
         &pick("expires_at"),
     )
 }

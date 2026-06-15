@@ -2802,10 +2802,25 @@ mod participant_binding_crypto_tests {
     }
 
     /// Mint a self-signed binding through the shared issuer helper so the bytes
-    /// are byte-symmetric with the verifier.
+    /// are byte-symmetric with the verifier. `media-service-binding.md` §3: the
+    /// signature covers ONLY the seven authoritative fields; the wire binding
+    /// additionally carries the unsigned `scheme` / `issuer_kid` / `issued_at`
+    /// metadata.
     fn signed_binding(state: &AppState, expires_at: &str) -> Value {
         let issued_at = "2026-06-15T00:00:00Z";
-        let binding = json!({
+        // Signed value = the seven authoritative fields only.
+        let signed = participant_binding::binding_canonical_value(
+            &json!(REALM_ID),
+            &json!(CALL_ID),
+            &json!(FOCUS_ID),
+            &json!(ACTOR_ID),
+            &json!(DEVICE_ID),
+            &json!(PARTICIPANT_IDENTITY),
+            &json!(expires_at),
+        );
+        let signing_key = state.notary_signing_key();
+        let sig = participant_binding::sign_binding(&signed, &signing_key);
+        json!({
             "scheme": cokret_sdk::PARTICIPANT_BINDING_SCHEMA,
             "issuer_kid": ISSUER_KID,
             "realm_id": REALM_ID,
@@ -2816,12 +2831,8 @@ mod participant_binding_crypto_tests {
             "participant_identity": PARTICIPANT_IDENTITY,
             "issued_at": issued_at,
             "expires_at": expires_at,
-        });
-        let signing_key = state.notary_signing_key();
-        let sig = participant_binding::sign_binding(&binding, &signing_key);
-        let mut binding = binding;
-        binding["sig"] = json!(sig);
-        binding
+            "sig": sig,
+        })
     }
 
     fn call_state_op(binding: Value) -> Operation {
@@ -2945,6 +2956,59 @@ mod participant_binding_crypto_tests {
         assert!(
             err.starts_with("participant_binding_invalid"),
             "expected participant_binding_invalid, got {err}"
+        );
+    }
+
+    /// `media-service-binding.md` §3 — the signing input is exactly
+    /// `LABEL || 0x00 || canonical_json(7 authoritative fields)`. Mutating an
+    /// UNSIGNED metadata field (`issued_at`) MUST NOT break the signature
+    /// (it is not covered), while the byte layout of the signing input MUST
+    /// match the spec construction verbatim.
+    fn signing_input_matches_spec_construction() {
+        // Build the canonical signing input the spec fixes and assert the
+        // module helper produces the identical bytes.
+        let signed = participant_binding::binding_canonical_value(
+            &json!(REALM_ID),
+            &json!(CALL_ID),
+            &json!(FOCUS_ID),
+            &json!(ACTOR_ID),
+            &json!(DEVICE_ID),
+            &json!(PARTICIPANT_IDENTITY),
+            &json!("2026-06-15T00:05:00Z"),
+        );
+        let canonical = participant_binding::binding_canonical_bytes(&signed);
+        let actual = participant_binding::binding_signing_input(&canonical);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(cokret_sdk::PARTICIPANT_BINDING_SCHEMA.as_bytes());
+        expected.push(0);
+        // canonical-json is key-sorted (alphabetical) over the seven fields only.
+        let expected_json = format!(
+            "{{\"actor_id\":\"{ACTOR_ID}\",\"call_id\":\"{CALL_ID}\",\
+             \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00Z\",\
+             \"focus_id\":\"{FOCUS_ID}\",\"participant_identity\":\"{PARTICIPANT_IDENTITY}\",\
+             \"realm_id\":\"{REALM_ID}\"}}"
+        );
+        expected.extend_from_slice(expected_json.as_bytes());
+        assert_eq!(actual, expected, "signing input must match spec §3 layout");
+        // The label is the verbatim scheme value, no private domain prefix.
+        assert!(actual.starts_with(b"ck.media.participant_binding.v1\0"));
+    }
+
+    #[test]
+    fn signing_input_layout_and_unsigned_metadata() {
+        signing_input_matches_spec_construction();
+
+        // Mutating an unsigned metadata field (`issued_at`) leaves the binding
+        // verifiable: the signature only covers the seven authoritative fields.
+        let state = AppState::new(test_config(), Db { pool: None });
+        install_media_service(&state, ISSUER_KID);
+        let mut binding = signed_binding(&state, "2026-06-15T00:05:00Z");
+        binding["issued_at"] = json!("2000-01-01T00:00:00Z");
+        let op = call_state_op(binding);
+        assert!(
+            validate_operation_semantics(&state, std::slice::from_ref(&op)).is_ok(),
+            "mutating unsigned metadata must not break the binding signature"
         );
     }
 }

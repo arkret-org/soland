@@ -319,9 +319,24 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ck:call:01904100-0000-7000-8000-c0000000000a";
 
-    // First write commits session_focus + recording_state into the cell.
-    // Entering the `recording` capture state requires the §5.2 second-consent
-    // flag (`recording_result.retention.consent_confirmed=true`).
+    // §4.2 — the first `ck.call.state` MUST open in `{scheduled, ringing,
+    // connecting}`; `ringing` is the immediate-call entry state.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "ringing" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    // `ringing -> active` is a legal transition; this write commits
+    // session_focus + recording_state into the cell. Entering the `recording`
+    // capture state requires the §5.2 second-consent flag
+    // (`recording_result.retention.consent_confirmed=true`).
     assert!(matches!(
         state.apply(
             &make_operation(
@@ -384,6 +399,98 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     ));
 }
 
+/// `call-state.md` §4.2 — the `state` lifecycle FSM: first-state range, the
+/// legal-successor table, terminal absorption, and idempotent replay.
+#[test]
+fn call_state_lifecycle_fsm_enforces_transition_table() {
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+
+    let apply_state = |state: &mut ProjectionState, hlc: &ServerHlc, call_id: &str, value: &str| {
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": value }),
+            ),
+            hlc,
+        )
+    };
+
+    // First state outside `{scheduled, ringing, connecting}` is rejected with
+    // `call_state_transition_invalid` (a first `active` / terminal is invalid).
+    for bad_first in ["active", "ended", "missed", "failed", "cancelled"] {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let call_id = "ck:call:01904100-0000-7000-8000-c00000000f01";
+        assert!(
+            matches!(
+                apply_state(&mut state, &hlc, call_id, bad_first),
+                ProjectionEffect::Rejected { reason } if reason == "call_state_transition_invalid"
+            ),
+            "first state {bad_first} must be call_state_transition_invalid"
+        );
+    }
+
+    // Each first state in the allowed set is accepted.
+    for good_first in ["scheduled", "ringing", "connecting"] {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        let call_id = "ck:call:01904100-0000-7000-8000-c00000000f02";
+        assert!(
+            matches!(
+                apply_state(&mut state, &hlc, call_id, good_first),
+                ProjectionEffect::CallStateProjected { .. }
+            ),
+            "first state {good_first} must project"
+        );
+    }
+
+    // A legal multi-step lifecycle `scheduled -> ringing -> connecting ->
+    // active -> ended` is accepted.
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f03";
+    for next in ["scheduled", "ringing", "connecting", "active", "ended"] {
+        assert!(
+            matches!(
+                apply_state(&mut state, &hlc, call_id, next),
+                ProjectionEffect::CallStateProjected { .. }
+            ),
+            "legal transition to {next} must project"
+        );
+    }
+    // Terminal absorption: any transition out of `ended` rejects with
+    // `call_state_terminal` (NOT `call_state_transition_invalid`).
+    assert!(matches!(
+        apply_state(&mut state, &hlc, call_id, "active"),
+        ProjectionEffect::Rejected { reason } if reason == "call_state_terminal"
+    ));
+    // Same `from -> to` replay on a terminal head is an idempotent no-op.
+    assert!(matches!(
+        apply_state(&mut state, &hlc, call_id, "ended"),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    // A non-terminal illegal transition (`ringing -> ended`, not in the
+    // successor table) rejects with `call_state_transition_invalid`.
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let call_id = "ck:call:01904100-0000-7000-8000-c00000000f04";
+    assert!(matches!(
+        apply_state(&mut state, &hlc, call_id, "ringing"),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    assert!(matches!(
+        apply_state(&mut state, &hlc, call_id, "ended"),
+        ProjectionEffect::Rejected { reason } if reason == "call_state_transition_invalid"
+    ));
+    // Same-state replay on a non-terminal head is an idempotent no-op.
+    assert!(matches!(
+        apply_state(&mut state, &hlc, call_id, "ringing"),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+}
+
 #[test]
 fn call_state_rejects_recording_artifact_pipeline_bypass() {
     let mut state = ProjectionState::new();
@@ -440,8 +547,25 @@ fn call_state_recording_capture_requires_second_consent() {
     let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ck:call:01904100-0000-7000-8000-c0000000000c";
 
+    // §4.2 — drive a legal lifecycle to `active` so the capture-state gate is
+    // exercised on an in-range FSM head (first state MUST be in
+    // `{scheduled, ringing, connecting}`).
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "connecting" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
     // §5.2 — entering `recording_state="recording"` without
-    // `recording_result.retention.consent_confirmed=true` MUST reject.
+    // `recording_result.retention.consent_confirmed=true` MUST reject. The
+    // `connecting -> active` transition is legal, so the rejection is the
+    // consent gate, not the FSM.
     assert!(matches!(
         state.apply(
             &make_operation(
@@ -557,18 +681,24 @@ fn call_summary_requires_terminal_state_and_is_write_once() {
         ProjectionEffect::Rejected { reason } if reason == "call_summary_invalid"
     ));
 
-    // Drive the call to a terminal `ended` head.
-    assert!(matches!(
-        state.apply(
-            &make_operation(
-                crate::kinds::CK_CALL_STATE,
-                realm,
-                serde_json::json!({ "call_id": call_id, "state": "ended" }),
+    // §4.2 — drive a legal lifecycle `ringing -> active -> ended` to a terminal
+    // head (a first event in `ended` would itself be `call_state_transition_invalid`).
+    for next_state in ["ringing", "active", "ended"] {
+        assert!(
+            matches!(
+                state.apply(
+                    &make_operation(
+                        crate::kinds::CK_CALL_STATE,
+                        realm,
+                        serde_json::json!({ "call_id": call_id, "state": next_state }),
+                    ),
+                    &hlc,
+                ),
+                ProjectionEffect::CallStateProjected { .. }
             ),
-            &hlc,
-        ),
-        ProjectionEffect::CallStateProjected { .. }
-    ));
+            "lifecycle transition to {next_state} must project"
+        );
+    }
 
     // §7 — a non-terminal `final_state` still rejects even with a terminal head.
     assert!(matches!(

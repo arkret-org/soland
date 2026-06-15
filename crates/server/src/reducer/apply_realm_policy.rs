@@ -155,6 +155,35 @@ impl ProjectionState {
         };
         let call_id = call_id.to_owned();
 
+        // §4.2 — `state` lifecycle FSM. The controlled `state` enum is written
+        // into `ck.component.call.state.v1` (`cell_subject = call_id`). Read the
+        // current head's `state` and enforce the legal-transition table before
+        // the cell is overwritten. Absence of `state` on the payload (e.g. a
+        // pure `session_focus` / `recording_state` write) leaves the FSM
+        // untouched.
+        if let Some(to_state) = value
+            .get("state")
+            .and_then(Value::as_str)
+            .filter(|state| !state.is_empty())
+        {
+            let from_state = cokret_sdk::CellRef::new(format!(
+                "ck:cell:ck.component.call.state.v1:{call_id}"
+            ))
+            .ok()
+            .and_then(|cell_id| self.cell_value(&cell_id).cloned())
+            .and_then(|state| {
+                state
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
+            if let Some(reason) = validate_call_state_transition(from_state.as_deref(), to_state) {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
+
         // §4.1 — write-once session_focus.
         if let Some(session_focus) = value
             .get("session_focus")
@@ -723,6 +752,59 @@ impl ProjectionState {
 /// `call-state.md` §4.2 — terminal call lifecycle states.
 fn is_terminal_call_state(state: &str) -> bool {
     matches!(state, "ended" | "missed" | "failed" | "cancelled")
+}
+
+/// `call-state.md` §4.2 — the reason code for an illegal transition out of a
+/// non-terminal source state (or an out-of-range first state).
+const CALL_STATE_TRANSITION_INVALID: &str = "call_state_transition_invalid";
+/// `call-state.md` §4.2 — the reason code for any transition out of a terminal
+/// source state (single-monotonic-progress / terminal absorption).
+const CALL_STATE_TERMINAL: &str = "call_state_terminal";
+
+/// `call-state.md` §4.2 — the legal-successor table. Returns `true` iff `to` is
+/// a listed successor of the non-terminal source `from`.
+fn is_legal_call_state_transition(from: &str, to: &str) -> bool {
+    matches!(
+        (from, to),
+        ("scheduled", "ringing" | "connecting" | "cancelled" | "missed" | "failed")
+            | ("ringing", "connecting" | "active" | "missed" | "cancelled" | "failed")
+            | ("connecting", "active" | "failed" | "ended")
+            | ("active", "ended" | "failed")
+    )
+}
+
+/// `call-state.md` §4.2 — validate one `ck.call.state` `state` transition given
+/// the projected head `from` (None = this is the first `ck.call.state` for the
+/// call). Returns `Some(reason)` to reject, `None` to accept:
+///
+/// - first event (`from = None`): `to` MUST ∈ `{scheduled, ringing, connecting}`, else
+///   `call_state_transition_invalid`.
+/// - identical `from == to` replay: idempotent no-op (accepted, no new head divergence).
+/// - source terminal: any transition out rejects with `call_state_terminal`.
+/// - source non-terminal: a `to` not in the legal-successor table rejects with
+///   `call_state_transition_invalid`.
+fn validate_call_state_transition(from: Option<&str>, to: &str) -> Option<&'static str> {
+    let Some(from) = from else {
+        return if matches!(to, "scheduled" | "ringing" | "connecting") {
+            None
+        } else {
+            Some(CALL_STATE_TRANSITION_INVALID)
+        };
+    };
+    if from == to {
+        // Same `from -> to` replay is an idempotent no-op; MUST NOT be treated
+        // as an illegal transition (and the cas-register cell write is a
+        // no-op rewrite of the identical value).
+        return None;
+    }
+    if is_terminal_call_state(from) {
+        return Some(CALL_STATE_TERMINAL);
+    }
+    if is_legal_call_state_transition(from, to) {
+        None
+    } else {
+        Some(CALL_STATE_TRANSITION_INVALID)
+    }
 }
 
 /// `call-state.md` §4.2 — controlled `recording_state` enum.

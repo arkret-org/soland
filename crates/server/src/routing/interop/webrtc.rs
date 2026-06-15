@@ -830,37 +830,36 @@ async fn handle_rtc_token(
         media_token_issuer_for(focus.provider).issue(&issue_request, &signing_ctx)?;
 
     let issuer_kid = focus.issuer_kid.clone();
-    // `media-service-binding.md` §3 — the binding carries both `issued_at` and
-    // `expires_at`; the signed canonical bytes cover the new `issued_at` field
-    // so a relying party verifies the full freshness window.
-    let binding_payload = json!({
-        "scheme": cokret_sdk::PARTICIPANT_BINDING_SCHEMA,
-        "issuer_kid": issuer_kid.clone(),
-        "realm_id": body.realm_id,
-        "call_id": body.call_id,
-        "focus_id": body.focus_id,
-        "actor_id": body.actor_id,
-        "device_id": body.device_id,
-        "participant_identity": participant_identity,
-        "issued_at": issued_at,
-        "expires_at": expires_at,
-    });
+    // `media-service-binding.md` §3 — the signature covers ONLY the seven
+    // authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
+    // participant_identity, realm_id)`. The self-describing `scheme` /
+    // `issuer_kid` / `issued_at` are unsigned wire metadata and MUST NOT enter
+    // the signing input. Timestamps are serialized verbatim to RFC3339 strings
+    // matching the wire binding so the verifier reconstructs identical bytes.
+    let signed_binding = super::participant_binding::binding_canonical_value(
+        &json!(body.realm_id),
+        &json!(body.call_id),
+        &json!(body.focus_id),
+        &json!(body.actor_id),
+        &json!(body.device_id),
+        &json!(participant_identity),
+        &json!(expires_at),
+    );
     // The binding `sig` is produced through the shared
     // `participant_binding` helper so the issue side and the
     // operation-admission verify side share one canonical-bytes +
     // signing-input definition (`media-service-binding.md` §3 / §7).
-    let binding_bytes = super::participant_binding::binding_canonical_bytes(&binding_payload);
-    let sig = super::participant_binding::sign_binding(&binding_payload, &signing_key);
+    let signing_input = super::participant_binding::binding_signing_input(
+        &super::participant_binding::binding_canonical_bytes(&signed_binding),
+    );
+    let sig = super::participant_binding::sign_binding(&signed_binding, &signing_key);
 
     // `media-service-binding.md` §3 — the detached service signature is a typed
-    // `{kid, sig}` object, not a packed `<kid>:<alg>:<sig>` string. `kid` is the
-    // realm media-service anchor (the focus issuer_kid); `sig` is the base64url
-    // detached Ed25519 signature over the canonical binding bytes.
-    let mut service_input = Vec::with_capacity(64 + binding_bytes.len());
-    service_input.extend_from_slice(b"soland-media-token-response-v1");
-    service_input.push(0);
-    service_input.extend_from_slice(&binding_bytes);
-    let service_sig = signing_key.sign(&service_input);
+    // `{kid, sig}` object over the **same** `signing_input` (same label + same
+    // seven-field tuple), committing the issuer identity of the whole token
+    // exchange response. `kid` is the realm media-service anchor (the focus
+    // issuer_kid); `sig` is the base64url detached Ed25519 signature.
+    let service_sig = signing_key.sign(&signing_input);
     let service_signature = CallMediaServiceSignature {
         kid: issuer_kid.clone(),
         sig: URL_SAFE_NO_PAD.encode(service_sig.to_bytes()),
