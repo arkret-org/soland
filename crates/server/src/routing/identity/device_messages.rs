@@ -32,25 +32,10 @@ use crate::wire::{
 pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ck.account_data.update";
 pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ck.account.blocklist.update";
 pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ck.read_cursor.update";
-pub(crate) const NOTIFICATION_READ_MARKER_UPDATE_TYPE: &str = "ck.notification.read_cursor.update";
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("device_messages")
-                .post(send_device_messages)
-                .get(get_device_messages),
-        )
-        .push(Router::with_path("device_messages/ack").post(ack_device_messages))
-}
-
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(
-            Router::with_path("device_messages/describe")
-                .get(super::describe::device_messages_describe),
-        )
         .push(
             Router::with_path("device_messages")
                 .post(send_device_messages)

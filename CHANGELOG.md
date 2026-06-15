@@ -19,7 +19,7 @@ and the project tracks Cokret v1 spec revisions.
 
 - Roster v2: `identity_state_digest` → `member_display_state_digest`; added disclosure-gated `subject_id` / `handle_claim_digests` / `handle_claims` / `handle_claims_limited` (omitted together unless subject disclosed).
 - `ck.member.identity.update` payload `identity_state_digest` → `identity_payload_digest`; `expected_state_digest` uses the segment-inclusive effective-set formula; effective set stays multi-valued (no last-writer-wins).
-- New wire validators reject MemberIdentity `primary_handle`/`handles[]` (`member_identity_handle_field_forbidden`), handle-claim `service_handle` / non-principal subject, and legacy mention shape (`mention_reference_legacy_shape`).
+- New wire validators reject MemberIdentity `primary_handle`/`handles[]` (`member_identity_handle_field_forbidden`) and handle-claim `service_handle` / non-principal subject.
 - Real handle-claim evidence population + Realm subject_id disclosure policy deferred `TODO(R3.2.1)` (fails closed).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
@@ -28,7 +28,7 @@ and the project tracks Cokret v1 spec revisions.
 - HTTP-1: `POST /api/v1/rtc/token` (ck.self.call.media.exchange.issue_token) mounted as a 501 stub in `src/routing/system/rtc.rs`; real TTL / participant_binding / service_signature issuer logic deferred to R3.1.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
-- ERR-1: all 20 R3 reason codes (`pairing_request_expired`, `proof_invalid`, agent / media-binding / recovery / handle homograph families) exposed as `pub const` strings under `crate::error::reasons` and grouped in `R3_NEW_REASONS`; per-handler wiring deferred to R3.1.
+- ERR-1: protocol reason codes are emitted from concrete validation and handler paths; obsolete round-scoped grouping helpers are not part of the runtime surface.
 - PROF-1: `ck.profile.media_service_binding.v1` and `ck.profile.accountable_principals.strict_reject.v1` advertised in `ck.server.query.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
@@ -43,21 +43,13 @@ kinds, six `ck.circle.*` capability actions, and six new failed-precondition
 reason codes registered in `cokret-spec` `9cb47c1..2b0d70d`.
 
 - **BREAKING** `Strand.discussion_realm_ref` is no longer accepted on the wire.
-  The legacy cross-Realm discussion routing has been removed (CKP-0007 hard
+  Cross-Realm discussion routing has been removed (CKP-0007 hard
   delete; intra-Realm discussion boundaries now live on a Circle via
   `scope_circle_id`). The reducer's `strand_discussion_realms` projection
   field, the `discussion_realm_patch` dispatch, and the `ck.realm.destroy`
   cross-Realm discussion-edge cascade have all been deleted outright.
-- The wire validator (`POST /api/v1/events`) now hard-rejects any payload
-  whose object/patch sub-tree carries a key listed in the SDK's
-  `forbidden-wire-fields` set (`discussion_realm_ref`,
-  `discussion_space_ref`, `parent_ref`, `default_realm_ref`, `scope_ref`,
-  `default_scope_ref`, `retention_policy_ref`, `disclosure_policy_ref`,
-  `rate_limit_policy_ref`). Returns 400 `forbidden_wire_field`.
-- Migration `20260526000000_drop_discussion_realm_ref` defensively drops the
-  legacy `projection_strands.discussion_realm_ref` column when present (the
-  main-line schema never persisted it; this protects vendor deployments that
-  carried it in a prior fork).
+- Migration `20260526000000_drop_discussion_realm_ref` drops the removed
+  `projection_strands.discussion_realm_ref` column when present.
 - New `/api/v1/circles/*` admin surface
   (`POST/GET/DELETE` Circle CRUD + members + scope-rotate / archive /
   tombstone). Reducer enforces the strict-subset invariant
@@ -140,7 +132,7 @@ on the reducer / federation / state-machine surfaces. See
   reducer cross-checks against blob metadata.
 - **BREAKING** `ck.space.archive` / `restore` / `tombstone` accept the new
   `space_state_transition_payload` / `space_object_tombstone_payload`
-  shapes; legacy top-level `target_ref` rejects as `schema_violation`.
+  shapes; removed top-level `target_ref` rejects as `schema_violation`.
 - **BREAKING** `ConsentRevoke` reducer requires `observed_dots[]`; implicit
   cascade rejects as `schema_violation`.
 - **BREAKING** `ck.strand.update` / `ck.strand.tracks_patch` reducer uses
@@ -218,7 +210,7 @@ below. Producers on the old wire MUST upgrade.
   policy_root) or surfaces `media_plaintext_service_not_authorised` /
   `mls_governance_binding_stale` (T09 + T12).
 - **`POST /api/v1/seals` frontier validation** — every entry in
-  `Seal.frontier[]` MUST match `sha256:<64 lowercase hex>`; the legacy
+  `Seal.frontier[]` MUST match `sha256:<64 lowercase hex>`; the removed
   `ck:event:<uuid>` form hard-rejects (T04).
 - **`GET /api/v1/blob/get` fail-closed gates** — E2EE, legal-hold,
   redacted, and actor_private blobs return the registered error code

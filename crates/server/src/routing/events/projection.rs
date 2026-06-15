@@ -2,16 +2,15 @@
 //!
 //! This is the in-process projection layer: ingestion of accepted operations
 //! (local service writes + federation push), per-Realm lifecycle materialization, the
-//! `state.projection_events` log, redaction tombstones, gap/backfill helpers,
+//! `state.projection_events` log, redaction tombstones, read-side helpers,
 //! and the deterministic reducer fan-out (`state.projection.lock().apply(op)`).
 //!
 //! Surfaces:
 //! - **inbound**: local operation builders, `federation::federation_push_operations` and
 //!   `federation::federation_transaction` call `project_accepted_operations` and
 //!   `ingest_federation_operations` from here.
-//! - **outbound**: `events::list_events`, `sync::*` and `index::*` consume `projected_event_page`,
-//!   `backfill_gap_events`, `truncate_gap_events`, and `sync_timeline_message_json` to render
-//!   timeline-shaped responses.
+//! - **outbound**: `events::list_events` and `sync::*` consume `projected_event_page` and
+//!   `sync_timeline_message_json` to render timeline-shaped responses.
 //!
 //! Today this layer only fans out `ck.message.*` / `ck.member.state` /
 //! `ck.realm.*` (security boundary, was `ck.space.*` pre-R1.2) lifecycle
@@ -345,9 +344,8 @@ pub fn sync_timeline_message_json(message: &crate::reducer::MessageState) -> ser
     // strand_id is always derived from realm_id; thread_id is a discussion
     // track within the strand, not the strand itself. See
     // `sync_timeline_message_record_json` for the matching MessageRecord
-    // path. The legacy top-level `branch` object was removed in revision
-    // 0a5ab85 (forbidden-wire-fields entry "branch") — only `track` is
-    // emitted on v1 wire.
+    // path. The removed top-level `branch` object was replaced by the v1
+    // `track` field.
     let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({
@@ -885,39 +883,6 @@ pub async fn projected_event_page(
         next_cursor,
         has_more,
     }))
-}
-
-pub async fn backfill_gap_events(
-    state: &AppState,
-    realm_id: &str,
-    from_cursor: Option<&str>,
-    limit: usize,
-) -> anyhow::Result<(Vec<Value>, Option<String>, bool)> {
-    if let Some(page) = projected_event_page(state, realm_id, from_cursor, limit).await? {
-        let events = page
-            .items
-            .iter()
-            .map(projection_event_json)
-            .collect::<Vec<_>>();
-        return Ok((events, page.next_cursor, page.has_more));
-    }
-
-    let _ = (realm_id, from_cursor);
-    Ok((Vec::new(), None, false))
-}
-
-pub fn truncate_gap_events(mut events: Vec<Value>, to_cursor: Option<&str>) -> (Vec<Value>, bool) {
-    let Some(to_cursor) = to_cursor else {
-        return (events, false);
-    };
-    let Some(index) = events
-        .iter()
-        .position(|event| event["event_id"].as_str() == Some(to_cursor))
-    else {
-        return (events, false);
-    };
-    events.truncate(index + 1);
-    (events, true)
 }
 
 pub async fn load_projected_events_from_pg(
@@ -1564,7 +1529,7 @@ async fn project_accepted_operations_inner(
             // P1 — fold the projected capability grant cell back into the
             // SolandAuthzEngine read index. The cell is the source of truth;
             // the engine map is a read-side index maintained by projection
-            // (no longer written directly by the legacy HTTP handlers).
+            // (no longer written directly by HTTP handlers).
             refresh_authz_index_from_capability_effect(state, &effect);
         }
         // Write through Space-container/Strand/Morph projection changes to durable
@@ -1637,7 +1602,7 @@ async fn project_accepted_operations_inner(
 /// accepted capability event. The grant cell
 /// (`ck.component.capability.grant.v1`) is the source of truth; this keeps
 /// the engine's in-memory index (read by `SolandAuthzEngine::check`) in sync
-/// with the projection without the legacy HTTP handlers writing it directly.
+/// with the projection without HTTP handlers writing it directly.
 fn refresh_authz_index_from_capability_effect(
     state: &AppState,
     effect: &crate::reducer::ProjectionEffect,

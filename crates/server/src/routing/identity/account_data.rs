@@ -1,8 +1,8 @@
-//! Legacy actor-private account data compatibility handlers.
+//! Actor-private account data protocol handlers.
 //!
 //! Protocol writes use `ck.account_data.set` actor-private events and
-//! `ck.self.account.stream.subscribe` for sync/read. This module is mounted only under
-//! `/_soland/self/account_data*` for old local clients.
+//! `ck.self.account.stream.subscribe` for sync/read. This module is mounted under
+//! `/_cokret/self/account_data*`.
 //!
 //! Spec: `discovery/client-preferences.md` §2 (storage model) plus the per-key
 //! sections (§3.1 Space tags, §3.5 blocklist, §3.6 contact remarks, §3.7 Space

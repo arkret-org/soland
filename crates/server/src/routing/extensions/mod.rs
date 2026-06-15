@@ -2,7 +2,7 @@
 //! actor support, TSP transport + route + audit, sovereign enclave
 //! profile guards).
 //!
-//! Legacy sub-routers are mounted under `/_soland/...` and are
+//! Deployment-local sub-routers are mounted under `/_soland/...` and are
 //! intentionally *runnable stubs*: they accept and return the
 //! spec-shaped wire envelopes the cotest scenarios expect
 //! (`cotest/e2e/scenarios/extensions/applet-bridge.md`,
@@ -60,7 +60,6 @@ pub fn local_router() -> Router {
         // sovereign enclave surfaces.
         .push(
             Router::with_path("self")
-                .push(applet_bridge::local_self_router())
                 .push(
                     Router::with_path("extensions")
                         .push(bot_actor::router())

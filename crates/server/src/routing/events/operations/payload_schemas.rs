@@ -236,15 +236,14 @@ pub(crate) const SPACE_CONTAINER_PARENT_REQUIREMENTS: &[PayloadRequirement] = &[
 ];
 // Strand / Morph lifecycle payload requirements. The spec
 // `event-payload.schema.json` `object_lifecycle_payload` shape requires one
-// of `target_ref` / `object_ref` / `status`; soland additionally accepts the
-// legacy `strand_id` field name for backwards compatibility with older
-// builders. The first field present (in spec-canonical order) names the
-// target Strand; `apply_strand_lifecycle` reads them with the same precedence.
-pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref", "strand_id"];
+// of `target_ref` / `object_ref` / `status`. The first field present
+// (in spec-canonical order) names the target Strand; `apply_strand_lifecycle`
+// reads them with the same precedence.
+pub(crate) const STRAND_LIFECYCLE_ID_FIELDS: &[&str] = &["target_ref", "object_ref"];
 pub(crate) const STRAND_LIFECYCLE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::AnyOf(
         STRAND_LIFECYCLE_ID_FIELDS,
-        "strand lifecycle operation requires target_ref (or strand_id)",
+        "strand lifecycle operation requires target_ref",
     )];
 pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
@@ -253,7 +252,7 @@ pub(crate) const STRAND_CREATE_REQUIREMENTS: &[PayloadRequirement] =
     )];
 pub(crate) const STRAND_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::AnyOf(
-        &["target_ref", "strand_id"],
+        &["target_ref"],
         "strand update operation requires target_ref",
     ),
     PayloadRequirement::Required("patch", "strand update operation requires patch"),

@@ -52,8 +52,6 @@ Examples:
 
 - `ck:focus:livekit:eu-west-1` — a LiveKit pool in eu-west-1.
 - `ck:focus:mediasoup:us-east-2:b` — a second Mediasoup pool in us-east-2.
-- `ck:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>` — synthesized by
-  the v1.0 → v1 migration for realms that haven't been re-declared.
 
 Derivation rules:
 
@@ -181,5 +179,4 @@ tokens validate correctly across the kid boundary.
 | `session_focus_already_committed` | Client | call already bound to another focus |
 | `e2ee_key_source_unauthorised` | Backend | escalate to yougen; SFrame key derivation |
 | `recording_artifact_pipeline_bypassed` | floria recording hook | canonical pipeline |
-| `legacy_single_endpoint_media_service` | Migration | run `20260520_realm_media_service_foci.sql` |
 | `focus_unavailable_for_client` | Client profile | declared profile set vs realm focus backend |

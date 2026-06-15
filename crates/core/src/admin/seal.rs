@@ -100,7 +100,7 @@ pub enum SelfSignViolation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct NotaryReconfigRequest {
+pub struct NotaryReconfigRequestBody {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub realm_id: String,
     pub kind: String,
@@ -120,7 +120,7 @@ pub struct NotaryReconfigRequest {
     pub mixed_recovery: Vec<String>,
 }
 
-impl NotaryReconfigRequest {
+impl NotaryReconfigRequestBody {
     pub fn admin_self_signs_themselves_in(&self, admin_did: &str) -> bool {
         self.self_sign_violation(admin_did).is_some()
     }
@@ -282,9 +282,8 @@ impl BottomRepairStrategy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct BottomRepairRequest {
-    pub realm_id: String,
-    pub cell_id: String,
+pub struct BottomRepairRequestBody {
+    #[serde(flatten)]
     pub strategy: BottomRepairStrategy,
 }
 
@@ -329,7 +328,7 @@ pub struct CompactionOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct CompactionRequest {
+pub struct CompactionRequestBody {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub realm_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,7 +337,7 @@ pub struct CompactionRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
-pub struct SealPruneRequest {
+pub struct SealPruneRequestBody {
     pub seal_id: String,
 }
 

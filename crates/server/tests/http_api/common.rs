@@ -802,8 +802,7 @@ pub(crate) fn spawn_oauth_introspection_server() -> (String, std::thread::JoinHa
 
 // T6.1 — describe response partitioning, T1.4 — dev-mode posture surface,
 // and T8.3 — hardening block. The test fixtures for these checks live in
-// the legacy http_api integration suite and are exercised via the helpers
-// below.
+// the http_api integration suite and are exercised via the helpers below.
 
 // MIMI facade writes map into the canonical Cokret reducer chain via the
 // four reducer-bound mappings: room_update, submit_message, notify, and

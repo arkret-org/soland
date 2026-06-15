@@ -85,10 +85,6 @@ pub fn protocol_router() -> Router {
 pub fn local_router() -> Router {
     Router::with_path("keys").push(
         Router::with_path("keypackages")
-            .push(Router::with_path("upload").post(upload_keypackage))
-            .push(Router::with_path("claim").post(claim_keypackage))
-            .push(Router::with_path("consume").post(consume_keypackages))
-            .push(Router::with_path("revoke").post(revoke_keypackages))
             .push(Router::with_path("welcomes/pending").get(pending_welcomes)),
     )
 }

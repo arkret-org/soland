@@ -33,18 +33,6 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
 
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(Router::with_path("keys/backups/describe").get(super::describe::key_backups_describe))
-        .push(
-            Router::with_path("keys/backups/{backup_id}")
-                .put(put_key_backup)
-                .delete(delete_key_backup),
-        )
-        .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
-        .push(Router::with_path("keys/backups").get(list_key_backups))
-}
-
 const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",

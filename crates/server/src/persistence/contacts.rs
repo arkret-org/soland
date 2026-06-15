@@ -558,19 +558,20 @@ struct ConsentCellRow {
 }
 
 /// Decode a persisted `grant_dots` JSONB object back into the in-memory
-/// `BTreeMap<String, ConsentGrantDot>`. Tolerant of a missing `dot` key (falls
-/// back to the map key) so manual / legacy rows survive.
+/// `BTreeMap<String, ConsentGrantDot>`.
 pub(crate) fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {
     let mut dots = BTreeMap::new();
     let Some(object) = value.as_object() else {
         return dots;
     };
     for (key, entry) in object {
-        let dot = entry
+        let Some(dot) = entry
             .get("dot")
             .and_then(Value::as_str)
-            .unwrap_or(key)
-            .to_owned();
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
         let granted_at = entry
             .get("granted_at")
             .and_then(Value::as_str)

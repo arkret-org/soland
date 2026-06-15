@@ -20,8 +20,8 @@ use operations::{
     validate_content_encryption_floor, validate_operation_policy, validate_operation_semantics,
 };
 use projection::{
-    augment_timeline_message_json, backfill_gap_events, projected_event_page,
-    projection_event_json, sync_timeline_message_json_with_projection, truncate_gap_events,
+    augment_timeline_message_json, projected_event_page, projection_event_json,
+    sync_timeline_message_json_with_projection,
 };
 use strand::{
     default_discussion_track, discussion_track_for_projection_event, message_id_from_event_id,
@@ -31,12 +31,11 @@ use strand::{
 use super::{
     TO_DEVICE_PAGE_LIMIT, append_audit_log, auth_or_render, authenticated_session,
     device_message_envelopes_after, is_json_integer, is_realm_deleted, is_valid_discoverability,
-    is_valid_sha256_digest, now, parse_snapshot_ref, prune_expired_typing, query_param,
-    query_param_all, realm_allows_plaintext_service, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_visibility,
-    realm_id_accessible, realm_visible_to, render_error, sha256_hex, snapshot_bundle_for_realm,
-    snapshot_manifest_for_realm, touch_realm, typing_ephemeral_for_realm, validate_did,
-    validate_space_id,
+    is_valid_sha256_digest, now, prune_expired_typing, query_param, query_param_all,
+    realm_allows_plaintext_service, realm_discoverability, realm_event_visible_to_session,
+    realm_has_member, realm_history_visibility, realm_id_accessible, realm_visible_to,
+    render_error, sha256_hex, snapshot_manifest_for_realm, touch_realm, typing_ephemeral_for_realm,
+    validate_did, validate_space_id,
 };
 
 pub fn router() -> Router {
@@ -48,11 +47,4 @@ pub fn router() -> Router {
 
 pub fn peer_router() -> Router {
     peer::router()
-}
-
-pub fn local_router() -> Router {
-    Router::new()
-        .push(sync::local_router())
-        .push(event_log::router())
-        .push(projection_query::local_router())
 }

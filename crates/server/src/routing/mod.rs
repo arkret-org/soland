@@ -1,6 +1,5 @@
 use std::sync::OnceLock;
 
-use cokret_sdk::RealmId;
 use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
@@ -11,9 +10,7 @@ use serde_json::{Value, json};
 
 use crate::config::AppConfig;
 use crate::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
-use crate::state::{
-    AppState, BlobRecord, CanonicalEventRecord, DeviceInventoryRecord, MessageRecord,
-};
+use crate::state::{AppState, BlobRecord, CanonicalEventRecord, DeviceInventoryRecord};
 use crate::wire::now;
 
 mod access;
@@ -48,8 +45,8 @@ use events::projection::{
     projection_event_from_operation, redaction_targets_from_operations,
 };
 use events::strand::{
-    default_discussion_track, discussion_track_for_projection_event,
-    strand_id_for_projection_event, strand_id_from_realm_id, strand_projection_for_realm,
+    discussion_track_for_projection_event, strand_id_for_projection_event, strand_id_from_realm_id,
+    strand_projection_for_realm,
 };
 use events::sync::{SyncCursorError, parse_and_validate_sync_cursor, sync_token_for_client_sync};
 use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
@@ -65,10 +62,10 @@ use spaces::space::{
 };
 use system::extract::AuthArgs;
 use system::util::{
-    bearer_token, classify_handle, handle_for_did, is_json_integer, is_valid_discoverability,
-    is_valid_handle, is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token,
-    normalize_handle, normalize_localpart, query_param, query_param_all, render_error, sha256_hex,
-    validate_device_id, validate_did, validate_realm_id, validate_space_id,
+    bearer_token, handle_for_did, is_json_integer, is_valid_discoverability, is_valid_handle,
+    is_valid_sha256_digest, is_valid_sha256_hex, is_valid_sync_token, normalize_handle,
+    normalize_localpart, query_param, query_param_all, render_error, sha256_hex,
+    validate_device_id, validate_did, validate_space_id,
 };
 
 pub fn router(state: AppState) -> Router {
@@ -269,32 +266,19 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
 fn soland_local_router() -> Router {
     Router::new()
         .oapi_tag("soland-local")
-        // The `/_soland/` compat mirror reuses the same protocol handlers as
-        // the canonical `/_cokret/` tree, so it must also carry the protocol
-        // middleware: `X-Cokret-Wait-For` validation/acknowledgement must not
-        // silently no-op on one mount while working on the other. The mirror
-        // is slated for sunset (product clients migrate to `/_cokret/`, then
-        // protocol-duplicate mounts are removed module by module); until then
-        // the two trees must stay behaviourally equivalent.
+        // Product-local routes still accept protocol wait tokens where they
+        // expose reducer-backed read state.
         .hoop(wait_for_sync_token)
         .push(system::local_router())
         .push(identity::local_router())
         .push(
             Router::with_path("self")
-                // SPEC-CR-001 — the `/_soland/self` compat mirror must carry the
-                // same PoP verification as the canonical `/_cokret/self` tree.
                 .hoop(identity::session_pop::verify_session_pop)
                 .push(spaces::local_router())
-                .push(events::local_router())
-                .push(access::local_router())
                 .push(admin::audit_router())
-                // COT-06-002 / service-http-binding.md §2.1.2: the conformance
-                // harness surface moved to the reserved `/_cokret/_conformance/*`
-                // namespace (profile-gated in `api_v1_router`). It is no longer
-                // mounted on the `/_soland/self` compat mirror.
                 .push(mls::local_router()),
         )
-        // `/_soland/find/directory/*` legacy mirror retired — directory
+        // `/_soland/find/directory/*` mirror retired — directory
         // discovery is served only from the canonical `/_cokret/find/...`
         // protocol tree (see `api_v1_router`).
         .push(Router::with_path("peer").push(federation::router()))
@@ -429,20 +413,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "health and liveness",
     ),
     (
-        "/_soland/self/account/register",
-        PathItemType::Post,
-        "account",
-        "org.cokret.soland.account.register",
-        "register account",
-    ),
-    (
-        "/_soland/self/account/me",
-        PathItemType::Get,
-        "account",
-        "org.cokret.soland.account.me",
-        "get current account",
-    ),
-    (
         "/_cokret/gate/account/session-grants",
         PathItemType::Post,
         "auth",
@@ -552,27 +522,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "Morph lifecycle projection query",
     ),
     (
-        "/_soland/self/index/describe",
-        PathItemType::Get,
-        "index",
-        "org.cokret.soland.index.describe",
-        "describe index profile",
-    ),
-    (
-        "/_soland/self/index/query",
-        PathItemType::Post,
-        "index",
-        "org.cokret.soland.index.query",
-        "query the projection index",
-    ),
-    (
-        "/_soland/self/index/debug/reducer",
-        PathItemType::Get,
-        "index",
-        "org.cokret.soland.index.debug_reducer",
-        "debug reducer frontier",
-    ),
-    (
         "/_cokret/self/authz/effective-grants",
         PathItemType::Get,
         "authz",
@@ -650,25 +599,11 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "account aggregate describe",
     ),
     (
-        "/_soland/self/sync/backfill/gap",
-        PathItemType::Get,
-        "sync",
-        "org.cokret.soland.sync.backfill_gap",
-        "sync gap backfill (deployment-local)",
-    ),
-    (
         "/_cokret/self/snapshot/head",
         PathItemType::Get,
         "snapshot",
         "ck.self.snapshot.query.manifest_head",
         "snapshot head",
-    ),
-    (
-        "/_soland/self/sync/snapshot-chunk",
-        PathItemType::Get,
-        "sync",
-        "org.cokret.soland.sync.snapshot_chunk",
-        "snapshot chunk",
     ),
     (
         "/_cokret/find/directory/describe",
@@ -830,27 +765,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "import outbound push bridge cache snapshots",
     ),
     (
-        "/_soland/edge/push/rules",
-        PathItemType::Get,
-        "push",
-        "org.cokret.soland.push.rules",
-        "list local push rules",
-    ),
-    (
-        "/_soland/edge/push/rules",
-        PathItemType::Post,
-        "push",
-        "org.cokret.soland.push.upsert_rule",
-        "create or update a local push rule",
-    ),
-    (
-        "/_soland/edge/push/rules/{rule_id}",
-        PathItemType::Delete,
-        "push",
-        "org.cokret.soland.push.delete_rule",
-        "delete a local push rule",
-    ),
-    (
         "/_cokret/self/keys/backups/{backup_id}",
         PathItemType::Put,
         "keys",
@@ -912,27 +826,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "blob",
         "ck.self.blob.resource.get",
         "download blob bytes",
-    ),
-    (
-        "/_soland/self/webrtc/sessions",
-        PathItemType::Post,
-        "webrtc",
-        "org.cokret.soland.webrtc.create_session",
-        "create WebRTC session",
-    ),
-    (
-        "/_soland/self/webrtc/sessions/{session_id}/signals",
-        PathItemType::Post,
-        "webrtc",
-        "org.cokret.soland.webrtc.send_signal",
-        "send WebRTC signal",
-    ),
-    (
-        "/_soland/self/webrtc/sessions/{session_id}",
-        PathItemType::Delete,
-        "webrtc",
-        "org.cokret.soland.webrtc.close_session",
-        "close WebRTC session",
     ),
     (
         "/_cokret/self/moderation/report",
@@ -1091,13 +984,6 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "agents",
         "ck.self.agent.grant.resource.delete",
         "detach a capability grant from a personal agent",
-    ),
-    (
-        "/_soland/self/agents/{agent_id}/sidecar-thread/ensure",
-        PathItemType::Post,
-        "agents",
-        "ck.self.agent.sidecar_thread.command.ensure",
-        "idempotently ensure the controller<->agent sidecar Circle exists",
     ),
     // CKP-0010 (R3 spec-sync 2026-05-27, cokret-spec b47ff6ec) — media
     // token exchange + signed ICE config. Canonical wire paths now live on
@@ -1442,36 +1328,6 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
 #[derive(Clone)]
 pub struct CokretOpenApiDoc(pub OpenApi);
 
-/// Snapshot bundle: surfaces the head fields (`id` / `state_digest` /
-/// `chunk_bytes` single-chunk fallback) alongside SDK-canonical
-/// [`cokret_sdk::SnapshotChunk`] partitions + a binary
-/// [`cokret_sdk::SnapshotMerkleTree`] over their digests + a signed Realm
-/// generator proof. Receivers verify the proof first, then fetch chunks lazily
-/// and check each one against `merkle_root` via `SnapshotMerkleTree::verify`.
-/// Spec rename: the manifest's own identifier is `id`; `snapshot_ref` only
-/// survives at external reference positions (e.g. the chunk query param).
-pub(crate) struct SnapshotBundle {
-    /// The bundle's own identifier (`ck:snapshot:<realm>:<hash>` dev form).
-    pub id: String,
-    /// `sha256:<hex>` digest over the full serialized state document.
-    /// Doubles as the snapshot's `state_root` until the
-    /// `effective_seal_view`-driven state root is wired in.
-    pub state_digest: String,
-    pub frontier: Value,
-    /// Deterministic chunk partition (SDK
-    /// [`cokret_sdk::SnapshotChunker::default`] @ 256 KiB).
-    pub chunks: Vec<cokret_sdk::SnapshotChunk>,
-    /// Merkle tree over `chunks[*].digest`. `tree.root()` is the
-    /// `merkle_root` advertised in the snapshot head.
-    pub tree: cokret_sdk::SnapshotMerkleTree,
-    pub chunk_count: u32,
-    pub total_bytes: u64,
-    pub chunk_bytes: u32,
-    /// Signed generator-proof envelope; binds `(generator_did, realm_id,
-    /// state_root, merkle_root, chunk_count, total_bytes, chunk_bytes)`.
-    pub generator_proof: Value,
-}
-
 pub(crate) async fn snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
@@ -1596,134 +1452,6 @@ pub(crate) async fn snapshot_manifest_for_realm(
     )
     .map_err(|error| crate::error::AppError::internal(error.to_string()))?;
     Ok(manifest)
-}
-
-pub(crate) async fn snapshot_bundle_for_realm(
-    state: &AppState,
-    realm_id: &str,
-) -> Option<SnapshotBundle> {
-    let realm_id_value = RealmId::new(realm_id.to_owned()).ok()?;
-    let (title, members, category, tags) = {
-        let realms = state.realms.lock().expect("realms lock");
-        let realm = realms.get(&realm_id_value)?;
-        (
-            realm.title.clone(),
-            realm
-                .members
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            realm.category.clone(),
-            realm.tags.iter().cloned().collect::<Vec<_>>(),
-        )
-    };
-    let meta = state
-        .persistence
-        .realm_meta()
-        .get(realm_id)
-        .await
-        .ok()
-        .flatten();
-    let messages = state
-        .persistence
-        .messages()
-        .list_for_realm(realm_id, 1024)
-        .await
-        .unwrap_or_default();
-    let generated_at = messages
-        .iter()
-        .map(|message| message.created_at)
-        .max()
-        .or_else(|| meta.as_ref().map(|meta| meta.updated_at))
-        .unwrap_or_else(now);
-    let message_events = messages.iter().map(message_event).collect::<Vec<_>>();
-    let state_document = json!({
-        "type": "ck.snapshot.realm_state.v1",
-        "schema_profiles": ["ck.schema.core.v1"],
-        "reducer_profile": "ck.reducer.v1",
-        "realm_id": realm_id,
-        "title": title,
-        "category": category,
-        "tags": tags,
-        "members": members,
-        "message_count": message_events.len(),
-        "messages": message_events,
-        "generated_at": generated_at,
-    });
-    let chunk_bytes = serde_json::to_vec(&state_document).ok()?;
-    let state_digest = cokret_sdk::canonical::sha256_digest(&chunk_bytes);
-    let snapshot_id = format!(
-        "ck:snapshot:{}:{}",
-        realm_id,
-        state_digest.trim_start_matches("sha256:")
-    );
-
-    // Snapshot v1: deterministically chunk the state-document
-    // bytes via the SDK chunker, build a Merkle tree over the chunk
-    // digests, and sign a GeneratorProof binding the tree root to
-    // (generator_did, realm_id, state_root). Receivers verify the proof
-    // first, then fetch chunks lazily.
-    let chunker = cokret_sdk::SnapshotChunker::default();
-    let chunks = chunker.chunk(&chunk_bytes);
-    let tree = cokret_sdk::SnapshotMerkleTree::build(&chunks).ok()?;
-    let merkle_root = tree.root().clone();
-    let chunk_count = chunks.len() as u32;
-    let total_bytes: u64 = chunks.iter().map(|c| c.bytes.len() as u64).sum();
-    let chunk_target_bytes = chunker.target_chunk_bytes as u32;
-    let state_root_hash = cokret_sdk::Hash::new(state_digest.clone()).ok()?;
-    let generator_did = cokret_sdk::Did::new(state.config.service_did.clone()).ok()?;
-
-    let proof_body = json!({
-        "generator_did": generator_did.to_string(),
-        "realm_id": realm_id,
-        "state_root": state_root_hash.as_str(),
-        "merkle_root": merkle_root.as_str(),
-        "chunk_count": chunk_count,
-        "total_bytes": total_bytes,
-        "chunk_bytes": chunk_target_bytes,
-    });
-    let proof_body_bytes = cokret_sdk::canonical::canonical_json_bytes(&proof_body).ok()?;
-    let signing_key = (*state.notary_signing_key()).clone();
-    let signer = cokret_sdk::Ed25519MoveSigner::new(
-        signing_key,
-        generator_did.clone(),
-        format!("{}#snapshot-key", state.config.service_did),
-    );
-    let signature = cokret_sdk::MoveSigner::sign_payload(&signer, &proof_body_bytes).ok()?;
-    let generator_proof = json!({
-        "generator_did": generator_did.to_string(),
-        "realm_id": realm_id,
-        "state_root": state_root_hash.as_str(),
-        "merkle_root": merkle_root.as_str(),
-        "chunk_count": chunk_count,
-        "total_bytes": total_bytes,
-        "chunk_bytes": chunk_target_bytes,
-        "signature": signature,
-    });
-
-    let frontier = json!({
-        "realm_id": realm_id,
-        "generated_at": generated_at,
-        "message_count": state_document["message_count"],
-        "state_digest": state_digest,
-    });
-    // Note: this dev bundle deliberately does NOT mint a
-    // `ck.schema.snapshot.v1` manifest. The spec manifest requires a real
-    // detached proof (`signature` / `authority_binding` /
-    // `event_set_commitment` MUST NOT be fabricated), so the protocol
-    // snapshot-head operations stay `not_implemented`; the bundle only backs
-    // the `/_soland/` dev download surface.
-    Some(SnapshotBundle {
-        id: snapshot_id,
-        state_digest,
-        frontier,
-        chunks,
-        tree,
-        chunk_count,
-        total_bytes,
-        chunk_bytes: chunk_target_bytes,
-        generator_proof,
-    })
 }
 
 async fn persist_snapshot_chunk_blobs(
@@ -1885,15 +1613,6 @@ fn snapshot_auth_state_digest(
         .map_err(|error| crate::error::AppError::internal(error.to_string()))
 }
 
-fn parse_snapshot_ref(snapshot_ref: &str) -> Option<(String, String)> {
-    let rest = snapshot_ref.strip_prefix("ck:snapshot:")?;
-    let (realm_id, digest) = rest.rsplit_once(':')?;
-    if RealmId::new(realm_id.to_owned()).is_err() || !is_valid_sha256_hex(digest) {
-        return None;
-    }
-    Some((realm_id.to_owned(), format!("sha256:{digest}")))
-}
-
 fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value {
     json!({
         "actor": device.actor,
@@ -1905,19 +1624,6 @@ fn device_inventory_to_json(device: &DeviceInventoryRecord) -> serde_json::Value
         "created_at": device.created_at,
         "updated_at": device.updated_at,
         "revoked_at": device.revoked_at,
-    })
-}
-
-fn message_event(message: &MessageRecord) -> serde_json::Value {
-    json!({
-        "kind": "message",
-        "event_id": message.event_id,
-        "realm_id": message.realm_id,
-        "thread_id": message.thread_id,
-        "sender": message.sender,
-        "content": message.content,
-        "encrypted": message.encrypted,
-        "created_at": message.created_at,
     })
 }
 

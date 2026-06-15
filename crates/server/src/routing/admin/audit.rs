@@ -428,7 +428,7 @@ pub async fn append_audit_log(
 // ────────────────────────────────────────────────────────────────────────
 
 /// Spec B1.12 — recompute the audit policy version hash using the 4-arg
-/// SDK helper. The legacy 2-arg signature is removed; any audit receipt
+/// SDK helper. The removed 2-arg signature is not accepted; any audit receipt
 /// produced by an out-of-tree signer using the old form MUST be re-issued.
 #[allow(dead_code)]
 pub fn compute_audit_policy_hash(

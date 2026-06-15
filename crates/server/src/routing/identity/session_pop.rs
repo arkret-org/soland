@@ -11,7 +11,7 @@
 //!   `keyid` binding. Any failure is rejected as `unauthenticated`.
 //! - On a high-security deployment (`sovereign_enclave_enabled`), writes and sensitive reads MUST
 //!   be PoP-presented; bare bearer is rejected. On the default profile, bare bearer remains an
-//!   accepted downgrade for low sensitivity / legacy clients.
+//!   accepted downgrade for low-sensitivity clients.
 //!
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.

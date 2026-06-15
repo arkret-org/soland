@@ -2022,7 +2022,7 @@ fn apply_member_identity_update_dispatch(
     }
     if segment != "member_identity" {
         return ProjectionEffect::Rejected {
-            reason: cokret_sdk::error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
+            reason: crate::error::reasons::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
         };
     }
     ProjectionEffect::MemberIdentityProjected {

@@ -73,7 +73,6 @@ and rollout-only switches that should be managed deliberately.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT` | unset | Reject legacy accountable-principal payloads instead of accepting with compatibility handling. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
 | `SOLAND_AGENT_AUDIT_BINDING_SIGNING_SEED` | ephemeral seed | Optional base64 ed25519 seed for agent audit-binding signatures; store and rotate like other signing keys. |
@@ -90,7 +89,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
 | `SOLAND_JWS_REPLAY_WINDOW_SECONDS` | `300` | Accepted JWS replay window; `0` disables replay-window enforcement. |
 | `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT` | spec default | Per-principal daily key-backup download limit. |
-| `SOLAND_MEDIA_SERVICE_LEGACY_REJECT` | unset | Reject legacy realm media-service payloads instead of compatibility handling. |
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
 | `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
 | `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |
@@ -476,14 +474,14 @@ base64-standard-padded). Recommended cadence and ceremony:
   `20260526000000_drop_discussion_realm_ref`,
   `20260526010000_add_circles`, and
   `20260526020000_add_scope_circle_id`. The first is a defensive
-  `DROP COLUMN IF EXISTS` for vendor forks that persisted the legacy
+  `DROP COLUMN IF EXISTS` for vendor forks that persisted the removed
   cross-Realm discussion routing column; the next two land the
   `projection_circles` / `projection_circle_members` mirror tables and the
   `scope_circle_id` / `default_scope_circle_id` / `child_scope_policy` /
   `effective_scope` columns on the Strand / Morph / Space / Events mirrors.
   All three are forward-only in spirit — the down migrations are provided
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
-  CKP-0007 cutover would violate the forbidden-wire-fields contract.
+  CKP-0007 cutover would conflict with the v1 typed scope model.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
   projected Event. For a typical `ck:circle:<uuid>` value the on-wire form
   is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50
@@ -511,9 +509,8 @@ base64-standard-padded). Recommended cadence and ceremony:
 ## R3 migrations
 
 R3 lands new wire surfaces (agent FSM, recovery policy/receipt, media token
-exchange, and a re-shaped realm media_service shape). None of the R3
-migrations drop columns or tables; everything is additive plus a
-read-side normalization for the legacy `sfu_endpoint` shape.
+exchange, and the realm `media_service.foci[]` shape). None of the R3
+migrations drop columns or tables.
 
 Run order (each migration is idempotent):
 
@@ -524,18 +521,7 @@ Run order (each migration is idempotent):
 
 ### `ck.realm.media_service.foci[]` shape
 
-The v1.0 realm media-service shape exposed a single endpoint:
-
-```json
-{
-  "media_service": {
-    "sfu_endpoint": "https://sfu.example.org",
-    "backend": "livekit"
-  }
-}
-```
-
-R3 normalizes to a `foci[]` array so that a realm can advertise multiple
+R3 uses a `foci[]` array so that a realm can advertise multiple
 media foci (e.g. one LiveKit pool and one Mediasoup pool, or
 geo-distributed pools):
 
@@ -554,17 +540,8 @@ geo-distributed pools):
 }
 ```
 
-Migration `20260520_realm_media_service_foci.sql` does **not** drop the
-old column. It:
-
-1. Reads each `realm_media_service.payload` JSONB row.
-2. If `foci` already present and non-empty, no-ops.
-3. Otherwise, projects the legacy `sfu_endpoint` + `backend` pair into a
-   single-entry `foci` array under a derived `focus_id` of
-   `ck:focus:legacy:<realm_short>:<sha256(endpoint)[:8]>`.
-4. Writes the merged payload back. The legacy keys remain available for
-   one full release cycle; reader code accepts either shape and prefers
-   `foci[]` when both are present.
+Migration `20260520_realm_media_service_foci.sql` ensures each
+`realm_media_service.payload` JSONB row has a non-empty `foci[]` array.
 
 Validation post-migration:
 

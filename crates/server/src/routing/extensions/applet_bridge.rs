@@ -213,16 +213,6 @@ pub(super) fn router() -> Router {
         )
 }
 
-/// Compatibility copy of the applet ghost-provision surface under
-/// `/_soland/self/applets/...`; the canonical route is mounted under
-/// `/_cokret/self/applets/{applet_id}/ghosts/provision`.
-pub(super) fn local_self_router() -> Router {
-    Router::with_path("applets").push(
-        Router::with_path("{applet_id}")
-            .push(Router::with_path("ghosts/provision").post(provision_ghost_actor_endpoint)),
-    )
-}
-
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(
@@ -583,11 +573,11 @@ async fn transaction_endpoint(
 /// `created` / `expires` signature params. Failure codes (all 401 with the
 /// discriminating `reason`, `error.code` stays generic `unauthenticated`):
 /// - missing `Signature` / bearer-only → `http_signature_required`
-/// - bad signature / `content-digest` mismatch / `source_service_did`
-///   header↔body mismatch → `http_signature_invalid`
+/// - bad signature / `content-digest` mismatch / `source_service_did` header↔body mismatch →
+///   `http_signature_invalid`
 /// - `created` / `expires` outside the freshness window → `signature_window_invalid`
-/// - `Source-Service-DID` with no active effective install / not matching the
-///   registration service DID → 403 `applet_registration_unauthorized`.
+/// - `Source-Service-DID` with no active effective install / not matching the registration service
+///   DID → 403 `applet_registration_unauthorized`.
 async fn verify_inbound_transaction_signature(
     state: &AppState,
     req: &Request,
@@ -724,12 +714,8 @@ fn applet_registration_verification_method(
     source_service_did: &str,
 ) -> String {
     if let Some(package) = install.package.as_ref()
-        && let Some(key_ref) = package
-            .webhook_auth
-            .get("key_ref")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        && let key_ref = package.webhook_auth.key_ref.trim()
+        && !key_ref.is_empty()
         && key_ref.starts_with(source_service_did)
     {
         return key_ref.to_owned();
@@ -2944,10 +2930,15 @@ mod inbound_signature_tests {
     #[test]
     fn keyid_mismatch_is_invalid_signature() {
         let now = chrono::Utc::now().timestamp();
-        let err =
-            applet_validate_signature_params(&params(now, now + 60), "did:web:other#applet-service-key")
-                .expect_err("keyid mismatch must fail");
-        assert_eq!(err.top_level_reason.as_deref(), Some("http_signature_invalid"));
+        let err = applet_validate_signature_params(
+            &params(now, now + 60),
+            "did:web:other#applet-service-key",
+        )
+        .expect_err("keyid mismatch must fail");
+        assert_eq!(
+            err.top_level_reason.as_deref(),
+            Some("http_signature_invalid")
+        );
     }
 
     /// A fresh, well-formed window passes param validation.

@@ -1,8 +1,8 @@
 //! HC-SOL-1/2 handle-claim ingest hardening.
 //!
 //! - HC-SOL-1: the `claim_kind` enum lost `service_handle`; v1 only allows `handle_binding` /
-//!   `organization_handle`. The retired `claim_type` and `class` field names MUST be rejected as
-//!   forbidden wire fields.
+//!   `organization_handle`. The retired `claim_type` and `class` field names are rejected by this
+//!   typed validator.
 //! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
 //!   (`ck:actor:`), a server-local `account_id` (`ck:account:`), a service DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /

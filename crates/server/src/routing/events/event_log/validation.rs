@@ -308,20 +308,6 @@ pub(crate) async fn validate_event_envelope(
         ));
     }
     require_object_field(object, "payload")?;
-    // CKP-0007 (spec b7d35be) — hard-reject any wire payload that carries a
-    // field listed in `forbidden-wire-fields.json` (sourced from the SDK's
-    // `is_forbidden_wire_field`). Receivers MUST refuse the legacy field
-    // names outright; no compat path. Spec floor 2b0d70d.
-    if let Some(field) = first_forbidden_wire_field(object.get("payload")) {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "forbidden_wire_field",
-            format!(
-                "payload carries forbidden wire field {field:?} \
-                 (spec/v1/artifacts/registry/forbidden-wire-fields.json)"
-            ),
-        ));
-    }
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))?;
@@ -1198,11 +1184,9 @@ pub(super) fn validate_event_schema_and_payload(
             "event payload is required",
         )
     })?;
-    // R3.2 wire-breaking deny validators (MIU-SOL-1 / HC-SOL-3). These run
-    // ahead of the registered payload-schema validator so a forbidden
-    // field surfaces the precise R3.2 reason code rather than a generic
-    // `schema_violation` from the SDK catalog.
-    validate_r3_2_wire_shape(kind, payload)?;
+    // Wire-shape validators that must run before the registered payload
+    // schema validator to surface their precise reason codes.
+    validate_pre_schema_wire_shape(kind, payload)?;
     if kind == kinds::CK_CONFLICT_REPAIR {
         return validate_conflict_repair_event_payload(payload);
     }
@@ -1227,27 +1211,14 @@ pub(super) fn validate_event_schema_and_payload(
     Ok(())
 }
 
-/// R3.2 (cokret-spec @ b56cab1) — wire-breaking deny validators applied on
-/// the event ingest path.
-///
-/// - MIU-SOL-1: `ck.member.identity.update` payloads MUST NOT carry the removed handle fields
-///   (`primary_handle` / `handles[]` / `verified_handle`).
-/// - HC-SOL-3: message event payloads carrying mention references MUST use the v2 shape
-///   (`subject_id` authoritative); the legacy `subject` / `handle` / `display_snapshot` shape is
-///   rejected.
+/// Wire-shape validators applied on the event ingest path.
 ///
 /// Each maps a [`crate::wire_validators::WireRejection`] to a
 /// `schema_violation`-class [`EventValidationError`] carrying the precise
-/// R3.2 reason code.
-fn validate_r3_2_wire_shape(kind: &str, payload: &Value) -> Result<(), EventValidationError> {
+/// reason code.
+fn validate_pre_schema_wire_shape(kind: &str, payload: &Value) -> Result<(), EventValidationError> {
     if kind == kinds::CK_MEMBER_IDENTITY_UPDATE {
         crate::wire_validators::member_identity::validate_member_identity_update_payload(payload)
-            .map_err(wire_rejection_to_validation_error)?;
-    }
-    if matches!(kind, kinds::CK_MESSAGE_CREATE | kinds::CK_MESSAGE_REVISE)
-        && let Some(content) = payload.get("content")
-    {
-        crate::wire_validators::mention::validate_content_mention_references(content)
             .map_err(wire_rejection_to_validation_error)?;
     }
     Ok(())

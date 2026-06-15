@@ -50,10 +50,9 @@ impl ProjectionState {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-        // CKP-0007: `discussion_realm_ref` is a forbidden wire field,
-        // rejected at the envelope validator. Intra-Realm discussion
-        // boundaries are expressed via `scope_circle_id` (Circle); when
-        // present, validate the Circle is in this Realm and active.
+        // CKP-0007: intra-Realm discussion boundaries are expressed via
+        // `scope_circle_id` (Circle); when present, validate the Circle is in
+        // this Realm and active.
         if let Some(scope_circle_id) = object.get("scope_circle_id").and_then(Value::as_str)
             && let Err(reason) =
                 self.validate_scope_circle_id(scope_circle_id, operation.realm_id.as_ref())
@@ -128,10 +127,8 @@ impl ProjectionState {
                 reason: "strand_update_missing_strand_id".to_owned(),
             };
         };
-        // CKP-0007: `discussion_realm_ref` is a forbidden wire field,
-        // rejected at the envelope validator before reaching the reducer.
-        // Strand scope is set at create time; `scope_circle_id` rebinds fail
-        // below with `scope_rebind_forbidden`.
+        // CKP-0007: Strand scope is set at create time; `scope_circle_id`
+        // rebinds fail below with `scope_rebind_forbidden`.
         let Some(strand) = self.strands.get_mut(&strand_id) else {
             return ProjectionEffect::Ignored;
         };

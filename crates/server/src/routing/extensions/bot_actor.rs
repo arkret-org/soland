@@ -16,7 +16,7 @@
 //! `state.persistence` store is a follow-up — see TODO at module
 //! bottom.
 //!
-//! Legacy HTTP compatibility surface is mounted under
+//! Deployment-local HTTP surface is mounted under
 //! `/_soland/self/extensions/bots*`; protocol clients should not call it.
 //!
 //! Reducer dispatch hooks are exposed via

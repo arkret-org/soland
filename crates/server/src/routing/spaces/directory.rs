@@ -113,7 +113,7 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/withdraw").post(directory_withdraw))
         // Spec-canonical directory push-webhook registration
         // (`ck.find.directory.push.command.register`). The retired `/_soland/find/
-        // directory/subscribe` legacy mirror used the same handler under the
+        // directory/subscribe` mirror used the same handler under the
         // historical `subscribe` path; the protocol surface mounts only the
         // canonical `push/register` path.
         .push(Router::with_path("directory/push/register").post(directory_subscribe))

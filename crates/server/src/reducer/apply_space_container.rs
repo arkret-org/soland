@@ -112,8 +112,7 @@ impl ProjectionState {
         // The reducer keeps a transitional fallback to `parent_ref` so
         // soland's own internal reducer tests (which build payloads
         // directly without going through the wire validator) keep
-        // passing; real wire traffic never carries `parent_ref` because
-        // the envelope validator rejects it as a forbidden wire field.
+        // passing; real wire traffic uses `parent_space_id`.
         let parent_ref = object
             .get("parent_space_id")
             .or_else(|| object.get("parent_ref"))

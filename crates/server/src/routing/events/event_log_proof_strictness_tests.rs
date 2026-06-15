@@ -725,7 +725,7 @@ fn event_payload_validator_enforces_object_patch_family_schema() {
             .validate_payload(
                 "ck.strand.tracks.update",
                 &json!({
-                    "type": "legacy_track_update",
+                    "type": "removed_track_update",
                     "strand_id": "ck:strand:01904100-0000-7000-8000-f10dc0000001",
                 }),
             )

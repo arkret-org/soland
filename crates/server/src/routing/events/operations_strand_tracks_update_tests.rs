@@ -259,7 +259,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
     );
     assert!(validate_operation_schema(&operation, schema).is_ok());
 
-    let legacy_target_ref = space_container_op(
+    let removed_target_ref = space_container_op(
         kinds::CK_SPACE_CONTAINER_UPDATE,
         json!({
             "target_ref": "ck:space:01904100-0000-7000-8000-000000000003",
@@ -267,7 +267,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
         }),
     );
     assert_eq!(
-        validate_operation_schema(&legacy_target_ref, schema),
+        validate_operation_schema(&removed_target_ref, schema),
         Err("space update operation requires space_id")
     );
 

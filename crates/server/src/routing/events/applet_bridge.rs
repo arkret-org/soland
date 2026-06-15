@@ -117,7 +117,7 @@ pub async fn maybe_emit_echo_status_for_session_start(
         return;
     }
 
-    // No bridge URL -> in-process echo (legacy reference path).
+    // No bridge URL -> in-process echo reference path.
     let synthetic_event_id = ids::generate("event");
     let payload = json!({
         "session_id": session_id,

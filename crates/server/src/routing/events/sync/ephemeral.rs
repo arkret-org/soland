@@ -3,11 +3,10 @@
 //! (SOL-07-002) as a self-contained unit — no cross-module callers other than
 //! the parent router, which references `ephemeral::submit_ephemeral`.
 
+use cokret_sdk::EphemeralSubmitOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
-
-use cokret_sdk::EphemeralSubmitOutcome;
 
 use crate::routing::spaces::space::realm_has_member;
 use crate::state::{AppState, PresenceRecord, TypingRecord};

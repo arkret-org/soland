@@ -40,7 +40,7 @@ use super::*;
 /// (content-moderation.md §5.5.1.1 / moderation-appeal.schema.json).
 const APPEAL_VERDICTS: [&str; 3] = ["uphold", "overturn", "modify"];
 
-/// or_set add dot for a moderation event projected from the legacy
+/// or_set add dot for a moderation event projected from the
 /// `Operation` boundary. Deterministic per accepted event (mirrors
 /// `apply_capability::capability_add_dot`).
 fn moderation_add_dot(operation: &Operation) -> String {

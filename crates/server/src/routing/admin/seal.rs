@@ -20,7 +20,7 @@
 //! DTO shapes mirror `sodmin/src/types/seal.rs` (`NotaryValue`,
 //! `BottomEntry`, `BottomCandidateHead`, `BottomRepairStrategy`, `SealDagSnapshot`,
 //! `SealLeaf`, `CompactionOutcome`, `SubmitControlMoveOutcome`,
-//! `CompactionRequest`).
+//! `CompactionRequestBody`).
 //!
 //! v1 scope:
 //! - `single_did` reconfigure / `head_in_winner` repair / compaction each invoke the existing
@@ -48,30 +48,17 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_core::admin::seal as shared_seal;
+use soland_core::admin::seal::{
+    BottomCandidateHead, BottomEntry, BottomRepairRequestBody, BottomRepairStrategy,
+    CompactionOutcome, CompactionRequestBody, MultisigPendingEntry, MultisigPendingOutcome,
+    NotaryReconfigRequestBody, NotaryValue, SealDagSnapshot, SealLeaf, SealPruneDiagnostics,
+    SealPruneOutcome, SealPruneRequestBody, SubmitControlMoveOutcome,
+};
 
 use super::AuthArgs;
 use crate::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
-
-// ── Shared admin DTOs ──────────────────────────────────────────────────
-
-pub type NotaryValueOutcome = shared_seal::NotaryValue;
-pub type NotaryReconfigBody = shared_seal::NotaryReconfigRequest;
-pub type AdminSubmitControlMoveOutcome = shared_seal::SubmitControlMoveOutcome;
-pub type BottomCandidateHeadOutcome = shared_seal::BottomCandidateHead;
-pub type BottomEntryOutcome = shared_seal::BottomEntry;
-pub type BottomRepairStrategyBody = shared_seal::BottomRepairStrategy;
-pub type SealLeafOutcome = shared_seal::SealLeaf;
-pub type SealDagSnapshotOutcome = shared_seal::SealDagSnapshot;
-pub type CompactionRequestBody = shared_seal::CompactionRequest;
-pub type CompactionOutcome = shared_seal::CompactionOutcome;
-pub type SealPruneRequestBody = shared_seal::SealPruneRequest;
-pub type SealPruneOutcome = shared_seal::SealPruneOutcome;
-pub type SealPruneDiagnostics = shared_seal::SealPruneDiagnostics;
-pub type MultisigPendingEntry = shared_seal::MultisigPendingEntry;
-pub type MultisigPendingOutcome = shared_seal::MultisigPendingOutcome;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -162,9 +149,11 @@ fn dids_from_admin_field(field: &str, values: &[String]) -> Result<Vec<Did>, App
 }
 
 /// Convert the shared admin request DTO into the SDK-authoritative notary cell
-/// value. The admin wire does not accept legacy JSON aliases; the cell write is
+/// value. The admin wire does not accept removed JSON aliases; the cell write is
 /// still the canonical SDK `NotaryValue` shape.
-fn sdk_notary_value_from_body(body: &NotaryReconfigBody) -> Result<SdkNotaryValue, AppError> {
+fn sdk_notary_value_from_body(
+    body: &NotaryReconfigRequestBody,
+) -> Result<SdkNotaryValue, AppError> {
     let value = match body.kind.as_str() {
         "single_did" => SdkNotaryValue::SingleDid {
             did: did_from_admin_field(
@@ -218,7 +207,7 @@ fn notary_value_object_from_sdk(value: &SdkNotaryValue) -> Result<Value, AppErro
 }
 
 #[cfg(test)]
-fn notary_value_object_from_body(body: &NotaryReconfigBody) -> Result<Value, AppError> {
+fn notary_value_object_from_body(body: &NotaryReconfigRequestBody) -> Result<Value, AppError> {
     let value = sdk_notary_value_from_body(body)?;
     notary_value_object_from_sdk(&value)
 }
@@ -289,10 +278,10 @@ fn notary_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
     })
 }
 
-/// Project a JSON cell value into the typed [`NotaryValueOutcome`]. The
+/// Project a JSON cell value into the typed [`NotaryValue`]. The
 /// on-wire notary cell value MUST be the SDK-authoritative `NotaryValue`
 /// shape (internal tag `kind`, fields `did|k|n|members|primary|
-/// recovery_members`); legacy alias spellings (`shape`/`kind_raw`/
+/// recovery_members`); removed alias spellings (`shape`/`kind_raw`/
 /// `single_did`/`threshold_dids`/...) are rejected.
 ///
 /// When the value is `None` we return a `single_did` placeholder pointed
@@ -302,7 +291,7 @@ fn notary_cell_for(realm_id: &str) -> Result<CellRef, AppError> {
 fn notary_value_from_cell(
     value: Option<&Value>,
     service_did: &str,
-) -> Result<NotaryValueOutcome, AppError> {
+) -> Result<NotaryValue, AppError> {
     let Some(value) = value else {
         let did = Did::new(service_did.to_owned())
             .map_err(|e| app_error!(InternalError, "invalid service DID `{service_did}`: {e}"))?;
@@ -320,10 +309,7 @@ fn notary_value_from_cell(
     Ok(admin_notary_value_from_sdk(parsed, Some(value)))
 }
 
-fn admin_notary_value_from_sdk(
-    value: SdkNotaryValue,
-    envelope: Option<&Value>,
-) -> NotaryValueOutcome {
+fn admin_notary_value_from_sdk(value: SdkNotaryValue, envelope: Option<&Value>) -> NotaryValue {
     let revocation_freshness_window_ms = envelope.and_then(|value| {
         value
             .get("revocation_freshness_window_ms")
@@ -333,14 +319,14 @@ fn admin_notary_value_from_sdk(
         .and_then(|value| value.get("paused").and_then(Value::as_bool))
         .unwrap_or(false);
     match value {
-        SdkNotaryValue::SingleDid { did } => NotaryValueOutcome {
+        SdkNotaryValue::SingleDid { did } => NotaryValue {
             kind_raw: "single_did".to_owned(),
             single_did: Some(did.as_str().to_owned()),
             revocation_freshness_window_ms,
             paused,
             ..Default::default()
         },
-        SdkNotaryValue::Threshold { k, n, members } => NotaryValueOutcome {
+        SdkNotaryValue::Threshold { k, n, members } => NotaryValue {
             kind_raw: "threshold".to_owned(),
             threshold_k: Some(k),
             threshold_n: Some(n),
@@ -352,7 +338,7 @@ fn admin_notary_value_from_sdk(
             paused,
             ..Default::default()
         },
-        SdkNotaryValue::OpenSet { members } => NotaryValueOutcome {
+        SdkNotaryValue::OpenSet { members } => NotaryValue {
             kind_raw: "open_set".to_owned(),
             open_set_members: members
                 .into_iter()
@@ -365,7 +351,7 @@ fn admin_notary_value_from_sdk(
         SdkNotaryValue::Mixed {
             primary,
             recovery_members,
-        } => NotaryValueOutcome {
+        } => NotaryValue {
             kind_raw: "mixed".to_owned(),
             mixed_primary: Some(primary.as_str().to_owned()),
             mixed_recovery: recovery_members
@@ -379,12 +365,12 @@ fn admin_notary_value_from_sdk(
     }
 }
 
-/// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntryOutcome`.
+/// Fold a `CellState::Bottom(_)` JSON envelope into a `BottomEntry`.
 ///
 /// The SDK serializes `Bottom` as `{kind, ...}` where `kind` is one of
 /// `Conflict|InvalidTransition|...`. We snake-case it here so wire
 /// callers (sodmin) can pattern-match against `BottomKind::from_wire`.
-fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntryOutcome {
+fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEntry {
     let raw_kind = bottom
         .get("kind")
         .and_then(Value::as_str)
@@ -426,7 +412,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
     let candidate_heads = if kind == "conflict" {
         event_ids
             .iter()
-            .map(|event_id| BottomCandidateHeadOutcome {
+            .map(|event_id| BottomCandidateHead {
                 event_id: event_id.clone(),
                 ..Default::default()
             })
@@ -434,7 +420,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
     } else {
         Vec::new()
     };
-    BottomEntryOutcome {
+    BottomEntry {
         realm_id: realm_id.to_owned(),
         cell_id: cell_id.to_owned(),
         kind,
@@ -447,7 +433,7 @@ fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -> BottomEnt
 
 /// Walk the projection cell map for one Realm, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
-fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntryOutcome> {
+fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntry> {
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
@@ -495,7 +481,7 @@ pub(super) async fn admin_get_notary(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<NotaryValueOutcome> {
+) -> JsonResult<NotaryValue> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -542,8 +528,8 @@ pub(super) async fn admin_reconfigure_notary(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<NotaryReconfigBody>,
-) -> JsonResult<AdminSubmitControlMoveOutcome> {
+    body: JsonBody<NotaryReconfigRequestBody>,
+) -> JsonResult<SubmitControlMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -646,7 +632,7 @@ pub(super) async fn admin_reconfigure_notary(
     // Move sits pending until the round leader signs.
     let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
     match outcome {
-        Ok(Some(o)) => json_ok(AdminSubmitControlMoveOutcome {
+        Ok(Some(o)) => json_ok(SubmitControlMoveOutcome {
             control_move_id: move_id,
             accepted: true,
             reason: None,
@@ -655,7 +641,7 @@ pub(super) async fn admin_reconfigure_notary(
             ..Default::default()
         }),
         Ok(None) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {
-            json_ok(AdminSubmitControlMoveOutcome {
+            json_ok(SubmitControlMoveOutcome {
                 control_move_id: move_id,
                 accepted: true,
                 reason: Some("Move stashed pending; another node owns the round".to_owned()),
@@ -668,7 +654,7 @@ pub(super) async fn admin_reconfigure_notary(
             // The Move IS pending — the notary pass failed downstream.
             // Surface the failure but keep the Move in the queue.
             tracing::warn!(error = %e, %move_id, "admin_reconfigure_notary: notary pass failed");
-            json_ok(AdminSubmitControlMoveOutcome {
+            json_ok(SubmitControlMoveOutcome {
                 control_move_id: move_id,
                 accepted: true,
                 reason: Some(format!("Move stashed pending; notary pass error: {e}")),
@@ -693,7 +679,7 @@ pub(super) async fn admin_list_realm_bottom(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<Vec<BottomEntryOutcome>> {
+) -> JsonResult<Vec<BottomEntry>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -714,7 +700,7 @@ pub(super) async fn admin_list_bottom_global(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<Vec<BottomEntryOutcome>> {
+) -> JsonResult<Vec<BottomEntry>> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
@@ -755,8 +741,8 @@ pub(super) async fn admin_repair_bottom(
     req: &mut Request,
     realm_id: PathParam<String>,
     cell_id: PathParam<String>,
-    body: JsonBody<BottomRepairStrategyBody>,
-) -> JsonResult<AdminSubmitControlMoveOutcome> {
+    body: JsonBody<BottomRepairRequestBody>,
+) -> JsonResult<SubmitControlMoveOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let admin_session = super::require_admin_principal(state, session)?;
@@ -775,10 +761,10 @@ pub(super) async fn admin_repair_bottom(
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
         app_error!(InvalidParam, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
-    let body = body.into_inner();
+    let strategy = body.into_inner().strategy;
 
-    match &body {
-        BottomRepairStrategyBody::HeadInWinner { head } => {
+    match &strategy {
+        BottomRepairStrategy::HeadInWinner { head } => {
             if head.event_id.is_empty() {
                 return Err(
                     app_error!(InvalidParam, "winning head must carry an event_id")
@@ -848,7 +834,7 @@ pub(super) async fn admin_repair_bottom(
 
             let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
             match outcome {
-                Ok(Some(o)) => json_ok(AdminSubmitControlMoveOutcome {
+                Ok(Some(o)) => json_ok(SubmitControlMoveOutcome {
                     control_move_id: move_id,
                     accepted: true,
                     reason: None,
@@ -857,7 +843,7 @@ pub(super) async fn admin_repair_bottom(
                     ..Default::default()
                 }),
                 Ok(None) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {
-                    json_ok(AdminSubmitControlMoveOutcome {
+                    json_ok(SubmitControlMoveOutcome {
                         control_move_id: move_id,
                         accepted: true,
                         reason: Some(
@@ -875,7 +861,7 @@ pub(super) async fn admin_repair_bottom(
                         cell_id = %cell_id_str,
                         "admin_repair_bottom: notary pass failed"
                     );
-                    json_ok(AdminSubmitControlMoveOutcome {
+                    json_ok(SubmitControlMoveOutcome {
                         control_move_id: move_id,
                         accepted: true,
                         reason: Some(format!("Move stashed pending; notary pass error: {e}")),
@@ -886,7 +872,7 @@ pub(super) async fn admin_repair_bottom(
                 }
             }
         }
-        BottomRepairStrategyBody::Manual { effects, .. } => {
+        BottomRepairStrategy::Manual { effects, .. } => {
             // Admin-scope check: a manual repair Move MUST only touch the
             // bottom cell the operator named in the path. Any effect whose
             // `cell` field references a different cell id is rejected with
@@ -940,11 +926,11 @@ pub(super) async fn admin_repair_bottom(
             let canonical_request = serde_json::json!({
                 "realm_id": realm_id,
                 "cell_id": cell_id_str,
-                "strategy": &body,
+                "strategy": &strategy,
             });
             let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
             let placeholder_id = cokret_sdk::canonical::sha256_digest(&bytes);
-            json_ok(AdminSubmitControlMoveOutcome {
+            json_ok(SubmitControlMoveOutcome {
                 control_move_id: placeholder_id,
                 accepted: false,
                 reason: Some(
@@ -971,7 +957,7 @@ pub(super) async fn admin_get_seal_dag(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<SealDagSnapshotOutcome> {
+) -> JsonResult<SealDagSnapshot> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
@@ -988,7 +974,7 @@ pub(super) async fn admin_get_seal_dag(
         .with_status(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
 
-    // Materialise each leaf into the wire `SealLeafOutcome`.
+    // Materialise each leaf into the wire `SealLeaf`.
     // Normal Seals carry only delta; compaction Seals may materialize
     // covered_event_digests for bootstrap and pruning diagnostics.
     let mut leaves = Vec::with_capacity(leaf_ids.len());
@@ -1019,7 +1005,7 @@ pub(super) async fn admin_get_seal_dag(
         // `is_compaction` reads the explicit
         // `Seal.kind == SealKind::Compaction` field directly.
         let is_compaction = seal.kind.is_compaction();
-        leaves.push(SealLeafOutcome {
+        leaves.push(SealLeaf {
             seal_id: seal.id.as_str().to_owned(),
             state_root: Some(seal.state_root.as_str().to_owned()),
             control_event_count: (seal.covered_event_digests.len() + seal.delta.len()) as u64,
@@ -1028,7 +1014,7 @@ pub(super) async fn admin_get_seal_dag(
             is_compaction,
         });
     }
-    json_ok(SealDagSnapshotOutcome {
+    json_ok(SealDagSnapshot {
         realm_id,
         leaves,
         covered_event_digests: covered_event_digests.into_iter().collect(),
@@ -1852,24 +1838,6 @@ mod tests {
     }
 
     #[test]
-    fn notary_value_from_cell_rejects_legacy_alias_forms() {
-        // Pre-rename flat DTO spellings are no longer accepted: the
-        // authoritative wire is the SDK `NotaryValue` only.
-        for legacy in [
-            json!({"kind_raw": "open_set", "open_set_members": ["did:1", "did:2"]}),
-            json!({"shape": "single_did", "did": "did:web:alice.example"}),
-            json!({"kind": "single_did", "single_did": "did:web:alice.example"}),
-            json!({"kind": "threshold", "threshold_k": 2, "threshold_n": 3,
-                   "threshold_dids": ["did:a", "did:b", "did:c"]}),
-        ] {
-            assert!(
-                notary_value_from_cell(Some(&legacy), "did:web:s").is_err(),
-                "legacy form must be rejected: {legacy}"
-            );
-        }
-    }
-
-    #[test]
     fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
         // SDK serializes the Bottom variant as PascalCase via serde
         // default; the wire shape sodmin expects is snake_case. Our
@@ -1908,13 +1876,15 @@ mod tests {
     }
 
     #[test]
-    fn bottom_repair_strategy_round_trips_through_serde() {
-        let head_in = BottomRepairStrategyBody::HeadInWinner {
-            head: BottomCandidateHeadOutcome {
-                event_id: "ck:event:abc".to_owned(),
-                issuer: Some("did:ck:alice".to_owned()),
-                hlc: None,
-                summary: None,
+    fn bottom_repair_request_body_round_trips_through_serde() {
+        let head_in = BottomRepairRequestBody {
+            strategy: BottomRepairStrategy::HeadInWinner {
+                head: BottomCandidateHead {
+                    event_id: "ck:event:abc".to_owned(),
+                    issuer: Some("did:ck:alice".to_owned()),
+                    hlc: None,
+                    summary: None,
+                },
             },
         };
         let j = serde_json::to_value(&head_in).unwrap();
@@ -1922,17 +1892,19 @@ mod tests {
             j.get("strategy").and_then(Value::as_str),
             Some("head_in_winner")
         );
-        let back: BottomRepairStrategyBody = serde_json::from_value(j).unwrap();
-        match back {
-            BottomRepairStrategyBody::HeadInWinner { head } => {
+        let back: BottomRepairRequestBody = serde_json::from_value(j).unwrap();
+        match back.strategy {
+            BottomRepairStrategy::HeadInWinner { head } => {
                 assert_eq!(head.event_id, "ck:event:abc");
             }
             other => panic!("expected HeadInWinner, got {other:?}"),
         }
 
-        let manual = BottomRepairStrategyBody::Manual {
-            note: Some("schema-error rewrite".to_owned()),
-            effects: vec![json!({"cell": "x", "op": {"type": "set", "value": 1}})],
+        let manual = BottomRepairRequestBody {
+            strategy: BottomRepairStrategy::Manual {
+                note: Some("schema-error rewrite".to_owned()),
+                effects: vec![json!({"cell": "x", "op": {"type": "set", "value": 1}})],
+            },
         };
         let j = serde_json::to_value(&manual).unwrap();
         assert_eq!(j.get("strategy").and_then(Value::as_str), Some("manual"));
@@ -1942,7 +1914,7 @@ mod tests {
     fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
         // The admin request is the shared DTO field shape; the cell value
         // written by soland is the SDK `NotaryValue` shape.
-        let body: NotaryReconfigBody = serde_json::from_value(json!({
+        let body: NotaryReconfigRequestBody = serde_json::from_value(json!({
             "kind": "threshold",
             "threshold_k": 2,
             "threshold_n": 3,
@@ -1959,7 +1931,7 @@ mod tests {
 
         // Structural violations are rejected by the SDK validator
         // (members.len() != n).
-        let invalid: NotaryReconfigBody = serde_json::from_value(json!({
+        let invalid: NotaryReconfigRequestBody = serde_json::from_value(json!({
             "kind": "threshold",
             "threshold_k": 2,
             "threshold_n": 3,
@@ -1980,7 +1952,7 @@ mod tests {
 
     #[test]
     fn admin_submit_move_response_serializes_status() {
-        let r = AdminSubmitControlMoveOutcome {
+        let r = SubmitControlMoveOutcome {
             control_move_id: "sha256:00".to_owned(),
             accepted: false,
             reason: Some("placeholder".to_owned()),

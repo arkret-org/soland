@@ -169,7 +169,6 @@ pub const CANONICAL_DESCRIBE_PATH: &str = "/_cokret/describe";
 /// marking it active. The configured URL records admin intent and is still
 /// advertised when the probe fails; this function only controls runtime
 /// liveness.
-///
 pub async fn probe_webvh_provider_describe(
     url: &str,
     timeout: Duration,

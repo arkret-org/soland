@@ -986,10 +986,8 @@ fn add_scope_circle_metadata(event: &mut serde_json::Value, content: &serde_json
 fn sync_timeline_message_record_json(message: &crate::state::MessageRecord) -> serde_json::Value {
     // strand_id is always derived from realm_id (one strand per Realm for
     // the message timeline) — thread_id is the discussion *track* within
-    // that strand, NOT the strand itself. The legacy top-level `branch` object
-    // was removed in revision 0a5ab85 (see cokret-spec
-    // `artifacts/registry/forbidden-wire-fields.json` entry "branch"); the
-    // `track_name` is the concrete v1 wire field.
+    // that strand, NOT the strand itself. The removed top-level `branch` object
+    // was replaced by the concrete v1 `track_name` wire field.
     let strand_id = strand_id_from_realm_id(&message.realm_id);
     let track_id = message.thread_id.clone();
     let mut event = json!({

@@ -38,7 +38,7 @@ const MAX_INBOUND_FEDERATION_OPERATIONS: usize = 500;
 
 /// SPEC-CR-008 (federation.md §4.0) — the cross-deployment federation Event
 /// receive rail is converged onto a single track: `POST /_cokret/peer/events`
-/// (`ck.peer.events.command.submit`). The legacy `/_soland/peer/*` inbound
+/// (`ck.peer.events.command.submit`). The `/_soland/peer/*` inbound
 /// *write* surface (transactions, operations push/backfill, seals push) is a
 /// deployment-local test/ops rail only and MUST NOT serve as a cross-vendor
 /// interop entry point: it MUST NOT accept Move/Anchor/Operation pushes from a

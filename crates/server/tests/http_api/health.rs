@@ -47,14 +47,14 @@ async fn health_and_describe_work() {
             .any(|profile| profile == "ck.profile.soland_limited_server.v1")
     );
 
-    let legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+    let operator_describe: Value = TestClient::get("http://server/_soland/describe")
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
     assert!(
-        legacy_describe["unsupported_profiles"]
+        operator_describe["unsupported_profiles"]
             .as_array()
             .unwrap()
             .iter()
@@ -329,14 +329,14 @@ async fn describe_returns_development_mode_field() {
     assert!(describe.get("proof_verifier_mode").is_none());
     assert!(describe.get("admin_auth_mode").is_none());
 
-    let legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+    let operator_describe: Value = TestClient::get("http://server/_soland/describe")
         .send(&dev_app)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(legacy_describe["proof_verifier_mode"], "development");
-    assert_eq!(legacy_describe["admin_auth_mode"], "development");
+    assert_eq!(operator_describe["proof_verifier_mode"], "development");
+    assert_eq!(operator_describe["admin_auth_mode"], "development");
 
     // Now flip to production posture with an explicit admin allowlist to
     // make sure the derivation tracks the config — this is the production
@@ -369,14 +369,14 @@ async fn describe_returns_development_mode_field() {
     assert!(prod_describe.get("proof_verifier_mode").is_none());
     assert!(prod_describe.get("admin_auth_mode").is_none());
 
-    let prod_legacy_describe: Value = TestClient::get("http://server/_soland/describe")
+    let prod_operator_describe: Value = TestClient::get("http://server/_soland/describe")
         .send(&prod_app)
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(prod_legacy_describe["proof_verifier_mode"], "production");
-    assert_eq!(prod_legacy_describe["admin_auth_mode"], "did_allowlist");
+    assert_eq!(prod_operator_describe["proof_verifier_mode"], "production");
+    assert_eq!(prod_operator_describe["admin_auth_mode"], "did_allowlist");
 }
 
 #[tokio::test]

@@ -6,9 +6,7 @@
 //! - `POST /_cokret/edge/push/notify` — fan-out a notification through the rule engine (see the
 //!   12-fn helper block at the bottom of this file).
 //!
-//! Push rules are canonical actor-private account data (`ck.push_rules`). The
-//! legacy `/_soland/edge/push/rules*` handlers below map into that same
-//! store so old callers do not create a second rule source.
+//! Push rules are canonical actor-private account data (`ck.push_rules`).
 //!
 //! `push_register_session_grant_bridge` is the local stand-in that accepts an
 //! `X-Cokret-Session-Grant` header for clients that haven't yet picked up a

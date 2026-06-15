@@ -25,9 +25,8 @@ A successful `POST /_cokret/self/events` walks the following stages:
 
 1. **Wire validation** (`routing::events::event_log`). The Salvo handler
    normalizes the request body into a canonical
-   `cokret_sdk::events::EventEnvelope`, rejects forbidden wire fields
-   (`is_forbidden_wire_field`), and binds the envelope to the authenticated
-   principal.
+   `cokret_sdk::events::EventEnvelope`, validates the schema-backed payload,
+   and binds the envelope to the authenticated principal.
 
 2. **Replay window + signature verification**
    (`src/jws_verify.rs`, `src/routing/events/event_log.rs`). The

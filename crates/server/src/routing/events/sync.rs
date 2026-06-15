@@ -11,10 +11,7 @@
 //!   / multi-actor stream; frame `kind` field replaces `type`.
 //! - `GET  /_cokret/self/events`                  — `ck.self.events.query.scan` (replaces
 //!   `ck.events.list` + `ck.sync.backfill` via `direction=forward|backward`).
-//! - `GET  /_cokret/self/sync/backfill/gap`       — `ck.sync.backfill_gap` (deployment-local; not
-//!   in spec)
 //! - `GET  /_cokret/self/snapshot/head`
-//! - `GET  /_soland/self/sync/snapshot-chunk`
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -34,7 +31,6 @@ use cokret_sdk::{PresenceStatus, RealmId};
 use futures_util::stream::StreamExt;
 use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -44,14 +40,12 @@ use super::projection::{
 };
 use super::{
     TO_DEVICE_PAGE_LIMIT, augment_timeline_message_json, authenticated_session,
-    backfill_gap_events, default_discussion_track, device_message_envelopes_after,
-    is_realm_deleted, now, parse_snapshot_ref, projected_event_page, projection_event_json,
-    prune_expired_typing, query_param, realm_discoverability, realm_event_visible_to_session,
-    realm_has_member, realm_history_visibility, realm_id_accessible, realm_visible_to,
-    render_error, sha256_hex, snapshot_bundle_for_realm, snapshot_manifest_for_realm,
-    strand_id_from_realm_id, strand_projection_for_realm,
-    sync_timeline_message_json_with_projection, truncate_gap_events, typing_ephemeral_for_realm,
-    validate_did,
+    default_discussion_track, device_message_envelopes_after, is_realm_deleted, now,
+    projected_event_page, projection_event_json, prune_expired_typing, query_param,
+    realm_discoverability, realm_event_visible_to_session, realm_has_member,
+    realm_history_visibility, realm_id_accessible, realm_visible_to, render_error, sha256_hex,
+    snapshot_manifest_for_realm, strand_id_from_realm_id, strand_projection_for_realm,
+    sync_timeline_message_json_with_projection, typing_ephemeral_for_realm, validate_did,
 };
 use crate::ids;
 use crate::persistence::SyncCursorRecord;
@@ -71,61 +65,6 @@ mod snapshot;
 use snapshot::*;
 mod ephemeral;
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct SyncGapBackfillOutcome {
-    events: Vec<Value>,
-    from_cursor: Option<String>,
-    to_cursor: Option<String>,
-    prev_cursor: Option<String>,
-    next_cursor: Option<String>,
-    limited: bool,
-    gap_complete: bool,
-    production_gap: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct SnapshotDevChunkDescriptor {
-    chunk_id: u32,
-    media_type: String,
-    digest: String,
-    size: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct SnapshotDevDigest {
-    kid: String,
-    alg: String,
-    digest: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct SnapshotHeadDevOutcome {
-    id: String,
-    state_digest: String,
-    chunks: Vec<SnapshotDevChunkDescriptor>,
-    frontier: Value,
-    dev_digest: SnapshotDevDigest,
-    merkle_root: String,
-    chunk_count: u32,
-    chunk_bytes: u32,
-    total_bytes: u64,
-    generator_proof: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct SnapshotChunkDevOutcome {
-    snapshot_ref: String,
-    chunk_id: u32,
-    media_type: String,
-    encoding: String,
-    digest: String,
-    verified: bool,
-    bytes_base64: String,
-    audit_path: Vec<String>,
-    tree_size: usize,
-    merkle_root: String,
-}
-
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(Router::with_path("account/describe").get(account_describe))
@@ -133,20 +72,6 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
         .push(Router::with_path("ephemeral").post(ephemeral::submit_ephemeral))
         .push(Router::with_path("snapshot/head").get(snapshot_head))
-}
-
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(Router::with_path("account/describe").get(account_describe))
-        .push(Router::with_path("account/subscribe").get(account_subscribe))
-        .push(Router::with_path("account/cursor/revoke").post(account_cursor_revoke))
-        .push(Router::with_path("ephemeral").post(ephemeral::submit_ephemeral))
-        .push(Router::with_path("sync/backfill/gap").get(sync_gap_backfill))
-        // Product-face dev snapshot head: serves the deployment-local dev
-        // bundle descriptor. The protocol `ck.self.snapshot.query.manifest_head` (manifest
-        // contract) is NOT implemented and fails closed on `/_cokret/`.
-        .push(Router::with_path("sync/snapshot-head").get(snapshot_head_dev))
-        .push(Router::with_path("sync/snapshot-chunk").get(snapshot_chunk))
 }
 
 fn scope_selector_to_realm_id(value: &str) -> Result<String, crate::error::AppError> {
@@ -174,7 +99,6 @@ async fn account_describe(depot: &mut Depot) -> crate::result::JsonResult<SyncDe
         "chat".to_owned(),
         "topic".to_owned(),
         "offline_queue_flush".to_owned(),
-        "backfill_gap".to_owned(),
         "bottom_cell_repair".to_owned(),
     ];
     let service_did = validate_did(&state.config.service_did).map_err(|_| {
@@ -187,7 +111,6 @@ async fn account_describe(depot: &mut Depot) -> crate::result::JsonResult<SyncDe
             "max_realms": 50,
             "max_timeline_events": 100,
             "offline_flush_endpoint": "/_cokret/self/events",
-            "backfill_endpoint": "/_cokret/self/sync/backfill/gap",
             "bottom_repair_endpoint": "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair"
         }),
         // SDK `SyncDescription.frontier` is an opaque cursor string; hand out
@@ -1208,88 +1131,6 @@ pub fn decode_sync_cursor_value(token: &str) -> Result<serde_json::Value, SyncCu
         .map_err(|_| SyncCursorError::Invalid("after cursor must contain JSON"))
 }
 
-/// Translate an optional client cursor to a backfill (event-id) cursor.
-///
-/// - `None` → `None` (start from the beginning).
-/// - Plain string that does NOT start with `ck:cursor:` → pass through unchanged; the caller
-///   already speaks the projection's `event_id` cursor.
-/// - `ck:cursor:...` → decode the structured cursor, look up the handle's stored position for
-///   `realm_id` (a `timestamp_micros` checkpoint), then walk the Realm's projected events and
-///   persisted messages to find the most recent event at-or-before that checkpoint and return its
-///   `event_id`. When no event sits at-or-before the checkpoint, return `None` so backfill streams
-///   from the start of the Realm.
-pub async fn resolve_sync_cursor_to_event_id(
-    state: &AppState,
-    realm_id: &str,
-    cursor: Option<String>,
-) -> Result<Option<String>, &'static str> {
-    let Some(cursor) = cursor else {
-        return Ok(None);
-    };
-    if !cursor.starts_with("ck:cursor:") {
-        return Ok(Some(cursor));
-    }
-    let value = decode_sync_cursor_value(&cursor)
-        .map_err(|_| "sync cursor is not a valid ck:cursor token")?;
-    if has_inline_cursor_body_marker(&value)
-        || value.get("_ctx").is_some()
-        || value.get("_positions").is_some()
-    {
-        return Err("sync cursor integrity invalid");
-    }
-    let Some(handle) = value.get("h").and_then(Value::as_str) else {
-        return Err("sync cursor is missing stateful handle");
-    };
-    let stored = stored_sync_cursor_by_handle(state, handle)
-        .await
-        .map_err(|_| "sync cursor handle is unknown")?;
-    let checkpoint = stored
-        .get("positions")
-        .and_then(|positions| positions.get("realms"))
-        .and_then(|realms| realms.get(realm_id))
-        .and_then(|position| position.as_i64());
-    let Some(checkpoint) = checkpoint else {
-        return Ok(None);
-    };
-
-    let mut newest_event_id: Option<(i64, String)> = None;
-    // Snapshot the (event_id, created_at) pairs out from under the projection
-    // lock before the async position lookups (guard is not Send).
-    let projected_messages: Vec<(String, DateTime<Utc>)> = {
-        let projection = state.projection.lock().expect("projection lock");
-        projection
-            .messages_for_realm(realm_id)
-            .into_iter()
-            .map(|message| (message.event_id.clone(), message.created_at))
-            .collect()
-    };
-    for (event_id, created_at) in projected_messages {
-        let position = timeline_event_position(state, &event_id, created_at).await;
-        if position <= checkpoint {
-            match &newest_event_id {
-                Some((existing_pos, _)) if *existing_pos >= position => {}
-                _ => newest_event_id = Some((position, event_id.clone())),
-            }
-        }
-    }
-    for message in state
-        .persistence
-        .messages()
-        .list_for_realm(realm_id, 1000)
-        .await
-        .unwrap_or_default()
-    {
-        let position = timeline_event_position(state, &message.event_id, message.created_at).await;
-        if position <= checkpoint {
-            match &newest_event_id {
-                Some((existing_pos, _)) if *existing_pos >= position => {}
-                _ => newest_event_id = Some((position, message.event_id.clone())),
-            }
-        }
-    }
-    Ok(newest_event_id.map(|(_, event_id)| event_id))
-}
-
 pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let empty_filter = json!({});
     let binding = json!({
@@ -2088,74 +1929,6 @@ async fn durable_events_query_from_parts(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.sync.backfill_gap",
-    tags("sync"),
-    summary = "Backfill the gap between two cursors (deployment-local; not in spec)"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.backfill_gap"))]
-async fn sync_gap_backfill(
-    realm_id: salvo::oapi::extract::QueryParam<String, true>,
-    limit: salvo::oapi::extract::QueryParam<usize, false>,
-    _from_cursor: salvo::oapi::extract::QueryParam<String, false>,
-    _to_cursor: salvo::oapi::extract::QueryParam<String, false>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> crate::result::JsonResult<SyncGapBackfillOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let realm_id = scope_selector_to_realm_id(&realm_id.into_inner())?;
-    let session = authenticated_session(state, req).await.ok();
-    if !realm_id_accessible(state, &realm_id, session.as_ref()).await {
-        return Err(crate::error::AppError::not_found("not found"));
-    }
-    let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
-    let from_cursor = query_param(req, "from_cursor");
-    let to_cursor = query_param(req, "to_cursor");
-
-    // Resolve sync `ck:cursor:` tokens to reducer event cursors.
-    let from_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, from_cursor)
-        .await
-        .map_err(crate::error::AppError::invalid_param)?;
-    let to_cursor = resolve_sync_cursor_to_event_id(state, &realm_id, to_cursor)
-        .await
-        .map_err(crate::error::AppError::invalid_param)?;
-
-    let (events, next_cursor, limited) =
-        backfill_gap_events(state, &realm_id, from_cursor.as_deref(), limit)
-            .await
-            .map_err(|error| {
-                if error.to_string().contains("invalid_cursor") {
-                    crate::error::AppError::invalid_param("cursor not found")
-                        .with_wire_code("invalid_cursor")
-                } else {
-                    crate::error::AppError::internal(error.to_string())
-                }
-            })?;
-    let mut filtered_events = Vec::new();
-    for event in events {
-        if projection_event_value_visible_to_session(state, &event, session.as_ref()).await {
-            filtered_events.push(event);
-        }
-    }
-    let events = filtered_events;
-    let (events, gap_complete) = truncate_gap_events(events, to_cursor.as_deref());
-    let next_cursor = if gap_complete {
-        to_cursor.clone()
-    } else {
-        next_cursor
-    };
-    crate::result::json_ok(SyncGapBackfillOutcome {
-        events,
-        from_cursor: from_cursor.clone(),
-        to_cursor: to_cursor.clone(),
-        prev_cursor: from_cursor,
-        next_cursor,
-        limited: limited && !gap_complete,
-        gap_complete: gap_complete || !limited,
-        production_gap: "durable_sync_position_validation".to_owned(),
-    })
-}
-
-#[endpoint(
     operation_id = "ck.self.snapshot.query.manifest_head",
     tags("sync"),
     summary = "Read the signed snapshot-v1 manifest head for a Realm"
@@ -2164,7 +1937,7 @@ async fn sync_gap_backfill(
 async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> crate::result::JsonResult<cokret_sdk::SnapshotHeadState> {
+) -> crate::result::JsonResult<cokret_sdk::SnapshotManifest> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
@@ -2196,131 +1969,6 @@ async fn snapshot_head(
             }
         })?;
     crate::result::json_ok(manifest)
-}
-
-/// Deployment-local dev snapshot head (`/_soland/self/sync/snapshot-head`).
-/// Serves the dev bundle descriptor (chunk plan + merkle root + dev digest)
-/// that pairs with `org.cokret.soland.sync.snapshot_chunk`. This is NOT the
-/// protocol `ck.self.snapshot.query.manifest_head` manifest contract.
-#[endpoint(
-    operation_id = "org.cokret.soland.sync.snapshot_head",
-    tags("sync"),
-    summary = "Read the deployment-local dev snapshot head (chunk plan + merkle root)"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.snapshot_head"))]
-async fn snapshot_head_dev(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> crate::result::JsonResult<SnapshotHeadDevOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let realm_id = query_param(req, "realm_id")
-        .ok_or_else(|| crate::error::AppError::missing_param("realm_id is required"))?;
-    let realm_id = scope_selector_to_realm_id(&realm_id)?;
-    if is_realm_deleted(state, &realm_id).await {
-        return Err(crate::error::AppError::not_found("not found"));
-    }
-    let realm_id_value = RealmId::new(realm_id.clone())
-        .map_err(|_| crate::error::AppError::invalid_param("invalid realm_id"))?;
-    {
-        let realms = state.realms.lock().expect("realms lock");
-        if realms.get(&realm_id_value).is_none() {
-            return Err(crate::error::AppError::not_found("not found"));
-        }
-    }
-    let bundle = snapshot_bundle_for_realm(state, &realm_id)
-        .await
-        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    // chunks[] is the per-chunk descriptor (id + size + digest) — receivers
-    // fetch each chunk via `/sync/snapshot-chunk?chunk_id=N` and check it
-    // against `merkle_root` using the chunk's `audit_path`.
-    let chunk_descriptors: Vec<SnapshotDevChunkDescriptor> = bundle
-        .chunks
-        .iter()
-        .map(|chunk| SnapshotDevChunkDescriptor {
-            chunk_id: chunk.chunk_id,
-            media_type: "application/json".to_owned(),
-            digest: chunk.digest.as_str().to_owned(),
-            size: chunk.bytes.len(),
-        })
-        .collect();
-    let merkle_root = bundle.tree.root().as_str().to_owned();
-    let service_did = state.config.service_did.clone();
-    let digest_payload = format!("{}:{}:{}", bundle.id, bundle.state_digest, service_did);
-    crate::result::json_ok(SnapshotHeadDevOutcome {
-        id: bundle.id,
-        state_digest: bundle.state_digest,
-        chunks: chunk_descriptors,
-        frontier: bundle.frontier,
-        // Dev integrity digest over (id, state_digest, service
-        // DID). Deliberately NOT named `signature`: the spec forbids
-        // fabricating snapshot manifest signatures.
-        dev_digest: SnapshotDevDigest {
-            kid: format!("{service_did}#snapshot-dev"),
-            alg: "sha256-dev".to_owned(),
-            digest: sha256_hex(digest_payload.as_bytes()),
-        },
-        merkle_root,
-        chunk_count: bundle.chunk_count,
-        chunk_bytes: bundle.chunk_bytes,
-        total_bytes: bundle.total_bytes,
-        generator_proof: bundle.generator_proof,
-    })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.sync.snapshot_chunk",
-    tags("sync"),
-    summary = "Read one chunk of a snapshot-v1 bundle (with audit_path proving merkle membership)"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.sync.snapshot_chunk"))]
-async fn snapshot_chunk(
-    snapshot_ref: salvo::oapi::extract::QueryParam<String, true>,
-    chunk_id: salvo::oapi::extract::QueryParam<u32, false>,
-    depot: &mut Depot,
-) -> crate::result::JsonResult<SnapshotChunkDevOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let snapshot_ref = snapshot_ref.into_inner();
-    let chunk_id = chunk_id.into_inner().unwrap_or(0);
-    let (realm_id, expected_hash) = parse_snapshot_ref(&snapshot_ref)
-        .ok_or_else(|| crate::error::AppError::invalid_param("invalid snapshot_ref"))?;
-    if is_realm_deleted(state, &realm_id).await {
-        return Err(crate::error::AppError::not_found("not found"));
-    }
-    let bundle = snapshot_bundle_for_realm(state, &realm_id)
-        .await
-        .ok_or_else(|| crate::error::AppError::not_found("not found"))?;
-    if bundle.id != snapshot_ref || bundle.state_digest != expected_hash {
-        return Err(crate::error::AppError::new(
-            crate::error::ErrorCode::StaleFrontier,
-            "snapshot_ref no longer matches the current snapshot frontier",
-        ));
-    }
-    // Snapshot v1: chunks[N] is the SDK-canonical SnapshotChunk @
-    // chunk_id=N. Out-of-range `chunk_id` returns 404.
-    let tree_size = bundle.tree.tree_size();
-    let chunk = bundle
-        .chunks
-        .get(chunk_id as usize)
-        .ok_or_else(|| crate::error::AppError::not_found("snapshot chunk not found"))?;
-    let audit_path = bundle
-        .tree
-        .audit_path(chunk_id as usize)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|h| h.as_str().to_owned())
-        .collect::<Vec<_>>();
-    crate::result::json_ok(SnapshotChunkDevOutcome {
-        snapshot_ref,
-        chunk_id,
-        media_type: "application/json".to_owned(),
-        encoding: "base64url".to_owned(),
-        digest: chunk.digest.as_str().to_owned(),
-        verified: cokret_sdk::canonical::sha256_digest(&chunk.bytes) == chunk.digest.as_str(),
-        bytes_base64: URL_SAFE_NO_PAD.encode(&chunk.bytes),
-        audit_path,
-        tree_size,
-        merkle_root: bundle.tree.root().as_str().to_owned(),
-    })
 }
 
 #[cfg(test)]

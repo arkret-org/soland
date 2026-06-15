@@ -96,10 +96,9 @@ pub async fn strand_projection_for_realm(
         .unwrap_or(created_at);
     let deleted = meta.as_ref().is_some_and(|meta| meta.deleted);
     let history_visibility = strand_history_visibility_for_realm(state, realm_id).await;
-    // `kind: "room"` and `room_kind` were removed in revision 0a5ab85
-    // (see cokret-spec `artifacts/registry/forbidden-wire-fields.json`
-    // entries `kind=room` and `room_kind`); Realm is the v1 boundary and
-    // the Strand.kind discriminator MUST be a v1 value (e.g. "discussion").
+    // `kind: "room"` and `room_kind` were removed in revision 0a5ab85; Realm
+    // is the v1 boundary and the Strand.kind discriminator MUST be a v1 value
+    // (e.g. "discussion").
     json!({
         "id": strand_id_from_realm_id(realm_id),
         "strand_id": strand_id_from_realm_id(realm_id),

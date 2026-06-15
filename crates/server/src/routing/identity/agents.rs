@@ -19,7 +19,7 @@
 //!   `ck.self.agent.grant.command.attach`
 //! - `DELETE /_cokret/self/agents/{id}/grants/{grant_id}`      —
 //!   `ck.self.agent.grant.resource.delete`
-//! - `POST   /_cokret/self/agents/{id}/sidecar-thread/ensure`  —
+//! - `POST   /_cokret/self/agent-sidecar-threads:ensure`       —
 //!   `ck.self.agent.sidecar_thread.command.ensure`
 //!
 //! All endpoints accept controller-self bearer sessions (TODO(P2-impl):
@@ -78,28 +78,6 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("agent-sidecar-threads:ensure").post(ensure_sidecar_thread_canonical),
         )
-}
-
-pub(super) fn local_router() -> Router {
-    Router::with_path("agents")
-        .post(provision_agent)
-        .get(list_agents)
-        .push(Router::with_path("{agent_id}").get(get_agent))
-        .push(Router::with_path("{agent_id}/pause").post(pause_agent))
-        .push(Router::with_path("{agent_id}/resume").post(resume_agent))
-        .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
-        .push(Router::with_path("{agent_id}/rotate-key").post(rotate_agent_key))
-        .push(
-            Router::with_path("{agent_id}/grants")
-                .post(attach_agent_grant)
-                .push(Router::with_path("{grant_id}").delete(detach_agent_grant)),
-        )
-        .push(
-            Router::with_path("{agent_id}/participation")
-                .get(get_agent_participation)
-                .put(set_agent_participation),
-        )
-        .push(Router::with_path("{agent_id}/sidecar-thread/ensure").post(ensure_sidecar_thread))
 }
 
 /// `/_cokret/gate/account/agent-key-pair` lives under the auth router, not
@@ -409,24 +387,6 @@ async fn agent_key_pair(
             "verification_method DID must match agent_principal_id",
         ));
     }
-    // ERR-1 — PROOF_INVALID +
-    // VERIFICATION_METHOD_PRINCIPAL_MISMATCH +
-    // APPROVAL_ALREADY_CONSUMED reason codes seal here. The pairing
-    // pipeline (CKP-0008 §4.2) emits PROOF_INVALID when the
-    // runtime_attestation signature fails crypto verification,
-    // VERIFICATION_METHOD_PRINCIPAL_MISMATCH when the DID resolved from
-    // `verification_method` doesn't match the agent_principal's
-    // controller, and APPROVAL_ALREADY_CONSUMED when the controller
-    // approval token has been re-played.
-    //
-    // Runtime attestations are currently refused below with
-    // `unsupported_feature`; once the verifier + controller approval
-    // ledger land this handler should emit those canonical reasons from
-    // the concrete failing check.
-    let _proof_invalid_reason: &str = crate::error::reasons::PROOF_INVALID;
-    let _verification_method_mismatch_reason: &str =
-        crate::error::reasons::VERIFICATION_METHOD_PRINCIPAL_MISMATCH;
-    let _approval_consumed_reason: &str = crate::error::reasons::APPROVAL_ALREADY_CONSUMED;
     // The runtime-attestation verifier is not wired yet. Refuse every
     // supplied attestation fail-closed instead of accepting a shape-only
     // `self_asserted` placeholder as if it were a verified binding.
@@ -669,19 +629,6 @@ async fn lifecycle_transition(
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
-    // ERR-1 / REDU-1 — surface AGENT_PAUSED / AGENT_DEACTIVATED reason
-    // codes through this transition path so the constants stay
-    // grep-discoverable from the handler that emits them. The reducer's
-    // FSM rejection (`reducer::apply_agent_lifecycle`) re-emits the
-    // canonical wire form to clients when the projection is wired.
-    //
-    // TODO(R4): once the per-agent FSM projection is queryable from the
-    // handler, look up the current AgentLifecycleState and reject
-    // pre-flight (no audit-log churn) when:
-    //   - state == Paused and !is_resume(event_kind) → AGENT_PAUSED
-    //   - state == Deactivated                       → AGENT_DEACTIVATED
-    let _agent_paused_reason: &str = crate::error::reasons::AGENT_PAUSED;
-    let _agent_deactivated_reason: &str = crate::error::reasons::AGENT_DEACTIVATED;
     let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let mut payload = json!({
         "agent_principal_id": agent_id,
@@ -964,32 +911,6 @@ async fn detach_agent_grant(
     })
 }
 
-#[endpoint(
-    operation_id = "ck.self.agent.sidecar_thread.command.ensure",
-    tags("agents"),
-    summary = "Idempotently ensure the controller<->agent sidecar Circle exists",
-    status_codes(200, 201, 400, 401, 403, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.self.agent.sidecar_thread.command.ensure"))]
-async fn ensure_sidecar_thread(
-    aa: AuthArgs,
-    agent_id: PathParam<String>,
-    body: JsonBody<AgentSidecarThreadEnsureRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
-    // Legacy `/_cokret/self/agents/{id}/sidecar-thread/ensure` route: the path
-    // `{agent_id}` MUST agree with the spec body's `agent_principal_id`.
-    let agent_id = agent_id.into_inner();
-    let body = body.into_inner();
-    if body.agent_principal_id.as_str() != agent_id {
-        return Err(AppError::invalid_param(
-            "path agent_id must match body agent_principal_id",
-        ));
-    }
-    ensure_sidecar_thread_impl(aa, body, depot, req).await
-}
-
 async fn ensure_sidecar_thread_impl(
     aa: AuthArgs,
     body: AgentSidecarThreadEnsureRequestBody,
@@ -998,15 +919,6 @@ async fn ensure_sidecar_thread_impl(
 ) -> JsonResult<AgentSidecarThreadEnsureOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    // ERR-1 — SIDECAR_CREATE_DENIED + PAIRING_REQUEST_EXPIRED reason
-    // codes surface here when the controller<->agent sidecar policy
-    // forbids creation or when the pairing request has timed out.
-    // TODO(R4): when the policy projection is wired, evaluate the
-    // controller-agent relation index and short-circuit with:
-    //   - SIDECAR_CREATE_DENIED when the controller policy is disabled
-    //   - PAIRING_REQUEST_EXPIRED when pairing_request.expires_at <= now
-    let _sidecar_denied_reason: &str = crate::error::reasons::SIDECAR_CREATE_DENIED;
-    let _pairing_expired_reason: &str = crate::error::reasons::PAIRING_REQUEST_EXPIRED;
     // spec `agent_sidecar_thread_ensure_outcome` =
     // `{ok, private_circle_id, private_strand_id, private_relation_id,
     //   pending_member_reconciliations?}`. The private Circle / Strand / Relation

@@ -36,16 +36,13 @@ use cokret_sdk::{
     ProjectionStrandList, ProjectionStrandRow, RealmId, RelationId, SpaceId, StrandId,
 };
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{PathParam, QueryParam};
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
-use serde::Serialize;
-use serde_json::{Value, json};
 
 use super::realm_id_accessible;
 use crate::error::{AppError, ErrorCode};
 use crate::reducer::{
-    MorphProjection, ObjectLifecycleState, ProjectionState, SolandRelationState,
-    SpaceContainerLifecycleState,
+    ObjectLifecycleState, ProjectionState, SolandRelationState, SpaceContainerLifecycleState,
 };
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -56,14 +53,6 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("projection/spaces").get(list_space_container_projections))
         .push(Router::with_path("projection/strands").get(list_strand_projections))
         .push(Router::with_path("projection/morphs").get(list_morph_projections))
-}
-
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(Router::with_path("projection/spaces").get(list_space_container_projections))
-        .push(Router::with_path("projection/strands").get(list_strand_projections))
-        .push(Router::with_path("projection/morphs").get(list_morph_projections))
-        .push(Router::with_path("projection/documents/{morph_id}").get(read_document_projection))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -149,55 +138,6 @@ fn strand_position_relation<'a>(
 
 type StrandPositionFields = (Option<SpaceId>, Option<SpaceId>, Option<String>);
 
-#[derive(Debug, Serialize, ToSchema)]
-struct DocumentProjectionOutcome {
-    document: DocumentProjectionDocument,
-    versions: Vec<DocumentProjectionVersion>,
-    relations: Vec<DocumentProjectionRelation>,
-    comments: Vec<Value>,
-    cursor_presence: Vec<Value>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct DocumentProjectionDocument {
-    morph_id: String,
-    realm_id: String,
-    morph_type: String,
-    title: Option<String>,
-    state: String,
-    fields: std::collections::BTreeMap<String, Value>,
-    body: Value,
-    schema_refs: Vec<String>,
-    facets: Vec<String>,
-    created_by: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_by: Option<String>,
-    updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct DocumentProjectionVersion {
-    version_id: String,
-    event_id: String,
-    author: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-    body_digest: String,
-    body: Value,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-struct DocumentProjectionRelation {
-    relation_id: String,
-    realm_id: String,
-    relation_kind: String,
-    from: Option<String>,
-    to: Option<String>,
-    fields: std::collections::BTreeMap<String, Value>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
 fn strand_position_fields(
     projection: &ProjectionState,
     strand_id: &str,
@@ -244,159 +184,6 @@ fn strand_assigned_to_relations(
                 )?,
                 actor_id: parse_projection_id::<Did>(&actor_id, "assigned_to_relations.actor_id")?,
             })
-        })
-        .collect()
-}
-
-fn document_body_from_morph(morph: &MorphProjection) -> Value {
-    morph
-        .fields
-        .get("document")
-        .or_else(|| morph.fields.get("body"))
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
-fn document_text_len(value: &Value) -> usize {
-    if let Some(text) = value.as_str() {
-        return text.chars().count();
-    }
-    if let Some(blocks) = value.get("blocks").and_then(Value::as_array) {
-        return blocks
-            .iter()
-            .map(|block| {
-                block
-                    .get("content")
-                    .or_else(|| block.get("text"))
-                    .and_then(Value::as_str)
-                    .map(|text| text.chars().count())
-                    .unwrap_or(0)
-            })
-            .sum::<usize>()
-            + blocks.len().saturating_sub(1);
-    }
-    value.to_string().chars().count()
-}
-
-fn comment_anchor_range(content: &Value) -> Option<(u64, u64)> {
-    let range = content.get("anchor_range")?;
-    let start = range
-        .get("start")
-        .or_else(|| range.get("range_start"))
-        .and_then(Value::as_u64)?;
-    let end = range
-        .get("end")
-        .or_else(|| range.get("range_end"))
-        .and_then(Value::as_u64)?;
-    (end > start).then_some((start, end))
-}
-
-fn comment_target_ref(content: &Value) -> Option<&str> {
-    content
-        .get("morph_id")
-        .or_else(|| content.get("document_id"))
-        .or_else(|| content.get("target_ref"))
-        .or_else(|| content.pointer("/anchor_range/morph_id"))
-        .or_else(|| content.pointer("/anchor_range/document_id"))
-        .or_else(|| content.pointer("/anchor_range/target_ref"))
-        .and_then(Value::as_str)
-}
-
-fn comment_reply_to(content: &Value) -> Option<&str> {
-    content
-        .get("reply_to")
-        .or_else(|| content.get("in_reply_to"))
-        .and_then(Value::as_str)
-}
-
-fn comment_body(content: &Value) -> String {
-    content
-        .get("body")
-        .or_else(|| content.get("text"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned()
-}
-
-fn document_comments_json(
-    projection: &ProjectionState,
-    morph_id: &str,
-    document_len: usize,
-) -> Vec<Value> {
-    let mut roots = Vec::new();
-    let mut replies: std::collections::BTreeMap<String, Vec<Value>> =
-        std::collections::BTreeMap::new();
-    for message in projection.messages.values() {
-        let content = &message.content;
-        if comment_target_ref(content) != Some(morph_id) {
-            continue;
-        }
-        if let Some(parent) = comment_reply_to(content) {
-            replies.entry(parent.to_owned()).or_default().push(json!({
-                "event_id": message.event_id,
-                "author": message.sender,
-                "body": comment_body(content),
-                "created_at": message.created_at,
-            }));
-            continue;
-        }
-        let Some((start, end)) = comment_anchor_range(content) else {
-            continue;
-        };
-        let explicit_state = content
-            .get("state")
-            .or_else(|| content.get("comment_state"))
-            .and_then(Value::as_str);
-        let state = if matches!(explicit_state, Some("orphaned" | "locked")) {
-            explicit_state.unwrap()
-        } else if usize::try_from(end)
-            .ok()
-            .is_some_and(|end| end > document_len)
-        {
-            "orphaned"
-        } else {
-            "active"
-        };
-        roots.push(json!({
-            "comment_id": message.event_id,
-            "author": message.sender,
-            "body": comment_body(content),
-            "anchor_range": { "start": start, "end": end },
-            "state": state,
-            "created_at": message.created_at,
-        }));
-    }
-    for root in &mut roots {
-        if let Some(comment_id) = root.get("comment_id").and_then(Value::as_str)
-            && let Some(children) = replies.remove(comment_id)
-        {
-            root["replies"] = Value::Array(children);
-        }
-    }
-    roots
-}
-
-fn document_relations_json(
-    projection: &ProjectionState,
-    morph_id: &str,
-) -> Vec<DocumentProjectionRelation> {
-    projection
-        .relations
-        .values()
-        .filter(|relation| relation.is_active())
-        .filter(|relation| {
-            relation.from_ref.as_deref() == Some(morph_id)
-                || relation.to_ref.as_deref() == Some(morph_id)
-        })
-        .map(|relation| DocumentProjectionRelation {
-            relation_id: relation.relation_id.clone(),
-            realm_id: relation.realm_id.clone(),
-            relation_kind: relation.relation_kind.clone(),
-            from: relation.from_ref.clone(),
-            to: relation.to_ref.clone(),
-            fields: relation.fields.clone(),
-            created_at: relation.created_at,
-            updated_at: relation.updated_at,
         })
         .collect()
 }
@@ -623,86 +410,4 @@ async fn list_morph_projections(
         next_cursor: None,
         has_more: false,
     })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.projection.document",
-    tags("projection"),
-    summary = "Read a document Morph projection with body, versions, relations, comments, and cursor presence"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.projection.document"))]
-async fn read_document_projection(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    morph_id: PathParam<String>,
-) -> JsonResult<DocumentProjectionOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let morph_id = morph_id.into_inner();
-    let _ = parse_projection_id::<MorphId>(&morph_id, "morph_id")?;
-    // Snapshot the morph + derived comments/relations out from under the
-    // projection lock before the async access check (the guard is not Send
-    // and must not cross an `.await`).
-    let (morph, body, comments, relations) = {
-        let proj = state.projection.lock().map_err(|_| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                "projection state unavailable",
-            )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-        let morph = proj
-            .morphs
-            .get(&morph_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("document Morph not found"))?;
-        let body = document_body_from_morph(&morph);
-        let document_len = document_text_len(&body);
-        let comments = document_comments_json(&proj, &morph_id, document_len);
-        let relations = document_relations_json(&proj, &morph_id);
-        (morph, body, comments, relations)
-    };
-    if !realm_id_accessible(state, &morph.realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
-            "Document not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
-    }
-    let versions = morph
-        .versions
-        .iter()
-        .map(|version| DocumentProjectionVersion {
-            version_id: version.version_id.clone(),
-            event_id: version.event_id.clone(),
-            author: version.author.clone(),
-            created_at: version.created_at,
-            body_digest: version.body_digest.clone(),
-            body: version.body.clone(),
-        })
-        .collect::<Vec<_>>();
-    let response = DocumentProjectionOutcome {
-        document: DocumentProjectionDocument {
-            morph_id: morph.morph_id,
-            realm_id: morph.realm_id,
-            morph_type: morph.morph_type,
-            title: morph.title,
-            state: morph.state.as_str().to_owned(),
-            fields: morph.fields,
-            body,
-            schema_refs: morph.schema_refs,
-            facets: morph.facets,
-            created_by: morph.created_by,
-            created_at: morph.created_at,
-            updated_by: morph.updated_by,
-            updated_at: morph.updated_at,
-            state_changed_at: morph.state_changed_at,
-        },
-        versions,
-        relations,
-        comments,
-        cursor_presence: Vec::new(),
-    };
-    json_ok(response)
 }

@@ -948,7 +948,7 @@ fn did_webvh_descriptor(state: &AppState) -> Value {
             "base_url": url,
             // STA-07-002 — advertise the canonical generic server-describe
             // endpoint (operation_id ck.server.query.describe) the resolver
-            // freshness probe now targets, not the retired starid-legacy
+            // freshness probe now targets, not the retired starid
             // `<URL>/describe`.
             "describe_url": format!(
                 "{}{}",

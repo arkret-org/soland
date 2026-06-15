@@ -29,13 +29,6 @@ pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
 }
 
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(Router::with_path("moderation/report").post(moderation_report))
-        .push(Router::with_path("moderation/reports").get(moderation_reports))
-        .push(Router::with_path("moderation/appeal").post(moderation_appeal_submit))
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ModerationReportsOutcome {
     reports: Vec<Value>,
@@ -641,7 +634,7 @@ async fn moderation_appeal_submit(
 /// history. Returns the last-known `appeal_state` string, or `None` if the
 /// appeal does not exist.
 ///
-/// Retained as a read helper over the legacy moderation persistence table.
+/// Retained as a read helper over the moderation persistence table.
 /// The admin write path that consumed it was taken offline in the P2
 /// governance migration (moderation truth now lives in the reducer's
 /// `ck.component.moderation.appeal.v1` cell); kept for the interop read

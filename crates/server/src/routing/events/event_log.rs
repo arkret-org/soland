@@ -1689,42 +1689,6 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
     Some(canonical::sha256_digest(bytes))
 }
 
-/// CKP-0007 — recursively scan `value` for the first key listed in the SDK's
-/// [`cokret_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS`] hard-reject
-/// set. Receivers MUST refuse the legacy field names outright. Returns the
-/// offending field name when one is present, otherwise `None`.
-///
-/// The walk descends into nested objects and arrays so a forbidden key carried
-/// inside `patch`, `object`, or any other sub-tree also fails. Callers that
-/// need to inspect only the top-level payload object can pass
-/// `value.as_object()` directly — the recursive form handles both shapes.
-fn first_forbidden_wire_field(value: Option<&Value>) -> Option<&'static str> {
-    fn walk(value: &Value) -> Option<&'static str> {
-        match value {
-            Value::Object(map) => {
-                for (key, child) in map {
-                    if cokret_sdk::forbidden_wire_fields::is_forbidden_wire_field(key) {
-                        // Translate the wire key back to the SDK's canonical
-                        // &'static str so the caller's error message uses a
-                        // stable identifier.
-                        return cokret_sdk::forbidden_wire_fields::FORBIDDEN_WIRE_FIELDS
-                            .iter()
-                            .copied()
-                            .find(|name| *name == key.as_str());
-                    }
-                    if let Some(found) = walk(child) {
-                        return Some(found);
-                    }
-                }
-                None
-            }
-            Value::Array(items) => items.iter().find_map(walk),
-            _ => None,
-        }
-    }
-    value.and_then(walk)
-}
-
 fn require_object_field(
     object: &serde_json::Map<String, Value>,
     key: &'static str,
@@ -1962,7 +1926,7 @@ pub enum SolandEventsSubmitRequestBody {
     Federation(EventsSubmitFederationRequestBody),
     /// Batch form — multiple envelopes, optional `idempotency_key`.
     Batch(cokret_sdk::EventsSubmitBatchRequestBody),
-    /// Single Event Envelope (legacy / dominant shape).
+    /// Single Event Envelope (dominant shape).
     Single(Value),
 }
 
@@ -2152,7 +2116,7 @@ pub fn cross_signing_reset_replay_check(
 ///    is service-decryptable MUST be derivable from member-visible metadata, not asserted out of
 ///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
 ///    covers, as projected from the realm's MLS cell; `None` means the binding carried no digest,
-///    in which case only the legacy policy_root coverage gate (check 3) applies.
+///    in which case only the policy_root coverage gate (check 3) applies.
 pub fn realm_policy_components_check(
     payload: &Value,
     active_profiles: &[String],

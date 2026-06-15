@@ -14,7 +14,6 @@ operator-relevant ones:
 | `database_unreachable` (top-level on `/readyz`) | same | Verify `DATABASE_URL`, check Postgres logs, confirm the soland process can reach the listed host. |
 | `cross_domain_replay_rejected` | Federation intake | A peer replayed an event whose `trust_domain` does not match this deployment's `SOLAND_TRUST_DOMAIN`. Confirm the peer's `Source-Trust-Domain` header is correct. |
 | `delivery_binding_stale` | Federation handover | Recipient has rebound; the response body carries `new_recipient_service_did` + `handover_frontier`. Update the routing table. |
-| `forbidden_wire_field` | `routing::events::event_log` | Producer sent a payload key listed in `spec/v1/artifacts/registry/forbidden-wire-fields.json`. Update the client SDK. |
 | `cursor_expired` | account / events subscribe | Client cursor older than the configured window. Client must re-subscribe with `from=null`. |
 | `handle_in_grace_period` | identity handle claim | Handle was released too recently. Wait out `HANDLE_GRACE_PERIOD_SECONDS` or pick a different handle. |
 | `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` retries. Inspect the row in the dead-letter ledger via `GET /_soland/admin/federation/dead-letters`. |
@@ -167,7 +166,7 @@ cargo run --bin soland-rotate-drill --release
 
 The sections below cover the R3 sync and later v1 updates
 (`cokret-spec @ 8a9c32a`). They are
-intentionally separable from the legacy runbook above so that you can
+intentionally separable from the earlier runbook above so that you can
 on-call a fresh ops engineer who has not seen pre-R3 soland.
 
 ### Agent FSM transitions (pause / resume / deactivate)
@@ -304,7 +303,6 @@ Focus-binding troubleshooting matrix:
 | `session_focus_already_committed` | Call is bound to a different focus already; the client must resume against that focus or end and re-initiate. |
 | `e2ee_key_source_unauthorised` | Backend tried to source SFrame keys outside MLS-Exporter — this is a hard reject. Escalate to yougen if it persists. |
 | `recording_artifact_pipeline_bypassed` | Recording landed outside the canonical pipeline. Check `floria` recording-export hooks. |
-| `legacy_single_endpoint_media_service` | Realm `ck.realm.media_service` still uses the v1.0 `sfu_endpoint` field. Run the migration (DEPLOYMENT.md §R3). |
 | `focus_unavailable_for_client` | Client profile set doesn't include the focus's backend profile. Negotiate down or update the client. |
 
 ### Strict-reject profile toggle (`ck.profile.accountable_principals.strict_reject.v1`)

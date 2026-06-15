@@ -422,34 +422,6 @@ pub struct SolandHandleClaimProof {
     pub jws: Option<String>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct IndexQueryRequestBody {
-    #[serde(default)]
-    pub realm_ids: Vec<String>,
-    /// Filter by typed-id kinds (`space`, `strand`, `message`, …) drawn from the
-    /// spec id-kind-registry. Replaces the round-5 `entity_types[]` field that
-    /// referenced the soland-local entity scaffold.
-    #[serde(default)]
-    pub object_kinds: Vec<String>,
-    #[serde(default)]
-    pub facets: Vec<String>,
-    pub renderer: Option<String>,
-    #[serde(default)]
-    pub filters: Value,
-    #[serde(default)]
-    pub sort: Vec<Value>,
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct IndexQueryOutcome {
-    pub results: Vec<Value>,
-    pub next_cursor: Option<String>,
-    pub frontier: Value,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IndexDescribeOutcome {
     pub service_did: String,
@@ -526,11 +498,9 @@ pub struct EventsFrontierAccountClientState {
     pub receipts: Option<Vec<Value>>,
 }
 
-// `SolandSnapshotHeadState` was deleted with the 2026-06-11 spec resolution:
-// `ck.self.snapshot.query.manifest_head` / `ck.peer.snapshot.query.manifest_head` return the full
-// signed `ck.schema.snapshot.v1` manifest (the spec `SnapshotHeadState` DTO was
-// removed and hard-rejected in renames.json). soland answers both operations
-// with `not_implemented` until it can produce a real Snapshot detached proof.
+// Snapshot head operations return the full signed `ck.schema.snapshot.v1`
+// manifest. soland answers both operations with `not_implemented` until it can
+// produce a real Snapshot detached proof.
 
 // authz check DTOs are now the spec-authoritative SDK types. The SDK
 // `AuthzDecision` enum was aligned to the spec five-valued form
@@ -674,14 +644,6 @@ pub struct LogoutOutcome {
     pub revoked: bool,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RegisterAccountRequestBody {
-    pub did: String,
-    pub handle: String,
-    pub display_name: Option<String>,
-    pub device_id: Option<String>,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandAccountRegisterOutcome {
     pub did: String,
@@ -689,37 +651,6 @@ pub struct SolandAccountRegisterOutcome {
     pub display_name: Option<String>,
     pub state: String,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ClaimHandleRequestBody {
-    /// New handle (with or without leading `@`). Normalized server-side
-    /// to lowercase + `@`-prefixed form per identity-handles.md §2.
-    pub handle: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ClaimHandleOutcome {
-    pub did: String,
-    pub handle: String,
-    pub previous_handle: Option<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct TransferHandleRequestBody {
-    /// DID of the recipient. MUST be a registered account; otherwise
-    /// the request fails with `principal_unknown`.
-    pub target_did: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct TransferHandleOutcome {
-    /// The handle string that was moved between accounts.
-    pub handle: String,
-    pub from_did: String,
-    /// Synthetic placeholder handle that now belongs to the source actor.
-    pub from_handle: String,
-    pub to_did: String,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -808,60 +739,6 @@ pub use cokret_sdk::{
 // be verified before being projected into typed outcomes. The SDK carries the
 // authoritative typed forms (`cokret_sdk::models::{RecoveryPolicy,
 // RecoveryReceipt}`) for clients; no soland-private mirror exists.
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateWebRtcSessionRequestBody {
-    pub realm_id: String,
-    #[serde(default)]
-    pub participants: Vec<String>,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub recording_policy: Option<String>,
-    #[serde(default)]
-    pub ttl_ms: Option<u64>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CreateWebRtcSessionOutcome {
-    pub session_id: String,
-    pub realm_id: String,
-    pub participants: Vec<String>,
-    pub mode: String,
-    pub recording_policy: String,
-    pub call_state: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct WebRtcSignalRequestBody {
-    pub message_type: String,
-    #[serde(default)]
-    pub seq: Option<u64>,
-    #[serde(default)]
-    pub payload: Value,
-    #[serde(default)]
-    pub proofs: Vec<Value>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebRtcSignalOutcome {
-    pub ok: bool,
-    pub session_id: String,
-    pub seq: u64,
-    pub next_cursor: String,
-    pub call_state: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct WebRtcSignalsOutcome {
-    pub session_id: String,
-    pub call_state: String,
-    pub events: Vec<Value>,
-    pub next_cursor: String,
-    pub limited: bool,
-}
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandBlobUploadOutcome {
@@ -1014,7 +891,7 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ck.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the legacy /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ck.self.snapshot.query.manifest_head returns a signed ck.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",
@@ -1202,8 +1079,6 @@ pub fn describe(
         rate_limit: serde_json::json!({"kind": "windowed", "per_minute": 600}),
         egress_network_policy: Some(cokret_sdk::EgressNetworkPolicy::deny_private_defaults()),
         supported_features: vec![
-            "org.cokret.soland.feature.account.register".to_owned(),
-            "org.cokret.soland.feature.account.me".to_owned(),
             "org.cokret.soland.feature.auth.logout".to_owned(),
             "org.cokret.soland.feature.contacts.request".to_owned(),
             "org.cokret.soland.feature.contacts.respond".to_owned(),
@@ -1218,15 +1093,12 @@ pub fn describe(
             "org.cokret.soland.feature.sync.bound_cursor".to_owned(),
             "org.cokret.soland.feature.sync.incremental_since".to_owned(),
             "org.cokret.soland.feature.sync.typing".to_owned(),
-            "org.cokret.soland.feature.sync.backfill".to_owned(),
             "org.cokret.soland.feature.directory.search_realms".to_owned(),
             "org.cokret.soland.feature.directory.resolve_realm".to_owned(),
-            "org.cokret.soland.feature.index.query".to_owned(),
             "org.cokret.soland.feature.authz.check".to_owned(),
             "org.cokret.soland.feature.profile.presence".to_owned(),
             "org.cokret.soland.feature.push.register_device".to_owned(),
             "org.cokret.soland.feature.push.rules".to_owned(),
-            "org.cokret.soland.feature.webrtc.signaling".to_owned(),
             "org.cokret.soland.feature.blob.upload".to_owned(),
             // Spec crypto-media/media-and-blob.md §2.1 — protocol-level
             // feature id for the resumable (tus) upload companion binding
@@ -1400,28 +1272,6 @@ pub struct RedactMessageOutcome {
     pub event_id: String,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct AddReactionRequestBody {
-    pub event_id: String,
-    pub key: String,
-    pub realm_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ReactionOutcome {
-    pub event_id: String,
-    pub actor: String,
-    pub key: String,
-    pub active: bool,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RemoveReactionRequestBody {
-    pub event_id: String,
-    pub key: String,
-    pub realm_id: String,
-}
-
 pub type SetReadMarkerRequestBody = cokret_sdk::ReadCursorAdvanceRequestBody;
 pub type ReadScopeWire = cokret_sdk::ReadScope;
 pub type ReadScopeTrackScopeWire = cokret_sdk::ReadScopeTrackScope;
@@ -1431,98 +1281,6 @@ pub type ReadMarkerOutcome = cokret_sdk::ReadMarkerOutcome;
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct GetReadMarkersRequestBody {
     pub realm_id: String,
-}
-
-// ── Relation DTOs ──
-//
-// Relation DTOs — `ck:relation:` is a registered typed-id in
-// `cokret-spec/v1/artifacts/registry/id-kind-registry.json`.
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateRelationRequestBody {
-    pub realm_id: String,
-    pub relation_kind: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    #[serde(default)]
-    pub fields: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RelationOutcome {
-    pub relation_id: String,
-    pub realm_id: String,
-    pub relation_kind: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub fields: BTreeMap<String, Value>,
-    pub state: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct ListRelationsRequestBody {
-    pub realm_id: String,
-    pub relation_kind: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct ListRelationsOutcome {
-    pub relations: Vec<RelationOutcome>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct TombstoneRelationOutcome {
-    pub state: String,
-    pub relation_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct CreateGrantOutcome {
-    pub grant_id: String,
-    pub subject: String,
-    pub actions: Vec<String>,
-    pub resource: String,
-    pub created_at: String,
-    /// Effective expiry of this grant (RFC 3339). `None` means never expires.
-    /// capabilities.md §3 — denormalized from `constraints[temporal].expires_at`
-    /// when only the constraint form was supplied.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-    /// `delegated_from` is set when this grant was issued via delegation
-    /// (capabilities.md §10). Revoking the named parent cascades through
-    /// every descendant including this one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegated_from: Option<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RevokeGrantOutcome {
-    pub revoked: bool,
-    pub grant_id: String,
-    /// Grant ids that flipped to revoked as part of this call's delegation
-    /// cascade (does NOT include `grant_id` itself). capabilities.md §3.3.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cascade_revoked: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct CreateGrantRequestBody {
-    pub realm_id: String,
-    pub subject: String,
-    pub resource: String,
-    pub actions: Vec<String>,
-    #[serde(default)]
-    pub constraints: Vec<serde_json::Value>,
-    /// Optional top-level expiry (RFC 3339). When set, server cross-checks
-    /// against `constraints[temporal].expires_at` (stricter wins).
-    #[serde(default)]
-    pub expires_at: Option<String>,
-    /// Parent grant_id when this request is a delegation. caller MUST be
-    /// the subject of the parent grant; delegated actions/resource/expiry
-    /// MUST fit within the parent's scope (capabilities.md §10).
-    #[serde(default)]
-    pub delegated_from: Option<String>,
 }
 
 #[cfg(test)]

@@ -334,8 +334,8 @@ soland calls `SOLAND_OAUTH_INTROSPECTION_URL` with
 `Authorization: Bearer <SOLAND_OAUTH_INTROSPECTION_BEARER>`, requires an active
 token with `urn:cokret:principal-server:session.bind`, then maps
 `org.cokret.principal_did` and `org.cokret.device_id` into the local
-account/device view. The older `/_cokret/gate/account/session-grants` bridge is
-kept as a legacy scaffold, not the primary login path.
+account/device view. The `/_cokret/gate/account/session-grants` bridge is
+kept as a scaffold, not the primary login path.
 
 Account subscribe and Events API cursors are structured `ck:cursor:` tokens
 bound to the principal, device, service DID, filter hash, stream positions, and

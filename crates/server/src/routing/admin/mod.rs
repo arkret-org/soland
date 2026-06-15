@@ -95,8 +95,7 @@ pub(super) fn require_admin_principal(
 
 /// Audit endpoints (`/_soland/admin/audit/*`). These carry their own
 /// per-handler actor auth rather than the shared `RequireAdmin` hoop, so
-/// they are mounted separately from the admin branch below. The historical
-/// `/_soland/self/audit/*` mount remains legacy-only until cotest is migrated.
+/// they are mounted separately from the admin branch below.
 pub fn audit_router() -> Router {
     audit::router()
 }

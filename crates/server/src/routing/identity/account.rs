@@ -1,8 +1,8 @@
 //! Account + contact handlers.
 //!
 //! Surfaces:
-//! - `POST /_soland/self/account/register` — create the account record
-//! - `GET  /_soland/self/account/me` — return the authenticated principal's account
+//! - `POST /_cokret/gate/account/register` — create the account record
+//! - `GET  /_cokret/self/account/viewer` — return the authenticated principal's account
 //! - `POST /_cokret/self/contacts/request` — open a pending contact relationship
 //! - `POST /_cokret/self/contacts/respond` — accept or reject a pending request
 //! - `GET  /_cokret/self/contacts` — list contacts visible to the actor
@@ -31,9 +31,9 @@ use cokret_sdk::{
 };
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::auth::{revoke_devices_for_actor, revoke_sessions_for_actor};
@@ -41,40 +41,18 @@ use super::consent::{
     active_invite_consent_grant_ref, grant_contact_managed_consent, has_active_consent_for_scope,
     normalize_scope, persist_consent_cell, record_pending_request, revoke_contact_managed_consent,
 };
-use super::device_messages::{NOTIFICATION_READ_MARKER_UPDATE_TYPE, fanout_actor_private_update};
 use super::{
-    AuthArgs, append_audit_log, classify_handle, handle_for_did, normalize_localpart, now,
-    sha256_hex, validate_did,
+    AuthArgs, append_audit_log, handle_for_did, normalize_localpart, now, sha256_hex, validate_did,
 };
 use crate::error::AppError;
-use crate::routing::spaces::space::realm_has_member;
 use crate::state::{
     AccountLifecycleRecord, AccountRecord, AppState, ContactRecord, DeviceInventoryRecord,
     DirectConversationBindingRecord,
 };
 use crate::wire::{
-    ClaimHandleOutcome, ClaimHandleRequestBody, RegisterAccountRequestBody,
     SolandAccountRegisterOutcome, SolandAccountUpdateProfileOutcome,
-    SolandAccountUpdateProfileRequestBody, TransferHandleOutcome, TransferHandleRequestBody,
+    SolandAccountUpdateProfileRequestBody,
 };
-
-/// Grace period after a handle is released before another actor may claim
-/// it. Spec: identity-handles.md — released handles enter a cooldown so
-/// stale references resolve gracefully. Kept short in dev mode so e2e
-/// tests can verify both halves of the contract; production deployments
-/// can swap to a longer constant or env-driven value once the persistent
-/// release ledger lands.
-pub const HANDLE_GRACE_PERIOD_SECONDS: i64 = 5;
-const PERSONAL_BLOCKLIST_DATA_TYPES: &[&str] = &["ck.account.blocklist", "ck.account.blocklist.v1"];
-
-fn handle_in_grace_period(state: &AppState, localpart: &str) -> bool {
-    let releases = state.handle_releases.lock().expect("handle_releases lock");
-    let Some(released_at) = releases.get(localpart) else {
-        return false;
-    };
-    let elapsed = chrono::Utc::now() - *released_at;
-    elapsed < chrono::Duration::seconds(HANDLE_GRACE_PERIOD_SECONDS)
-}
 
 pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
     let mut releases = state.handle_releases.lock().expect("handle_releases lock");
@@ -82,8 +60,6 @@ pub(crate) fn record_handle_release(state: &AppState, localpart: &str) {
 }
 use crate::{JsonResult, json_ok};
 
-mod notifications;
-use notifications::*;
 mod social;
 use social::*;
 mod lifecycle;
@@ -94,9 +70,7 @@ pub(crate) use lifecycle::{AccountLifecycleChange, set_account_lifecycle_state};
 
 /// `gate` trust-segment account routes — the spec `account_auth` surface
 /// group (tier `deployment_local`) binds account registration to
-/// `POST /_cokret/gate/account/register`. The historical product-private
-/// mirror at `/_soland/self/account/register` (handle-based body) stays in
-/// `router()` below until product clients migrate.
+/// `POST /_cokret/gate/account/register`.
 pub(super) fn protocol_gate_router() -> Router {
     Router::with_path("account").push(Router::with_path("register").post(gate_account_register))
 }
@@ -117,28 +91,6 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("invite-receive-policy")
                 .get(get_invite_receive_policy)
                 .post(set_invite_receive_policy),
-        )
-}
-
-pub(super) fn router() -> Router {
-    Router::new()
-        .push(
-            Router::with_path("account")
-                .push(Router::with_path("register").post(account_register))
-                .push(Router::with_path("me").get(account_me))
-                .push(Router::with_path("handle").post(claim_handle))
-                .push(Router::with_path("handle/transfer").post(transfer_handle))
-                .push(Router::with_path("profile").post(update_profile))
-                .push(Router::with_path("export").post(lifecycle::export_account))
-                .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
-                .push(Router::with_path("erase").post(lifecycle::erase_account))
-                .push(Router::with_path("{did}/principal-realm").get(account_principal_realm)),
-        )
-        .push(contact_routes())
-        .push(
-            Router::with_path("notifications")
-                .get(list_notifications)
-                .push(Router::with_path("mark-all-read").post(notifications_mark_all_read)),
         )
 }
 
@@ -189,100 +141,6 @@ async fn account_viewer(
         handle_claim_digests: Vec::new(),
         profile: None,
     })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.account.register",
-    tags("account"),
-    summary = "Register a new account record",
-    status_codes(201, 400, 401, 409, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.register"))]
-async fn account_register(
-    depot: &mut Depot,
-    res: &mut Response,
-    body: JsonBody<RegisterAccountRequestBody>,
-) -> JsonResult<SolandAccountRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    if validate_did(&body.did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
-    }
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &body.did)?;
-    if let Err((reason_code, message)) = classify_handle(&body.handle) {
-        return Err(AppError::invalid_param(message).with_wire_code(reason_code));
-    }
-    if let Some(device_id) = body.device_id.as_deref()
-        && device_id.trim().is_empty()
-    {
-        return Err(AppError::invalid_param("invalid device_id"));
-    }
-
-    let normalized_localpart = normalize_localpart(&body.handle);
-    let accounts = state
-        .persistence
-        .accounts()
-        .list()
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if accounts
-        .iter()
-        .any(|account| account.did == body.did || account.localpart == normalized_localpart)
-    {
-        return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
-            "account or handle already exists",
-        ));
-    }
-    let account = AccountRecord {
-        id: crate::ids::generate_account_id(),
-        did: body.did.clone(),
-        localpart: normalized_localpart,
-        display_name: body.display_name,
-        bio: None,
-        avatar_url: None,
-        created_at: now(),
-    };
-    state
-        .persistence
-        .accounts()
-        .put(&account)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if let Some(device_id) = body.device_id.as_deref() {
-        let registered_at = now();
-        let device = DeviceInventoryRecord {
-            actor: body.did.clone(),
-            device_id: device_id.to_owned(),
-            display_name: account.display_name.clone(),
-            verification_state: "unverified".to_owned(),
-            payload: json!({
-                "device_id": device_id,
-                "display_name": account.display_name.clone(),
-                "verification": "unverified",
-                "registered_with_account": true,
-            }),
-            created_at: registered_at,
-            updated_at: registered_at,
-            revoked_at: None,
-        };
-        state
-            .persistence
-            .devices()
-            .put(&device)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    }
-    append_audit_log(
-        state,
-        Some(&body.did),
-        "account.register",
-        json!({"handle": account.handle()}),
-        "accepted",
-    )
-    .await;
-    res.status_code(StatusCode::CREATED);
-    json_ok(account_response(account, state))
 }
 
 /// `POST /_cokret/gate/account/register` — spec-canonical registration
@@ -385,115 +243,6 @@ async fn gate_account_register(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.me",
-    tags("account"),
-    summary = "Get the authenticated principal's account record"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.me"))]
-async fn account_me(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<SolandAccountRegisterOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    match state
-        .persistence
-        .accounts()
-        .get(&session.actor)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        Some(account) => json_ok(account_response(account, state)),
-        None => Err(AppError::not_found("not found")),
-    }
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.account.claim_handle",
-    tags("account"),
-    summary = "Claim or rename the authenticated principal's handle",
-    status_codes(200, 400, 401, 409, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.claim_handle"))]
-async fn claim_handle(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<ClaimHandleRequestBody>,
-) -> JsonResult<ClaimHandleOutcome> {
-    // Spec: identity/identity-handles.md §2 — handles MUST be globally
-    // unique (per directory service), normalized to lowercase, and must
-    // match the `@<alnum/-_.>+` shape. Renaming MUST be explicit and
-    // recorded in the audit log so other actors can discover the new
-    // mapping.
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    if let Err((reason_code, message)) = classify_handle(&body.handle) {
-        return Err(AppError::invalid_param(message).with_wire_code(reason_code));
-    }
-    let normalized = normalize_localpart(&body.handle);
-    let accounts_store = state.persistence.accounts();
-    let mut current = accounts_store
-        .get(&session.actor)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("account not found"))?;
-    if current.localpart == normalized {
-        return json_ok(ClaimHandleOutcome {
-            did: current.did.clone(),
-            handle: current.handle(),
-            previous_handle: None,
-        });
-    }
-    let all_accounts = accounts_store
-        .list()
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if all_accounts
-        .iter()
-        .any(|account| account.did != session.actor && account.localpart == normalized)
-    {
-        return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
-            "handle is already claimed by another account",
-        )
-        .with_wire_code("handle_already_claimed"));
-    }
-    if handle_in_grace_period(state, &normalized) {
-        return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
-            "handle is in post-release grace period",
-        )
-        .with_wire_code("handle_in_grace_period"));
-    }
-    let previous_localpart = current.localpart.clone();
-    current.localpart = normalized.clone();
-    accounts_store
-        .put(&current)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    record_handle_release(state, &previous_localpart);
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "account.handle_claim",
-        json!({
-            "previous_handle": format!("@{previous_localpart}"),
-            "handle": current.handle(),
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(ClaimHandleOutcome {
-        did: current.did.clone(),
-        handle: current.handle(),
-        previous_handle: Some(format!("@{previous_localpart}")),
-    })
-}
-
-#[endpoint(
     operation_id = "org.cokret.soland.account.update_profile",
     tags("account"),
     summary = "Update the authenticated principal's profile fields (display_name, bio, avatar_url)",
@@ -572,103 +321,6 @@ fn empty_to_none(value: String) -> Option<String> {
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.account.transfer_handle",
-    tags("account"),
-    summary = "Transfer the authenticated principal's handle to another account",
-    status_codes(200, 400, 401, 404, 409, 500)
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.transfer_handle"))]
-async fn transfer_handle(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<TransferHandleRequestBody>,
-) -> JsonResult<TransferHandleOutcome> {
-    // Spec: identity/identity-handles.md — handle transfer is a dual
-    // operation: the source actor's handle clears (replaced with a
-    // synthetic DID-derived placeholder); the target actor gets the
-    // transferred handle. The released handle enters the same grace
-    // window as a regular release so stale references don't immediately
-    // resolve to the new owner.
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    if validate_did(&body.target_did).is_err() {
-        return Err(AppError::invalid_param("invalid target_did"));
-    }
-    if body.target_did == session.actor {
-        return Err(AppError::invalid_param("cannot transfer handle to self"));
-    }
-    let accounts_store = state.persistence.accounts();
-    let mut source = accounts_store
-        .get(&session.actor)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("source account not found"))?;
-    let mut target = match accounts_store
-        .get(&body.target_did)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        Some(account) => account,
-        None => {
-            // Registry code `principal_unknown` (404): the referenced
-            // principal DID is unknown or not visible to the caller.
-            return Err(
-                AppError::not_found("target account not found").with_wire_code("principal_unknown")
-            );
-        }
-    };
-    // Park the source on a synthetic DID-derived handle and check it's
-    // not already taken by yet a third actor. In practice the synthetic
-    // form is unique (it embeds the DID) but we defensively check.
-    let parked_localpart = normalize_localpart(&super::handle_for_did(&source.did));
-    let all_accounts = accounts_store
-        .list()
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if all_accounts
-        .iter()
-        .any(|account| account.did != source.did && account.localpart == parked_localpart)
-    {
-        return Err(AppError::new(
-            crate::error::ErrorCode::DuplicateConflict,
-            "synthetic parked handle collides with an existing actor",
-        )
-        .with_wire_code("handle_already_claimed"));
-    }
-    let transferred = source.localpart.clone();
-    source.localpart = parked_localpart;
-    target.localpart = transferred.clone();
-    accounts_store
-        .put(&source)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    accounts_store
-        .put(&target)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "account.handle_transfer",
-        json!({
-            "transferred_handle": format!("@{transferred}"),
-            "from": session.actor.clone(),
-            "to": body.target_did.clone(),
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(TransferHandleOutcome {
-        handle: format!("@{transferred}"),
-        from_did: source.did.clone(),
-        from_handle: source.handle(),
-        to_did: target.did,
-    })
-}
-
-#[endpoint(
     operation_id = "ck.self.direct_conversation.command.resolve",
     tags("contacts"),
     summary = "Resolve or create the canonical 1:1 direct conversation binding"
@@ -733,71 +385,6 @@ async fn direct_conversation_resolve(
         DirectConversationResolveState::Found
     };
     json_ok(direct_resolve_response(binding, created, resolve_state))
-}
-
-/// `GET /_soland/self/account/{did}/principal-realm` response.
-///
-/// **Wire shape**:
-/// ```json
-/// {
-///   "did": "did:web:alice.example",
-///   "realm_id": "ck:realm:01904100-0000-7000-8000-...",
-///   "mapping_kind": "deterministic",
-///   "stashed": true
-/// }
-/// ```
-///
-/// `mapping_kind` is one of:
-/// - `"deterministic"` — the response was computed via the SHA-256 principal-control Realm mapping.
-///
-/// `stashed` indicates the result was persisted to the audit log as a
-/// follow-up hook.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PrincipalRealmOutcome {
-    pub did: String,
-    pub realm_id: String,
-    pub mapping_kind: String,
-    pub stashed: bool,
-}
-
-/// `GET /_soland/self/account/{did}/principal-realm`.
-///
-/// Returns the deterministic principal-control Realm id for `did`.
-///
-/// Side-effect: appends an audit-log entry (`account.principal_realm.lookup`).
-#[endpoint(
-    operation_id = "org.cokret.soland.account.principal_realm",
-    tags("account"),
-    summary = "Resolve the principal control Realm for a DID"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.account.principal_realm"))]
-async fn account_principal_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    did: PathParam<String>,
-) -> JsonResult<PrincipalRealmOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    let did = did.into_inner();
-    if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
-    }
-    let realm_id = super::recovery::principal_control_realm_for_did(&did);
-    super::append_audit_log(
-        state,
-        Some(&did),
-        "account.principal_realm.lookup",
-        json!({"realm_id": realm_id, "mapping_kind": "deterministic"}),
-        "accepted",
-    )
-    .await;
-    json_ok(PrincipalRealmOutcome {
-        did,
-        realm_id,
-        mapping_kind: "deterministic".to_owned(),
-        stashed: true,
-    })
 }
 
 fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {

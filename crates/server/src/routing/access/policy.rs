@@ -1,13 +1,11 @@
 //! Policy document CRUD + policy decision check.
 //!
 //! Surfaces:
-//! - `POST   /_cokret/self/policy/check`               â€” evaluate a
-//!   `SolandPolicyCheckRequestBody`
-//! - `GET    /_soland/self/policies`            â€” list owner-scoped policies
-//! - `POST   /_soland/self/policies`            â€” upsert compatibility route
-//! - `GET    /_soland/self/policies/{id}`       â€” read one policy document
-//! - `PATCH  /_soland/self/policies/{id}`       â€” update one policy document
-//! - `DELETE /_soland/self/policies/{id}`       â€” remove one policy document
+//! - `POST   /_cokret/self/policy/check`        â€” evaluate a `SolandPolicyCheckRequestBody`
+//! - `GET    /_cokret/self/policies`            â€” list owner-scoped policies
+//! - `POST   /_cokret/self/policies`            â€” upsert one policy document
+//! - `GET    /_cokret/self/policies/{id}`       â€” read one policy document
+//! - `DELETE /_cokret/self/policies/{id}`       â€” remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
@@ -51,17 +49,6 @@ pub(super) fn protocol_router() -> Router {
                 .get(get_policy_document)
                 .delete(delete_policy_document),
         )
-}
-
-pub(super) fn local_router() -> Router {
-    Router::new()
-        .push(Router::with_path("policy/check").post(policy_check))
-        // `policies/describe` and PATCH are soland-local extensions with no
-        // canonical operation in the catalog, so they stay on the `/_soland`
-        // product surface. The spec-canonical policy_document CRUD moved to the
-        // protocol surface (see `protocol_router`).
-        .push(Router::with_path("policies/describe").get(super::describe::policies_describe))
-        .push(Router::with_path("policies/{policy_id}").patch(patch_policy_document))
 }
 
 #[endpoint(
@@ -202,103 +189,6 @@ async fn upsert_policy_document(
         active: body.active,
         updated_at: now(),
     };
-    store
-        .put(record.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(policy_document_to_response(&record))
-}
-
-/// Body for `PATCH /_soland/self/policies/{policy_id}` â€” applies a
-/// `ck.schema.patch.v1` field-patch to the existing policy document's
-/// payload (effect / actions / resource / obligations). Behaves as a
-/// shallow set/unset over the payload object: each key in `patch` is
-/// either a direct value (sugared `set`) or an explicit
-/// `{ "$op": "set" | "unset", "value": ... }` form. Updates
-/// `record.updated_at`; idempotent if the same patch is applied twice.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, salvo::oapi::ToSchema)]
-pub struct PatchPolicyDocumentRequestBody {
-    #[salvo(schema(value_type = serde_json::Value))]
-    pub patch: serde_json::Map<String, Value>,
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.policies.patch",
-    tags("policy"),
-    summary = "Apply a ck.schema.patch.v1 patch to a policy document"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.patch"))]
-async fn patch_policy_document(
-    aa: AuthArgs,
-    policy_id: PathParam<String>,
-    body: JsonBody<PatchPolicyDocumentRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<PolicyDocumentOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let policy_id = policy_id.into_inner();
-    let store = state.persistence.policy_documents();
-    let Ok(Some(mut record)) = store.get(&policy_id).await else {
-        return Err(AppError::not_found("policy not found"));
-    };
-    if record.owner != session.actor {
-        return Err(AppError::capability_denied(
-            "policy is owned by another actor",
-        ));
-    }
-    let patch = body.into_inner().patch;
-    if patch.is_empty() {
-        return Err(AppError::invalid_param(
-            "patch must contain at least one entry",
-        ));
-    }
-    let payload_obj = record
-        .payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("policy payload is not a JSON object"))?;
-    for (path, value) in patch {
-        if path.is_empty() || path.len() > 1024 {
-            return Err(AppError::invalid_param(format!(
-                "patch path {path:?} fails length checks"
-            )));
-        }
-        match &value {
-            Value::Object(obj) if obj.contains_key("$op") => {
-                let op = obj.get("$op").and_then(Value::as_str).unwrap_or_default();
-                let inner = obj.get("value");
-                match op {
-                    "set" => {
-                        let v = inner.cloned().ok_or_else(|| {
-                            AppError::invalid_param(format!("patch {path:?} set requires value"))
-                        })?;
-                        payload_obj.insert(path, v);
-                    }
-                    "unset" => {
-                        if inner.is_some() {
-                            return Err(AppError::invalid_param(format!(
-                                "patch {path:?} unset MUST NOT carry value"
-                            )));
-                        }
-                        payload_obj.remove(&path);
-                    }
-                    other => {
-                        return Err(AppError::invalid_param(format!(
-                            "patch {path:?} unsupported $op {other:?} on policy payload"
-                        )));
-                    }
-                }
-            }
-            _ => {
-                // Direct-value sugar = set.
-                payload_obj.insert(path, value);
-            }
-        }
-    }
-    if let Err(message) = validate_canonical_json_value(&record.payload) {
-        return Err(AppError::invalid_param(message));
-    }
-    record.updated_at = now();
     store
         .put(record.clone())
         .await

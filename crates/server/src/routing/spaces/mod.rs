@@ -1,22 +1,17 @@
 use salvo::prelude::*;
 
 pub(super) mod directory;
-mod index;
-mod reaction;
 mod read_cursor;
-mod relation;
 pub(super) mod space;
 
 use super::{
-    AuthArgs, accept_local_operations, authenticated_session, default_discussion_track,
-    device_inventory_to_json, handle_for_did, invite_token_matches_realm, invite_token_realm_id,
-    is_realm_deleted, now, realm_discoverability, realm_has_member, realm_history_visibility,
-    realm_resolvable_to, realm_search_visible_to, sha256_hex, strand_id_from_realm_id,
-    validate_realm_id,
+    AuthArgs, accept_local_operations, authenticated_session, device_inventory_to_json,
+    handle_for_did, invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, now,
+    realm_discoverability, realm_has_member, realm_history_visibility, realm_resolvable_to,
+    realm_search_visible_to, sha256_hex,
 };
 
-/// `self`-segment spaces surface (spaces, reactions, read-cursors,
-/// relations, projection index). The directory surface is split out into
+/// `self`-segment spaces surface. The directory surface is split out into
 /// [`find_router`] because directory discovery belongs to the `find` trust
 /// segment, not `self`.
 pub fn router() -> Router {
@@ -37,16 +32,12 @@ pub fn protocol_router() -> Router {
 }
 
 pub fn local_router() -> Router {
-    Router::new()
-        .push(space::local_router())
-        .push(reaction::router())
-        .push(relation::router())
-        .push(index::router())
+    Router::new().push(space::local_router())
 }
 
 /// `find`-segment directory discovery surface (`/_cokret/find/directory/*`).
 ///
-/// The historical `/_soland/find/directory/*` legacy mirror has been retired;
+/// The historical `/_soland/find/directory/*` mirror has been retired;
 /// directory discovery is served only from the canonical `/_cokret/find/...`
 /// protocol tree.
 pub fn find_router() -> Router {

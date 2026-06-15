@@ -10,10 +10,6 @@
 //! - `GET /readyz` — readiness gate for deploy orchestrators
 //! - `GET /_cokret/describe`
 //! - `GET /_soland/gate/auth/bridge/describe`
-//! - `GET /_soland/self/authz/describe`
-//! - `GET /_soland/self/policies/describe`
-//! - `GET /_soland/self/device_messages/describe`
-//! - `GET /_soland/self/keys/backups/describe`
 //! - `GET /_soland/self/integration/describe`
 //!
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
@@ -27,14 +23,13 @@ use diesel_async::RunQueryDsl;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::state::AppState;
 use crate::wire::{
     AuthBridgeAuthDescriptor, AuthBridgeDescribeOutcome, AuthBridgeExamples,
     AuthBridgePushDescriptor, HealthOutcome, IntegrationDependencyDescriptor,
-    IntegrationDescribeOutcome, IntegrationSurfaceDescriptor, SolandServerDescribeOutcome,
-    UnsupportedProfileDescriptor, describe,
+    IntegrationDescribeOutcome, IntegrationSurfaceDescriptor, describe,
 };
 use crate::{JsonResult, json_ok};
 
@@ -87,65 +82,6 @@ struct ReadyzExternalWebvhProviderCheck {
     active: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AuthzDescribeOutcome {
-    contract: String,
-    version: String,
-    stability: String,
-    profile_claim: String,
-    limitations: Vec<String>,
-    check_path: String,
-    effective_grants_path: String,
-    grants_path: String,
-    grant_item_path: String,
-    policy_describe_path: String,
-    resource_selector_examples: Vec<Value>,
-    grant_constraint_examples: Vec<Value>,
-    check_request_example: Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct PoliciesDescribeOutcome {
-    contract: String,
-    version: String,
-    stability: String,
-    profile_claim: String,
-    limitations: Vec<String>,
-    collection_path: String,
-    item_path: String,
-    authz_describe_path: String,
-    upsert_request_example: Value,
-    get_path_example: String,
-    delete_path_example: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct DeviceMessagesDescribeOutcome {
-    contract: String,
-    version: String,
-    collection_path: String,
-    send_path: String,
-    idempotency_header: String,
-    schema: String,
-    verification_event_kinds: Vec<String>,
-    send_request_example: Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct KeyBackupsDescribeOutcome {
-    contract: String,
-    collection_path: String,
-    item_path: String,
-    schema: String,
-    operations: Vec<String>,
-    limits: KeyBackupsLimits,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct KeyBackupsLimits {
-    daily_principal_download_limit: u32,
-}
-
 pub(super) fn health_router() -> Router {
     Router::new()
         .push(Router::with_path("health").get(health))
@@ -160,8 +96,6 @@ pub(super) fn protocol_router() -> Router {
 
 pub(super) fn local_router() -> Router {
     Router::new()
-        // `/_soland/describe` — compatibility copy with soland-local extras.
-        .push(Router::with_path("describe").get(legacy_server_describe))
         // soland-local integration describe → self-scoped.
         .push(Router::with_path("self/integration/describe").get(integration_describe))
 }
@@ -307,31 +241,6 @@ struct HealthCheckRow {
 async fn server_describe(depot: &mut Depot) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.obtain::<AppState>().expect("state injected");
     json_ok(ServerDescribeOutcome(build_server_description(state)))
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.server.describe_legacy",
-    tags("server"),
-    summary = "Soland compatibility server capability description"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.server.describe_legacy"))]
-async fn legacy_server_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let description = build_server_description(state);
-    json_ok(SolandServerDescribeOutcome {
-        service: description,
-        unsupported_profiles: vec![UnsupportedProfileDescriptor::unsupported(
-            "ck.profile.soland_limited_server.v1",
-            "limited profile is a limitation descriptor, not a conformance claim",
-        )],
-        proof_verifier_mode: state.config.proof_verifier_mode().to_owned(),
-        admin_auth_mode: state.config.admin_auth_mode().to_owned(),
-        // Stream-F (Wave 2C) — advertise the audit erasure-receipts surface.
-        // Spec `realm-and-space.md` §2.5.2 requires this receipt list to be
-        // reachable from server describe.
-        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
-        hardening: state.config.hardening_status(),
-    })
 }
 
 fn build_server_description(state: &AppState) -> ServerDescription {
@@ -541,7 +450,6 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         },
         examples: AuthBridgeExamples {
             session_grant_exchange_request: json!({
-                "legacy": true,
                 "grant_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6Y29hdXRoLmV4YW1wbGUjMSJ9.eyJpc3MiOiJkaWQ6d2ViOmNvYXV0aC5leGFtcGxlIiwic3ViIjoiZGlkOndlYjphbGljZS5leGFtcGxlIiwiYXVkIjoiZGlkOndlYjpzb2xhbmQubG9jYWwifQ.example",
                 "principal_id": "did:web:alice.example",
                 "device_id": "ck:device:01904100-0000-7000-8000-000000000001",
@@ -564,209 +472,9 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
             }),
         },
         todos: vec![
-            "publish a first-class OAuth bearer introspection descriptor instead of reusing the legacy session-grant bridge shape".to_owned(),
+            "publish a first-class OAuth bearer introspection descriptor for the session-grant bridge shape".to_owned(),
             "replace push register grant bridge headers with the same Authorization bearer path used by ordinary requests".to_owned(),
         ],
-    })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.authz.describe",
-    tags("authz"),
-    summary = "Authz scaffold description (constraint + condition examples)"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.authz.describe"))]
-pub(in crate::routing) async fn authz_describe() -> JsonResult<AuthzDescribeOutcome> {
-    json_ok(AuthzDescribeOutcome {
-        contract: "cokret.rest.authz_describe.v1".to_owned(),
-        version: "2026-05-17-limited-contract".to_owned(),
-        stability: "scaffold_contract".to_owned(),
-        profile_claim: "not_claimed".to_owned(),
-        limitations: vec![
-            "examples are maintained inline, not generated from a normative artifact bundle"
-                .to_owned(),
-            "effective-grants and check are backed by the local SolandAuthzEngine only".to_owned(),
-            "condition lattice, obligation execution, and cross-service policy lifecycle are not complete profile surfaces"
-                .to_owned(),
-        ],
-        check_path: "/_cokret/self/authz/check".to_owned(),
-        effective_grants_path: "/_cokret/self/authz/effective-grants".to_owned(),
-        grants_path: "/_soland/self/authz/grants".to_owned(),
-        grant_item_path: "/_soland/self/authz/grants/{grant_id}".to_owned(),
-        policy_describe_path: "/_soland/self/policies/describe".to_owned(),
-        resource_selector_examples: vec![
-            json!({
-                "kind": "event",
-                "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
-                "event_id": "ck:event:01904101-0000-7000-8000-000000000000",
-                "scope": "exact"
-            }),
-            json!({
-                "kind": "blob",
-                "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
-                "blob_ref": "ck:blob:sha256:0123456789abcdef",
-                "object_type": "encrypted_backup",
-                "object_ref": "backup-scaffold-current-device",
-                "scope": "exact"
-            }),
-        ],
-        grant_constraint_examples: vec![
-            json!({
-                "constraint_type": "claim_based",
-                "subtype": "approval",
-                "effect": "require_review",
-                "approval_required": true,
-                "approval_mode": "two_man_rule"
-            }),
-            json!({
-                "constraint_type": "claim_based",
-                "subtype": "claim",
-                "effect": "allow",
-                "allowed_object_types": ["key_backup"],
-                "allowed_facets": ["recovery"]
-            }),
-        ],
-        check_request_example: json!({
-            "actor": "did:web:alice.example",
-            "action": "ck.self.keys.backups.command.unlock",
-            "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
-            "resources": [
-                {
-                    "kind": "blob",
-                    "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "ck:blob:sha256:0123456789abcdef",
-                    "object_type": "encrypted_backup",
-                    "object_ref": "backup-scaffold-current-device",
-                    "scope": "exact"
-                }
-            ],
-            "constraints": [
-                {
-                    "constraint_type": "claim_based",
-                    "subtype": "claim",
-                    "effect": "allow",
-                    "allowed_object_types": ["key_backup"],
-                    "allowed_facets": ["recovery"]
-                }
-            ]
-        }),
-    })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.policies.describe",
-    tags("policy"),
-    summary = "Policy collection scaffold description"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.policies.describe"))]
-pub(in crate::routing) async fn policies_describe() -> JsonResult<PoliciesDescribeOutcome> {
-    json_ok(PoliciesDescribeOutcome {
-        contract: "cokret.rest.policies_describe.v1".to_owned(),
-        version: "2026-05-17-limited-contract".to_owned(),
-        stability: "scaffold_contract".to_owned(),
-        profile_claim: "not_claimed".to_owned(),
-        limitations: vec![
-            "collection CRUD is backed by soland policy_documents persistence".to_owned(),
-            "describe JSON is not generated from a normative policy-profile artifact".to_owned(),
-            "obligation execution and distributed policy lifecycle are not implemented".to_owned(),
-        ],
-        collection_path: "/_soland/self/policies".to_owned(),
-        item_path: "/_soland/self/policies/{policy_id}".to_owned(),
-        authz_describe_path: "/_soland/self/authz/describe".to_owned(),
-        upsert_request_example: json!({
-            "scope": "space",
-            "subject_ref": "did:web:alice.example",
-            "policy_type": "ck.self.keys.backups.command.unlock",
-            "effect": "require_review",
-            "payload": {
-                "actions": ["ck.self.keys.backups.command.unlock"],
-                "resource": {
-                    "kind": "blob",
-                    "space_id": "ck:space:01904100-0000-7000-8000-000000000000",
-                    "blob_ref": "ck:blob:sha256:0123456789abcdef",
-                    "object_type": "encrypted_backup",
-                    "object_ref": "backup-scaffold-current-device"
-                },
-                "constraints": [
-                    {
-                        "constraint_type": "claim_based",
-                        "subtype": "approval",
-                        "effect": "require_review",
-                        "approval_required": true,
-                        "approval_mode": "two_man_rule"
-                    }
-                ]
-            }
-        }),
-        get_path_example: "/_soland/self/policies/policy-key-backup-read-01".to_owned(),
-        delete_path_example: "/_soland/self/policies/policy-key-backup-read-01".to_owned(),
-    })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.device_messages.describe",
-    tags("device_messages"),
-    summary = "Device messages contract description"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.device_messages.describe"))]
-pub(in crate::routing) async fn device_messages_describe()
--> JsonResult<DeviceMessagesDescribeOutcome> {
-    json_ok(DeviceMessagesDescribeOutcome {
-        contract: "cokret.rest.device_messages_describe.v1".to_owned(),
-        version: "2026-05-04-scaffold".to_owned(),
-        collection_path: "/_cokret/self/device_messages".to_owned(),
-        send_path: "/_cokret/self/device_messages".to_owned(),
-        idempotency_header: "Idempotency-Key".to_owned(),
-        schema: "ck.schema.device_message.v1".to_owned(),
-        verification_event_kinds: vec![
-            "ck.key.verification.request".to_owned(),
-            "ck.key.verification.ready".to_owned(),
-            "ck.key.verification.start".to_owned(),
-            "ck.key.verification.accept".to_owned(),
-            "ck.key.verification.key".to_owned(),
-            "ck.key.verification.mac".to_owned(),
-            "ck.key.verification.done".to_owned(),
-            "ck.key.verification.cancel".to_owned(),
-        ],
-        send_request_example: json!({
-            "messages": {
-                "did:web:alice.example": {
-                    "ck:device:01904100-0000-7000-8000-000000000001": {
-                        "type": "ck.key.verification.request",
-                        "content": {
-                            "transaction_id": "verify-sas-01",
-                            "method": "sas",
-                            "note": "replace scaffold verification payload with signed device envelope"
-                        }
-                    }
-                }
-            }
-        }),
-    })
-}
-
-#[endpoint(
-    operation_id = "org.cokret.soland.keys.backups.describe",
-    tags("keys"),
-    summary = "Encrypted key-backup surface description"
-)]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.keys.backups.describe"))]
-pub(in crate::routing) async fn key_backups_describe() -> JsonResult<KeyBackupsDescribeOutcome> {
-    json_ok(KeyBackupsDescribeOutcome {
-        contract: "cokret.rest.key_backups_describe.v1".to_owned(),
-        collection_path: "/_cokret/self/keys/backups".to_owned(),
-        item_path: "/_cokret/self/keys/backups/{backup_id}".to_owned(),
-        schema: "ck.schema.key_backup.v1".to_owned(),
-        operations: vec![
-            "ck.self.keys.backups.resource.replace".to_owned(),
-            "ck.self.keys.backups.query.list".to_owned(),
-            "ck.self.keys.backups.command.unlock".to_owned(),
-            "ck.self.keys.backups.resource.delete".to_owned(),
-        ],
-        limits: KeyBackupsLimits {
-            daily_principal_download_limit:
-                crate::routing::identity::key_backup::key_backup_daily_download_limit(),
-        },
     })
 }
 
@@ -807,7 +515,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 path: "/_soland/gate/auth/bridge/describe".to_owned(),
                 contract: "cokret.rest.principal_bridge.v1".to_owned(),
                 stability: "scaffold".to_owned(),
-                todo: "split legacy session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
+                todo: "split session-grant fields from the primary OAuth bearer introspection contract.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "oauth_bearer_introspection".to_owned(),
@@ -834,52 +542,12 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 todo: "unify bearer and session-grant registration paths behind one capability-checked strand.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "device_messages_describe".to_owned(),
-                method: "GET".to_owned(),
-                path: "/_soland/self/device_messages/describe".to_owned(),
-                contract: "cokret.rest.device_messages_describe.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "replace inline device-message describe examples with generated protocol artifacts.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "key_backups_describe".to_owned(),
-                method: "GET".to_owned(),
-                path: "/_soland/self/keys/backups/describe".to_owned(),
-                contract: "cokret.rest.key_backups_describe.v1".to_owned(),
-                stability: "scaffold".to_owned(),
-                todo: "replace inline key-backups describe examples with generated protocol artifacts.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "authz_describe".to_owned(),
-                method: "GET".to_owned(),
-                path: "/_soland/self/authz/describe".to_owned(),
-                contract: "cokret.rest.authz_describe.v1".to_owned(),
-                stability: "scaffold_contract".to_owned(),
-                todo: "inline examples only; server/describe limitations explicitly mark this as not a full authz profile surface.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "policies_describe".to_owned(),
-                method: "GET".to_owned(),
-                path: "/_soland/self/policies/describe".to_owned(),
-                contract: "cokret.rest.policies_describe.v1".to_owned(),
-                stability: "scaffold_contract".to_owned(),
-                todo: "policy document CRUD is implemented locally; describe is not a generated full-profile artifact.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
                 name: "admin_bottom_manual_repair".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair".to_owned(),
                 contract: "cokret.rest.admin.bottom_repair.v1".to_owned(),
                 stability: "unsupported_signing_path".to_owned(),
                 todo: "manual effects are scope-validated only and are not submitted as signed Moves.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
-                name: "index_query".to_owned(),
-                method: "POST".to_owned(),
-                path: "/_soland/self/index/query".to_owned(),
-                contract: "cokret.rest.index_query.v1".to_owned(),
-                stability: "limited_projection".to_owned(),
-                todo: "backed by local projection state and demo fallback, not a full index-node profile.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
                 name: "member_identity_update".to_owned(),
@@ -939,7 +607,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             }
         }),
         todos: vec![
-            "replace legacy session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
+            "replace session-grant and push bridge scaffolds with the direct OAuth bearer path.".to_owned(),
             "bind outbound push notify delivery to the fetched gateway contract's advertised auth modes.".to_owned(),
             "publish the same integration manifest fields in the OpenAPI surface.".to_owned(),
         ],

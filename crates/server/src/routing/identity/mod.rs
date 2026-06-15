@@ -10,11 +10,8 @@ pub(crate) mod cross_signing;
 pub(super) mod device_messages;
 pub(super) mod did;
 mod identity_link;
-// pub(in crate::routing) so `system::describe::key_backups_describe` can
-// publish the effective §7.8 download quota alongside the surface contract.
 pub(in crate::routing) mod key_backup;
 mod keys;
-mod profile;
 // R3 spec-sync (cokret-spec b47ff6ec) — recovery policy / receipt
 // endpoints (HTTP-4 / REC-1). pub(crate) so the control-realm derivation
 // (`principal_control_realm_for_did`) is reachable from the events policy gate.
@@ -27,10 +24,10 @@ pub(crate) mod webvh_validation;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, bearer_token, classify_handle, handle_for_did,
-    is_device_revoked, is_valid_handle, normalize_handle, normalize_localpart, now,
-    parse_and_validate_sync_cursor, query_param, render_error, sha256_hex,
-    sync_token_for_client_sync, validate_device_id, validate_device_message_target, validate_did,
+    AuthArgs, SyncCursorError, append_audit_log, bearer_token, handle_for_did, is_device_revoked,
+    is_valid_handle, normalize_handle, normalize_localpart, now, parse_and_validate_sync_cursor,
+    query_param, render_error, sha256_hex, sync_token_for_client_sync, validate_device_id,
+    validate_device_message_target, validate_did,
 };
 
 pub fn router() -> Router {
@@ -108,19 +105,6 @@ pub fn local_router() -> Router {
             ),
         )
         .push(Router::with_path("root").push(recovery::router()))
-        // `self` — the principal's own authenticated session surface:
-        // account, contacts, keys, key backups, device messages, presence,
-        // personal agents.
-        .push(
-            Router::with_path("self")
-                .push(account::router())
-                .push(keys::router())
-                .push(key_backup::local_router())
-                .push(device_messages::local_router())
-                .push(profile::router())
-                // CKP-0008 / CKP-0009 — Personal Agent provisioning + lifecycle.
-                .push(agents::local_router()),
-        )
 }
 
 pub(super) fn embedded_webvh_public_router() -> Router {

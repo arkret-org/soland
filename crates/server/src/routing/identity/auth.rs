@@ -4,7 +4,7 @@
 //! - `POST /_soland/gate/auth/dev-login` — dev-mode bearer issue
 //! - direct OAuth bearer authentication — Matrix/Palpo-style validation through coauth
 //!   `/oauth/introspect`
-//! - `POST /_cokret/gate/account/session-grants` — legacy coauth session-grant bridge
+//! - `POST /_cokret/gate/account/session-grants` — coauth session-grant bridge
 //! - `POST /_cokret/gate/account/session-grants/revoke` — spec
 //!   `ck.gate.account.command.revoke_session`
 //! - `POST /_soland/gate/auth/logout` — revoke the bearer + the bound device

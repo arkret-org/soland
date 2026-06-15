@@ -1136,7 +1136,7 @@ pub struct AccountRecord {
     pub localpart: String,
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
-    /// `POST /_soland/self/account/profile` (operationId
+    /// `POST /_cokret/self/account/profile` (operationId
     /// `ck.self.account.command.update_profile`); rendered by `demo_actors` in directory
     /// search results.
     pub bio: Option<String>,

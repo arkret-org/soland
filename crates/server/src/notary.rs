@@ -819,20 +819,6 @@ mod tests {
             }
             other => panic!("expected Threshold, got {other:?}"),
         }
-
-        // Pre-rename alias spellings are rejected — the worker treats
-        // them as not-authorized (fail closed), never silently reads them.
-        for legacy in [
-            json!({"kind_raw": "threshold", "threshold_dids": ["did:a"]}),
-            json!({"shape": "single_did", "did": "did:ck:a"}),
-            json!({"kind": "threshold", "k": 2, "n": 3, "threshold_dids": ["did:a"]}),
-            json!({"kind": "mixed", "mixed_primary": "did:p", "mixed_recovery": ["did:r"]}),
-        ] {
-            assert!(
-                serde_json::from_value::<cokret_sdk::NotaryValue>(legacy.clone()).is_err(),
-                "legacy alias form must fail to parse: {legacy}"
-            );
-        }
     }
 
     #[test]

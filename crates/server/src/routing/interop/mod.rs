@@ -56,21 +56,8 @@ pub fn local_router() -> Router {
                     .push(Router::with_path("push/register-device").post(push::push_register))
                     .push(Router::with_path("push/unregister-device").post(push::push_unregister))
                     .push(push_outbound::router())
-                    .push(
-                        Router::with_path("push/rules")
-                            .get(push::push_rules)
-                            .post(push::upsert_push_rule),
-                    )
-                    .push(Router::with_path("push/rules/{rule_id}").delete(push::delete_push_rule))
                     .push(Router::with_path("push/notify").post(push::push_notify)),
             ),
-        )
-        // `self` — RTC/WebRTC, blob, moderation (authenticated session surface).
-        .push(
-            Router::with_path("self")
-                .push(webrtc::local_router())
-                .push(blob::router())
-                .push(moderation::local_router()),
         )
         // `open` — non-Cokret external vendor interop (MIMI).
         .push(Router::with_path("open").push(mimi::router()))

@@ -179,25 +179,11 @@ pub mod reasons {
         METADATA_ENCRYPTION_FLOOR_VIOLATION,
     ];
 
-    // ── R3 (spec b47ff6ec, _before_todos.md §0.7) — Agent / pairing /
-    // session-grant + media-binding (CKP-0010) + recovery / handle reason
-    // codes, re-exported from the SDK `ERROR_CODE_*` registry mirror so
-    // the wire strings have a single source of truth.
-
-    // Agent / pairing / session-grant (8 codes).
-    pub const PAIRING_REQUEST_EXPIRED: &str = core_error::ERROR_CODE_PAIRING_REQUEST_EXPIRED;
+    // Agent / pairing / session-grant reason codes.
     pub const PROOF_INVALID: &str = core_error::ERROR_CODE_PROOF_INVALID;
-    pub const VERIFICATION_METHOD_PRINCIPAL_MISMATCH: &str =
-        core_error::ERROR_CODE_VERIFICATION_METHOD_PRINCIPAL_MISMATCH;
-    pub const AGENT_PAUSED: &str = core_error::ERROR_CODE_AGENT_PAUSED;
-    pub const AGENT_DEACTIVATED: &str = core_error::ERROR_CODE_AGENT_DEACTIVATED;
-    pub const APPROVAL_ALREADY_CONSUMED: &str = core_error::ERROR_CODE_APPROVAL_ALREADY_CONSUMED;
-    pub const SIDECAR_CREATE_DENIED: &str = core_error::ERROR_CODE_SIDECAR_CREATE_DENIED;
     pub const ACTOR_KIND_REDUCER_MANAGED: &str = core_error::ERROR_CODE_ACTOR_KIND_REDUCER_MANAGED;
 
-    // Media binding / CKP-0010.
-    pub const FOCUS_MISMATCH: &str = core_error::ERROR_CODE_FOCUS_MISMATCH;
-    pub const UNKNOWN_FOCUS_TYPE: &str = core_error::ERROR_CODE_UNKNOWN_FOCUS_TYPE;
+    // Media binding reason codes.
     pub const TOKEN_ISSUER_UNAUTHORISED: &str = core_error::ERROR_CODE_TOKEN_ISSUER_UNAUTHORISED;
     pub const PARTICIPANT_BINDING_INVALID: &str =
         core_error::ERROR_CODE_PARTICIPANT_BINDING_INVALID;
@@ -207,182 +193,23 @@ pub mod reasons {
         core_error::ERROR_CODE_SESSION_FOCUS_ALREADY_COMMITTED;
     pub const E2EE_KEY_SOURCE_UNAUTHORISED: &str =
         core_error::ERROR_CODE_E2EE_KEY_SOURCE_UNAUTHORISED;
-    pub const RECORDING_ARTIFACT_PIPELINE_BYPASSED: &str =
-        core_error::ERROR_CODE_RECORDING_ARTIFACT_PIPELINE_BYPASSED;
     pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
         core_error::ERROR_CODE_FOCUS_UNAVAILABLE_FOR_CLIENT;
 
-    // Recovery / handle (2 codes).
+    // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
         core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;
-    pub const HANDLE_HOMOGRAPH_FORBIDDEN: &str = core_error::ERROR_CODE_HANDLE_HOMOGRAPH_FORBIDDEN;
 
-    // ── R3.1 (2026-05-27, cokret-spec @ 7157ee8) — MemberIdentity append-
-    // only replacement event error codes. Re-exported from the SDK's
-    // `ERROR_CODE_MEMBER_IDENTITY_*` constants so soland callsites have a
-    // stable namespace match for the spec wire codes.
-    pub const MEMBER_IDENTITY_STATE_MISMATCH: &str =
-        core_error::ERROR_CODE_MEMBER_IDENTITY_STATE_MISMATCH;
-    pub const MEMBER_IDENTITY_PROOF_INVALID: &str =
-        core_error::ERROR_CODE_MEMBER_IDENTITY_PROOF_INVALID;
-    pub const MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH: &str =
-        core_error::ERROR_CODE_MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH;
+    // MemberIdentity append-only replacement event reason codes.
     pub const MEMBER_IDENTITY_UNKNOWN_SEGMENT: &str =
         core_error::ERROR_CODE_MEMBER_IDENTITY_UNKNOWN_SEGMENT;
 
-    /// R3.1 reason codes for the MemberIdentity append-only replacement
-    /// event. Tests use this slice to assert the full set is surfaced.
-    pub const R3_1_MEMBER_IDENTITY_REASONS: &[&str] = &[
-        MEMBER_IDENTITY_STATE_MISMATCH,
-        MEMBER_IDENTITY_PROOF_INVALID,
-        MEMBER_IDENTITY_REPLACEMENT_DIGEST_MISMATCH,
-        MEMBER_IDENTITY_UNKNOWN_SEGMENT,
-    ];
-
-    // ── R3.2 (2026-05-28, cokret-spec @ b56cab1) — wire-breaking
-    // member-identity / handle-claim / mention reason codes. Defined as
-    // soland-local `pub const` literals (canonical wire form) until the SDK
-    // ships the matching `REASON_*` registry entries; once it does, swap to
-    // `core_error::REASON_*` re-exports the same way the C44/C45 block does.
-    // TODO(R3.2.1): swap to SDK re-exports once the registry lands.
-
-    /// MIU-SOL-1 — `ck.member.identity.update` payload carried a forbidden
-    /// handle field (`primary_handle` / `handles[]` / `verified_handle`).
-    /// MemberIdentity no longer carries handle lifecycle; it lives solely on
-    /// `ck.schema.handle_claim.v1`.
+    // MemberIdentity / handle-claim wire-shape reason codes.
     pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
         "member_identity_handle_field_forbidden";
-    /// HC-SOL-1 — handle claim used the removed `claim_type=service_handle`.
     pub const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
-    /// HC-SOL-2 — handle claim `subject` was not a holder/principal DID
-    /// (e.g. `ck:actor:` / `ck:account:` / non-DID).
     pub const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
         "handle_claim_subject_not_principal_did";
-    /// HC-SOL-3 — a mention reference carried the legacy pre-R3.2 shape
-    /// (`subject` / `handle` / `display_snapshot`) instead of the v2 shape
-    /// (`subject_id` authoritative + audit metadata).
-    pub const MENTION_REFERENCE_LEGACY_SHAPE: &str = "mention_reference_legacy_shape";
-
-    /// R3.2 reason codes registered in this round. Test scaffolding uses
-    /// this slice to assert the full set is surfaced through
-    /// `crate::error::reasons`.
-    pub const R3_2_REASONS: &[&str] = &[
-        MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN,
-        CLAIM_TYPE_UNSUPPORTED,
-        HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID,
-        MENTION_REFERENCE_LEGACY_SHAPE,
-    ];
-
-    /// R3 reason codes registered in this round. Test scaffolding uses this
-    /// slice to assert the full set is surfaced through
-    /// `crate::error::reasons`.
-    pub const R3_NEW_REASONS: &[&str] = &[
-        PAIRING_REQUEST_EXPIRED,
-        PROOF_INVALID,
-        VERIFICATION_METHOD_PRINCIPAL_MISMATCH,
-        AGENT_PAUSED,
-        AGENT_DEACTIVATED,
-        APPROVAL_ALREADY_CONSUMED,
-        SIDECAR_CREATE_DENIED,
-        ACTOR_KIND_REDUCER_MANAGED,
-        FOCUS_MISMATCH,
-        UNKNOWN_FOCUS_TYPE,
-        TOKEN_ISSUER_UNAUTHORISED,
-        PARTICIPANT_BINDING_INVALID,
-        PARTICIPANT_IDENTITY_UNRECOGNISED,
-        SESSION_FOCUS_ALREADY_COMMITTED,
-        E2EE_KEY_SOURCE_UNAUTHORISED,
-        RECORDING_ARTIFACT_PIPELINE_BYPASSED,
-        FOCUS_UNAVAILABLE_FOR_CLIENT,
-        RECOVERY_WITNESS_REVOKE_LAGGING,
-        HANDLE_HOMOGRAPH_FORBIDDEN,
-    ];
-
-    /// ERR-1 — per-handler reason-code wiring index.
-    ///
-    /// Each tuple `(reason, handler_site)` documents the canonical handler
-    /// site responsible for emitting the corresponding R3 reason code.
-    /// Test scaffolding uses this list to ensure no R3 reason code falls
-    /// off the surface unannounced; the handler files themselves emit the
-    /// reasons via the constants above (or wire-level string literals in
-    /// the validator path — both satisfy ERR-1 because the constants and
-    /// literals share canonical wire form, asserted by
-    /// `error::tests::all_r3_reasons_have_a_handler_site`).
-    pub const R3_HANDLER_SITES: &[(&str, &str)] = &[
-        (
-            PAIRING_REQUEST_EXPIRED,
-            "routing::identity::agents::lifecycle_transition (provision/pair)",
-        ),
-        (
-            PROOF_INVALID,
-            "routing::identity::recovery::validate_recovery_policy auth_data check",
-        ),
-        (
-            VERIFICATION_METHOD_PRINCIPAL_MISMATCH,
-            "routing::events::event_log envelope verification_method check",
-        ),
-        (AGENT_PAUSED, "reducer::apply_agent_lifecycle FSM reject"),
-        (
-            AGENT_DEACTIVATED,
-            "reducer::apply_agent_lifecycle FSM reject",
-        ),
-        (
-            APPROVAL_ALREADY_CONSUMED,
-            "routing::identity::agents action_approve idempotency",
-        ),
-        (
-            SIDECAR_CREATE_DENIED,
-            "routing::identity::agents::ensure_sidecar_thread",
-        ),
-        (
-            ACTOR_KIND_REDUCER_MANAGED,
-            "routing::events::event_log envelope actor_kind reject",
-        ),
-        (
-            FOCUS_MISMATCH,
-            "routing::interop::webrtc::handle_rtc_token session_focus check",
-        ),
-        (
-            UNKNOWN_FOCUS_TYPE,
-            "routing::events::operations ck.realm.media_service foci[] check",
-        ),
-        (
-            TOKEN_ISSUER_UNAUTHORISED,
-            "routing::interop::webrtc::handle_rtc_token issuer_kid resolve",
-        ),
-        (
-            PARTICIPANT_BINDING_INVALID,
-            "routing::events::operations ck.call.state participant_binding check",
-        ),
-        (
-            PARTICIPANT_IDENTITY_UNRECOGNISED,
-            "routing::interop::webrtc participant identity lookup",
-        ),
-        (
-            SESSION_FOCUS_ALREADY_COMMITTED,
-            "routing::events::operations ck.call.state.session_focus write-once",
-        ),
-        (
-            E2EE_KEY_SOURCE_UNAUTHORISED,
-            "routing::interop::webrtc e2ee key source authorisation",
-        ),
-        (
-            RECORDING_ARTIFACT_PIPELINE_BYPASSED,
-            "routing::interop::webrtc recording artifact pipeline",
-        ),
-        (
-            FOCUS_UNAVAILABLE_FOR_CLIENT,
-            "routing::interop::webrtc focus availability resolution",
-        ),
-        (
-            RECOVERY_WITNESS_REVOKE_LAGGING,
-            "routing::identity::recovery::recovery_receipt_put witness freshness",
-        ),
-        (
-            HANDLE_HOMOGRAPH_FORBIDDEN,
-            "routing::system::util::classify_handle UTS#39 reject",
-        ),
-    ];
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;
@@ -443,30 +270,6 @@ pub fn render_error_code(code: ErrorCode, res: &mut Response, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// ERR-1 — every R3 reason code in `R3_NEW_REASONS` MUST have a
-    /// matching entry in `R3_HANDLER_SITES`. Test scaffolding so a new
-    /// reason added to the SDK doesn't silently lack a soland emission
-    /// site.
-    #[test]
-    fn all_r3_reasons_have_a_handler_site() {
-        use reasons::{R3_HANDLER_SITES, R3_NEW_REASONS};
-        for reason in R3_NEW_REASONS {
-            assert!(
-                R3_HANDLER_SITES.iter().any(|(r, _)| r == reason),
-                "R3 reason `{reason}` lacks a registered handler site \
-                 (add to `reasons::R3_HANDLER_SITES` once you wire it)"
-            );
-        }
-        // Symmetric direction: no orphan handler-site entries that
-        // don't correspond to a registered R3 reason.
-        for (reason, _site) in R3_HANDLER_SITES {
-            assert!(
-                R3_NEW_REASONS.contains(reason),
-                "R3 handler site references unknown reason `{reason}`"
-            );
-        }
-    }
 
     #[test]
     fn sdk_error_codes_are_soland_source_of_truth() {

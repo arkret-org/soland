@@ -85,7 +85,7 @@ pub fn validate_operation_semantics(
         };
         // Spec B1.13 / B1.14 — typed payload validators for the
         // new wire-broken shapes. These run BEFORE the per-kind schema
-        // check so a legacy `target_ref` payload is rejected with the
+        // check so a removed `target_ref` payload is rejected with the
         // typed-shape reason rather than the generic SDK schema error.
         validate_typed_payload_shapes(kind, operation)?;
         validate_reaction_target_kind(kind, operation)?;
@@ -140,21 +140,23 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
     match kind {
         // ck.space.archive / ck.space.restore use the typed
         // SpaceStateTransitionPayload (space_id, new_state, reason?).
-        // The legacy top-level `target_ref` form is rejected
+        // The removed top-level `target_ref` form is rejected
         // unconditionally; everything else passes through to the
         // per-kind SPACE_CONTAINER_LIFECYCLE_REQUIREMENTS validator below.
         "ck.space.archive" | "ck.space.restore" => {
             if operation.payload.get("target_ref").is_some() {
                 return Err(
-                    "ck.space.archive/restore legacy `target_ref` form rejected by round-4 wire",
+                    "ck.space.archive/restore removed `target_ref` form rejected by round-4 wire",
                 );
             }
             Ok(())
         }
-        // ck.space.tombstone — same legacy reject rule.
+        // ck.space.tombstone — same removed-field reject rule.
         "ck.space.tombstone" => {
             if operation.payload.get("target_ref").is_some() {
-                return Err("ck.space.tombstone legacy `target_ref` form rejected by round-4 wire");
+                return Err(
+                    "ck.space.tombstone removed `target_ref` form rejected by round-4 wire",
+                );
             }
             Ok(())
         }
@@ -340,37 +342,27 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-6 — when `ck.profile.accountable_principals.strict_reject.v1`
-        // is declared (env-gated by `SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT`),
-        // Actor Profile create/update with unverified `accountable_principal_ids[]`
-        // MUST reject the whole event with `failed_precondition
-        // reason=accountability_grant_missing`. Without the profile we
-        // fall back to the default strip + audit behavior.
+        // REDU-6 — Actor Profile create/update with unverified
+        // `accountable_principal_ids[]` MUST reject the whole event with
+        // `failed_precondition reason=accountability_grant_missing`.
         // TODO(R3.1): cross-check each accountable_principal_ids[] DID against the
         // `ck.identity.accountability_grant` projection; for now we
         // only enforce the wire-shape contract (presence of the
         // accountable_principal_ids[] field implies verification must happen).
         "ck.profile.create" | "ck.profile.update" => {
-            let strict_reject = matches!(
-                std::env::var("SOLAND_ACCOUNTABLE_PRINCIPALS_STRICT_REJECT").as_deref(),
-                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
-            );
-            if strict_reject
-                && operation
-                    .payload
-                    .get("accountable_principal_ids")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|arr| !arr.is_empty())
+            if operation
+                .payload
+                .get("accountable_principal_ids")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty())
                 && operation
                     .payload
                     .get("accountability_grant_refs")
                     .and_then(|v| v.as_array())
                     .is_none_or(|arr| arr.is_empty())
             {
-                return Err(
-                    "accountability_grant_missing: strict_reject profile requires \
-                     accountability_grant_refs[] when accountable_principal_ids[] is non-empty",
-                );
+                return Err("accountability_grant_missing: profile requires \
+                     accountability_grant_refs[] when accountable_principal_ids[] is non-empty");
             }
             Ok(())
         }
@@ -875,17 +867,6 @@ pub fn payload_key_present(payload: &serde_json::Value, field: &str) -> bool {
 }
 
 pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &'static str> {
-    if operation.payload.get("track").is_some() {
-        return Err("message operation field 'track' is retired; use track_name");
-    }
-    if operation.payload.get("body").is_some() {
-        return Err("message operation field 'body' is retired; use content.body");
-    }
-    if operation.payload.get("encrypted_payload").is_some() {
-        return Err(
-            "message operation field 'encrypted_payload' is retired; use encrypted_content",
-        );
-    }
     if crate::kinds::operation_is_message_create(operation) {
         if operation
             .payload
@@ -1215,7 +1196,6 @@ fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static s
     let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) else {
         return Ok(());
     };
-    reject_legacy_morph_patch_fields(patch)?;
     if patch.contains_key("content") && patch.contains_key("encrypted_content") {
         return Err("morph_content_carrier_conflict");
     }
@@ -1232,7 +1212,6 @@ fn validate_morph_create_payload(operation: &Operation) -> Result<(), &'static s
     let Some(object) = operation.payload.get("object").and_then(Value::as_object) else {
         return Err("morph_create_object_invalid");
     };
-    reject_legacy_morph_object_fields(object)?;
     if object.contains_key("content") && object.contains_key("encrypted_content") {
         return Err("morph_content_carrier_conflict");
     }
@@ -1241,28 +1220,6 @@ fn validate_morph_create_payload(operation: &Operation) -> Result<(), &'static s
     }
     if let Some(metadata) = object.get("metadata").and_then(Value::as_object) {
         reject_morph_metadata_business_fields(metadata)?;
-    }
-    Ok(())
-}
-
-fn reject_legacy_morph_object_fields(
-    object: &serde_json::Map<String, Value>,
-) -> Result<(), &'static str> {
-    for field in ["title", "summary", "encrypted_payload"] {
-        if object.contains_key(field) {
-            return Err("morph_legacy_wire_field");
-        }
-    }
-    Ok(())
-}
-
-fn reject_legacy_morph_patch_fields(
-    patch: &serde_json::Map<String, Value>,
-) -> Result<(), &'static str> {
-    for field in ["title", "summary", "encrypted_payload"] {
-        if patch.contains_key(field) {
-            return Err("morph_legacy_wire_field");
-        }
     }
     Ok(())
 }
@@ -2022,7 +1979,7 @@ mod invite_create_schema_tests {
     }
 
     #[test]
-    fn invite_create_rejects_legacy_inviter_payload_field() {
+    fn invite_create_rejects_removed_inviter_payload_field() {
         let schema = operation_schema_for_kind(kinds::CK_INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["inviter"] = json!("did:web:alice.example");
