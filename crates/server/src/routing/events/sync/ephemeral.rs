@@ -49,7 +49,29 @@ pub(super) async fn submit_ephemeral(
         }
         "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
         "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
-        "ck.call.signal" => admit_ephemeral_call_signal(&envelope)?,
+        "ck.call.signal" => {
+            // `service-http-binding.md` §162 — sending a `ck.call.signal`
+            // envelope on `/_cokret/self/ephemeral` requires the realm-scoped
+            // `ck.call.signal.send` capability (registered in
+            // `capability-action-registry.json`). Realm membership stays a
+            // precondition (checked above); signal-send authority is an
+            // explicit capability so a member without it cannot relay call
+            // signals. §162 defines no dedicated error code, so we surface the
+            // generic `capability_denied` (403).
+            if !crate::routing::interop::webrtc::actor_has_call_capability(
+                state,
+                realm_id_str,
+                &session.actor,
+                cokret_sdk::CAP_CALL_SIGNAL_SEND,
+            )
+            .await
+            {
+                return Err(crate::error::AppError::capability_denied(
+                    "actor does not hold the ck.call.signal.send capability for this realm",
+                ));
+            }
+            admit_ephemeral_call_signal(&envelope)?
+        }
         _ => {
             return Err(crate::error::AppError::invalid_param(
                 "unsupported ephemeral kind",

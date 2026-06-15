@@ -6,7 +6,7 @@ mod mimi;
 pub(crate) mod moderation;
 mod push;
 mod push_outbound;
-mod webrtc;
+pub(crate) mod webrtc;
 
 pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
 pub use blob_resumable::spawn_resumable_upload_ttl_sweeper;

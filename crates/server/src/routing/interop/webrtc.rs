@@ -257,7 +257,14 @@ async fn issue_ice_config(
 
     let issued_at = now();
     let ttl_seconds: u32 = state.config.ice.ttl_seconds;
-    let refresh_lead_seconds: u32 = state.config.ice.refresh_lead_seconds;
+    // `webrtc-signaling.md` §4.2 — `refresh_lead_seconds` MUST be strictly less
+    // than `ttl_seconds`; a server MUST NOT issue `lead >= ttl` or the client
+    // would judge the credential stale at issuance and storm refresh. The env
+    // value is operator-configurable, so clamp it at the signing point: cap to
+    // `ttl_seconds - 1` and keep the schema floor (>= 10) when `ttl` is large
+    // enough to admit it.
+    let refresh_lead_seconds: u32 =
+        clamp_refresh_lead_seconds(state.config.ice.refresh_lead_seconds, ttl_seconds);
     let expires_at = issued_at + Duration::seconds(i64::from(ttl_seconds));
     // `webrtc-signaling.md` §4.1 — coarse-grained bucket the TURN pseudonym
     // is derived against. v1 fixes `bucket_seconds = 300`; `issued_at_bucket
@@ -324,6 +331,27 @@ async fn issue_ice_config(
 
 /// `webrtc-signaling.md` §4.1 — v1 fixes the TURN pseudonym bucket at 300s.
 const ICE_PSEUDONYM_BUCKET_SECONDS: u32 = 300;
+
+/// Schema-aligned floor for `refresh_lead_seconds`
+/// (`ice-config-response.schema.json`: `minimum: 10`).
+const ICE_REFRESH_LEAD_FLOOR_SECONDS: u32 = 10;
+
+/// `webrtc-signaling.md` §4.2 — server-side guarantee that
+/// `refresh_lead_seconds < ttl_seconds`. The operator-configured lead is
+/// clamped at issuance so the response always satisfies the MUST: the lead is
+/// capped to `ttl_seconds - 1`. When `ttl_seconds` is large enough that the
+/// schema floor (10s) still leaves `floor < ttl`, the result is also held at or
+/// above that floor; for very small `ttl` the cap to `ttl - 1` wins so the
+/// strict-inequality invariant holds even below the floor.
+fn clamp_refresh_lead_seconds(configured: u32, ttl_seconds: u32) -> u32 {
+    let ceiling = ttl_seconds.saturating_sub(1);
+    let clamped = configured.min(ceiling);
+    if ttl_seconds > ICE_REFRESH_LEAD_FLOOR_SECONDS {
+        clamped.max(ICE_REFRESH_LEAD_FLOOR_SECONDS)
+    } else {
+        clamped
+    }
+}
 
 /// `floor(timestamp / bucket_seconds) * bucket_seconds` as a UTC timestamp.
 fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Utc> {
@@ -1919,7 +1947,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
 /// grants (`ck.component.capability.grant.v1`) and the engine default rules.
 /// The realm itself is the capability resource scope (call capabilities are
 /// realm-scoped in §3; a call is not a separate grant resource in v1).
-async fn actor_has_call_capability(
+pub(crate) async fn actor_has_call_capability(
     state: &AppState,
     realm_id: &str,
     actor: &str,
