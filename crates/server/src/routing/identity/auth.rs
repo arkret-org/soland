@@ -39,6 +39,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantExchangeRequestBody,
+    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
     SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
@@ -749,32 +750,10 @@ async fn exchange_session_grant(
     })
 }
 
-#[derive(Debug, Serialize)]
-struct SessionGrantIntrospectionRequestBody<'a> {
-    grant_jwt: &'a str,
-    audience: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    proof: Option<&'a SessionGrantIntrospectionProof>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionGrantIntrospectionOutcome {
-    active: bool,
-    status: String,
-    one_time_use_consumed: bool,
-    grant: Option<SessionGrantIntrospectionGrant>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionGrantIntrospectionGrant {
-    subject: String,
-    device_id: Option<String>,
-    audience: String,
-    scopes: Vec<String>,
-    expires_at: DateTime<Utc>,
-    #[serde(default)]
-    session_public_key: Option<String>,
-}
+// Session-grant introspection wire types come from the SDK
+// (`SessionGrantIntrospectRequestBody` / `SessionGrantIntrospectOutcome` /
+// `SessionGrantIntrospectStatus`), so this caller binds to the same strong
+// types the spec/OpenAPI declare instead of hand-rolled structs.
 
 #[derive(Debug, Serialize)]
 struct OAuthIntrospectionRequestBody<'a> {
@@ -829,10 +808,11 @@ pub(crate) async fn validate_session_grant_binding(
                 "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
-    let request = SessionGrantIntrospectionRequestBody {
-        grant_jwt: input.grant_jwt,
-        audience: state.config.service_did.as_str(),
-        proof: input.proof,
+    let request = SessionGrantIntrospectRequestBody {
+        id: None,
+        grant_jwt: Some(input.grant_jwt.to_owned()),
+        audience: Some(state.config.service_did.as_str().to_owned()),
+        proof: input.proof.cloned(),
     };
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
@@ -863,7 +843,7 @@ pub(crate) async fn validate_session_grant_binding(
         )));
     }
     let response = response
-        .json::<SessionGrantIntrospectionOutcome>()
+        .json::<SessionGrantIntrospectOutcome>()
         .await
         .map_err(|error| {
             AppError::new(
@@ -871,10 +851,15 @@ pub(crate) async fn validate_session_grant_binding(
                 format!("invalid session grant introspection response: {error}"),
             )
         })?;
-    if !response.active || response.status != "active" {
+    if !response.active || response.status != SessionGrantIntrospectStatus::Active {
+        // Preserve the snake_case wire status in the message (e.g. "revoked")
+        // rather than the Debug form, so downstream callers see the same token.
+        let status_wire = serde_json::to_value(response.status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned());
         return Err(AppError::capability_denied(format!(
-            "session grant is not active: {}",
-            response.status
+            "session grant is not active: {status_wire}"
         )));
     }
     let grant = response.grant.ok_or_else(|| {
@@ -913,7 +898,7 @@ pub(crate) async fn validate_session_grant_binding(
     Ok(Some(ValidatedSessionGrant {
         expires_at: grant.expires_at,
         one_time_use_consumed: response.one_time_use_consumed,
-        session_public_key: grant.session_public_key,
+        session_public_key: Some(grant.session_public_key),
     }))
 }
 
