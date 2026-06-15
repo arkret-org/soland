@@ -46,6 +46,24 @@ use crate::{JsonResult, ids, json_ok};
 const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
 
+/// Lifetime (minutes) of an access bearer minted from a session-grant exchange.
+/// The bearer is a SHORT access token; the (longer, minutes-to-hours) session
+/// grant is the refresh credential the client re-exchanges for fresh bearers.
+/// Capped so a long grant never yields a long-lived bearer; never extended past
+/// the grant's own expiry.
+const SHORT_BEARER_TTL_MINUTES: i64 = 15;
+
+/// Expiry for an access bearer minted from a session-grant exchange: `now +
+/// SHORT_BEARER_TTL`, but never beyond the grant's own expiry. Keeps bearers
+/// short regardless of grant length, and never mints a bearer that outlives the
+/// refresh credential backing it.
+fn capped_bearer_expiry(
+    grant_expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    grant_expires_at.min(now + Duration::minutes(SHORT_BEARER_TTL_MINUTES))
+}
+
 pub(super) fn router() -> Router {
     local_router()
 }
@@ -626,10 +644,20 @@ async fn exchange_session_grant(
             return Err(error);
         }
     };
-    let expires_at = grant
+    // The principal session grant is the (minutes-to-hours, audience-bound)
+    // refresh credential; the access bearer minted from it is a SHORT-lived
+    // access token. Decouple the two: cap the bearer at SHORT_BEARER_TTL but
+    // never let it outlive the grant. The client silently re-exchanges the
+    // still-valid grant for a fresh short bearer (every <TTL), so the session
+    // lives for the grant's full lifetime without ever holding a long-lived
+    // bearer. (Previously the bearer inherited the grant's expiry verbatim,
+    // which both produced long-lived bearers when grants are long and — with a
+    // 5-minute grant — bounced the user to login every 5 minutes.)
+    let grant_expires_at = grant
         .as_ref()
         .map(|grant| grant.expires_at)
         .unwrap_or_else(|| now() + Duration::hours(12));
+    let expires_at = capped_bearer_expiry(grant_expires_at, now());
     let token = token_for(
         principal_id_str,
         device_id_str,
@@ -1225,7 +1253,7 @@ async fn authenticated_oauth_session(
         state.config.development_mode,
     )
     .await?;
-    let oauth = parse_oauth_introspection(&value, token)?;
+    let oauth = parse_oauth_introspection(&value)?;
     ensure_oauth_account(state, &oauth).await?;
     if let Some((status, code, _reason_detail, message)) =
         account_new_session_tuple(state, &oauth.actor)
@@ -1391,7 +1419,6 @@ fn jitter_micros(max: std::time::Duration) -> u64 {
 
 fn parse_oauth_introspection(
     value: &Value,
-    token: &str,
 ) -> Result<OAuthIntrospectionSession, (StatusCode, &'static str, &'static str)> {
     if !value
         .get("active")
@@ -1427,6 +1454,14 @@ fn parse_oauth_introspection(
         ));
     }
 
+    // Device binding MUST come from the introspected `org.cokret.device_id`
+    // claim (carried by the OAuth `urn:cokret:client:device:<id>` scope). It is
+    // the stable protocol device identity (`ck:device:<uuid>`). We MUST NOT
+    // fabricate one from the token (jti/session_id): a per-token derived id
+    // drifts on every refresh and silently breaks every device-scoped binding
+    // (sync cursor principal/device match, key-backup writer authorization).
+    // Fail closed instead — a token with no valid device binding is not a
+    // device session and cannot drive `/_cokret/self/*`.
     let raw_device_id = string_field(value, "org.cokret.device_id")
         .or_else(|| string_field(value, "device_id"))
         .map(str::to_owned);
@@ -1434,7 +1469,11 @@ fn parse_oauth_introspection(
         .as_deref()
         .filter(|device_id| validate_device_id(device_id).is_ok())
         .map(str::to_owned)
-        .unwrap_or_else(|| derived_oauth_device_id(value, token));
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "OAuth introspection response carried no valid device binding (org.cokret.device_id); session is not device-bound",
+        ))?;
     let expires_at = oauth_expiry(value);
     if expires_at <= now() {
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
@@ -1651,22 +1690,6 @@ fn sanitized_handle(value: &str) -> Option<String> {
     is_valid_handle(&handle).then_some(handle)
 }
 
-fn derived_oauth_device_id(value: &Value, token: &str) -> String {
-    let seed = string_field(value, "org.cokret.session_id")
-        .or_else(|| string_field(value, "jti"))
-        .or_else(|| string_field(value, "sub"))
-        .unwrap_or(token);
-    let digest = hex::encode(Sha256::digest(seed.as_bytes()));
-    format!(
-        "ck:device:{}-{}-7{}-8{}-{}",
-        &digest[0..8],
-        &digest[8..12],
-        &digest[12..15],
-        &digest[15..18],
-        &digest[18..30]
-    )
-}
-
 fn short_hex(bytes: &[u8], len: usize) -> String {
     let digest = Sha256::digest(bytes);
     hex::encode(digest).chars().take(len).collect()
@@ -1799,4 +1822,28 @@ pub fn session_token_hash(token: &str, audience: &str) -> String {
     hasher.update(b":");
     hasher.update(token.as_bytes());
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bearer_expiry_is_capped_short_and_never_outlives_grant() {
+        let now = DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // Long (8h) grant → bearer capped at the short 15-minute TTL, so a long
+        // refresh credential never yields a long-lived access bearer.
+        let long_grant = now + Duration::hours(8);
+        assert_eq!(
+            capped_bearer_expiry(long_grant, now),
+            now + Duration::minutes(SHORT_BEARER_TTL_MINUTES),
+        );
+
+        // Grant nearer than the short TTL → bearer never outlives the grant.
+        let near_grant = now + Duration::minutes(3);
+        assert_eq!(capped_bearer_expiry(near_grant, now), near_grant);
+    }
 }
