@@ -297,7 +297,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::ObjectStorageConfig;
+    use crate::config::{IceServersConfig, ObjectStorageConfig};
 
     fn base_config() -> AppConfig {
         AppConfig {
@@ -309,6 +309,7 @@ mod tests {
             tls_key_path: None,
             database_url: None,
             object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-blobs")),
+            ice: IceServersConfig::default(),
             cors_allow_origin: None,
             auth_server_url: None,
             development_mode: false,

@@ -87,6 +87,9 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN` | derived trust domain | Expected trust domain for the external webvh provider probe. |
 | `SOLAND_FEDERATION_POLICY` | `mesh` | Federation policy mode (`mesh` or `hub`). |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
+| `SOLAND_ICE_STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN URLs advertised in signed ICE configs. |
+| `SOLAND_ICE_TTL_SECONDS` | `300` | Lifetime of an issued ICE config / TURN credential before refresh; non-positive falls back to default. |
+| `SOLAND_ICE_REFRESH_LEAD_SECONDS` | `75` | Lead time before TTL at which clients should refresh the ICE config. |
 | `SOLAND_JWS_REPLAY_WINDOW_SECONDS` | `300` | Accepted JWS replay window; `0` disables replay-window enforcement. |
 | `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT` | spec default | Per-principal daily key-backup download limit. |
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
@@ -95,6 +98,9 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_DIDS` | empty | Comma-separated service DIDs trusted for push bridge elevation. |
 | `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |
 | `SOLAND_TRUST_X_FORWARDED_FOR` | `false` | Backward-compatible alias for `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR`. |
+| `SOLAND_TURN_URLS` | `turn:turn.soland.local:3478?transport=udp` | Comma-separated TURN URLs advertised in signed ICE configs. |
+| `SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS` | `86400` | Rotation window for the TURN shared secret used in credential derivation. |
+| `SOLAND_TURN_SHARED_SECRET` | unset | Optional shared secret folded into derived TURN credentials (`*_FILE` form supported); when unset, credential material is unchanged. |
 | `SOLAND_RESUMABLE_UPLOAD_DIR` | `./soland-resumable-uploads` | Directory for resumable-upload staging files. |
 | `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` | `86400` | Incomplete resumable-upload TTL; minimum 60 seconds. |
 | `SOLAND_SOVEREIGN_ENCLAVE` | `false` | Enables the sovereign-enclave profile and startup invariant checks. |
@@ -557,6 +563,23 @@ LIMIT  20;
 Realms with `has_foci = false` after the migration ran indicate either an
 empty `media_service` row or a row outside the canonical shape — capture
 the row and escalate; do not delete.
+
+### ICE / TURN vs. media-service foci — two distinct config layers
+
+Media connectivity is configured in two independent layers:
+
+- **Per-deployment ICE/STUN/TURN (P2P NAT traversal)** — set via the
+  `SOLAND_ICE_*` / `SOLAND_TURN_*` env vars above. These feed the signed
+  `POST /_cokret/self/rtc/ice-config` response. Defaults reproduce the
+  historical hardcoded `stun.l.google.com` / `turn.soland.local` values so
+  existing deployments behave identically until overridden. Point
+  `SOLAND_TURN_URLS` at your own coturn/eturnal pool for production.
+- **Per-realm SFU foci (LiveKit / Mediasoup conferencing)** — declared in the
+  realm `ck.component.realm.media_service.v1` cell as the `foci[]` array shown
+  above, consumed by the CKP-0010 token exchange at
+  `POST /_cokret/self/rtc/token`. This is where a LiveKit pool's
+  `connect_url` / `issuer_kid` / `audience` are bound; it is realm-scoped
+  config, not a deployment env var.
 
 ### `recovery_policies` + `recovery_receipts`
 

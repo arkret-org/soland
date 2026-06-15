@@ -264,6 +264,54 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     ));
 }
 
+// W2 — `ck.realm.media_service` projects the per-Realm media_service epoch
+// cell consumed by the CKP-0010 token exchange. An empty `foci[]` is
+// rejected so a Realm cannot advertise a media service with no focus.
+#[test]
+fn media_service_projects_cell_and_rejects_empty_foci() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_REALM_MEDIA_SERVICE,
+                realm,
+                serde_json::json!({ "service_id": "did:web:media.example", "foci": [] }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "media_service_foci_required"
+    ));
+
+    let payload = serde_json::json!({
+        "service_id": "did:web:media.example",
+        "foci": [{
+            "focus_id": "ck:focus:livekit:green",
+            "backend": "livekit",
+            "connect_url": "wss://media.example/livekit",
+            "issuer_kid": "did:web:media.example#livekit-2026-05",
+            "audience": "livekit-demo"
+        }]
+    });
+    assert!(matches!(
+        state.apply(
+            &make_operation(crate::kinds::CK_REALM_MEDIA_SERVICE, realm, payload),
+            &hlc,
+        ),
+        ProjectionEffect::RealmMediaServiceProjected { .. }
+    ));
+    let cell_id = cokret_sdk::CellRef::new(format!(
+        "ck:cell:ck.component.realm.media_service.v1:{realm}"
+    ))
+    .unwrap();
+    let value = state
+        .cell_value(&cell_id)
+        .expect("media_service cell projected");
+    assert_eq!(value["foci"][0]["focus_id"], "ck:focus:livekit:green");
+}
+
 #[test]
 fn message_create_and_query() {
     let mut state = ProjectionState::new();

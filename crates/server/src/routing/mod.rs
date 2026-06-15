@@ -1633,7 +1633,7 @@ mod operation_conformance_tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::config::{AppConfig, ObjectStorageConfig};
+    use crate::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
     use crate::db::Db;
     use crate::kinds;
 
@@ -1657,6 +1657,7 @@ mod operation_conformance_tests {
                 object_storage: ObjectStorageConfig::local(
                     std::env::temp_dir().join("soland-test-blobs"),
                 ),
+                ice: IceServersConfig::default(),
                 cors_allow_origin: None,
                 auth_server_url: None,
                 development_mode: true,

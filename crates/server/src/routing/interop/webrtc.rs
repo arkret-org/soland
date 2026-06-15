@@ -4,9 +4,10 @@
 //! - `POST /_cokret/self/rtc/ice-config` (TURN / STUN list)
 //! - `POST /_cokret/self/rtc/token` (media token exchange, CKP-0010)
 //!
-//! Sessions are persisted through `state.persistence.webrtc()`. Durable
-//! Pg backing + TURN policy + spec rule (no DID in TURN username / push
-//! payload) are future work.
+//! Sessions are persisted through `state.persistence.webrtc()`. STUN/TURN
+//! URLs, credential TTLs, and the optional TURN shared secret are
+//! operator-configurable via `AppConfig::ice`. Durable Pg backing and the
+//! spec rule (no DID in TURN username / push payload) are future work.
 
 use std::collections::BTreeSet;
 
@@ -220,8 +221,8 @@ async fn issue_ice_config(
     }
 
     let issued_at = now();
-    let ttl_seconds: u32 = 300;
-    let refresh_lead_seconds: u32 = 75;
+    let ttl_seconds: u32 = state.config.ice.ttl_seconds;
+    let refresh_lead_seconds: u32 = state.config.ice.refresh_lead_seconds;
     let expires_at = issued_at + Duration::seconds(i64::from(ttl_seconds));
     let force_turn = body.force_turn;
     let turn_username = pairwise_turn_username(state, realm_id, call_id, actor_id, device_id);
@@ -229,14 +230,14 @@ async fn issue_ice_config(
         state, realm_id, call_id, actor_id, device_id, &issued_at, refresh,
     );
     let turn_server = IceServerDescriptor {
-        urls: vec!["turn:turn.soland.local:3478?transport=udp".to_owned()],
+        urls: state.config.ice.turn_urls.clone(),
         username: Some(turn_username.clone()),
         credential: Some(turn_credential),
         credential_type: Some("password".to_owned()),
         expires_at: Some(expires_at),
     };
     let mut ice_servers = vec![IceServerDescriptor {
-        urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+        urls: state.config.ice.stun_urls.clone(),
         username: None,
         credential: None,
         credential_type: None,
@@ -287,11 +288,18 @@ fn turn_credential(
     issued_at: &chrono::DateTime<chrono::Utc>,
     refresh: bool,
 ) -> String {
-    let material = format!(
+    let mut material = format!(
         "soland-turn-credential-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}\0{}\0{refresh}",
         state.config.service_did,
         issued_at.to_rfc3339()
     );
+    // When a TURN shared secret is configured, fold it into the credential
+    // material so derived credentials cannot be recomputed without it. When
+    // unset, material is unchanged and existing credential assertions hold.
+    if let Some(secret) = state.config.ice.turn_shared_secret.as_deref() {
+        material.push('\0');
+        material.push_str(secret);
+    }
     URL_SAFE_NO_PAD.encode(sha256_hex(material.as_bytes()))
 }
 

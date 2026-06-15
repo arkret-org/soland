@@ -1333,6 +1333,12 @@ pub enum ProjectionEffect {
     RealmSearchPolicyProjected {
         realm_id: String,
     },
+    /// `ck.realm.media_service` projected into the canonical
+    /// `ck.component.realm.media_service.v1` cas-register cell consumed by
+    /// the CKP-0010 media token exchange.
+    RealmMediaServiceProjected {
+        realm_id: String,
+    },
     /// R3.1 — `ck.realm.link` event was projected into the
     /// `ck.component.realm.link.v1` or_set cell + the `realm_links`
     /// structured cache.
@@ -2067,6 +2073,16 @@ fn apply_realm_search_policy_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_search_policy(op)
+}
+
+/// Dispatch for `ck.realm.media_service`; cell family is
+/// `ck.component.realm.media_service.v1`.
+fn apply_realm_media_service_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_media_service(op)
 }
 /// R3.1 — upsert a realm-link row into a per-Realm Vec cache. Matches
 /// on the composite key `(realm_id, target_realm_id, link_kind)`; an
@@ -3133,6 +3149,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_disappearing_policy_dispatch,
     );
     m.insert(CK_REALM_SEARCH_POLICY, apply_realm_search_policy_dispatch);
+    // media_service is Realm-scoped with cell_family
+    // `ck.component.realm.media_service.v1`; consumed by the CKP-0010
+    // media token exchange in `routing::interop::webrtc`.
+    m.insert(CK_REALM_MEDIA_SERVICE, apply_realm_media_service_dispatch);
     m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply

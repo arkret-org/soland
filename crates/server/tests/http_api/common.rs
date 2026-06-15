@@ -17,7 +17,7 @@ pub(crate) use salvo::http::StatusCode;
 pub(crate) use salvo::test::{ResponseExt, TestClient};
 pub(crate) use serde_json::Value;
 pub(crate) use sha2::{Digest, Sha256};
-pub(crate) use soland::config::{AppConfig, ObjectStorageConfig};
+pub(crate) use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
 pub(crate) use soland::db::Db;
 pub(crate) use soland::ratelimit::RateLimiterConfig;
 pub(crate) use soland::state::{
@@ -40,6 +40,7 @@ pub(crate) fn test_config() -> AppConfig {
         tls_key_path: None,
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
+        ice: IceServersConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

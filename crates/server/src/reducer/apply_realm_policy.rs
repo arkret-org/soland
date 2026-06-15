@@ -104,6 +104,36 @@ impl ProjectionState {
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
 
+    /// Project `ck.realm.media_service` into the canonical
+    /// `ck.component.realm.media_service.v1` cas-register cell consumed by
+    /// the CKP-0010 media token exchange (`routing::interop::webrtc`). The
+    /// payload is normalized like `apply_realm_policy_components` (accepting
+    /// both the Event-Envelope `{"value": ...}` wrapper and a direct value),
+    /// then the `foci[]` array is required to be non-empty so a realm cannot
+    /// advertise a media service that exposes no focus. Both the wrapped
+    /// (`{"media_service": {...}}`) and unwrapped (`{"service_id", "foci"}`)
+    /// shapes are tolerated to match `parse_media_service_epoch`.
+    pub(crate) fn apply_realm_media_service(&mut self, operation: &Operation) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        let value = state_payload_value(&operation.payload).clone();
+        let config = value.get("media_service").unwrap_or(&value);
+        let foci_non_empty = config
+            .get("foci")
+            .and_then(Value::as_array)
+            .is_some_and(|foci| !foci.is_empty());
+        if !foci_non_empty {
+            return ProjectionEffect::Rejected {
+                reason: "media_service_foci_required".to_owned(),
+            };
+        }
+        if let Ok(cell_id) = cokret_sdk::CellRef::new(format!(
+            "ck:cell:ck.component.realm.media_service.v1:{realm_id}"
+        )) {
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+        ProjectionEffect::RealmMediaServiceProjected { realm_id }
+    }
+
     pub(crate) fn apply_realm_link(
         &mut self,
         operation: &Operation,

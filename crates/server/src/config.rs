@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub tls_key_path: Option<PathBuf>,
     pub database_url: Option<String>,
     pub object_storage: ObjectStorageConfig,
+    /// ICE/STUN/TURN servers and credential lifetimes advertised by the
+    /// RTC ice-config endpoint. Externalized via `SOLAND_ICE_*` /
+    /// `SOLAND_TURN_*` env vars; defaults preserve the historical
+    /// hardcoded values.
+    pub ice: IceServersConfig,
     pub cors_allow_origin: Option<String>,
     /// Public Auth / Account Server base URL advertised to browser clients in
     /// `/_cokret/describe.auth_metadata`. Registration, password
@@ -348,6 +353,45 @@ impl ObjectStorageConfig {
     }
 }
 
+/// ICE/STUN/TURN configuration advertised by
+/// `POST /_cokret/self/rtc/ice-config`. Externalized from hardcoded
+/// defaults so operators can point clients at their own STUN/TURN
+/// infrastructure and tune credential lifetimes per deployment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IceServersConfig {
+    /// STUN server URLs advertised to clients (e.g. `stun:host:3478`).
+    pub stun_urls: Vec<String>,
+    /// TURN server URLs advertised to clients (e.g.
+    /// `turn:host:3478?transport=udp`).
+    pub turn_urls: Vec<String>,
+    /// Lifetime in seconds of an issued ICE configuration / TURN
+    /// credential before clients must request a refresh.
+    pub ttl_seconds: u32,
+    /// Lead time in seconds before `ttl_seconds` at which clients should
+    /// proactively refresh the ICE configuration.
+    pub refresh_lead_seconds: u32,
+    /// Rotation window in seconds for the TURN shared secret. Reserved for
+    /// time-windowed TURN credential derivation.
+    pub turn_secret_rotation_window_seconds: u64,
+    /// Optional shared secret mixed into derived TURN credentials. When set,
+    /// it is folded into the credential material so credentials cannot be
+    /// recomputed by parties that do not hold the secret.
+    pub turn_shared_secret: Option<String>,
+}
+
+impl Default for IceServersConfig {
+    fn default() -> Self {
+        Self {
+            stun_urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            turn_urls: vec!["turn:turn.soland.local:3478?transport=udp".to_owned()],
+            ttl_seconds: 300,
+            refresh_lead_seconds: 75,
+            turn_secret_rotation_window_seconds: 86_400,
+            turn_shared_secret: None,
+        }
+    }
+}
+
 /// Federation routing policy. Selected at config-load
 /// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,6 +471,7 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty());
         let object_storage = load_object_storage_config()?;
+        let ice = load_ice_servers_config()?;
         let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -591,6 +636,7 @@ impl AppConfig {
             tls_key_path,
             database_url,
             object_storage,
+            ice,
             cors_allow_origin,
             auth_server_url,
             development_mode,
@@ -846,6 +892,49 @@ fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
     }
 }
 
+/// Load ICE/STUN/TURN configuration from `SOLAND_ICE_*` / `SOLAND_TURN_*`
+/// env vars. Each field falls back to the corresponding
+/// [`IceServersConfig::default`] value when its env var is absent or empty,
+/// preserving the historical hardcoded behavior.
+fn load_ice_servers_config() -> anyhow::Result<IceServersConfig> {
+    let defaults = IceServersConfig::default();
+    let parse_url_list = |name: &str, fallback: Vec<String>| -> Vec<String> {
+        match env_non_empty(name) {
+            Some(raw) => {
+                let parsed = raw
+                    .split(',')
+                    .map(|part| part.trim().to_owned())
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>();
+                if parsed.is_empty() { fallback } else { parsed }
+            }
+            None => fallback,
+        }
+    };
+    let stun_urls = parse_url_list("SOLAND_ICE_STUN_URLS", defaults.stun_urls);
+    let turn_urls = parse_url_list("SOLAND_TURN_URLS", defaults.turn_urls);
+    let ttl_seconds = env_non_empty("SOLAND_ICE_TTL_SECONDS")
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(defaults.ttl_seconds);
+    let refresh_lead_seconds = env_non_empty("SOLAND_ICE_REFRESH_LEAD_SECONDS")
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(defaults.refresh_lead_seconds);
+    let turn_secret_rotation_window_seconds =
+        env_non_empty("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(defaults.turn_secret_rotation_window_seconds);
+    let turn_shared_secret = env_non_empty_or_file("SOLAND_TURN_SHARED_SECRET")?;
+    Ok(IceServersConfig {
+        stun_urls,
+        turn_urls,
+        ttl_seconds,
+        refresh_lead_seconds,
+        turn_secret_rotation_window_seconds,
+        turn_shared_secret,
+    })
+}
+
 fn normalized_storage_prefix(prefix: Option<String>) -> String {
     prefix
         .map(|value| {
@@ -1072,6 +1161,55 @@ mod tests {
             default_did_resolver_allow_methods(),
             vec!["webvh", "web", "key", "uuid"]
         );
+    }
+
+    #[test]
+    fn ice_servers_defaults_match_historical_hardcoded_values() {
+        // These defaults must keep the pre-externalization wire behavior so
+        // deployments that do not set `SOLAND_ICE_*` / `SOLAND_TURN_*` see no
+        // change in their issued ICE configs.
+        let ice = IceServersConfig::default();
+        assert_eq!(ice.stun_urls, vec!["stun:stun.l.google.com:19302"]);
+        assert_eq!(
+            ice.turn_urls,
+            vec!["turn:turn.soland.local:3478?transport=udp"]
+        );
+        assert_eq!(ice.ttl_seconds, 300);
+        assert_eq!(ice.refresh_lead_seconds, 75);
+        assert_eq!(ice.turn_secret_rotation_window_seconds, 86_400);
+        assert!(ice.turn_shared_secret.is_none());
+    }
+
+    #[test]
+    fn load_ice_servers_config_parses_env_overrides() {
+        // All SOLAND_ICE_* / SOLAND_TURN_* vars are exercised in a single
+        // test so the fixed (non-unique) env-var names cannot race against a
+        // sibling test reading the same keys.
+        let stun = ScopedEnv::new("SOLAND_ICE_STUN_URLS");
+        let turn = ScopedEnv::new("SOLAND_TURN_URLS");
+        let ttl = ScopedEnv::new("SOLAND_ICE_TTL_SECONDS");
+        let lead = ScopedEnv::new("SOLAND_ICE_REFRESH_LEAD_SECONDS");
+        let rotation = ScopedEnv::new("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS");
+        stun.set_env("stun:stun.example:3478 , stun:stun2.example:3478");
+        turn.set_env("turn:turn.example:3478?transport=udp");
+        ttl.set_env("120");
+        lead.set_env("30");
+        rotation.set_env("3600");
+
+        let ice = load_ice_servers_config().expect("load ice config");
+        assert_eq!(
+            ice.stun_urls,
+            vec!["stun:stun.example:3478", "stun:stun2.example:3478"]
+        );
+        assert_eq!(ice.turn_urls, vec!["turn:turn.example:3478?transport=udp"]);
+        assert_eq!(ice.ttl_seconds, 120);
+        assert_eq!(ice.refresh_lead_seconds, 30);
+        assert_eq!(ice.turn_secret_rotation_window_seconds, 3600);
+
+        // A non-positive TTL is rejected and falls back to the default.
+        ttl.set_env("0");
+        let ice = load_ice_servers_config().expect("load ice config");
+        assert_eq!(ice.ttl_seconds, 300);
     }
 
     /// Guard that scopes env-var mutation to a single test. The Rust

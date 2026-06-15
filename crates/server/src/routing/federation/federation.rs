@@ -2739,6 +2739,7 @@ pub(crate) fn test_app_state_with_peers(
         tls_key_path: None,
         database_url: None,
         object_storage: crate::config::ObjectStorageConfig::local(std::env::temp_dir()),
+        ice: crate::config::IceServersConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

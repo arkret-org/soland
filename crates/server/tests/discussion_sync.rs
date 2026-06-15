@@ -5,7 +5,7 @@ use cokret_sdk::{Did, RealmId, new_prefixed_uuid7};
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, ObjectStorageConfig};
+use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::reducer::{
     CircleLifecycleState, CircleProjection, ObjectLifecycleState, StrandProjection,
@@ -25,6 +25,7 @@ fn test_config() -> AppConfig {
         tls_key_path: None,
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
+        ice: IceServersConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

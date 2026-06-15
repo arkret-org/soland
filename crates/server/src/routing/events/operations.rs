@@ -1381,6 +1381,7 @@ mod direct_conversation_policy_tests {
             object_storage: crate::config::ObjectStorageConfig::local(
                 std::env::temp_dir().join("soland-direct-conversation-policy-test-blobs"),
             ),
+            ice: crate::config::IceServersConfig::default(),
             cors_allow_origin: None,
             auth_server_url: None,
             development_mode: true,
