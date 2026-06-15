@@ -142,6 +142,68 @@ const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
 /// least this long so a leaked cursor cannot outlive its revocation.
 const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
 
+/// Pure predicate: do the `Authorization` header value and/or query string
+/// carry authentication material? Split out from the `Request` so the
+/// degrade-vs-propagate decision is unit-testable without a live request.
+///
+/// Mirrors the positions `authenticated_session` inspects: a `Bearer` header,
+/// or a token smuggled into the query string (which it rejects outright).
+fn auth_material_present(authorization: Option<&str>, query: Option<&str>) -> bool {
+    let header_bearer = authorization
+        .is_some_and(|value| value.starts_with("Bearer ") || value.starts_with("bearer "));
+    let query_token = query.is_some_and(|query| {
+        query.contains("access_token=") || query.contains("auth=") || query.contains("token=")
+    });
+    header_bearer || query_token
+}
+
+/// True when the request carries authentication material in any position the
+/// auth layer inspects. The subscribe handlers use this to tell a genuinely
+/// anonymous client (no material at all) apart from one presenting a bad /
+/// expired credential.
+fn request_presents_auth_material(req: &Request) -> bool {
+    let authorization = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    auth_material_present(authorization, req.uri().query())
+}
+
+/// Resolve the optional session for a subscribe long-poll **without masking a
+/// failed authentication as anonymous**.
+///
+/// Subscribe MAY run anonymously, but ONLY when the client presents no auth
+/// material at all. A request that DOES present a bearer which then fails
+/// authentication MUST NOT be silently downgraded to an anonymous session: the
+/// sync cursor is bound to the minting principal, so an anonymous replay of a
+/// principal-bound cursor surfaces as `cursor_integrity_invalid` ("cursor
+/// principal does not match request actor"). The client's sync engine treats
+/// that as "reset the cursor and retry" rather than "refresh the session", so a
+/// merely-expired bearer sends it into a non-recovering anonymous loop instead
+/// of re-authenticating. Fail closed: render the real 401 — preserving the
+/// `auth_expired` wire code the client keys its refresh on — and signal the
+/// handler to stop.
+///
+/// Returns `Some(session_opt)` to continue (anonymous when the inner option is
+/// `None`), or `None` when an auth error was already rendered to `res`.
+async fn subscribe_session_or_render(
+    state: &AppState,
+    req: &Request,
+    res: &mut Response,
+) -> Option<Option<SessionRecord>> {
+    match authenticated_session(state, req).await {
+        Ok(session) => Some(Some(session)),
+        Err((status, code, message)) => {
+            if request_presents_auth_material(req) {
+                render_error(res, status, code, message);
+                None
+            } else {
+                Some(None)
+            }
+        }
+    }
+}
+
 #[endpoint(
     operation_id = "ck.self.account.stream.subscribe",
     tags("sync"),
@@ -152,7 +214,10 @@ async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Respo
     let state = depot.obtain::<AppState>().expect("state injected").clone();
     let body = account_subscribe_query(req);
     let max_wait_ms = parse_max_wait_ms(req);
-    let session = authenticated_session(&state, req).await.ok();
+    let session = match subscribe_session_or_render(&state, req, res).await {
+        Some(session) => session,
+        None => return,
+    };
     let filter_value = sync_filter_value(body.filter.as_ref());
     let subscribe_scope_key = account_subscribe_scope_key(req, session.as_ref(), &body);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
@@ -1180,7 +1245,10 @@ pub(super) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             return;
         }
     };
-    let session = authenticated_session(&state, req).await.ok();
+    let session = match subscribe_session_or_render(&state, req, res).await {
+        Some(session) => session,
+        None => return,
+    };
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
         if realm_id_accessible(&state, &realm, session.as_ref()).await {
@@ -1687,7 +1755,20 @@ async fn events_query_impl(
         let response = durable_events_query_from_parts(state, &session, &parts).await;
         return crate::result::json_ok(response);
     }
-    let session = authenticated_session(state, req).await.ok();
+    // Anonymous scan is allowed (public realms), but a presented-yet-invalid
+    // bearer must surface its 401 rather than degrade to anonymous — see
+    // `subscribe_session_or_render` for the cursor-masking rationale.
+    let session = match authenticated_session(state, req).await {
+        Ok(session) => Some(session),
+        Err((status, code, message)) => {
+            if request_presents_auth_material(req) {
+                return Err(crate::error::AppError::invalid_param(message)
+                    .with_status(status)
+                    .with_wire_code(code));
+            }
+            None
+        }
+    };
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
         if realm_id_accessible(state, &realm, session.as_ref()).await {

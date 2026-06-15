@@ -1542,16 +1542,33 @@ async fn ensure_oauth_device(
         None => {}
     }
 
+    // Bootstrap exception (crypto-media/device-lifecycle.md §5.3): a device that
+    // first appears for an account with no other device is the inception device
+    // and self-authorizes; any additional device while others exist stays
+    // `unverified` until an authorized device approves it. This is the same rule
+    // the session paths apply via `initial_session_device_verification_state`,
+    // so the OAuth-introspection lazy-create path honours it too — otherwise the
+    // founding device of a fresh account is left permanently unauthorized with
+    // no device able to approve it.
+    let existing_devices = devices.list_for_actor(&oauth.actor).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "device store unavailable",
+        )
+    })?;
+    let verification_state =
+        initial_session_device_verification_state(&existing_devices, &oauth.device_id);
     let seen_at = now();
     let device = DeviceInventoryRecord {
         actor: oauth.actor.clone(),
         device_id: oauth.device_id.clone(),
         display_name: oauth.display_name.clone(),
-        verification_state: "unverified".to_owned(),
+        verification_state: verification_state.to_owned(),
         payload: json!({
             "device_id": oauth.device_id.clone(),
             "display_name": oauth.display_name.clone(),
-            "verification": "unverified",
+            "verification": verification_state,
             "oauth_introspection": true,
             "raw_device_id": oauth.raw_device_id.clone(),
             "last_seen_at": seen_at,

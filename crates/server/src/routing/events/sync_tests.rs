@@ -578,6 +578,30 @@ fn roster_limits_large_inline_handle_claim_payloads() {
     assert_eq!(row["handle_claims_limited"], true);
 }
 
+#[test]
+fn auth_material_present_separates_anonymous_from_bad_credential() {
+    // Genuinely anonymous: no Authorization header, no query token → the
+    // subscribe handler MAY degrade to an anonymous session.
+    assert!(!auth_material_present(None, None));
+    assert!(!auth_material_present(None, Some("catchup=true&set_presence=online")));
+
+    // A presented bearer (even an expired/garbage one) counts as material, so
+    // the handler MUST surface the 401 instead of silently degrading to
+    // anonymous and stranding the principal-bound cursor (the
+    // `cursor principal does not match request actor` loop).
+    assert!(auth_material_present(Some("Bearer expired.token.value"), None));
+    assert!(auth_material_present(Some("bearer lower.case.scheme"), None));
+
+    // A token smuggled into the query string is also material (and separately
+    // rejected by the auth layer) — never treat it as anonymous.
+    assert!(auth_material_present(None, Some("access_token=x")));
+    assert!(auth_material_present(None, Some("foo=1&auth=y")));
+    assert!(auth_material_present(None, Some("token=z")));
+
+    // A non-bearer Authorization scheme is not bearer material on its own.
+    assert!(!auth_material_present(Some("Basic dXNlcjpwYXNz"), None));
+}
+
 fn assert_integrity_error(error: SyncCursorError) {
     match error {
         SyncCursorError::Integrity(_) => {}
