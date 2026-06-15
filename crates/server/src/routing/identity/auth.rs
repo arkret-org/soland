@@ -7,7 +7,8 @@
 //! - `POST /_cokret/gate/account/session-grants` — coauth session-grant bridge
 //! - `POST /_cokret/gate/account/session-grants/revoke` — spec
 //!   `ck.gate.account.command.revoke_session`
-//! - `POST /_soland/gate/auth/logout` — revoke the bearer + the bound device
+//! - `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`:
+//!   revoke the bearer + the bound device session record + queued to-device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
@@ -39,6 +40,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantExchangeRequestBody,
+    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
     SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
@@ -80,19 +82,23 @@ pub(super) fn protocol_account_router() -> Router {
         // Spec `ck.gate.account.command.logout` — Principal Server device
         // logout (account-lifecycle §4.1): revoke this session's bearer, mark
         // its local device session record revoked, drop the device's queued
-        // to-device. Protocol-surface mount of the same handler historically
-        // exposed only at the product-private `/_soland/gate/auth/logout`, so
-        // clients depend on `/_cokret` rather than a product path.
+        // to-device. Canonical `/_cokret/gate/account/logout`; deployment
+        // gateways route this longer prefix to soland even though `/_cokret/gate/`
+        // otherwise goes to the Auth Server.
         .push(Router::with_path("logout").post(logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
 }
 
 pub(super) fn local_router() -> Router {
+    // Device logout is the spec op `ck.gate.account.command.logout`, served at
+    // the canonical `/_cokret/gate/account/logout` (see `protocol_account_router`).
+    // Deployment gateways route that longer prefix to soland (the Principal
+    // Server) even though `/_cokret/gate/` otherwise goes to the Auth Server, so
+    // no `/_soland/gate/auth/logout` product alias is needed.
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
         .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
-        .push(Router::with_path("logout").post(logout))
 }
 
 #[endpoint(
@@ -749,32 +755,10 @@ async fn exchange_session_grant(
     })
 }
 
-#[derive(Debug, Serialize)]
-struct SessionGrantIntrospectionRequestBody<'a> {
-    grant_jwt: &'a str,
-    audience: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    proof: Option<&'a SessionGrantIntrospectionProof>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionGrantIntrospectionOutcome {
-    active: bool,
-    status: String,
-    one_time_use_consumed: bool,
-    grant: Option<SessionGrantIntrospectionGrant>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionGrantIntrospectionGrant {
-    subject: String,
-    device_id: Option<String>,
-    audience: String,
-    scopes: Vec<String>,
-    expires_at: DateTime<Utc>,
-    #[serde(default)]
-    session_public_key: Option<String>,
-}
+// Session-grant introspection wire types come from the SDK
+// (`SessionGrantIntrospectRequestBody` / `SessionGrantIntrospectOutcome` /
+// `SessionGrantIntrospectStatus`), so this caller binds to the same strong
+// types the spec/OpenAPI declare instead of hand-rolled structs.
 
 #[derive(Debug, Serialize)]
 struct OAuthIntrospectionRequestBody<'a> {
@@ -829,10 +813,11 @@ pub(crate) async fn validate_session_grant_binding(
                 "session grant exchange requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
             )
         })?;
-    let request = SessionGrantIntrospectionRequestBody {
-        grant_jwt: input.grant_jwt,
-        audience: state.config.service_did.as_str(),
-        proof: input.proof,
+    let request = SessionGrantIntrospectRequestBody {
+        id: None,
+        grant_jwt: Some(input.grant_jwt.to_owned()),
+        audience: Some(state.config.service_did.as_str().to_owned()),
+        proof: input.proof.cloned(),
     };
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
@@ -863,7 +848,7 @@ pub(crate) async fn validate_session_grant_binding(
         )));
     }
     let response = response
-        .json::<SessionGrantIntrospectionOutcome>()
+        .json::<SessionGrantIntrospectOutcome>()
         .await
         .map_err(|error| {
             AppError::new(
@@ -871,10 +856,15 @@ pub(crate) async fn validate_session_grant_binding(
                 format!("invalid session grant introspection response: {error}"),
             )
         })?;
-    if !response.active || response.status != "active" {
+    if !response.active || response.status != SessionGrantIntrospectStatus::Active {
+        // Preserve the snake_case wire status in the message (e.g. "revoked")
+        // rather than the Debug form, so downstream callers see the same token.
+        let status_wire = serde_json::to_value(response.status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned());
         return Err(AppError::capability_denied(format!(
-            "session grant is not active: {}",
-            response.status
+            "session grant is not active: {status_wire}"
         )));
     }
     let grant = response.grant.ok_or_else(|| {
@@ -913,7 +903,7 @@ pub(crate) async fn validate_session_grant_binding(
     Ok(Some(ValidatedSessionGrant {
         expires_at: grant.expires_at,
         one_time_use_consumed: response.one_time_use_consumed,
-        session_public_key: grant.session_public_key,
+        session_public_key: Some(grant.session_public_key),
     }))
 }
 

@@ -912,8 +912,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert_eq!(forbidden_audit.status_code.unwrap().as_u16(), 403);
 
     // Exercise the canonical spec path `/_cokret/gate/account/logout`
-    // (ck.gate.account.command.logout) — the one yougen calls. It shares the
-    // handler with the deprecated `/_soland/gate/auth/logout` alias.
+    // (ck.gate.account.command.logout) — the only device-logout surface.
     let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))

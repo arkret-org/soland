@@ -1431,7 +1431,7 @@ async fn keys_query_hides_revoked_device() {
         "phone-device-key"
     );
 
-    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
         .add_header("authorization", format!("Bearer {mobile}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1476,7 +1476,7 @@ async fn revoked_device_blocks_encrypted_writes() {
     )
     .await;
 
-    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
         .add_header("authorization", format!("Bearer {device_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1672,7 +1672,7 @@ async fn device_messages_evicted_after_session_logout() {
         .unwrap();
     assert_eq!(pre_logout["messages"].as_array().unwrap().len(), 1);
 
-    let logout: Value = TestClient::post("http://server/_soland/gate/auth/logout")
+    let logout: Value = TestClient::post("http://server/_cokret/gate/account/logout")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
