@@ -290,7 +290,7 @@ SOLAND_SERVICE_DID=did:web:local.host
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_OAUTH_INTROSPECTION_URL=https://auth.local.host/oauth/introspect
 SOLAND_OAUTH_INTROSPECTION_BEARER=local-coauth-oauth-introspection
-SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_coauth/gate/account/session-grants/introspect
+SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_cokret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
