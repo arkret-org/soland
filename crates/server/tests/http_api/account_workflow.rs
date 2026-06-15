@@ -83,13 +83,20 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     // satisfiable "approve from an existing device" prompt.
     let state = AppState::new(test_config(), Db { pool: None });
     let founding_device = "ck:device:01904100-0000-7000-8000-b0b0b0000001";
-    let token = register_account(
-        state.clone(),
-        "did:web:bob.example",
-        "@bob",
-        founding_device,
-    )
-    .await;
+    let did = "did:web:bob.example";
+    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "display_name": "bob",
+            "device_id": founding_device,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(registered["principal_id"], did, "register response: {registered}");
+    let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
 
     let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
