@@ -201,6 +201,10 @@ pub mod reasons {
         core_error::ERROR_CODE_CALL_MODERATION_UNAUTHORISED;
     pub const CALL_PARTICIPANT_REMOVED: &str = core_error::ERROR_CODE_CALL_PARTICIPANT_REMOVED;
 
+    // Call capability gating reason codes (webrtc-signaling.md §3 / §8).
+    pub const MEDIA_PERMISSION_DENIED: &str = core_error::ERROR_CODE_MEDIA_PERMISSION_DENIED;
+    pub const RECORDING_DENIED: &str = core_error::ERROR_CODE_RECORDING_DENIED;
+
     // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
         core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;

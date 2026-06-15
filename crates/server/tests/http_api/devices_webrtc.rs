@@ -498,6 +498,14 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(recording_session["mode"], "sfu");
     assert_eq!(recording_session["recording_policy"], "allow");
     let recording_session_id = recording_session["session_id"].as_str().unwrap();
+    // `webrtc-signaling.md` §3 — recording requires `ck.call.record`; the
+    // realm-member creator does not implicitly hold it.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.record",
+    );
     let recording: Value = TestClient::post(format!(
         "http://server/_cokret/self/calls/{recording_session_id}/recording/start"
     ))
@@ -933,6 +941,13 @@ async fn admin_realm_media_service_renders_projected_cell() {
 async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    // §3a — the moderator (alice) MUST hold `ck.call.moderate`.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.moderate",
+    );
     let bob = "did:web:bob.example";
     let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
 
@@ -1024,6 +1039,13 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let alice_token = dev_token(state.clone()).await;
+    // §3a — the moderator (alice) MUST hold `ck.call.moderate` to ban.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.moderate",
+    );
     let bob = "did:web:bob.example";
     let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
@@ -1107,6 +1129,184 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     assert_eq!(post_ban.status_code, Some(StatusCode::FORBIDDEN));
     let body: Value = post_ban.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "call_participant_removed");
+}
+
+/// Grant `subject` a realm-scoped call capability (`action`) in the shared
+/// authz engine, mirroring what the capability-grant projection would fold in.
+fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
+    state.authz.create_grant(
+        realm_id.to_owned(),
+        "did:web:alice.example".to_owned(),
+        subject.to_owned(),
+        realm_id.to_owned(),
+        vec![action.to_owned()],
+        vec![],
+    );
+}
+
+/// Create an sfu session in DEMO_REALM with alice (owner) + bob as
+/// participants and bob registered as a realm member. Returns the session id.
+async fn create_session_with_bob(state: &AppState, alice_token: &str, bob: &str) -> String {
+    add_test_realm_member(state, DEMO_REALM_ID, bob);
+    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "participants": ["did:web:alice.example", bob],
+            "mode": "sfu",
+            "recording_policy": "allow",
+            "ttl_ms": 60000
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    session["session_id"].as_str().unwrap().to_owned()
+}
+
+fn dev_proof() -> Value {
+    serde_json::json!([{"kid": "did:web:bob.example#device", "sig": "dev"}])
+}
+
+#[tokio::test]
+async fn webrtc_moderation_requires_moderate_capability() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
+
+    // Bob (realm member + participant, but no `ck.call.moderate`) cannot kick.
+    let mut denied = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "moderation",
+        "payload": { "data": { "action": "kick", "target_actor_id": "did:web:alice.example" } },
+        "proofs": dev_proof()
+    }))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    let body: Value = denied.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "call_moderation_unauthorised");
+
+    // After granting `ck.call.moderate`, the same moderation frame is accepted.
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.moderate");
+    let accepted: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "moderation",
+        "payload": { "data": { "action": "kick", "target_actor_id": "did:web:alice.example" } },
+        "proofs": dev_proof()
+    }))
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(accepted["seq"], 1);
+}
+
+#[tokio::test]
+async fn webrtc_screen_share_requires_screen_share_capability() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
+
+    let screen_on = serde_json::json!({
+        "message_type": "media_state",
+        "payload": { "data": { "screen": { "enabled": true, "source_id": "screen_01" } } },
+        "proofs": dev_proof()
+    });
+
+    // No `ck.call.screen_share` → media_permission_denied.
+    let mut denied = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&screen_on)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    let body: Value = denied.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "media_permission_denied");
+
+    // A `media_state` that does NOT enable screen share is not gated.
+    let no_screen: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "media_state",
+        "payload": { "data": { "screen": { "enabled": false } } },
+        "proofs": dev_proof()
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(no_screen["seq"], 1);
+
+    // After granting `ck.call.screen_share`, screen-on is accepted.
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.screen_share");
+    let accepted: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&screen_on)
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(accepted["seq"], 2);
+}
+
+#[tokio::test]
+async fn webrtc_recording_requires_record_capability() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    let session_id = create_session_with_bob(&state, &alice_token, bob).await;
+
+    // recording_policy=allow but bob lacks `ck.call.record` → recording_denied.
+    let mut denied = TestClient::post(format!(
+        "http://server/_cokret/self/calls/{session_id}/recording/start"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    let body: Value = denied.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "recording_denied");
+
+    // After granting `ck.call.record`, the recording starts.
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.record");
+    let recording: Value = TestClient::post(format!(
+        "http://server/_cokret/self/calls/{session_id}/recording/start"
+    ))
+    .add_header("authorization", format!("Bearer {bob_token}"), true)
+    .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(recording["ok"], true);
+    assert_eq!(recording["recording_started_by"], bob);
 }
 
 async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {

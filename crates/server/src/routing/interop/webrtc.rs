@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
-use crate::error::{AppError, ErrorCode};
+use crate::error::{AppError, ErrorCode, reasons};
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
@@ -722,7 +722,17 @@ async fn handle_rtc_token(
             )
         })
         .unwrap_or((true, true, false));
-    let allow_screen_share = !body.capability_refs.is_empty() || state.config.development_mode;
+    // `bindings/livekit.md` §5 — the `screen_share` publish source is gated by
+    // a real `ck.call.screen_share` capability, not merely the presence of any
+    // `capability_refs`. Resolve it against the projected grants so an actor
+    // without the capability never receives a screen-share publish grant.
+    let allow_screen_share = actor_has_call_capability(
+        state,
+        body.realm_id.as_str(),
+        body.actor_id.as_str(),
+        CAP_CALL_SCREEN_SHARE,
+    )
+    .await;
     let issue_request = MediaTokenIssueRequestBody {
         focus,
         realm_id: body.realm_id.as_str(),
@@ -1440,6 +1450,36 @@ fn current_non_terminal(current: &str) -> &'static str {
     }
 }
 
+/// Structural (non-cryptographic) check that a signal `proof` entry is a
+/// well-formed device proof: a non-empty object naming a `kid` and a `sig`.
+/// See the boundary note in `append_webrtc_signal` — the server does not
+/// verify the signature; the receiver does (§5).
+fn is_structural_device_proof(proof: &Value) -> bool {
+    let Some(object) = proof.as_object() else {
+        return false;
+    };
+    let has_kid = object
+        .get("kid")
+        .and_then(Value::as_str)
+        .is_some_and(|kid| !kid.trim().is_empty());
+    let has_sig = object
+        .get("sig")
+        .and_then(Value::as_str)
+        .is_some_and(|sig| !sig.trim().is_empty());
+    has_kid && has_sig
+}
+
+/// Whether a `media_state` payload turns screen share on
+/// (`webrtc-signaling.md` §8 — `data.screen.enabled = true`). Accepts both the
+/// `{data:{screen:{…}}}` envelope shape and a flat `{screen:{…}}` payload.
+fn media_state_enables_screen_share(payload: &Value) -> bool {
+    let data = payload.get("data").unwrap_or(payload);
+    data.get("screen")
+        .and_then(|screen| screen.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// Extract `data.action` (or top-level `action`) from a `moderation` payload.
 fn moderation_action(payload: &Value) -> Option<&str> {
     payload
@@ -1639,14 +1679,62 @@ async fn append_webrtc_signal(
             body.message_type
         )));
     }
-    // §2.2 / §5 — every `ck.call.signal` MUST be signed by the sending
-    // device. Reject frames without a device proof before they enter the log.
-    if body.proofs.is_empty() {
+    // §5 — every `ck.call.signal` MUST carry a device `proof`. We enforce the
+    // *presence* and structural shape of a proof here (a non-empty object that
+    // names a `kid` and a `sig`), but DO NOT cryptographically verify it.
+    //
+    // Decision (FIN-F task 5): server-side signature verification is NOT done,
+    // and this is the spec-correct boundary, not a shortcut:
+    //   1. §5 assigns verification to the *receiver* ("Receiver MUST verify `proof` over the
+    //      canonical envelope bytes excluding `proof`"). This surface is the ephemeral
+    //      relay/fan-out, not the receiving device.
+    //   2. The relay cannot reconstruct the exact canonical envelope bytes the sender signed: the
+    //      spec envelope (`kind` / `realm_id` / `actor_id` / `device_id` / `sent_at` / `expires_at`
+    //      / `payload`) is not carried on this append body — it only receives `message_type` /
+    //      `payload` / `proofs[]`, and `device_id` is taken from the authenticated session, not the
+    //      wire envelope. Verifying over a re-synthesised byte string would assert a signature the
+    //      sender never produced.
+    //   3. The transport into this surface is already an authenticated `/_cokret/self/*` session
+    //      bound to `(actor, device)`, so frame provenance at the relay is established by the
+    //      session, while end-to-end device-proof verification remains the receiver's duty.
+    // The weak presence check is retained (a frame with no/empty proof is
+    // rejected) so malformed frames never enter the ephemeral log.
+    if !body.proofs.iter().any(is_structural_device_proof) {
         return Err(AppError::invalid_param(
-            "signaling frame requires at least one device proof",
+            "signaling frame requires at least one device proof (kid + sig)",
         ));
     }
     let record = load_session_for_participant(state, &session_id, &auth.actor).await?;
+
+    // `webrtc-signaling.md` §3a — moderation signals (kick / ban / end_for_all)
+    // MUST be authored by an actor holding `ck.call.moderate`. Any participant
+    // could otherwise kick / ban call legs. Gate before the frame enters the
+    // log; reject with `call_moderation_unauthorised`.
+    if body.message_type == "moderation"
+        && !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_MODERATE).await
+    {
+        return Err(AppError::new(
+            ErrorCode::CallModerationUnauthorised,
+            "moderation signal requires the ck.call.moderate capability",
+        )
+        .with_wire_code(reasons::CALL_MODERATION_UNAUTHORISED));
+    }
+
+    // `webrtc-signaling.md` §3 / §8 — enabling screen share (`media_state`
+    // carrying `screen.enabled = true`) requires `ck.call.screen_share`. Realm
+    // membership does not imply it; reject with `media_permission_denied`.
+    if body.message_type == "media_state"
+        && media_state_enables_screen_share(&body.payload)
+        && !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_SCREEN_SHARE)
+            .await
+    {
+        return Err(AppError::new(
+            ErrorCode::MediaPermissionDenied,
+            "screen share requires the ck.call.screen_share capability",
+        )
+        .with_wire_code(reasons::MEDIA_PERMISSION_DENIED));
+    }
+
     if matches!(
         derive_call_state(&record.signals).as_str(),
         CALL_STATE_ENDED | CALL_STATE_MISSED | CALL_STATE_CANCELLED | "failed"
@@ -1755,6 +1843,66 @@ async fn list_webrtc_signals(
         next_cursor: record.next_seq.saturating_sub(1).to_string(),
         call_state: derive_call_state(&record.signals),
     })
+}
+
+// `webrtc-signaling.md` §3 — canonical capability actions. The registry is
+// the truth source; the spec body and this server MUST use the `ck.`-prefixed
+// forms and MUST NOT accept the bare `call.*` names.
+const CAP_CALL_MODERATE: &str = "ck.call.moderate";
+const CAP_CALL_SCREEN_SHARE: &str = "ck.call.screen_share";
+const CAP_CALL_RECORD: &str = "ck.call.record";
+
+/// Resolve the (owner, members) authorization principals for a realm so the
+/// shared [`SolandAuthzEngine`] default rules (owner ⇒ all actions; explicit
+/// grants override) evaluate consistently with the rest of the server. Mirrors
+/// `events::operations::realm_owner_and_members` / `circles::circle_authz_principals`.
+async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<String>, Vec<String>) {
+    let owner = state
+        .persistence
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|meta| meta.owner);
+    let members = state
+        .realms
+        .lock()
+        .ok()
+        .map(|realms| {
+            cokret_sdk::RealmId::new(realm_id.to_owned())
+                .ok()
+                .and_then(|id| realms.get(&id))
+                .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    (owner, members)
+}
+
+/// Whether `actor` holds `action` in `realm_id` per the projected capability
+/// grants (`ck.component.capability.grant.v1`) and the engine default rules.
+/// The realm itself is the capability resource scope (call capabilities are
+/// realm-scoped in §3; a call is not a separate grant resource in v1).
+async fn actor_has_call_capability(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+    action: &str,
+) -> bool {
+    let (owner, members) = call_authz_principals(state, realm_id).await;
+    state
+        .authz
+        .check(
+            actor,
+            action,
+            realm_id,
+            realm_id,
+            owner.as_deref(),
+            &members,
+            &[],
+        )
+        .allowed
 }
 
 /// Load a session and assert the caller is one of its participants.
@@ -1901,6 +2049,17 @@ async fn calls_recording_start(
         )
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_wire_code("recording_policy_violation"));
+    }
+
+    // `webrtc-signaling.md` §3 — beyond the per-call `recording_policy` gate,
+    // the acting actor MUST hold `ck.call.record`. Realm membership does not
+    // imply it; reject with `recording_denied`.
+    if !actor_has_call_capability(state, &record.realm_id, &auth.actor, CAP_CALL_RECORD).await {
+        return Err(AppError::new(
+            ErrorCode::RecordingDenied,
+            "starting a recording requires the ck.call.record capability",
+        )
+        .with_wire_code(reasons::RECORDING_DENIED));
     }
 
     // `call-state.md` §5 — backend-generated recording artifacts MUST flow
