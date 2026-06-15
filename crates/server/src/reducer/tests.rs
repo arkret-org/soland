@@ -313,6 +313,121 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
 }
 
 #[test]
+fn call_state_projects_cell_and_commits_session_focus_write_once() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000a";
+
+    // First write commits session_focus + recording_state into the cell.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "mode": "sfu",
+                    "session_focus": "ck:focus:livekit:green",
+                    "recording_state": "recording"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    let cell_id =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    let value = state
+        .cell_value(&cell_id)
+        .expect("call.state cell projected");
+    assert_eq!(value["recording_state"], "recording");
+
+    // Re-asserting the same focus is fine (idempotent).
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "ended",
+                    "session_focus": "ck:focus:livekit:green"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    // Mutating the committed session_focus is rejected (§4.1 write-once).
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "session_focus": "ck:focus:mediasoup:blue"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "session_focus_already_committed"
+    ));
+}
+
+#[test]
+fn call_state_rejects_recording_artifact_pipeline_bypass() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000b";
+
+    // A recording_result pointing at a raw backend URL bypasses the Cokret
+    // blob pipeline (`call-state.md` §5) and MUST be rejected.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "recording_state": "ready",
+                    "recording_result": {
+                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e00000000001",
+                        "recording_artifact_url": "https://backend.example/egress/out.mp4"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "recording_artifact_pipeline_bypassed"
+    ));
+
+    // A Cokret-blob-backed artifact ref is accepted.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "recording_state": "ready",
+                    "recording_result": {
+                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e00000000001",
+                        "recording_artifact_ref": "ck:blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+}
+
+#[test]
 fn message_create_and_query() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

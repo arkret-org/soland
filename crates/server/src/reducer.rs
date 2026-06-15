@@ -1339,6 +1339,13 @@ pub enum ProjectionEffect {
     RealmMediaServiceProjected {
         realm_id: String,
     },
+    /// `ck.call.state` projected into the canonical
+    /// `ck.component.call.state.v1` cell. Carries the committed
+    /// `session_focus` plus the orthogonal recording / transcribe /
+    /// moderation projection (`call-state.md` §4.2 / §5).
+    CallStateProjected {
+        call_id: String,
+    },
     /// R3.1 — `ck.realm.link` event was projected into the
     /// `ck.component.realm.link.v1` or_set cell + the `realm_links`
     /// structured cache.
@@ -2083,6 +2090,16 @@ fn apply_realm_media_service_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_media_service(op)
+}
+
+/// Dispatch for `ck.call.state`; cell family is
+/// `ck.component.call.state.v1` (`cell_subject = payload.call_id`).
+fn apply_call_state_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_call_state(op)
 }
 /// R3.1 — upsert a realm-link row into a per-Realm Vec cache. Matches
 /// on the composite key `(realm_id, target_realm_id, link_kind)`; an
@@ -3153,6 +3170,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // `ck.component.realm.media_service.v1`; consumed by the CKP-0010
     // media token exchange in `routing::interop::webrtc`.
     m.insert(CK_REALM_MEDIA_SERVICE, apply_realm_media_service_dispatch);
+    // `ck.call.state` — durable call lifecycle + recording/transcribe/
+    // moderation projection. Cell family `ck.component.call.state.v1`,
+    // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
+    m.insert(CK_CALL_STATE, apply_call_state_dispatch);
     m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply

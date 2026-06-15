@@ -134,6 +134,74 @@ impl ProjectionState {
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
     }
 
+    /// Project `ck.call.state` into the canonical `ck.component.call.state.v1`
+    /// cell (`cell_subject = payload.call_id`). Beyond the wire-shape checks
+    /// in `routing::events::operations`, this reducer enforces the durable
+    /// invariants in `call-state.md`:
+    ///
+    /// - `session_focus` is write-once (`§4.1`): the first event commits the focus; later events
+    ///   MUST keep the same value or be rejected with `session_focus_already_committed`.
+    /// - the orthogonal `recording_state` / transcribe / moderation fields (`§4.2` / `§5`) are
+    ///   projected into the cell so admin / sync readers can render them.
+    /// - backend-generated recording artifacts MUST flow through the Cokret blob pipeline (`§5`): a
+    ///   `recording_result` that points at a raw non-`ck:blob:` artifact reference is rejected with
+    ///   `recording_artifact_pipeline_bypassed`.
+    pub(crate) fn apply_call_state(&mut self, operation: &Operation) -> ProjectionEffect {
+        let value = state_payload_value(&operation.payload).clone();
+        let Some(call_id) = value.get("call_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "call_state_call_id_required".to_owned(),
+            };
+        };
+        let call_id = call_id.to_owned();
+
+        // §4.1 — write-once session_focus.
+        if let Some(session_focus) = value
+            .get("session_focus")
+            .and_then(Value::as_str)
+            .filter(|focus| !focus.is_empty())
+        {
+            match self.call_session_focus.get(&call_id) {
+                Some(committed) if committed != session_focus => {
+                    return ProjectionEffect::Rejected {
+                        reason: crate::error::reasons::SESSION_FOCUS_ALREADY_COMMITTED.to_owned(),
+                    };
+                }
+                Some(_) => {}
+                None => {
+                    self.call_session_focus
+                        .insert(call_id.clone(), session_focus.to_owned());
+                }
+            }
+        }
+
+        // §5 — backend recording artifacts MUST land in the Cokret blob
+        // pipeline. A `recording_result` referencing a raw external URL (or a
+        // non-`ck:blob:` artifact ref) is bypassing the pipeline.
+        if let Some(result) = value.get("recording_result").and_then(Value::as_object) {
+            let bypassed = result
+                .get("recording_artifact_url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty())
+                || result
+                    .get("recording_artifact_ref")
+                    .and_then(Value::as_str)
+                    .is_some_and(|reference| !reference.starts_with("ck:blob:"));
+            if bypassed {
+                return ProjectionEffect::Rejected {
+                    reason: "recording_artifact_pipeline_bypassed".to_owned(),
+                };
+            }
+        }
+
+        if let Ok(cell_id) =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+        {
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+        ProjectionEffect::CallStateProjected { call_id }
+    }
+
     pub(crate) fn apply_realm_link(
         &mut self,
         operation: &Operation,

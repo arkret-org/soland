@@ -196,6 +196,11 @@ pub mod reasons {
     pub const FOCUS_UNAVAILABLE_FOR_CLIENT: &str =
         core_error::ERROR_CODE_FOCUS_UNAVAILABLE_FOR_CLIENT;
 
+    // Call moderation reason codes (webrtc-signaling.md §3a).
+    pub const CALL_MODERATION_UNAUTHORISED: &str =
+        core_error::ERROR_CODE_CALL_MODERATION_UNAUTHORISED;
+    pub const CALL_PARTICIPANT_REMOVED: &str = core_error::ERROR_CODE_CALL_PARTICIPANT_REMOVED;
+
     // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
         core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;

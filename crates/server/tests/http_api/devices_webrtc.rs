@@ -733,6 +733,287 @@ async fn rtc_media_token_rejects_non_member_actor() {
     assert_eq!(body["error"]["code"], "capability_denied");
 }
 
+#[tokio::test]
+async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+
+    // Steer focus selection to the livekit focus via foci_preferred[].
+    let _: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "focus_join",
+        "payload": {"foci_preferred": ["ck:focus:livekit:green"]},
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+
+    let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": "did:web:alice.example",
+            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
+            "focus_id": "ck:focus:livekit:green",
+            "desired_media": {"audio": true, "video": true, "screen": false}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(token_response["type"], "livekit");
+    assert_eq!(token_response["connect_url"], "wss://media.example/livekit");
+
+    let backend_token = token_response["backend_token"].as_str().unwrap();
+    assert!(backend_token.starts_with("livekit."));
+    let claims = decode_backend_token_payload(backend_token);
+    // `bindings/livekit.md` §2 — LiveKit standard claims.
+    assert_eq!(claims["iss"], "did:web:media.example#livekit-2026-05");
+    assert_eq!(claims["sub"], token_response["participant_identity"]);
+    assert_eq!(claims["video"]["roomJoin"], true);
+    assert_eq!(claims["video"]["canPublish"], true);
+    assert_eq!(claims["video"]["canSubscribe"], true);
+    assert_eq!(claims["video"]["recorder"], false);
+    let room = claims["video"]["room"].as_str().unwrap();
+    assert!(room.starts_with("ck_call_"));
+    assert!(!room.contains(&session_id));
+    let sources = claims["video"]["canPublishSources"].as_array().unwrap();
+    assert!(sources.iter().any(|s| s == "microphone"));
+    assert!(sources.iter().any(|s| s == "camera"));
+    assert!(!sources.iter().any(|s| s == "screen_share"));
+    // `exp` must sit within the 600s media-token ceiling.
+    assert!(claims["exp"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn admin_realm_media_service_renders_projected_cell() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+
+    let media_service: Value = TestClient::get(format!(
+        "http://server/_soland/admin/realms/{DEMO_REALM_ID}/media-service"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(media_service["realm_id"], DEMO_REALM_ID);
+    assert_eq!(media_service["service_id"], "did:web:media.example");
+    let foci = media_service["foci"].as_array().unwrap();
+    assert_eq!(foci.len(), 2);
+    assert!(
+        foci.iter()
+            .any(|focus| focus["focus_id"] == "ck:focus:livekit:green")
+    );
+
+    // A Realm with no committed epoch renders an empty (but well-typed) view.
+    let other_realm = "ck:realm:0196419b-0000-7000-8000-0000000000ff";
+    let empty: Value = TestClient::get(format!(
+        "http://server/_soland/admin/realms/{other_realm}/media-service"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(empty["realm_id"], other_realm);
+    assert!(empty.get("foci").is_none() || empty["foci"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+
+    // Session with bob as an extra participant so the moderation targets a
+    // real call leg.
+    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "participants": ["did:web:alice.example", bob],
+            "mode": "sfu",
+            "recording_policy": "none",
+            "ttl_ms": 60000
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let session_id = session["session_id"].as_str().unwrap().to_owned();
+
+    // `moderation{action=kick}` is accepted and projected into
+    // `removed_participants[]` with the pinned device id.
+    let kick: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "moderation",
+        "payload": {
+            "signal_type": "moderation",
+            "data": {
+                "action": "kick",
+                "target_actor_id": bob,
+                "target_device_id": bob_device,
+                "reason": "policy_violation"
+            }
+        },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(kick["seq"], 1);
+    // kick leaves the call lifecycle running (active is not required, but the
+    // call MUST NOT be terminal).
+    assert_ne!(kick["call_state"], "ended");
+
+    // The removed-participants projection is materialized on the stored record.
+    let record = state
+        .persistence
+        .webrtc()
+        .get(&session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.removed_participants.len(), 1);
+    assert_eq!(record.removed_participants[0].actor_id, bob);
+    assert_eq!(
+        record.removed_participants[0].device_id.as_deref(),
+        Some(bob_device)
+    );
+    assert_eq!(record.removed_participants[0].action, "kick");
+
+    // `moderation{action=end_for_all}` drives the call to the terminal `ended`
+    // state (webrtc-signaling.md §3a).
+    let end: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "moderation",
+        "payload": { "data": { "action": "end_for_all" } },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(end["seq"], 2);
+    assert_eq!(end["call_state"], "ended");
+}
+
+#[tokio::test]
+async fn webrtc_ban_blocks_removed_participant_token_reissue() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+
+    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "participants": ["did:web:alice.example", bob],
+            "mode": "sfu",
+            "recording_policy": "none",
+            "ttl_ms": 60000
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let session_id = session["session_id"].as_str().unwrap().to_owned();
+
+    // Before the ban, bob can exchange a media token.
+    let pre_ban: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": bob,
+            "device_id": bob_device,
+            "focus_id": "ck:focus:livekit:green"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(pre_ban["focus_id"], "ck:focus:livekit:green");
+
+    // Alice bans bob (actor-wide; no device id).
+    let ban: Value = TestClient::post(format!(
+        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+    ))
+    .add_header("authorization", format!("Bearer {alice_token}"), true)
+    .json(&serde_json::json!({
+        "message_type": "moderation",
+        "payload": { "data": { "action": "ban", "target_actor_id": bob } },
+        "proofs": [{"kid": "did:web:alice.example#device", "sig": "dev"}]
+    }))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(ban["seq"], 1);
+
+    let record = state
+        .persistence
+        .webrtc()
+        .get(&session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.removed_participants.len(), 1);
+    assert_eq!(record.removed_participants[0].action, "ban");
+    // Actor-wide ban omits device_id.
+    assert!(record.removed_participants[0].device_id.is_none());
+
+    // After the ban, bob's token re-issue is refused with
+    // `call_participant_removed` (webrtc-signaling.md §3a).
+    let mut post_ban = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "call_id": session_id,
+            "actor_id": bob,
+            "device_id": bob_device,
+            "focus_id": "ck:focus:livekit:green"
+        }))
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(post_ban.status_code, Some(StatusCode::FORBIDDEN));
+    let body: Value = post_ban.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "call_participant_removed");
+}
+
 async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {
     let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)

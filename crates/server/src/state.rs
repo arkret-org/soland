@@ -1742,10 +1742,25 @@ pub struct WebRtcSessionRecord {
     pub recording_policy: String,
     pub recording_started_by: Option<String>,
     pub recording_blob_ref: Option<String>,
+    /// `ck.call.state.removed_participants[]` projection (webrtc-signaling.md
+    /// §3a). Each kick / ban moderation signal appends a `{ actor_id,
+    /// device_id?, action, removed_at }` row; `ban` omits `device_id` to mark
+    /// an actor-wide removal. The token issuer gates re-issue on the ban set.
+    pub removed_participants: Vec<WebRtcRemovedParticipant>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub next_seq: u64,
     pub signals: Vec<WebRtcSignalRecord>,
+}
+
+/// One `ck.call.state.removed_participants[]` row (webrtc-signaling.md §3a).
+#[derive(Clone, Debug)]
+pub struct WebRtcRemovedParticipant {
+    pub actor_id: String,
+    /// Present for `kick` (single leg); omitted for `ban` (actor-wide).
+    pub device_id: Option<String>,
+    pub action: String,
+    pub removed_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug)]

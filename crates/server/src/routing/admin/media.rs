@@ -2,11 +2,15 @@
 
 use std::collections::BTreeMap;
 
+use cokret_sdk::{CellRef, RealmId};
+use salvo::http::StatusCode;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
+use crate::error::AppError;
 use crate::state::{AppState, BlobRecord};
 use crate::{JsonResult, json_ok};
 
@@ -53,6 +57,117 @@ pub(super) fn router() -> Router {
     Router::new()
         .push(Router::with_path("media/statistics").get(get_media_statistics))
         .push(Router::with_path("media/by-actor").get(get_media_by_actor))
+        .push(
+            Router::with_path("realms/{realm_id}/media-service").get(admin_get_realm_media_service),
+        )
+}
+
+/// Effective `ck.component.realm.media_service.v1` cell, surfaced read-only
+/// for sodmin. Mirrors the projected media_service epoch shape: the service
+/// DID plus the declared multi-focus set (`bindings/livekit.md` §2 /
+/// `media-service-binding.md` §2).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+struct RealmMediaServiceOutcome {
+    realm_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    e2ee_key_sources_allowed: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    foci: Vec<Value>,
+    /// Raw projected cell value (null when the Realm has no committed epoch).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
+}
+
+fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMediaServiceOutcome {
+    let Some(value) = value else {
+        return RealmMediaServiceOutcome {
+            realm_id: realm_id.to_owned(),
+            ..Default::default()
+        };
+    };
+    // The reducer stores the epoch either bare or wrapped in `media_service`.
+    let config = value.get("media_service").unwrap_or(value);
+    let service_id = config
+        .get("service_id")
+        .or_else(|| config.get("service_did"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let e2ee_key_sources_allowed = config
+        .get("e2ee_key_sources_allowed")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let foci = config
+        .get("foci")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    RealmMediaServiceOutcome {
+        realm_id: realm_id.to_owned(),
+        service_id,
+        e2ee_key_sources_allowed,
+        foci,
+        raw: Some(value.clone()),
+    }
+}
+
+#[endpoint(
+    operation_id = "org.cokret.soland.admin.realms.media_service.get",
+    tags("admin", "realm", "media"),
+    summary = "Get effective Realm media_service epoch",
+    status_codes(200, 400, 401, 403, 500)
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.cokret.soland.admin.realms.media_service.get")
+)]
+async fn admin_get_realm_media_service(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    realm_id: PathParam<String>,
+) -> JsonResult<RealmMediaServiceOutcome> {
+    let state = depot.obtain::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let session = require_admin_principal(state, session)?;
+    let realm_id = realm_id.into_inner();
+    if RealmId::new(realm_id.clone()).is_err() {
+        return Err(AppError::invalid_param(format!(
+            "invalid realm_id `{realm_id}`: must be a typed ck:realm: id"
+        ))
+        .with_status(StatusCode::BAD_REQUEST));
+    }
+    let cell_id = CellRef::new(format!(
+        "ck:cell:ck.component.realm.media_service.v1:{realm_id}"
+    ))
+    .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
+    let value = state
+        .projection
+        .lock()
+        .ok()
+        .and_then(|proj| proj.cell_value(&cell_id).cloned());
+
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "admin.media.realm_media_service",
+        json!({
+            "realm_id": realm_id,
+            "present": value.is_some(),
+            "device_id": session.device_id,
+        }),
+        "accepted",
+    )
+    .await;
+
+    json_ok(response_from_media_cell(&realm_id, value.as_ref()))
 }
 
 #[endpoint(

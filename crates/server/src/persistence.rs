@@ -1850,6 +1850,7 @@ mod tests {
             recording_policy: "none".to_owned(),
             recording_started_by: None,
             recording_blob_ref: None,
+            removed_participants: Vec::new(),
             expires_at: now + chrono::Duration::minutes(30),
             created_at: now,
             next_seq: 0,

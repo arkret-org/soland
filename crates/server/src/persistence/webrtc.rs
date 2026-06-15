@@ -193,6 +193,36 @@ impl WebRtcSessionRow {
                 .get("recording_blob_ref")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            removed_participants: self
+                .signaling_state
+                .get("removed_participants")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|row| {
+                            let actor_id = row.get("actor_id").and_then(Value::as_str)?.to_owned();
+                            Some(WebRtcRemovedParticipant {
+                                actor_id,
+                                device_id: row
+                                    .get("device_id")
+                                    .and_then(Value::as_str)
+                                    .map(ToOwned::to_owned),
+                                action: row
+                                    .get("action")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("kick")
+                                    .to_owned(),
+                                removed_at: row
+                                    .get("removed_at")
+                                    .and_then(Value::as_str)
+                                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                                    .unwrap_or_else(Utc::now),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             expires_at: self.expires_at,
             created_at: self.created_at,
             next_seq,
@@ -208,6 +238,16 @@ fn webrtc_signaling_state(record: &WebRtcSessionRecord) -> Value {
         "recording_policy": record.recording_policy.clone(),
         "recording_started_by": record.recording_started_by.clone(),
         "recording_blob_ref": record.recording_blob_ref.clone(),
+        "removed_participants": record
+            .removed_participants
+            .iter()
+            .map(|r| serde_json::json!({
+                "actor_id": r.actor_id,
+                "device_id": r.device_id,
+                "action": r.action,
+                "removed_at": r.removed_at.to_rfc3339(),
+            }))
+            .collect::<Vec<_>>(),
         "next_seq": record.next_seq,
         "signals": record
             .signals
