@@ -276,7 +276,7 @@ async fn webrtc_signaling_contracts_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
 
-    let unauthenticated = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let unauthenticated = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID
         }))
@@ -284,7 +284,7 @@ async fn webrtc_signaling_contracts_work() {
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
-    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -305,7 +305,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(session["recording_policy"], "none");
     assert_eq!(session["call_state"], "ringing");
 
-    let ice: Value = TestClient::post("http://server/_cokret/self/calls/ice-config")
+    let ice: Value = TestClient::post("http://server/_soland/self/calls/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -377,7 +377,7 @@ async fn webrtc_signaling_contracts_work() {
     );
 
     let refreshed: Value = TestClient::post(format!(
-        "http://server/_cokret/self/calls/{session_id}/ice-config/refresh"
+        "http://server/_soland/self/calls/{session_id}/ice-config/refresh"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -413,7 +413,7 @@ async fn webrtc_signaling_contracts_work() {
     let _ = turn_credential;
 
     let unsigned_signal = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -425,7 +425,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(unsigned_signal.status_code.unwrap().as_u16(), 400);
 
     let signal: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -446,7 +446,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(signal["call_state"], "connecting");
 
     let events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals?since=0"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals?since=0"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -461,7 +461,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(events["call_state"], "connecting");
 
     let answer: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -480,7 +480,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(answer["call_state"], "active");
 
     let hangup: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -497,7 +497,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(hangup["call_state"], "ended");
 
     let mut denied_recording = TestClient::post(format!(
-        "http://server/_cokret/self/calls/{session_id}/recording/start"
+        "http://server/_soland/self/calls/{session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
@@ -511,7 +511,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(denied_body["error"]["code"], "recording_policy_violation");
 
     let empty_events: Value = TestClient::get(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals?since=3"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals?since=3"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -521,7 +521,7 @@ async fn webrtc_signaling_contracts_work() {
     .unwrap();
     assert!(empty_events["events"].as_array().unwrap().is_empty());
 
-    let recording_session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let recording_session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -547,7 +547,7 @@ async fn webrtc_signaling_contracts_work() {
         "ck.call.record",
     );
     let recording: Value = TestClient::post(format!(
-        "http://server/_cokret/self/calls/{recording_session_id}/recording/start"
+        "http://server/_soland/self/calls/{recording_session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
@@ -567,7 +567,7 @@ async fn webrtc_signaling_contracts_work() {
     );
 
     let closed: Value = TestClient::delete(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}"
+        "http://server/_soland/self/webrtc/sessions/{session_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -578,7 +578,7 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(closed["ok"], true);
 
     let after_close = TestClient::get(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
@@ -594,7 +594,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
 
     let focus_signal: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -778,7 +778,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     );
 
     let _: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -983,7 +983,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
 
     // Steer focus selection to the livekit focus via foci_preferred[].
     let _: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -1116,7 +1116,7 @@ async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all(
 
     // Session with bob as an extra participant so the moderation targets a
     // real call leg.
-    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1135,7 +1135,7 @@ async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all(
     // `moderation{action=kick}` is accepted and projected into
     // `removed_participants[]` with the pinned device id.
     let kick: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -1180,7 +1180,7 @@ async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all(
     // `moderation{action=end_for_all}` drives the call to the terminal `ended`
     // state (webrtc-signaling.md §3a).
     let end: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&serde_json::json!({
@@ -1214,7 +1214,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
-    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1251,7 +1251,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 
     // Alice bans bob (actor-wide; no device id).
     let ban: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {alice_token}"), true)
     .json(&serde_json::json!({
@@ -1313,7 +1313,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// participants and bob registered as a realm member. Returns the session id.
 async fn create_session_with_bob(state: &AppState, alice_token: &str, bob: &str) -> String {
     add_test_realm_member(state, DEMO_REALM_ID, bob);
-    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1345,7 +1345,7 @@ async fn webrtc_moderation_requires_moderate_capability() {
 
     // Bob (realm member + participant, but no `ck.call.moderate`) cannot kick.
     let mut denied = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&serde_json::json!({
@@ -1362,7 +1362,7 @@ async fn webrtc_moderation_requires_moderate_capability() {
     // After granting `ck.call.moderate`, the same moderation frame is accepted.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.moderate");
     let accepted: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&serde_json::json!({
@@ -1395,7 +1395,7 @@ async fn webrtc_screen_share_requires_screen_share_capability() {
 
     // No `ck.call.screen_share` → media_permission_denied.
     let mut denied = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&screen_on)
@@ -1407,7 +1407,7 @@ async fn webrtc_screen_share_requires_screen_share_capability() {
 
     // A `media_state` that does NOT enable screen share is not gated.
     let no_screen: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&serde_json::json!({
@@ -1425,7 +1425,7 @@ async fn webrtc_screen_share_requires_screen_share_capability() {
     // After granting `ck.call.screen_share`, screen-on is accepted.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.screen_share");
     let accepted: Value = TestClient::post(format!(
-        "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
+        "http://server/_soland/self/webrtc/sessions/{session_id}/signals"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&screen_on)
@@ -1448,7 +1448,7 @@ async fn webrtc_recording_requires_record_capability() {
 
     // recording_policy=allow but bob lacks `ck.call.record` → recording_denied.
     let mut denied = TestClient::post(format!(
-        "http://server/_cokret/self/calls/{session_id}/recording/start"
+        "http://server/_soland/self/calls/{session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
@@ -1461,7 +1461,7 @@ async fn webrtc_recording_requires_record_capability() {
     // After granting `ck.call.record`, the recording starts.
     grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.record");
     let recording: Value = TestClient::post(format!(
-        "http://server/_cokret/self/calls/{session_id}/recording/start"
+        "http://server/_soland/self/calls/{session_id}/recording/start"
     ))
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .json(&serde_json::json!({"realm_id": DEMO_REALM_ID}))
@@ -1475,7 +1475,7 @@ async fn webrtc_recording_requires_record_capability() {
 }
 
 async fn create_webrtc_session_for_alice(state: AppState, token: &str) -> String {
-    let session: Value = TestClient::post("http://server/_cokret/self/webrtc/sessions")
+    let session: Value = TestClient::post("http://server/_soland/self/webrtc/sessions")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
@@ -1732,6 +1732,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
             call_id: call_id.to_owned(),
             expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
             envelope: call_signal_envelope(alice, alice_device, call_id, "hangup", 2),
+            position: 0,
         })
         .await
         .unwrap();
@@ -1767,6 +1768,110 @@ async fn ephemeral_call_signal_without_send_capability_is_denied() {
         .await
         .unwrap();
     assert!(relayed.is_empty());
+}
+
+/// Incremental subscribe (with an `after` cursor) for `token`, returning the
+/// relayed `ck.call.signal` envelopes and the next cursor. `is_incremental` on
+/// the server is `body.after.is_some()`, so passing `after=` exercises the
+/// deliver-once watermark path rather than a full sync.
+async fn incremental_call_signals(
+    state: AppState,
+    token: &str,
+    after: &str,
+) -> (Vec<Value>, String) {
+    let frame =
+        account_subscribe_frame(state, Some(token), &format!("max_wait_ms=0&after={after}")).await;
+    let signals = call_signals_in_subscribe(&frame, DEMO_REALM_ID);
+    let next = frame["cursor"].as_str().unwrap().to_owned();
+    (signals, next)
+}
+
+#[tokio::test]
+async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
+    // Deliver-once: a subscriber-device that already received a relayed
+    // `ck.call.signal` on one sync MUST NOT receive it again on a later
+    // incremental sync inside the TTL window; a *new* signal still arrives;
+    // and a full sync (catchup, no `after`) still re-delivers pending signals.
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        alice,
+        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+    );
+
+    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca20";
+    let first = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
+    assert_eq!(
+        post_ephemeral(state.clone(), &alice_token, &first)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+
+    // First (full) sync: bob receives the invite once and the watermark aligns.
+    let baseline = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let baseline_signals = call_signals_in_subscribe(&baseline, DEMO_REALM_ID);
+    assert_eq!(baseline_signals.len(), 1, "bob receives the first invite");
+    assert_eq!(baseline_signals[0]["payload"]["seq"], 1);
+    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+
+    // Incremental re-subscribe inside the TTL window: the already-delivered
+    // invite MUST NOT be re-emitted.
+    let (repeat, cursor) = incremental_call_signals(state.clone(), &bob_token, &cursor).await;
+    assert!(
+        repeat.is_empty(),
+        "an incremental re-subscribe must not re-deliver an already-seen signal"
+    );
+
+    // A second, distinct signal is still delivered on the next incremental sync.
+    let second = call_signal_envelope(alice, alice_device, call_id, "answer", 2);
+    assert_eq!(
+        post_ephemeral(state.clone(), &alice_token, &second)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+    let (after_second, cursor) = incremental_call_signals(state.clone(), &bob_token, &cursor).await;
+    assert_eq!(
+        after_second.len(),
+        1,
+        "a new signal must still be delivered incrementally"
+    );
+    assert_eq!(after_second[0]["payload"]["signal_type"], "answer");
+
+    // And it is not re-delivered on a subsequent incremental sync.
+    let (after_second_repeat, _cursor) =
+        incremental_call_signals(state.clone(), &bob_token, &cursor).await;
+    assert!(
+        after_second_repeat.is_empty(),
+        "the second signal must not be re-delivered incrementally either"
+    );
+
+    // A full sync (catchup, no `after`) re-delivers all still-pending signals so
+    // a reconnecting device recovers a pending invite.
+    let full = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let full_signals = call_signals_in_subscribe(&full, DEMO_REALM_ID);
+    assert_eq!(
+        full_signals.len(),
+        2,
+        "a full sync re-delivers all non-expired pending signals (catchup recovery)"
+    );
+
+    // The sending device still never sees its own self-echo, even on full sync.
+    let alice_frame =
+        account_subscribe_frame(state.clone(), Some(&alice_token), "catchup=true").await;
+    assert!(
+        call_signals_in_subscribe(&alice_frame, DEMO_REALM_ID).is_empty(),
+        "the sending device must not see its own self-echoed call signal"
+    );
 }
 
 fn decode_backend_token_payload(token: &str) -> Value {

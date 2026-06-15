@@ -155,13 +155,15 @@ pub(crate) async fn build_sync_snapshot(
             && known_timeline_to_cursor
             && timeline_events.is_empty()
             && !account_projection_changed
-            && !has_pending_call_signals_for_subscriber(state, &realm_id, session).await
+            && !has_pending_call_signals_for_subscriber(state, &realm_id, session, !is_incremental)
+                .await
         {
             continue;
         }
         let bottom_cells = bottom_cells_for_realm(&projection, &realm_id);
         let seal_view = seal_view_for_realm(&bottom_cells);
-        let ephemeral = typing_ephemeral_for_realm(state, &realm_id, session).await;
+        let ephemeral =
+            typing_ephemeral_for_realm(state, &realm_id, session, !is_incremental).await;
         sync_realms.insert(
             realm_id.clone(),
             json!({

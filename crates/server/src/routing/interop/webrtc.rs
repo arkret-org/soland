@@ -34,17 +34,39 @@ use crate::wire::{
     CallMediaTokenExchangeRequestBody,
 };
 
-/// RTC / WebRTC surface. Mounted under the `self` trust segment by
-/// `interop::router()` so the spec-canonical media paths resolve at
-/// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token`.
+/// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
+/// `interop::router()` so the only spec-registered media paths resolve at
+/// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token` (see
+/// `contract-catalog.json` / the OpenAPI binding). The ephemeral signaling /
+/// call-scoped surfaces are NOT spec-registered and live on the soland-internal
+/// `/_soland/self/*` face instead (see [`local_router`]).
 pub(super) fn protocol_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).
         .push(Router::with_path("rtc/ice-config").post(cokret_ice_config))
         // CKP-0010 — media token exchange (`/_cokret/self/rtc/token`).
         .push(Router::with_path("rtc/token").post(cokret_rtc_token))
+}
+
+/// Soland-internal WebRTC compatibility / test surface. These routes are NOT
+/// registered in the spec contract-catalog / OpenAPI binding, so they MUST NOT
+/// live on the `/_cokret/self` spec-conformance face. They are mounted under
+/// the deployment-local `/_soland/self/*` namespace instead. The canonical
+/// clients (yougen) drive media through the registered `/_cokret/self/rtc/*`
+/// surface above; only cotest e2e and soland's own webrtc tests exercise these.
+///
+/// Resolves at:
+/// - `POST   /_soland/self/webrtc/sessions`
+/// - `DELETE /_soland/self/webrtc/sessions/{session_id}`
+/// - `GET    /_soland/self/webrtc/sessions/{session_id}/signals`
+/// - `POST   /_soland/self/webrtc/sessions/{session_id}/signals`
+/// - `POST   /_soland/self/calls/ice-config`
+/// - `POST   /_soland/self/calls/{call_id}/ice-config/refresh`
+/// - `POST   /_soland/self/calls/{call_id}/recording/start`
+pub(crate) fn local_router() -> Router {
+    Router::new()
         // Ephemeral WebRTC signaling face (`webrtc-signaling.md`): session
-        // create / close, append+list signals.
+        // create / close, append+list signals. Soland-internal, non-spec.
         .push(
             Router::with_path("webrtc/sessions")
                 .post(create_webrtc_session)
@@ -59,7 +81,8 @@ pub(super) fn protocol_router() -> Router {
                 ),
         )
         // Call-scoped ICE config + recording control
-        // (`webrtc-signaling.md` §4, `call-state.md` §5).
+        // (`webrtc-signaling.md` §4, `call-state.md` §5). Soland-internal,
+        // non-spec.
         .push(
             Router::with_path("calls")
                 .push(Router::with_path("ice-config").post(calls_ice_config))

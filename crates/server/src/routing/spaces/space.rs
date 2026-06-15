@@ -945,6 +945,7 @@ pub async fn typing_ephemeral_for_realm(
     state: &AppState,
     realm_id: &str,
     session: Option<&SessionRecord>,
+    full_sync: bool,
 ) -> Vec<serde_json::Value> {
     let Some(session) = session else {
         return Vec::new();
@@ -982,7 +983,10 @@ pub async fn typing_ephemeral_for_realm(
     // the same per-Realm `ephemeral` segment as a typed item so canonical
     // signals reach subscribers. Each envelope is delivered verbatim (proof
     // intact) so the receiver verifies the signature itself.
-    let call_signals = call_signal_envelopes_for_subscriber(state, realm_id, session).await;
+    // This is the real delivery point (the Realm is being emitted), so advance
+    // the per-subscriber-device deliver-once watermark here.
+    let call_signals =
+        deliver_call_signal_envelopes_for_subscriber(state, realm_id, session, full_sync).await;
     if !call_signals.is_empty() {
         ephemeral.push(json!({
             "type": "ck.call.signal",
@@ -993,16 +997,38 @@ pub async fn typing_ephemeral_for_realm(
     ephemeral
 }
 
-/// `webrtc-signaling.md` §5 / §7 — the verbatim relayed `ck.call.signal`
-/// envelopes a given subscriber should receive for `realm_id`: non-expired,
-/// excluding the subscriber's own device self-echo (a same-actor *other*
-/// device is retained so multi-device fan-out works).
-pub async fn call_signal_envelopes_for_subscriber(
+/// `webrtc-signaling.md` §5 / §7 — relayed `ck.call.signal` records a given
+/// subscriber should receive for `realm_id`: non-expired, excluding the
+/// subscriber's own device self-echo (a same-actor *other* device is retained
+/// so multi-device fan-out works).
+///
+/// Deliver-once: on an **incremental** sync only records with `position` above
+/// the subscriber-device watermark are returned (so a re-subscribe inside the
+/// TTL window does not re-emit a signal the device already saw). On a **full
+/// sync** every non-expired pending record is returned regardless of the
+/// watermark, so a reconnecting device recovers any still-pending invite.
+///
+/// This is a read-only peek — it never advances the watermark. The actual
+/// delivery path ([`deliver_call_signal_envelopes_for_subscriber`]) advances
+/// it after computing the same set, so the skip-predicate
+/// ([`has_pending_call_signals_for_subscriber`]) and the delivery agree.
+async fn pending_call_signal_records_for_subscriber(
     state: &AppState,
     realm_id: &str,
     session: &SessionRecord,
-) -> Vec<serde_json::Value> {
+    full_sync: bool,
+) -> Vec<crate::state::CallSignalRelayRecord> {
     let now = chrono::Utc::now();
+    let watermark = if full_sync {
+        0
+    } else {
+        state
+            .persistence
+            .call_signal_relay()
+            .delivered_through(&session.actor, &session.device_id, realm_id)
+            .await
+            .unwrap_or(0)
+    };
     state
         .persistence
         .call_signal_relay()
@@ -1011,26 +1037,51 @@ pub async fn call_signal_envelopes_for_subscriber(
         .unwrap_or_default()
         .into_iter()
         .filter(|record| record.expires_at > now)
+        .filter(|record| record.position > watermark)
         .filter(|record| {
             !(record.sender_actor == session.actor && record.sender_device == session.device_id)
         })
-        .map(|record| record.envelope)
         .collect()
+}
+
+/// Deliver the relayed `ck.call.signal` envelopes for `session` and advance the
+/// per-subscriber-device deliver-once watermark to the highest position
+/// delivered this round (incremental and full sync both advance it, so a full
+/// sync re-aligns a reconnecting device's watermark instead of leaving it
+/// behind).
+pub async fn deliver_call_signal_envelopes_for_subscriber(
+    state: &AppState,
+    realm_id: &str,
+    session: &SessionRecord,
+    full_sync: bool,
+) -> Vec<serde_json::Value> {
+    let records =
+        pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
+    if let Some(max_position) = records.iter().map(|record| record.position).max() {
+        let _ = state
+            .persistence
+            .call_signal_relay()
+            .advance(&session.actor, &session.device_id, realm_id, max_position)
+            .await;
+    }
+    records.into_iter().map(|record| record.envelope).collect()
 }
 
 /// `webrtc-signaling.md` §5 — whether `realm_id` has at least one relayed
 /// `ck.call.signal` envelope still pending delivery to `session` (used to keep
 /// incremental syncs from skipping a Realm whose only change is a live call
-/// signal).
+/// signal). Read-only: this peek must NOT advance the watermark, otherwise the
+/// subsequent delivery would skip the very signal it gated on.
 pub async fn has_pending_call_signals_for_subscriber(
     state: &AppState,
     realm_id: &str,
     session: Option<&SessionRecord>,
+    full_sync: bool,
 ) -> bool {
     let Some(session) = session else {
         return false;
     };
-    !call_signal_envelopes_for_subscriber(state, realm_id, session)
+    !pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync)
         .await
         .is_empty()
 }

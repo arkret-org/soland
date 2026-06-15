@@ -1701,7 +1701,7 @@ pub struct TypingRecord {
 /// Relayed `ck.call.signal` envelope for realm-broadcast ephemeral delivery
 /// (`webrtc-signaling.md` §5). The full signed envelope is stored verbatim so
 /// the receiver can verify `proof` over the canonical bytes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CallSignalRelayRecord {
     pub realm_id: String,
     pub sender_actor: String,
@@ -1709,6 +1709,12 @@ pub struct CallSignalRelayRecord {
     pub call_id: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub envelope: serde_json::Value,
+    /// Monotonic per-Realm position assigned by `CallSignalRelayStore::append`.
+    /// Drives per-subscriber-device deliver-once: a subscriber's watermark
+    /// records the highest `position` already delivered to that device, so an
+    /// incremental re-subscribe inside the TTL window does not re-emit the same
+    /// envelope. Producers leave this `0`; `append` overwrites it.
+    pub position: u64,
 }
 
 #[derive(Clone, Debug)]

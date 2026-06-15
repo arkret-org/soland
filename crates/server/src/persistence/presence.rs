@@ -21,12 +21,38 @@ pub trait TypingStore: Send + Sync {
 /// with a TTL; receivers pick it up off the subscribe `ephemeral.call_signals`
 /// segment and verify the carried `proof`. Auto-prunes expired entries and
 /// caps each Realm to the most recent `CALL_SIGNAL_RELAY_MAX_PER_REALM`.
+///
+/// Deliver-once: `append` stamps each record with a monotonic per-Realm
+/// `position`, and an in-memory per-subscriber-device watermark
+/// (`delivered_through` / `advance`) records the highest position already
+/// delivered to a `(actor, device, realm)` triple. Incremental re-subscribes
+/// inside the TTL window therefore do not re-emit a signal the device already
+/// saw, while a full sync still re-delivers all non-expired pending signals so
+/// a reconnecting device recovers a pending invite. This mirrors the to_device
+/// deliver-once watermark without touching the client-facing sync cursor.
 #[async_trait]
 pub trait CallSignalRelayStore: Send + Sync {
     async fn append(&self, record: CallSignalRelayRecord) -> PersistenceResult<()>;
     async fn list_for_realm(&self, realm_id: &str)
     -> PersistenceResult<Vec<CallSignalRelayRecord>>;
     async fn prune_expired(&self) -> PersistenceResult<usize>;
+    /// Highest per-Realm `position` already delivered to `(actor, device,
+    /// realm)`. Returns `0` when nothing has been delivered yet.
+    async fn delivered_through(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+    ) -> PersistenceResult<u64>;
+    /// Advance the `(actor, device, realm)` watermark to `position` (monotonic;
+    /// a lower value is ignored).
+    async fn advance(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+        position: u64,
+    ) -> PersistenceResult<()>;
 }
 
 /// Per-Realm cap on retained relayed call signals to bound memory growth.
@@ -112,6 +138,14 @@ impl TypingStore for MemoryTypingStore {
 #[derive(Default)]
 pub(crate) struct MemoryCallSignalRelayStore {
     data: Mutex<BTreeMap<String, Vec<CallSignalRelayRecord>>>,
+    /// Monotonic per-Realm position counter. Never resets (even when the bucket
+    /// is fully pruned) so positions stay strictly increasing for the lifetime
+    /// of the process and a watermark can never be re-crossed by a recycled id.
+    next_position: Mutex<BTreeMap<String, u64>>,
+    /// Per-subscriber-device deliver-once watermark keyed by `(actor, device,
+    /// realm_id)`: the highest per-Realm `position` already delivered to that
+    /// device.
+    watermark: Mutex<BTreeMap<(String, String, String), u64>>,
 }
 
 impl MemoryCallSignalRelayStore {
@@ -122,9 +156,21 @@ impl MemoryCallSignalRelayStore {
 
 #[async_trait]
 impl CallSignalRelayStore for MemoryCallSignalRelayStore {
-    async fn append(&self, record: CallSignalRelayRecord) -> PersistenceResult<()> {
+    async fn append(&self, mut record: CallSignalRelayRecord) -> PersistenceResult<()> {
         let now = Utc::now();
         let realm_id = record.realm_id.clone();
+        // Assign the monotonic per-Realm position before storing so every
+        // delivered record carries a stable deliver-once key.
+        let position = {
+            let mut counters = self
+                .next_position
+                .lock()
+                .expect("call signal position lock");
+            let counter = counters.entry(realm_id.clone()).or_insert(0);
+            *counter += 1;
+            *counter
+        };
+        record.position = position;
         let mut data = self.data.lock().expect("call signal relay lock");
         let bucket = data.entry(realm_id).or_default();
         bucket.retain(|existing| existing.expires_at > now);
@@ -167,6 +213,38 @@ impl CallSignalRelayStore for MemoryCallSignalRelayStore {
         }
         data.retain(|_, bucket| !bucket.is_empty());
         Ok(removed)
+    }
+
+    async fn delivered_through(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+    ) -> PersistenceResult<u64> {
+        let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
+        Ok(self
+            .watermark
+            .lock()
+            .expect("call signal watermark lock")
+            .get(&key)
+            .copied()
+            .unwrap_or(0))
+    }
+
+    async fn advance(
+        &self,
+        actor: &str,
+        device: &str,
+        realm_id: &str,
+        position: u64,
+    ) -> PersistenceResult<()> {
+        let key = (actor.to_owned(), device.to_owned(), realm_id.to_owned());
+        let mut watermark = self.watermark.lock().expect("call signal watermark lock");
+        let entry = watermark.entry(key).or_insert(0);
+        if position > *entry {
+            *entry = position;
+        }
+        Ok(())
     }
 }
 

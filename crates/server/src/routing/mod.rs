@@ -277,6 +277,12 @@ fn soland_local_router() -> Router {
                 .hoop(identity::session_pop::verify_session_pop)
                 .push(spaces::local_router())
                 .push(admin::audit_router())
+                // Soland-internal WebRTC compatibility / test surface
+                // (`/_soland/self/webrtc/*`, `/_soland/self/calls/*`). These are
+                // NOT spec-registered (only `/_cokret/self/rtc/*` is); they back
+                // cotest e2e and soland's own webrtc tests. See
+                // `interop::webrtc::local_router`.
+                .push(interop::webrtc::local_router())
                 .push(mls::local_router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory

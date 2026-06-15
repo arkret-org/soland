@@ -116,6 +116,8 @@ async fn relay_ephemeral_call_signal(
         call_id: payload.call_id.to_string(),
         expires_at: envelope.expires_at,
         envelope: envelope_value,
+        // `append` assigns the monotonic per-Realm position.
+        position: 0,
     };
     if let Err(error) = state.persistence.call_signal_relay().append(record).await {
         tracing::error!(%error, "failed to relay ephemeral ck.call.signal");
