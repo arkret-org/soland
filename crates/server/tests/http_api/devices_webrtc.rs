@@ -1542,6 +1542,233 @@ fn turn_rest_credential_for(secret: &str, username: &str) -> String {
     STANDARD.encode(mac.finalize().into_bytes())
 }
 
+/// Build a signed `ck.call.signal` ephemeral envelope (verbatim wire shape
+/// per `ck.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`
+/// is a development detached-signature stub — the relay stores it verbatim and
+/// the receiver (not the relay) verifies it.
+fn call_signal_envelope(
+    actor: &str,
+    device_id: &str,
+    call_id: &str,
+    signal_type: &str,
+    seq: u64,
+) -> Value {
+    let sent_at = chrono::Utc::now();
+    let expires_at = sent_at + chrono::Duration::minutes(2);
+    serde_json::json!({
+        "kind": "ck.call.signal",
+        "realm_id": DEMO_REALM_ID,
+        "actor_id": actor,
+        "device_id": device_id,
+        "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "payload": {
+            "call_id": call_id,
+            "signal_type": signal_type,
+            "seq": seq,
+            "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        },
+        "proof": {"kid": format!("{actor}#device"), "sig": "dev"}
+    })
+}
+
+async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo::http::Response {
+    TestClient::post("http://server/_cokret/self/ephemeral")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(envelope)
+        .send(&app_from_state(state))
+        .await
+}
+
+/// Extract the verbatim relayed `ck.call.signal` envelopes from a subscribe
+/// frame's per-Realm `ephemeral` segment (the typed `ck.call.signal` item).
+fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
+    let Some(realm) = frame["realms"].get(realm_id) else {
+        return Vec::new();
+    };
+    let Some(ephemeral) = realm["ephemeral"].as_array() else {
+        return Vec::new();
+    };
+    ephemeral
+        .iter()
+        .filter(|item| item["type"] == "ck.call.signal")
+        .flat_map(|item| item["call_signals"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[tokio::test]
+async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_device() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    // §162 — the sender MUST hold `ck.call.signal.send` for the Realm.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        alice,
+        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+    );
+
+    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca11";
+    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
+    let mut submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
+    assert_eq!(submit.status_code, Some(StatusCode::OK));
+    let outcome: Value = submit.take_json().await.unwrap();
+    assert_eq!(outcome["accepted"], true);
+    // dispatched_to now reflects the realm-broadcast breadth (bob), not None.
+    assert_eq!(outcome["dispatched_to"], 1);
+
+    // Bob (other member) receives the verbatim signed envelope (proof intact).
+    let bob_frame = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let bob_signals = call_signals_in_subscribe(&bob_frame, DEMO_REALM_ID);
+    assert_eq!(
+        bob_signals.len(),
+        1,
+        "bob must receive the relayed call signal"
+    );
+    assert_eq!(bob_signals[0]["kind"], "ck.call.signal");
+    assert_eq!(bob_signals[0]["payload"]["call_id"], call_id);
+    assert_eq!(bob_signals[0]["payload"]["signal_type"], "invite");
+    assert_eq!(bob_signals[0]["payload"]["seq"], 1);
+    assert_eq!(
+        bob_signals[0]["proof"]["sig"], "dev",
+        "the relay delivers the envelope verbatim so the receiver can verify proof"
+    );
+
+    // Alice's own device A subscribe does NOT echo her own signal back.
+    let alice_frame =
+        account_subscribe_frame(state.clone(), Some(&alice_token), "catchup=true").await;
+    let alice_signals = call_signals_in_subscribe(&alice_frame, DEMO_REALM_ID);
+    assert!(
+        alice_signals.is_empty(),
+        "the sending device must not see its own self-echoed call signal"
+    );
+}
+
+#[tokio::test]
+async fn ephemeral_call_signal_reaches_same_actor_other_device() {
+    // §7 — a same-actor *other* device receives the signal (multi-device
+    // fan-out); only the originating device self-echo is suppressed.
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device_a = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_b = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+    let token_a = dev_token(state.clone()).await;
+    let token_b = dev_token_for_device(state.clone(), alice, alice_device_b, "Alice Laptop").await;
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        alice,
+        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+    );
+
+    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca12";
+    let envelope = call_signal_envelope(alice, alice_device_a, call_id, "invite", 1);
+    let submit = post_ephemeral(state.clone(), &token_a, &envelope).await;
+    assert_eq!(submit.status_code, Some(StatusCode::OK));
+
+    // Device B (same actor) receives the signal.
+    let frame_b = account_subscribe_frame(state.clone(), Some(&token_b), "catchup=true").await;
+    let signals_b = call_signals_in_subscribe(&frame_b, DEMO_REALM_ID);
+    assert_eq!(
+        signals_b.len(),
+        1,
+        "a second device of the same actor must receive the call signal"
+    );
+    assert_eq!(signals_b[0]["payload"]["call_id"], call_id);
+
+    // Device A (originating) still does not see its own echo.
+    let frame_a = account_subscribe_frame(state.clone(), Some(&token_a), "catchup=true").await;
+    assert!(call_signals_in_subscribe(&frame_a, DEMO_REALM_ID).is_empty());
+}
+
+#[tokio::test]
+async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        alice,
+        cokret_sdk::CAP_CALL_SIGNAL_SEND,
+    );
+
+    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca13";
+    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
+    let submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
+    assert_eq!(submit.status_code, Some(StatusCode::OK));
+
+    // Force-expire the relayed record by rewriting its expires_at into the past.
+    {
+        let record = state
+            .persistence
+            .call_signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap();
+        assert_eq!(record.len(), 1);
+    }
+    // Re-submit with an already-near expiry, then prune; simulate expiry by
+    // pruning after the relay TTL passes. We drive expiry deterministically by
+    // appending an expired record directly and pruning.
+    state
+        .persistence
+        .call_signal_relay()
+        .append(soland::state::CallSignalRelayRecord {
+            realm_id: DEMO_REALM_ID.to_owned(),
+            sender_actor: alice.to_owned(),
+            sender_device: alice_device.to_owned(),
+            call_id: call_id.to_owned(),
+            expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+            envelope: call_signal_envelope(alice, alice_device, call_id, "hangup", 2),
+        })
+        .await
+        .unwrap();
+
+    // The expired hangup must not be delivered; only the live invite remains.
+    let bob_frame = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
+    let bob_signals = call_signals_in_subscribe(&bob_frame, DEMO_REALM_ID);
+    assert!(
+        bob_signals
+            .iter()
+            .all(|signal| signal["payload"]["signal_type"] != "hangup"),
+        "expired call signals must not be delivered"
+    );
+}
+
+#[tokio::test]
+async fn ephemeral_call_signal_without_send_capability_is_denied() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_token = dev_token(state.clone()).await;
+    // No `ck.call.signal.send` grant.
+    let call_id = "ck:call:0196419b-0000-7000-8000-00000000ca14";
+    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
+    let denied = post_ephemeral(state.clone(), &alice_token, &envelope).await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+
+    // Nothing entered the relay.
+    let relayed = state
+        .persistence
+        .call_signal_relay()
+        .list_for_realm(DEMO_REALM_ID)
+        .await
+        .unwrap();
+    assert!(relayed.is_empty());
+}
+
 fn decode_backend_token_payload(token: &str) -> Value {
     let parts = token.split('.').collect::<Vec<_>>();
     assert_eq!(

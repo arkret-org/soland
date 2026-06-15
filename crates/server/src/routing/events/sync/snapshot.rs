@@ -155,6 +155,7 @@ pub(crate) async fn build_sync_snapshot(
             && known_timeline_to_cursor
             && timeline_events.is_empty()
             && !account_projection_changed
+            && !has_pending_call_signals_for_subscriber(state, &realm_id, session).await
         {
             continue;
         }

@@ -16,6 +16,24 @@ pub trait TypingStore: Send + Sync {
     async fn prune_expired(&self) -> PersistenceResult<usize>;
 }
 
+/// Realm-broadcast relay for `ck.call.signal` ephemeral envelopes
+/// (`webrtc-signaling.md` §5). Stores the verbatim signed envelope per Realm
+/// with a TTL; receivers pick it up off the subscribe `ephemeral.call_signals`
+/// segment and verify the carried `proof`. Auto-prunes expired entries and
+/// caps each Realm to the most recent `CALL_SIGNAL_RELAY_MAX_PER_REALM`.
+#[async_trait]
+pub trait CallSignalRelayStore: Send + Sync {
+    async fn append(&self, record: CallSignalRelayRecord) -> PersistenceResult<()>;
+    async fn list_for_realm(&self, realm_id: &str)
+    -> PersistenceResult<Vec<CallSignalRelayRecord>>;
+    async fn prune_expired(&self) -> PersistenceResult<usize>;
+}
+
+/// Per-Realm cap on retained relayed call signals to bound memory growth.
+/// Call signals are short-lived (≤5 min ephemeral TTL) so the bound only
+/// matters under a burst; the oldest entries are dropped first.
+pub(crate) const CALL_SIGNAL_RELAY_MAX_PER_REALM: usize = 256;
+
 #[derive(Default)]
 pub(crate) struct MemoryPresenceStore {
     data: Mutex<BTreeMap<String, PresenceRecord>>,
@@ -88,6 +106,67 @@ impl TypingStore for MemoryTypingStore {
         let before = data.len();
         data.retain(|_, record| record.expires_at > now);
         Ok(before - data.len())
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MemoryCallSignalRelayStore {
+    data: Mutex<BTreeMap<String, Vec<CallSignalRelayRecord>>>,
+}
+
+impl MemoryCallSignalRelayStore {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl CallSignalRelayStore for MemoryCallSignalRelayStore {
+    async fn append(&self, record: CallSignalRelayRecord) -> PersistenceResult<()> {
+        let now = Utc::now();
+        let realm_id = record.realm_id.clone();
+        let mut data = self.data.lock().expect("call signal relay lock");
+        let bucket = data.entry(realm_id).or_default();
+        bucket.retain(|existing| existing.expires_at > now);
+        bucket.push(record);
+        if bucket.len() > CALL_SIGNAL_RELAY_MAX_PER_REALM {
+            let overflow = bucket.len() - CALL_SIGNAL_RELAY_MAX_PER_REALM;
+            bucket.drain(0..overflow);
+        }
+        Ok(())
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CallSignalRelayRecord>> {
+        let now = Utc::now();
+        Ok(self
+            .data
+            .lock()
+            .expect("call signal relay lock")
+            .get(realm_id)
+            .map(|bucket| {
+                bucket
+                    .iter()
+                    .filter(|record| record.expires_at > now)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn prune_expired(&self) -> PersistenceResult<usize> {
+        let now = Utc::now();
+        let mut data = self.data.lock().expect("call signal relay lock");
+        let mut removed = 0usize;
+        for bucket in data.values_mut() {
+            let before = bucket.len();
+            bucket.retain(|record| record.expires_at > now);
+            removed += before - bucket.len();
+        }
+        data.retain(|_, bucket| !bucket.is_empty());
+        Ok(removed)
     }
 }
 

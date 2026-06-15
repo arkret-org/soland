@@ -43,6 +43,7 @@ pub(super) async fn submit_ephemeral(
         ));
     }
 
+    let mut dispatched_to: Option<u64> = None;
     match envelope.kind.as_str() {
         "ck.typing" => {
             persist_ephemeral_typing(state, &session.actor, realm_id_str, &envelope).await
@@ -70,7 +71,11 @@ pub(super) async fn submit_ephemeral(
                     "actor does not hold the ck.call.signal.send capability for this realm",
                 ));
             }
-            admit_ephemeral_call_signal(&envelope)?
+            let payload = admit_ephemeral_call_signal(&envelope)?;
+            let recipients =
+                relay_ephemeral_call_signal(state, &session, realm_id_str, &payload, &envelope)
+                    .await?;
+            dispatched_to = Some(recipients);
         }
         _ => {
             return Err(crate::error::AppError::invalid_param(
@@ -83,9 +88,48 @@ pub(super) async fn submit_ephemeral(
         accepted: true,
         kind: envelope.kind,
         realm_id,
-        dispatched_to: None,
+        dispatched_to,
         server_received_at: Some(chrono::Utc::now()),
     })
+}
+
+/// `webrtc-signaling.md` §5 — persist the verbatim signed `ck.call.signal`
+/// envelope into the realm-broadcast relay so subscribers in the Realm pick it
+/// up off `ephemeral.call_signals` and verify the carried `proof`. The
+/// envelope is stored unmodified (proof intact) and pruned at its TTL.
+async fn relay_ephemeral_call_signal(
+    state: &AppState,
+    session: &crate::state::SessionRecord,
+    realm_id: &str,
+    payload: &cokret_sdk::CallSignalPayload,
+    envelope: &cokret_sdk::EphemeralEnvelope,
+) -> Result<u64, crate::error::AppError> {
+    let envelope_value = serde_json::to_value(envelope).map_err(|error| {
+        crate::error::AppError::invalid_param(format!(
+            "ck.call.signal envelope is not serialisable: {error}"
+        ))
+    })?;
+    let record = crate::state::CallSignalRelayRecord {
+        realm_id: realm_id.to_owned(),
+        sender_actor: session.actor.clone(),
+        sender_device: session.device_id.clone(),
+        call_id: payload.call_id.to_string(),
+        expires_at: envelope.expires_at,
+        envelope: envelope_value,
+    };
+    if let Err(error) = state.persistence.call_signal_relay().append(record).await {
+        tracing::error!(%error, "failed to relay ephemeral ck.call.signal");
+        return Err(crate::error::AppError::internal(
+            "failed to relay ck.call.signal for realm broadcast",
+        ));
+    }
+    // Broadcast breadth = Realm members other than the sender; the precise
+    // per-device recipient set is resolved lazily on each subscribe.
+    Ok(crate::routing::spaces::space::realm_member_count_excluding(
+        state,
+        realm_id,
+        &session.actor,
+    ))
 }
 
 fn validate_ephemeral_envelope(
@@ -230,11 +274,10 @@ async fn admit_ephemeral_read_receipt(
 /// so malformed call signals never enter the ephemeral fan-out.
 fn admit_ephemeral_call_signal(
     envelope: &cokret_sdk::EphemeralEnvelope,
-) -> Result<(), crate::error::AppError> {
+) -> Result<cokret_sdk::CallSignalPayload, crate::error::AppError> {
     cokret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "ck.call.signal envelope failed structural validation: {error}"
         ))
-    })?;
-    Ok(())
+    })
 }

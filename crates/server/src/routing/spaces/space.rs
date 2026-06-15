@@ -915,6 +915,26 @@ pub async fn realm_allows_plaintext_service_for_id(state: &AppState, realm_id: &
         })
 }
 
+/// Number of Realm members other than `exclude_actor`. Used to report the
+/// realm-broadcast fan-out breadth for relayed `ck.call.signal` envelopes
+/// (`webrtc-signaling.md` §5) without resolving the per-device recipient set.
+pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_actor: &str) -> u64 {
+    let Ok(realm_id_value) = RealmId::new(realm_id.to_owned()) else {
+        return 0;
+    };
+    let realms = state.realms.lock().expect("realms lock");
+    realms
+        .get(&realm_id_value)
+        .map(|realm| {
+            realm
+                .members
+                .iter()
+                .filter(|member| member.as_str() != exclude_actor)
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
 pub async fn prune_expired_typing(state: &AppState) {
     if let Err(error) = state.persistence.typing().prune_expired().await {
         tracing::warn!(%error, "failed to prune expired typing entries");
@@ -926,9 +946,9 @@ pub async fn typing_ephemeral_for_realm(
     realm_id: &str,
     session: Option<&SessionRecord>,
 ) -> Vec<serde_json::Value> {
-    if session.is_none() {
+    let Some(session) = session else {
         return Vec::new();
-    }
+    };
     let mut by_scope = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
     let typing_records = state
         .persistence
@@ -947,7 +967,7 @@ pub async fn typing_ephemeral_for_realm(
             "updated_at": record.updated_at,
         }));
     }
-    by_scope
+    let mut ephemeral: Vec<serde_json::Value> = by_scope
         .into_iter()
         .map(|(scope_id, actors)| {
             json!({
@@ -957,5 +977,60 @@ pub async fn typing_ephemeral_for_realm(
                 "actors": actors,
             })
         })
+        .collect();
+    // `webrtc-signaling.md` §5 — fold relayed `ck.call.signal` envelopes into
+    // the same per-Realm `ephemeral` segment as a typed item so canonical
+    // signals reach subscribers. Each envelope is delivered verbatim (proof
+    // intact) so the receiver verifies the signature itself.
+    let call_signals = call_signal_envelopes_for_subscriber(state, realm_id, session).await;
+    if !call_signals.is_empty() {
+        ephemeral.push(json!({
+            "type": "ck.call.signal",
+            "realm_id": realm_id,
+            "call_signals": call_signals,
+        }));
+    }
+    ephemeral
+}
+
+/// `webrtc-signaling.md` §5 / §7 — the verbatim relayed `ck.call.signal`
+/// envelopes a given subscriber should receive for `realm_id`: non-expired,
+/// excluding the subscriber's own device self-echo (a same-actor *other*
+/// device is retained so multi-device fan-out works).
+pub async fn call_signal_envelopes_for_subscriber(
+    state: &AppState,
+    realm_id: &str,
+    session: &SessionRecord,
+) -> Vec<serde_json::Value> {
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .call_signal_relay()
+        .list_for_realm(realm_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| record.expires_at > now)
+        .filter(|record| {
+            !(record.sender_actor == session.actor && record.sender_device == session.device_id)
+        })
+        .map(|record| record.envelope)
         .collect()
+}
+
+/// `webrtc-signaling.md` §5 — whether `realm_id` has at least one relayed
+/// `ck.call.signal` envelope still pending delivery to `session` (used to keep
+/// incremental syncs from skipping a Realm whose only change is a live call
+/// signal).
+pub async fn has_pending_call_signals_for_subscriber(
+    state: &AppState,
+    realm_id: &str,
+    session: Option<&SessionRecord>,
+) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    !call_signal_envelopes_for_subscriber(state, realm_id, session)
+        .await
+        .is_empty()
 }

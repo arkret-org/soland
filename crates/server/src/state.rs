@@ -1698,6 +1698,19 @@ pub struct TypingRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Relayed `ck.call.signal` envelope for realm-broadcast ephemeral delivery
+/// (`webrtc-signaling.md` §5). The full signed envelope is stored verbatim so
+/// the receiver can verify `proof` over the canonical bytes.
+#[derive(Clone, Debug)]
+pub struct CallSignalRelayRecord {
+    pub realm_id: String,
+    pub sender_actor: String,
+    pub sender_device: String,
+    pub call_id: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub envelope: serde_json::Value,
+}
+
 #[derive(Clone, Debug)]
 pub struct PushRuleRecord {
     pub actor: String,

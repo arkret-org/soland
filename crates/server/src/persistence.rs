@@ -194,6 +194,7 @@ pub trait PersistenceStore: Send + Sync {
     fn push_rules(&self) -> &dyn PushRuleStore;
     fn presence(&self) -> &dyn PresenceStore;
     fn typing(&self) -> &dyn TypingStore;
+    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore;
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
     fn webrtc(&self) -> &dyn WebRtcSessionStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
@@ -248,6 +249,7 @@ pub struct SolandMemoryPersistenceStore {
     push_rules: MemoryPushRuleStore,
     presence: MemoryPresenceStore,
     typing: MemoryTypingStore,
+    call_signal_relay: MemoryCallSignalRelayStore,
     push_bridge_cache: MemoryPushBridgeCacheStore,
     webrtc: MemoryWebRtcSessionStore,
     policy_documents: MemoryPolicyDocumentStore,
@@ -300,6 +302,7 @@ impl SolandMemoryPersistenceStore {
             push_rules: MemoryPushRuleStore::new(),
             presence: MemoryPresenceStore::new(),
             typing: MemoryTypingStore::new(),
+            call_signal_relay: MemoryCallSignalRelayStore::new(),
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             webrtc: MemoryWebRtcSessionStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
@@ -416,6 +419,10 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
 
     fn typing(&self) -> &dyn TypingStore {
         &self.typing
+    }
+
+    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
+        &self.call_signal_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
@@ -699,6 +706,10 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn typing(&self) -> &dyn TypingStore {
         self.fallback.typing()
+    }
+
+    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
+        self.fallback.call_signal_relay()
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
