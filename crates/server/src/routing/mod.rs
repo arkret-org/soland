@@ -420,11 +420,18 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "issue principal bearer session from a coauth session grant",
     ),
     (
+        "/_cokret/gate/account/logout",
+        PathItemType::Post,
+        "auth",
+        "ck.gate.account.command.logout",
+        "device logout: revoke bearer + device session record + to-device",
+    ),
+    (
         "/_soland/gate/auth/logout",
         PathItemType::Post,
         "auth",
         "org.cokret.soland.auth.logout",
-        "logout active session",
+        "logout active session (product-private alias of ck.gate.account.command.logout)",
     ),
     (
         "/_cokret/describe",

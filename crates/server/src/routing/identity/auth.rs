@@ -77,6 +77,13 @@ pub(super) fn protocol_account_router() -> Router {
             // binds to `POST /_cokret/gate/account/session-grants/revoke`.
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
+        // Spec `ck.gate.account.command.logout` — Principal Server device
+        // logout (account-lifecycle §4.1): revoke this session's bearer, mark
+        // its local device session record revoked, drop the device's queued
+        // to-device. Protocol-surface mount of the same handler historically
+        // exposed only at the product-private `/_soland/gate/auth/logout`, so
+        // clients depend on `/_cokret` rather than a product path.
+        .push(Router::with_path("logout").post(logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
 }
 
@@ -911,11 +918,11 @@ pub(crate) async fn validate_session_grant_binding(
 }
 
 #[endpoint(
-    operation_id = "org.cokret.soland.auth.logout",
+    operation_id = "ck.gate.account.command.logout",
     tags("auth"),
-    summary = "Revoke the current bearer session and bound device"
+    summary = "Principal Server device logout: revoke bearer + device session record + to-device"
 )]
-#[tracing::instrument(skip_all, fields(op = "org.cokret.soland.auth.logout"))]
+#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.logout"))]
 async fn logout(
     aa: super::AuthArgs,
     depot: &mut Depot,
