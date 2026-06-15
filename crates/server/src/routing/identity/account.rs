@@ -200,15 +200,25 @@ async fn gate_account_register(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(device_id) = body.device_id.as_ref() {
         let registered_at = now();
+        // Bootstrap exception (crypto-media/device-lifecycle.md §5.3,
+        // identity/key-management.md §5.0.1): the device registered atomically
+        // with a brand-new account is the inception device and self-authorizes.
+        // The account did not exist before this call (the duplicate check above
+        // returned a conflict otherwise), so there is provably no prior device
+        // that could approve this one. Recording it `unverified` would leave the
+        // founding device permanently unauthorized with no path to approval, and
+        // would poison the `initial_session_device_verification_state` bootstrap
+        // check in the session paths (a pre-existing unverified device makes the
+        // device inventory non-empty before the session runs).
         let device = DeviceInventoryRecord {
             actor: did.clone(),
             device_id: device_id.as_str().to_owned(),
             display_name: account.display_name.clone(),
-            verification_state: "unverified".to_owned(),
+            verification_state: "verified".to_owned(),
             payload: json!({
                 "device_id": device_id.as_str(),
                 "display_name": account.display_name.clone(),
-                "verification": "unverified",
+                "verification": "verified",
                 "registered_with_account": true,
             }),
             created_at: registered_at,

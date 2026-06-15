@@ -75,6 +75,40 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
 }
 
 #[tokio::test]
+async fn account_viewer_authorizes_founding_device_registered_with_account() {
+    // Bootstrap exception (crypto-media/device-lifecycle.md §5.3): the inception
+    // device registered atomically with a brand-new account self-authorizes —
+    // there is no prior device that could approve it, so it MUST surface as
+    // authorized rather than stranding the founding device behind a never-
+    // satisfiable "approve from an existing device" prompt.
+    let state = AppState::new(test_config(), Db { pool: None });
+    let founding_device = "ck:device:01904100-0000-7000-8000-b0b0b0000001";
+    let token = register_account(
+        state.clone(),
+        "did:web:bob.example",
+        "@bob",
+        founding_device,
+    )
+    .await;
+
+    let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let devices = viewer["devices"].as_array().expect("viewer devices array");
+    let founding = devices
+        .iter()
+        .find(|device| device["device_id"] == founding_device)
+        .expect("founding device summary");
+    assert_eq!(founding["status"], "active");
+    assert!(founding.get("authorized_at").is_some());
+}
+
+#[tokio::test]
 async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = AppState::new(test_config(), Db { pool: None });
     let alice = dev_token(state.clone()).await;
