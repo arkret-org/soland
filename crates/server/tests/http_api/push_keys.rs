@@ -561,21 +561,24 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert!(query["device_keys"].is_object());
+    let alice_desktop = &query["device_keys"]["did:web:alice.example"]
+        ["ck:device:01904100-0000-7000-8000-a11ce0000001"];
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["one_time_keys"]["signed_curve25519:otk1"]["key"],
+        alice_desktop["algorithms"]["one_time_keys"]["signed_curve25519:otk1"]["key"],
         "one-time"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["fallback_keys"]["signed_curve25519:fallback"]["key"],
+        alice_desktop["algorithms"]["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
     assert_eq!(
-        query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["device_signature"]["alg"],
+        alice_desktop["algorithms"]["device_signature"]["alg"],
         "none"
     );
+    // dev-login devices carry no authoritative device_public_key, so the
+    // signing-key directory facet reports status without a verify key.
+    assert_eq!(alice_desktop["device_status"], "active");
+    assert!(alice_desktop["device_signing_key"].is_null());
 
     let claimed_once: Value = TestClient::post("http://server/_cokret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1204,6 +1207,149 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     assert_eq!(after_unregister["rejected"][0]["reason"], "unknown_device");
 }
 
+/// Persist a verified device for `actor` carrying an authoritative
+/// `device_public_key` (the shape the session-grant exchange and the
+/// `ck.device.authorize` projection both write), so the `keys/query`
+/// signing-key directory can resolve it.
+async fn seed_verified_device_with_public_key(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    device_public_key: &str,
+) {
+    let now = chrono::Utc::now();
+    state
+        .persistence
+        .devices()
+        .put(&soland::state::DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: Some("Directory Test Device".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": device_id,
+                "verification": "verified",
+                "device_public_key": device_public_key,
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+/// Device-identity Phase 1 — a peer (member B) resolves member A's authoritative
+/// device verify key via `keys/query`, and the key disappears once A's device is
+/// revoked (device-lifecycle.md §8.2).
+#[tokio::test]
+async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
+    let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
+    let expected_did_key = format!("did:key:{alice_device_multibase}");
+    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_multibase).await;
+
+    // Member B queries member A's (actor, device) directory entry.
+    let bob = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000001",
+        "Bob Desktop",
+    )
+    .await;
+
+    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({
+            "device_keys": { alice: [alice_device] }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let entry = &query["device_keys"][alice][alice_device];
+    assert_eq!(
+        entry["device_signing_key"], expected_did_key,
+        "expected authoritative did:key, got {entry}"
+    );
+    assert_eq!(entry["device_status"], "active");
+
+    // Revoke member A's device, then re-query: the entry MUST be omitted so no
+    // signing key leaks for a revoked device.
+    let mut revoked = state
+        .persistence
+        .devices()
+        .get(alice, alice_device)
+        .await
+        .unwrap()
+        .unwrap();
+    revoked.revoked_at = Some(chrono::Utc::now());
+    state.persistence.devices().put(&revoked).await.unwrap();
+
+    let post_revoke: Value = TestClient::post("http://server/_cokret/self/keys/query")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({
+            "device_keys": { alice: [alice_device] }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(
+        post_revoke["device_keys"][alice][alice_device].is_null(),
+        "revoked device must not surface a directory entry: {post_revoke}"
+    );
+}
+
+/// Device-identity Phase 1 (Task C) — an accepted `ck.device.authorize` carrying
+/// `device_public_key` projects that key into the devices table, so a device that
+/// was authorized but never opened a session is still directory-resolvable.
+#[tokio::test]
+async fn device_authorize_projects_public_key_into_devices_table() {
+    let state = AppState::new(test_config(), Db { pool: None });
+
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000002";
+    let device_key = SigningKey::from_bytes(&[202u8; 32]);
+    let multibase = test_ed25519_multibase_public(&device_key);
+
+    // No cross_signing_binding → the ingest binding gate is a no-op
+    // (bootstrap/first-device authorizations are validated elsewhere), so the
+    // projection write is exercised directly.
+    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let operation = Operation::create(
+        OperationId::new(new_prefixed_uuid7("ck:operation:")).unwrap(),
+        RealmId::new(control_realm).unwrap(),
+        "ck.device.authorize",
+        serde_json::json!({
+            "principal_id": alice,
+            "device_id": alice_device,
+            "device_public_key": multibase,
+        }),
+    );
+    soland::test_support::project_accepted_operations(&state, alice, &[operation]).await;
+
+    let device = state
+        .persistence
+        .devices()
+        .get(alice, alice_device)
+        .await
+        .unwrap()
+        .expect("device.authorize projection persisted the device");
+    assert_eq!(
+        device.payload["device_public_key"].as_str(),
+        Some(multibase.as_str())
+    );
+    assert_eq!(device.verification_state, "verified");
+    assert!(device.revoked_at.is_none());
+}
+
 #[tokio::test]
 async fn keys_query_hides_revoked_device() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -1276,12 +1422,12 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["device_keys"]["key"],
+            ["algorithms"]["device_keys"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"]
-            ["device_keys"]["key"],
+            ["algorithms"]["device_keys"]["key"],
         "phone-device-key"
     );
 
@@ -1307,7 +1453,7 @@ async fn keys_query_hides_revoked_device() {
     assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"].is_null());
     assert_eq!(
         post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["device_keys"]["key"],
+            ["algorithms"]["device_keys"]["key"],
         "desktop-device-key"
     );
 }

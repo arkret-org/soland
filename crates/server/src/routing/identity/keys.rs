@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{is_device_revoked, now};
 use crate::error::AppError;
@@ -19,7 +19,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, DeviceInventoryRecord};
 use crate::wire::{
     KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
-    KeysUploadOutcome, KeysUploadRequestBody,
+    KeysUploadOutcome, KeysUploadRequestBody, QueryDeviceRecord,
 };
 
 pub(super) fn router() -> Router {
@@ -173,12 +173,39 @@ async fn keys_query(
     for (actor, devices) in body.device_keys {
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
+            // Revocation filter (device-lifecycle.md §8.2): a revoked device is
+            // omitted entirely, so its prekey bundle is never surfaced and no
+            // signing key leaks.
             if is_device_revoked(state, actor.as_str(), device_id.as_str()).await {
                 continue;
             }
-            if let Ok(Some(key)) = store.get(actor.as_str(), device_id.as_str()).await {
-                actor_keys.insert(device_id, key);
-            }
+            // Carry the opaque uploaded prekey blob under `algorithms`. The demo
+            // upload stores one payload object per device, so it is surfaced as a
+            // single `algorithms` map (key→value) rather than per-algorithm
+            // key_records; the directory facet below is the real signing-key data.
+            let algorithms = match store.get(actor.as_str(), device_id.as_str()).await {
+                Ok(Some(Value::Object(map))) => map.into_iter().collect(),
+                Ok(Some(other)) => BTreeMap::from([("key".to_owned(), other)]),
+                _ => BTreeMap::new(),
+            };
+            // Signing-key directory facet from the authoritative devices-table
+            // `payload.device_public_key`: returns the verify key only for a
+            // verified, non-revoked device. Shared with the recovery receipt
+            // predicate via `resolve_device_signing_directory_facet`.
+            let facet = crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+                state,
+                actor.as_str(),
+                device_id.as_str(),
+            )
+            .await;
+            actor_keys.insert(
+                device_id,
+                QueryDeviceRecord {
+                    algorithms,
+                    device_signing_key: facet.signing_key_did,
+                    device_status: Some(facet.status),
+                },
+            );
         }
         result.insert(actor, actor_keys);
     }

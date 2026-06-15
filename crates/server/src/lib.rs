@@ -44,6 +44,16 @@ pub const REFERENCE_AGENT_AUDIT_ED25519_SEED: [u8; 32] =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_SEED;
 pub const REFERENCE_AGENT_AUDIT_ED25519_KEY_ID: &str =
     routing::events::agent_bridge::REFERENCE_AGENT_AUDIT_ED25519_KEY_ID;
+
+/// Test-support re-exports for the integration test crate. These projection /
+/// identity helpers live in `pub(crate)` modules; surface them here (hidden
+/// from the rendered API) so the device-identity directory tests can drive the
+/// `ck.device.authorize` projection without a full signed-envelope ingest.
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::routing::events::projection::project_accepted_operations;
+    pub use crate::routing::identity::recovery::principal_control_realm_for_did;
+}
 use salvo::catcher::Catcher;
 use salvo::prelude::{CatchPanic, Service};
 

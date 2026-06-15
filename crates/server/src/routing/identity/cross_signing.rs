@@ -11,7 +11,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use cokret_sdk::{CrossSigningPublishContent, DeviceId, DeviceTrustBinding, Did};
+use cokret_sdk::{CrossSigningPublishContent, DeviceId, DeviceStatus, DeviceTrustBinding, Did};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
 
@@ -316,6 +316,66 @@ fn resolve_psk_in_control_set(
         return Err("cross_signing_psk_mismatch");
     }
     Ok(resolved)
+}
+
+/// The signing-key directory facet for a `(principal_id, device_id)` pair, as
+/// projected into the `keys/query` response (`device-lifecycle.md` §8.2).
+///
+/// `signing_key_did` is the authoritative device verify key rendered as an
+/// Ed25519 `did:key` (`did:key:` + the stored multibase string), present ONLY
+/// when the device is verified and not revoked. `status` mirrors the wire
+/// `device_status` enum: `Active` for a verified, non-revoked device on record,
+/// `Revoked` otherwise.
+pub(crate) struct DeviceSigningDirectoryFacet {
+    pub signing_key_did: Option<String>,
+    pub status: DeviceStatus,
+}
+
+/// Resolve the `keys/query` signing-key directory facet for `(principal_id,
+/// device_id)`. Single source of truth for the "verified + not revoked → return
+/// `device_signing_key`" rule that `device-lifecycle.md` §8.2 mandates; the
+/// recovery receipt path's [`resolve_authorized_device_key`] applies the same
+/// device-record predicate (verified + not revoked + non-empty
+/// `payload.device_public_key`).
+///
+/// The stored `payload.device_public_key` is a bare multibase Ed25519 key
+/// (`z…`); the directory exposes it as a `did:key`. The key is decoded once to
+/// confirm it is a well-formed Ed25519 key before it is surfaced; a present but
+/// undecodable key is treated as no key (status `Active` is still reported when
+/// the device is otherwise verified and not revoked, but the key is omitted —
+/// fail-closed on the verify-key, not on the status).
+pub(crate) async fn resolve_device_signing_directory_facet(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> DeviceSigningDirectoryFacet {
+    let record = match state.persistence.devices().get(principal_id, device_id).await {
+        Ok(Some(record)) => record,
+        _ => {
+            return DeviceSigningDirectoryFacet {
+                signing_key_did: None,
+                status: DeviceStatus::Revoked,
+            };
+        }
+    };
+    if record.revoked_at.is_some() || record.verification_state != "verified" {
+        return DeviceSigningDirectoryFacet {
+            signing_key_did: None,
+            status: DeviceStatus::Revoked,
+        };
+    }
+    let signing_key_did = record
+        .payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| decode_ed25519_key(value, "multibase").is_ok())
+        .map(|value| format!("did:key:{value}"));
+    DeviceSigningDirectoryFacet {
+        signing_key_did,
+        status: DeviceStatus::Active,
+    }
 }
 
 /// Decode an Ed25519 public key in the declared `key_format`

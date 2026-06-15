@@ -1512,6 +1512,14 @@ async fn project_accepted_operations_inner(
                 &operation.payload,
             );
         }
+        // Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
+        // `payload.device_public_key` into the devices table so the
+        // `keys/query` signing-key directory resolves devices that were
+        // authorized but never opened a session (previously the key only
+        // landed via the session-grant exchange path).
+        if kinds::canonical_kind_string(operation) == "ck.device.authorize" {
+            project_device_authorize(state, &operation.payload).await;
+        }
         // Also apply to the deterministic reducer.
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
@@ -1594,6 +1602,79 @@ async fn project_accepted_operations_inner(
         // `routing::events::agent_bridge::maybe_emit_echo_result_for_session_start`.
         super::agent_bridge::maybe_emit_echo_result_for_session_start(state, origin, operation)
             .await;
+    }
+}
+
+/// Device-identity Phase 1 — persist an accepted `ck.device.authorize`'s
+/// authoritative `device_public_key` into the devices inventory so the
+/// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
+/// a device that was authorized but never opened a session. Idempotent and
+/// non-destructive: an existing row keeps its `created_at`, `display_name`,
+/// revocation, and any already-recorded `device_public_key`; a verified state
+/// is never downgraded. The `cross_signing_binding` was already verified at
+/// ingest (`validate_device_authorize_binding`).
+async fn project_device_authorize(state: &crate::state::AppState, payload: &Value) {
+    use crate::state::DeviceInventoryRecord;
+    let Some(principal_id) = payload.get("principal_id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(device_id) = payload.get("device_id").and_then(Value::as_str) else {
+        return;
+    };
+    let device_public_key = payload
+        .get("device_public_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(device_public_key) = device_public_key else {
+        // No key to project; nothing the directory needs from this event.
+        return;
+    };
+    let existing = state
+        .persistence
+        .devices()
+        .get(principal_id, device_id)
+        .await
+        .ok()
+        .flatten();
+    let updated_at = now();
+    let created_at = existing
+        .as_ref()
+        .map(|device| device.created_at)
+        .unwrap_or(updated_at);
+    let display_name = existing.as_ref().and_then(|device| device.display_name.clone());
+    // An accepted device.authorize confirms the device; never downgrade an
+    // already-verified row, and treat a fresh authorize as verified.
+    let verification_state = "verified".to_owned();
+    let revoked_at = existing.as_ref().and_then(|device| device.revoked_at);
+    let mut device_payload = existing
+        .as_ref()
+        .map(|device| device.payload.clone())
+        .unwrap_or_else(|| json!({ "device_id": device_id }));
+    if !device_payload.is_object() {
+        device_payload = json!({ "device_id": device_id });
+    }
+    if let Some(map) = device_payload.as_object_mut() {
+        map.insert(
+            "device_public_key".to_owned(),
+            Value::String(device_public_key.to_owned()),
+        );
+        map.entry("device_id".to_owned())
+            .or_insert_with(|| Value::String(device_id.to_owned()));
+        map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
+    }
+    let device = DeviceInventoryRecord {
+        actor: principal_id.to_owned(),
+        device_id: device_id.to_owned(),
+        display_name,
+        verification_state,
+        payload: device_payload,
+        created_at,
+        updated_at,
+        revoked_at,
+    };
+    if let Err(error) = state.persistence.devices().put(&device).await {
+        tracing::warn!(%error, "failed to project ck.device.authorize device_public_key");
     }
 }
 
