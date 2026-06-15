@@ -175,6 +175,28 @@ impl ProjectionState {
             }
         }
 
+        // §4.2 / §5.1 — `recording_state` / `transcript_state` are controlled
+        // enums orthogonal to the call `state`. Reject any unknown value, and
+        // gate entry into a capture state on the §5.2 second-consent flag.
+        if let Some(reason) = validate_capture_state(
+            value.get("recording_state").and_then(Value::as_str),
+            value.get("recording_result"),
+            RECORDING_CAPTURE_STATE,
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        if let Some(reason) = validate_capture_state(
+            value.get("transcript_state").and_then(Value::as_str),
+            value.get("transcript_result"),
+            TRANSCRIBING_CAPTURE_STATE,
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+
         // §5 — backend recording artifacts MUST land in the Cokret blob
         // pipeline. A `recording_result` referencing a raw external URL (or a
         // non-`ck:blob:` artifact ref) is bypassing the pipeline.
@@ -194,12 +216,98 @@ impl ProjectionState {
             }
         }
 
+        // §5.1 — transcript artifacts share the same Cokret blob pipeline
+        // requirement; a backend-hosted URL / non-`ck:blob:` ref bypasses it.
+        if let Some(result) = value.get("transcript_result").and_then(Value::as_object) {
+            let bypassed = result
+                .get("transcript_artifact_url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty())
+                || result
+                    .get("transcript_artifact_ref")
+                    .and_then(Value::as_str)
+                    .is_some_and(|reference| !reference.starts_with("ck:blob:"));
+            if bypassed {
+                return ProjectionEffect::Rejected {
+                    reason: crate::error::reasons::TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED
+                        .to_owned(),
+                };
+            }
+        }
+
         if let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
         {
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::CallStateProjected { call_id }
+    }
+
+    /// Project `ck.call.summary` into the write-once
+    /// `ck.component.call.summary.v1` cas_register cell
+    /// (`cell_subject = payload.call_id`). `call-state.md` §7:
+    ///
+    /// - `final_state` MUST be a terminal call state (`ended` / `missed` / `failed` / `cancelled`).
+    /// - the `call_id` MUST already have a terminal `ck.call.state` head (the projected call-state
+    ///   cell is in a terminal `state`).
+    /// - the summary cell is write-once: a divergent rewrite MUST `call_summary_invalid`; an
+    ///   identical replay is an idempotent no-op.
+    ///
+    /// Any violation rejects with `call_summary_invalid`.
+    pub(crate) fn apply_call_summary(&mut self, operation: &Operation) -> ProjectionEffect {
+        let value = state_payload_value(&operation.payload).clone();
+        let Some(call_id) = value.get("call_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+            };
+        };
+        let call_id = call_id.to_owned();
+
+        // §7 — `final_state` MUST be a terminal state.
+        let final_state_terminal = value
+            .get("final_state")
+            .and_then(Value::as_str)
+            .is_some_and(is_terminal_call_state);
+        if !final_state_terminal {
+            return ProjectionEffect::Rejected {
+                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+            };
+        }
+
+        // §7 — the call MUST already have a terminal `ck.call.state` head.
+        let call_state_terminal =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+                .ok()
+                .and_then(|cell_id| self.cell_value(&cell_id).cloned())
+                .and_then(|state| {
+                    state
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .is_some_and(|state| is_terminal_call_state(&state));
+        if !call_state_terminal {
+            return ProjectionEffect::Rejected {
+                reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+            };
+        }
+
+        // §7 — write-once cas_register. A divergent rewrite is rejected; an
+        // identical replay is a no-op.
+        if let Ok(cell_id) =
+            cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.summary.v1:{call_id}"))
+        {
+            if let Some(existing) = self.cell_value(&cell_id) {
+                if existing != &value {
+                    return ProjectionEffect::Rejected {
+                        reason: crate::error::reasons::CALL_SUMMARY_INVALID.to_owned(),
+                    };
+                }
+                return ProjectionEffect::CallSummaryProjected { call_id };
+            }
+            self.cells.insert(cell_id, CellState::Value(value));
+        }
+        ProjectionEffect::CallSummaryProjected { call_id }
     }
 
     pub(crate) fn apply_realm_link(
@@ -610,4 +718,69 @@ impl ProjectionState {
             realm_id,
         }
     }
+}
+
+/// `call-state.md` §4.2 — terminal call lifecycle states.
+fn is_terminal_call_state(state: &str) -> bool {
+    matches!(state, "ended" | "missed" | "failed" | "cancelled")
+}
+
+/// `call-state.md` §4.2 — controlled `recording_state` enum.
+const RECORDING_STATES: &[&str] = &["recording", "stopped", "ready", "failed"];
+/// `call-state.md` §5.1 — controlled `transcript_state` enum.
+const TRANSCRIPT_STATES: &[&str] = &["transcribing", "stopped", "ready", "failed"];
+/// The §5.2 capture-state value that triggers second-consent gating for
+/// recording.
+const RECORDING_CAPTURE_STATE: CaptureKind = CaptureKind {
+    capture_state: "recording",
+    states: RECORDING_STATES,
+};
+/// The §5.2 capture-state value that triggers second-consent gating for
+/// transcription.
+const TRANSCRIBING_CAPTURE_STATE: CaptureKind = CaptureKind {
+    capture_state: "transcribing",
+    states: TRANSCRIPT_STATES,
+};
+
+#[derive(Clone, Copy)]
+struct CaptureKind {
+    /// The state value that means "actively capturing" (`recording` /
+    /// `transcribing`); entering it requires §5.2 second consent.
+    capture_state: &'static str,
+    /// The full controlled enum for this capture dimension.
+    states: &'static [&'static str],
+}
+
+/// `call-state.md` §4.2 / §5.1 / §5.2 — validate one capture-state dimension on
+/// a `ck.call.state` payload. Returns `Some(reason)` to reject:
+///
+/// - an unknown `state` value (outside the controlled enum) → `schema_violation`-class wire reason;
+/// - entry into the capture state (`recording` / `transcribing`) without `result.retention.
+///   consent_confirmed=true` → `recording_consent_required`.
+fn validate_capture_state(
+    state: Option<&str>,
+    result: Option<&Value>,
+    kind: CaptureKind,
+) -> Option<&'static str> {
+    let state = state.filter(|value| !value.is_empty())?;
+    if !kind.states.contains(&state) {
+        return Some(match kind.capture_state {
+            "recording" => "recording_state_invalid",
+            _ => "transcript_state_invalid",
+        });
+    }
+    if state != kind.capture_state {
+        return None;
+    }
+    // §5.2 — entering a capture state requires recorded second consent in the
+    // corresponding `*_result.retention.consent_confirmed` flag.
+    let consent_confirmed = result
+        .and_then(|result| result.get("retention"))
+        .and_then(|retention| retention.get("consent_confirmed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !consent_confirmed {
+        return Some(crate::error::reasons::RECORDING_CONSENT_REQUIRED);
+    }
+    None
 }

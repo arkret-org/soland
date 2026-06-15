@@ -845,18 +845,12 @@ async fn handle_rtc_token(
         "issued_at": issued_at,
         "expires_at": expires_at,
     });
-    let binding_bytes = cokret_sdk::canonical::canonical_json_bytes(&binding_payload)
-        .unwrap_or_else(|_| binding_payload.to_string().into_bytes());
-    let mut signing_input =
-        Vec::with_capacity(b"soland-media-participant-binding-v1".len() + binding_bytes.len() + 1);
-    signing_input.extend_from_slice(b"soland-media-participant-binding-v1");
-    signing_input.push(0);
-    signing_input.extend_from_slice(&binding_bytes);
-    let binding_sig = signing_key.sign(&signing_input);
-    let sig = format!(
-        "eddsa-ed25519:{}",
-        URL_SAFE_NO_PAD.encode(binding_sig.to_bytes())
-    );
+    // The binding `sig` is produced through the shared
+    // `participant_binding` helper so the issue side and the
+    // operation-admission verify side share one canonical-bytes +
+    // signing-input definition (`media-service-binding.md` §3 / §7).
+    let binding_bytes = super::participant_binding::binding_canonical_bytes(&binding_payload);
+    let sig = super::participant_binding::sign_binding(&binding_payload, &signing_key);
 
     // `media-service-binding.md` §3 — the detached service signature is a typed
     // `{kid, sig}` object, not a packed `<kid>:<alg>:<sig>` string. `kid` is the

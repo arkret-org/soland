@@ -1983,6 +1983,17 @@ impl AppState {
         self.notary_signing_key.load_full()
     }
 
+    /// Public Ed25519 verifying key for the current notary signing key.
+    ///
+    /// Used by the `ck.call.state` participant_binding verifier: in the
+    /// cokret-native self-signed deployment the binding `sig` is minted with
+    /// the notary signing key (`routing::interop::webrtc`), so the receiver
+    /// verifies against this key after anchoring `issuer_kid` to the current
+    /// media_service epoch.
+    pub fn notary_verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.notary_signing_key.load().verifying_key()
+    }
+
     /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
     pub fn notary_signing_key_origin(&self) -> NotarySigningKeyOrigin {
         *self

@@ -1346,6 +1346,11 @@ pub enum ProjectionEffect {
     CallStateProjected {
         call_id: String,
     },
+    /// `call-state.md` §7 — `ck.call.summary` projected into the write-once
+    /// `ck.component.call.summary.v1` cas_register cell.
+    CallSummaryProjected {
+        call_id: String,
+    },
     /// R3.1 — `ck.realm.link` event was projected into the
     /// `ck.component.realm.link.v1` or_set cell + the `realm_links`
     /// structured cache.
@@ -2100,6 +2105,17 @@ fn apply_call_state_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_call_state(op)
+}
+
+/// Dispatch for `ck.call.summary`; cell family is
+/// `ck.component.call.summary.v1` (`cell_subject = payload.call_id`,
+/// cas_register, write-once).
+fn apply_call_summary_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_call_summary(op)
 }
 /// R3.1 — upsert a realm-link row into a per-Realm Vec cache. Matches
 /// on the composite key `(realm_id, target_realm_id, link_kind)`; an
@@ -3174,6 +3190,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // moderation projection. Cell family `ck.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
     m.insert(CK_CALL_STATE, apply_call_state_dispatch);
+    // `ck.call.summary` — durable terminal summary projection. Cell family
+    // `ck.component.call.summary.v1`, write-once cas_register (`call-state.md`
+    // §7).
+    m.insert(CK_CALL_SUMMARY, apply_call_summary_dispatch);
     m.insert(CK_DEVICE_PUSH_ROUTE, apply_device_push_route_dispatch);
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply

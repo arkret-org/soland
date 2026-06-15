@@ -320,6 +320,8 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     let call_id = "ck:call:01904100-0000-7000-8000-c0000000000a";
 
     // First write commits session_focus + recording_state into the cell.
+    // Entering the `recording` capture state requires the §5.2 second-consent
+    // flag (`recording_result.retention.consent_confirmed=true`).
     assert!(matches!(
         state.apply(
             &make_operation(
@@ -330,7 +332,11 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
                     "state": "active",
                     "mode": "sfu",
                     "session_focus": "ck:focus:livekit:green",
-                    "recording_state": "recording"
+                    "recording_state": "recording",
+                    "recording_result": {
+                        "recording_start_event_id": "ck:event:01904100-0000-7000-8000-e0000000000a",
+                        "retention": { "consent_confirmed": true }
+                    }
                 }),
             ),
             &hlc,
@@ -424,6 +430,197 @@ fn call_state_rejects_recording_artifact_pipeline_bypass() {
             &hlc,
         ),
         ProjectionEffect::CallStateProjected { .. }
+    ));
+}
+
+#[test]
+fn call_state_recording_capture_requires_second_consent() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000c";
+
+    // §5.2 — entering `recording_state="recording"` without
+    // `recording_result.retention.consent_confirmed=true` MUST reject.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "recording_state": "recording"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "recording_consent_required"
+    ));
+
+    // With recorded consent the capture-state write is accepted.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "recording_state": "recording",
+                    "recording_result": { "retention": { "consent_confirmed": true } }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+}
+
+#[test]
+fn call_state_transcript_capture_requires_consent_and_rejects_unknown_state() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000d";
+
+    // §5.1 — an unknown `transcript_state` value MUST reject.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "transcript_state": "captioning"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "transcript_state_invalid"
+    ));
+
+    // §5.2 — entering `transcribing` without consent MUST reject.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "transcript_state": "transcribing"
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "recording_consent_required"
+    ));
+
+    // §5.1 — a backend-hosted transcript artifact bypasses the blob pipeline.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "transcript_state": "ready",
+                    "transcript_result": {
+                        "transcript_artifact_url": "https://backend.example/t.vtt"
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == "transcription_artifact_pipeline_bypassed"
+    ));
+}
+
+#[test]
+fn call_summary_requires_terminal_state_and_is_write_once() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000e";
+
+    // §7 — a summary for a call with no terminal `ck.call.state` head rejects.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_SUMMARY,
+                realm,
+                serde_json::json!({ "call_id": call_id, "final_state": "ended" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "call_summary_invalid"
+    ));
+
+    // Drive the call to a terminal `ended` head.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "ended" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    // §7 — a non-terminal `final_state` still rejects even with a terminal head.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_SUMMARY,
+                realm,
+                serde_json::json!({ "call_id": call_id, "final_state": "active" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "call_summary_invalid"
+    ));
+
+    // §7 — a valid summary projects into the write-once cell.
+    let summary = serde_json::json!({
+        "call_id": call_id,
+        "final_state": "ended",
+        "mode": "sfu",
+        "peak_participant_count": 3
+    });
+    assert!(matches!(
+        state.apply(
+            &make_operation(crate::kinds::CK_CALL_SUMMARY, realm, summary.clone()),
+            &hlc,
+        ),
+        ProjectionEffect::CallSummaryProjected { .. }
+    ));
+    // Identical replay is an idempotent no-op.
+    assert!(matches!(
+        state.apply(
+            &make_operation(crate::kinds::CK_CALL_SUMMARY, realm, summary),
+            &hlc,
+        ),
+        ProjectionEffect::CallSummaryProjected { .. }
+    ));
+    // §7 — a divergent rewrite of the write-once summary rejects.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_SUMMARY,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "final_state": "ended",
+                    "mode": "sfu",
+                    "peak_participant_count": 9
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "call_summary_invalid"
     ));
 }
 

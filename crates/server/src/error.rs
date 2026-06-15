@@ -205,6 +205,14 @@ pub mod reasons {
     pub const MEDIA_PERMISSION_DENIED: &str = core_error::ERROR_CODE_MEDIA_PERMISSION_DENIED;
     pub const RECORDING_DENIED: &str = core_error::ERROR_CODE_RECORDING_DENIED;
 
+    // Call recording / transcription lifecycle reason codes
+    // (call-state.md §5 / §5.1 / §5.2 / §7).
+    pub const RECORDING_CONSENT_REQUIRED: &str = core_error::ERROR_CODE_RECORDING_CONSENT_REQUIRED;
+    pub const TRANSCRIPTION_DENIED: &str = core_error::ERROR_CODE_TRANSCRIPTION_DENIED;
+    pub const TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED: &str =
+        core_error::ERROR_CODE_TRANSCRIPTION_ARTIFACT_PIPELINE_BYPASSED;
+    pub const CALL_SUMMARY_INVALID: &str = core_error::ERROR_CODE_CALL_SUMMARY_INVALID;
+
     // Recovery reason codes.
     pub const RECOVERY_WITNESS_REVOKE_LAGGING: &str =
         core_error::ERROR_CODE_RECOVERY_WITNESS_REVOKE_LAGGING;

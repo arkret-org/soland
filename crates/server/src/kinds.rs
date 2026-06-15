@@ -134,7 +134,7 @@ pub use cokret_sdk::events::kinds::{
     APPLET_INTEROP_SESSION_STATUS as CK_APPLET_INTEROP_SESSION_STATUS,
     APPLET_REGISTRATION as CK_APPLET_REGISTRATION,
     AUDIT_ERASURE_RECEIPT as CK_AUDIT_ERASURE_RECEIPT, CALL_STATE as CK_CALL_STATE,
-    REDACTION as CK_REDACTION,
+    CALL_SUMMARY as CK_CALL_SUMMARY, REDACTION as CK_REDACTION,
 };
 pub const CK_AGENT_INTEROP_SESSION_START: &str = "ck.agent.interop_session.start";
 // R3 spec-sync — new actor_private_event kinds (reducer_input=false; do
@@ -425,6 +425,9 @@ fn canonical_registered_kind(object_type: &str) -> Option<&str> {
         // `ck.call.state` — durable call lifecycle + recording/transcribe/
         // moderation projection (cell family `ck.component.call.state.v1`).
         CK_CALL_STATE => Some(CK_CALL_STATE),
+        // `ck.call.summary` — durable terminal call summary projection
+        // (cell family `ck.component.call.summary.v1`, write-once).
+        CK_CALL_SUMMARY => Some(CK_CALL_SUMMARY),
         CK_REALM_KEY_SHARE => Some(CK_REALM_KEY_SHARE),
         CK_RSVP_SET => Some(CK_RSVP_SET),
         CK_PIN_ADD => Some(CK_PIN_ADD),
