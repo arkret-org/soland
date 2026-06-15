@@ -30,7 +30,8 @@ use crate::state::{
     AppState, SessionRecord, WebRtcRemovedParticipant, WebRtcSessionRecord, WebRtcSignalRecord,
 };
 use crate::wire::{
-    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,
+    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
+    CallMediaTokenExchangeRequestBody,
 };
 
 /// RTC / WebRTC surface. Mounted under the `self` trust segment by
@@ -266,7 +267,12 @@ async fn issue_ice_config(
     let bucket_seconds: u32 = ICE_PSEUDONYM_BUCKET_SECONDS;
     let issued_at_bucket = floor_to_bucket(issued_at, bucket_seconds);
     let force_turn = body.force_turn;
-    let turn_username = pairwise_turn_username(
+    // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential.
+    // username = `<expiry-unix>:<pairwise-pseudonym>`; the pseudonym keeps the
+    // existing private-key-derived `ck_pseudonym_call_<16hex>` form (does not
+    // leak identity), and `<expiry-unix>` is the credential's own expiry so
+    // coturn enforces TTL on its side.
+    let pseudonym = pairwise_turn_username(
         state,
         realm_id,
         call_id,
@@ -274,9 +280,10 @@ async fn issue_ice_config(
         device_id,
         issued_at_bucket,
     );
-    let turn_credential = turn_credential(
-        state, realm_id, call_id, actor_id, device_id, &issued_at, refresh,
-    );
+    let turn_username = format!("{}:{}", expires_at.timestamp(), pseudonym);
+    // credential = base64( HMAC-SHA256(turn_shared_secret, username) ) — the
+    // HMAC is taken over the full REST-style username (SHA256, never SHA1).
+    let turn_credential = turn_rest_credential(state, &turn_username);
     let turn_server = IceServerDescriptor {
         urls: state.config.ice.turn_urls.clone(),
         username: Some(turn_username.clone()),
@@ -309,7 +316,7 @@ async fn issue_ice_config(
         bucket_seconds,
         expires_at,
         force_turn,
-        pairwise_pseudonym: turn_username,
+        pairwise_pseudonym: pseudonym,
         refreshed: refresh,
     };
     json_ok(SolandIceConfigOutcome::signed(state, response)?)
@@ -367,28 +374,32 @@ fn pairwise_turn_username(
     format!("ck_pseudonym_call_{}", hex::encode(&tag[..8]))
 }
 
-fn turn_credential(
-    state: &AppState,
-    realm_id: &str,
-    call_id: &str,
-    actor_id: &str,
-    device_id: &str,
-    issued_at: &chrono::DateTime<chrono::Utc>,
-    refresh: bool,
-) -> String {
-    let mut material = format!(
-        "soland-turn-credential-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}\0{}\0{refresh}",
-        state.config.service_did,
-        issued_at.to_rfc3339()
-    );
-    // When a TURN shared secret is configured, fold it into the credential
-    // material so derived credentials cannot be recomputed without it. When
-    // unset, material is unchanged and existing credential assertions hold.
-    if let Some(secret) = state.config.ice.turn_shared_secret.as_deref() {
-        material.push('\0');
-        material.push_str(secret);
-    }
-    URL_SAFE_NO_PAD.encode(sha256_hex(material.as_bytes()))
+/// `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential:
+/// `credential = base64( HMAC-SHA256(turn_shared_secret, username) )`. The
+/// HMAC is over the full `<expiry-unix>:<pseudonym>` username and uses SHA256
+/// (never the legacy SHA1). The credential is standard base64 (with padding),
+/// matching what an external coturn expects.
+///
+/// `turn_shared_secret` comes from `state.config.ice.turn_shared_secret`
+/// (`SOLAND_TURN_SHARED_SECRET`, W1). When unset, a deployment-stable fallback
+/// key is derived from the notary signing seed so credentials stay
+/// self-consistent across issue/refresh within this deployment; production
+/// deployments fronting an external coturn MUST set `SOLAND_TURN_SHARED_SECRET`
+/// to the same secret coturn is configured with.
+fn turn_rest_credential(state: &AppState, username: &str) -> String {
+    let configured = state.config.ice.turn_shared_secret.as_deref();
+    let fallback;
+    let secret: &[u8] = match configured {
+        Some(secret) => secret.as_bytes(),
+        None => {
+            fallback = hmac_sha256(
+                &state.notary_signing_key().to_bytes(),
+                b"soland-turn-shared-secret-fallback-v1",
+            );
+            &fallback
+        }
+    };
+    base64::engine::general_purpose::STANDARD.encode(hmac_sha256(secret, username.as_bytes()))
 }
 
 fn ice_config_payload_digest<T: Serialize>(payload: &T) -> String {
@@ -648,6 +659,24 @@ async fn handle_rtc_token(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code(crate::error::reasons::CALL_PARTICIPANT_REMOVED));
     }
+    // `media-service-binding.md` §6 — token exchange is gated on the
+    // `ck.call.join` capability, not merely realm membership. Membership stays a
+    // precondition (checked above); join authority is an explicit capability so
+    // a realm member without join rights cannot mint a backend media token.
+    // §6 defines no dedicated error code, so we surface the generic
+    // `capability_denied` (403).
+    if !actor_has_call_capability(
+        state,
+        body.realm_id.as_str(),
+        body.actor_id.as_str(),
+        CAP_CALL_JOIN,
+    )
+    .await
+    {
+        return Err(AppError::capability_denied(
+            "actor does not hold the ck.call.join capability for this realm",
+        ));
+    }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
     // MEDIA-2 — focus selection (oldest-membership-wins). A committed
@@ -696,16 +725,13 @@ async fn handle_rtc_token(
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
-    let participant_identity = format!(
-        "ck:rtc_participant:{}",
-        &sha256_hex(
-            format!(
-                "participant\0{}\0{}\0{}\0{}",
-                body.realm_id, body.call_id, body.actor_id, body.device_id
-            )
-            .as_bytes()
-        )[..32]
-    );
+    // `media-service-binding.md` §3 — participant_identity is an SFU-local
+    // handle that MUST NOT be a deterministic function of the public principal
+    // tuple. Mint a fresh random `ck:rtc_participant:<uuidv7>` per token
+    // exchange so the SFU cannot be linked back to (realm, call, actor, device)
+    // by recomputing the id, and the wire form matches the schema pattern
+    // `^ck:rtc_participant:<uuidv7>$`.
+    let participant_identity = cokret_sdk::new_prefixed_uuid7("ck:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -753,6 +779,9 @@ async fn handle_rtc_token(
         media_token_issuer_for(focus.provider).issue(&issue_request, &signing_ctx)?;
 
     let issuer_kid = focus.issuer_kid.clone();
+    // `media-service-binding.md` §3 — the binding carries both `issued_at` and
+    // `expires_at`; the signed canonical bytes cover the new `issued_at` field
+    // so a relying party verifies the full freshness window.
     let binding_payload = json!({
         "scheme": cokret_sdk::PARTICIPANT_BINDING_SCHEMA,
         "issuer_kid": issuer_kid.clone(),
@@ -762,6 +791,7 @@ async fn handle_rtc_token(
         "actor_id": body.actor_id,
         "device_id": body.device_id,
         "participant_identity": participant_identity,
+        "issued_at": issued_at,
         "expires_at": expires_at,
     });
     let binding_bytes = cokret_sdk::canonical::canonical_json_bytes(&binding_payload)
@@ -777,16 +807,19 @@ async fn handle_rtc_token(
         URL_SAFE_NO_PAD.encode(binding_sig.to_bytes())
     );
 
+    // `media-service-binding.md` §3 — the detached service signature is a typed
+    // `{kid, sig}` object, not a packed `<kid>:<alg>:<sig>` string. `kid` is the
+    // realm media-service anchor (the focus issuer_kid); `sig` is the base64url
+    // detached Ed25519 signature over the canonical binding bytes.
     let mut service_input = Vec::with_capacity(64 + binding_bytes.len());
     service_input.extend_from_slice(b"soland-media-token-response-v1");
     service_input.push(0);
     service_input.extend_from_slice(&binding_bytes);
     let service_sig = signing_key.sign(&service_input);
-    let service_signature = format!(
-        "{}:eddsa-ed25519:{}",
-        issuer_kid,
-        URL_SAFE_NO_PAD.encode(service_sig.to_bytes())
-    );
+    let service_signature = CallMediaServiceSignature {
+        kid: issuer_kid.clone(),
+        sig: URL_SAFE_NO_PAD.encode(service_sig.to_bytes()),
+    };
 
     let participant_binding = CallMediaParticipantBinding {
         scheme: cokret_sdk::PARTICIPANT_BINDING_SCHEMA.to_owned(),
@@ -798,6 +831,7 @@ async fn handle_rtc_token(
         actor_id,
         device_id,
         participant_identity: participant_identity.clone(),
+        issued_at,
         expires_at,
     };
 
@@ -1848,6 +1882,7 @@ async fn list_webrtc_signals(
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is
 // the truth source; the spec body and this server MUST use the `ck.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
+const CAP_CALL_JOIN: &str = "ck.call.join";
 const CAP_CALL_MODERATE: &str = "ck.call.moderate";
 const CAP_CALL_SCREEN_SHARE: &str = "ck.call.screen_share";
 const CAP_CALL_RECORD: &str = "ck.call.record";

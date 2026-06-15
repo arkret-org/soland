@@ -729,8 +729,8 @@ pub use cokret_sdk::models::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
 pub use cokret_sdk::{
-    CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, IdentityLogOutcome,
-    IdentityReceiptsOutcome, KeysBackupsPutRequestBody,
+    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
+    IdentityLogOutcome, IdentityReceiptsOutcome, KeysBackupsPutRequestBody,
 };
 
 // Recovery policy / receipt endpoints validate against the spec REC-1 shapes in

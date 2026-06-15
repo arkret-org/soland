@@ -49,7 +49,7 @@ pub(super) async fn submit_ephemeral(
         }
         "ck.presence" => persist_ephemeral_presence(state, &session.actor, &envelope).await,
         "ck.receipt.read" => admit_ephemeral_read_receipt(state, realm_id_str, &envelope).await?,
-        "ck.call.signal" => {}
+        "ck.call.signal" => admit_ephemeral_call_signal(&envelope)?,
         _ => {
             return Err(crate::error::AppError::invalid_param(
                 "unsupported ephemeral kind",
@@ -189,5 +189,30 @@ async fn admit_ephemeral_read_receipt(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
+    Ok(())
+}
+
+/// `webrtc-signaling.md` §5 — structural admission for `ck.call.signal`
+/// envelopes arriving on the canonical `/ephemeral` channel (the path the
+/// canonical client takes). We reuse the SDK
+/// [`cokret_sdk::validate_call_signal_envelope`] as the single truth source
+/// for the required shape: `device_id` present, `proof` present, and
+/// `payload` deserialises into `{call_id, signal_type, seq}` with a
+/// `signal_type` drawn from the canonical [`cokret_sdk::CALL_SIGNAL_TYPES`]
+/// set (which includes `moderation`).
+///
+/// Boundary (FIN-F task 5 decision, unchanged): the relay does NOT perform
+/// cryptographic `proof` verification — §5 assigns signature verification to
+/// the *receiver* over the canonical envelope bytes excluding `proof`. The
+/// relay only enforces the structural contract (existence + type + seq shape)
+/// so malformed call signals never enter the ephemeral fan-out.
+fn admit_ephemeral_call_signal(
+    envelope: &cokret_sdk::EphemeralEnvelope,
+) -> Result<(), crate::error::AppError> {
+    cokret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
+        crate::error::AppError::invalid_param(format!(
+            "ck.call.signal envelope failed structural validation: {error}"
+        ))
+    })?;
     Ok(())
 }

@@ -382,9 +382,11 @@ pub struct IceServersConfig {
     /// Rotation window in seconds for the TURN shared secret. Reserved for
     /// time-windowed TURN credential derivation.
     pub turn_secret_rotation_window_seconds: u64,
-    /// Optional shared secret mixed into derived TURN credentials. When set,
-    /// it is folded into the credential material so credentials cannot be
-    /// recomputed by parties that do not hold the secret.
+    /// Optional REST-style (draft-uberti) TURN shared secret. The advertised
+    /// TURN credential is `base64(HMAC-SHA256(turn_shared_secret, username))`
+    /// over the `<expiry-unix>:<pseudonym>` username, so an external coturn
+    /// configured with the same secret validates it. When unset, a
+    /// deployment-stable fallback derived from the notary signing seed is used.
     pub turn_shared_secret: Option<String>,
 }
 

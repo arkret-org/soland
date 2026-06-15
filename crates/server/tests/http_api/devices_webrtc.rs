@@ -322,13 +322,38 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(ice["call_id"], session_id);
     assert_eq!(ice["turn_servers"].as_array().unwrap().len(), 1);
     let turn_username = ice["turn_servers"][0]["username"].as_str().unwrap();
-    // `webrtc-signaling.md` §4.1 — per-call pairwise pseudonym shape; no
-    // principal DID / handle leaks to the TURN operator.
-    assert!(turn_username.starts_with("ck_pseudonym_call_"));
+    // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) username
+    // `<expiry-unix>:<pairwise-pseudonym>`. The `<unix>` prefix equals the
+    // credential expiry; the pseudonym keeps the private-key-derived
+    // `ck_pseudonym_call_<hex>` form and leaks no principal DID / handle.
+    let (expiry_part, pseudonym_part) = turn_username
+        .split_once(':')
+        .expect("REST-style TURN username must be <expiry-unix>:<pseudonym>");
+    let expiry_unix: i64 = expiry_part
+        .parse()
+        .expect("TURN username expiry prefix must be a unix timestamp");
+    let turn_expires_at = chrono::DateTime::parse_from_rfc3339(
+        ice["turn_servers"][0]["expires_at"].as_str().unwrap(),
+    )
+    .unwrap()
+    .timestamp();
+    assert_eq!(
+        expiry_unix, turn_expires_at,
+        "TURN username expiry prefix must equal the credential expires_at unix seconds"
+    );
+    assert!(pseudonym_part.starts_with("ck_pseudonym_call_"));
     assert!(!turn_username.contains("alice"));
     assert!(!turn_username.contains("did:web"));
     let turn_credential = ice["turn_servers"][0]["credential"].as_str().unwrap();
+    // credential = base64( HMAC-SHA256(turn_shared_secret, username) ). With the
+    // test deployment's configured shared secret, the credential MUST be exactly
+    // the standard-base64 HMAC over the REST-style username.
     assert!(!turn_credential.is_empty());
+    assert_eq!(
+        turn_credential,
+        turn_rest_credential_for(SOLAND_TEST_TURN_SHARED_SECRET, turn_username),
+        "credential must be base64(HMAC-SHA256(turn_shared_secret, username)) over the full username"
+    );
 
     // §4.1 — bucket fields are present, well-formed, and feed the signature.
     assert_eq!(ice["bucket_seconds"], 300);
@@ -366,11 +391,26 @@ async fn webrtc_signaling_contracts_work() {
     .await
     .unwrap();
     assert_eq!(refreshed["refreshed"], true);
-    assert_eq!(refreshed["turn_servers"][0]["username"], turn_username);
-    assert_ne!(
-        refreshed["turn_servers"][0]["credential"].as_str().unwrap(),
-        turn_credential
+    // §4.2 active-leg reuse — the pseudonym is bucket-stable across refresh, but
+    // the REST-style username carries a fresh `<expiry-unix>:` prefix (the new
+    // credential expiry), so username + credential both rotate.
+    let refreshed_username = refreshed["turn_servers"][0]["username"].as_str().unwrap();
+    let (_, refreshed_pseudonym) = refreshed_username.split_once(':').unwrap();
+    assert_eq!(
+        refreshed_pseudonym, pseudonym_part,
+        "pseudonym must stay stable within the same bucket"
     );
+    assert_eq!(
+        refreshed["turn_servers"][0]["credential"].as_str().unwrap(),
+        turn_rest_credential_for(SOLAND_TEST_TURN_SHARED_SECRET, refreshed_username),
+        "refreshed credential must be HMAC over the refreshed username"
+    );
+    // The refreshed username/credential are a deterministic function of the
+    // (bucket-stable) pseudonym + the credential expiry; when the expiry second
+    // advances they rotate, otherwise an identical credential within the same
+    // second is equally valid REST-style output. Either way the credential MUST
+    // remain a correct HMAC over its own username (asserted above).
+    let _ = turn_credential;
 
     let unsigned_signal = TestClient::post(format!(
         "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
@@ -571,6 +611,15 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     .unwrap();
     assert_eq!(focus_signal["seq"], 1);
 
+    // `media-service-binding.md` §6 — token exchange requires `ck.call.join`;
+    // realm membership alone is insufficient.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.join",
+    );
+
     let issued_before = chrono::Utc::now();
     let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -614,17 +663,63 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         token_response["participant_binding"]["focus_id"],
         "ck:focus:mediasoup:blue"
     );
+    // `media-service-binding.md` §3 — service_signature is a typed {kid, sig}
+    // object, not a packed `<kid>:<alg>:<sig>` string.
+    assert_eq!(
+        token_response["service_signature"]["kid"],
+        "did:web:media.example#mediasoup-2026-05"
+    );
     assert!(
-        token_response["service_signature"]
+        token_response["service_signature"]["sig"]
             .as_str()
-            .unwrap()
-            .starts_with("did:web:media.example#mediasoup-2026-05:eddsa-ed25519:")
+            .is_some_and(|sig| !sig.is_empty()),
+        "service_signature.sig must be a non-empty base64url detached signature"
+    );
+    assert!(
+        token_response["service_signature"].as_str().is_none(),
+        "service_signature must be an object, not a string"
     );
 
+    // §3 — participant_identity is a random `ck:rtc_participant:<uuidv7>` SFU
+    // handle, NOT a deterministic hash of the principal tuple.
+    let participant_identity = token_response["participant_identity"].as_str().unwrap();
+    assert!(
+        participant_identity.starts_with("ck:rtc_participant:"),
+        "participant_identity must be a typed ck:rtc_participant id"
+    );
+    assert!(
+        cokret_sdk::identifiers::is_lowercase_uuidv7(
+            participant_identity
+                .strip_prefix("ck:rtc_participant:")
+                .unwrap()
+        ),
+        "participant_identity payload must be a canonical lowercase uuidv7"
+    );
+    assert_eq!(
+        token_response["participant_binding"]["participant_identity"],
+        participant_identity
+    );
+
+    let issued_at = chrono::DateTime::parse_from_rfc3339(
+        token_response["participant_binding"]["issued_at"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap()
+    .with_timezone(&chrono::Utc);
     let expires_at =
         chrono::DateTime::parse_from_rfc3339(token_response["expires_at"].as_str().unwrap())
             .unwrap()
             .with_timezone(&chrono::Utc);
+    // §3 — binding carries issued_at and expires_at MUST be strictly later.
+    assert!(
+        expires_at > issued_at,
+        "participant_binding expires_at must be strictly after issued_at"
+    );
+    assert_eq!(
+        token_response["participant_binding"]["expires_at"], token_response["expires_at"],
+        "binding expires_at must match the outcome expires_at"
+    );
     assert!(
         expires_at <= issued_before + chrono::Duration::seconds(605),
         "realm TTL must be capped at the 600s media-token ceiling"
@@ -673,6 +768,14 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    // §6 — grant ck.call.join so the join gate passes and the focus/issuer
+    // mismatch errors (not capability_denied) are what surfaces.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.join",
+    );
 
     let _: Value = TestClient::post(format!(
         "http://server/_cokret/self/webrtc/sessions/{session_id}/signals"
@@ -764,6 +867,59 @@ async fn rtc_media_token_rejects_non_member_actor() {
     assert_eq!(body["error"]["code"], "capability_denied");
 }
 
+#[tokio::test]
+async fn rtc_media_token_requires_call_join_capability() {
+    // `media-service-binding.md` §6 — a realm member + call participant that
+    // does NOT hold ck.call.join is denied; granting the capability lets the
+    // exchange proceed.
+    // Use the LiveKit-configured deployment so the oldest-membership default
+    // focus (`ck:focus:livekit:green`) can mint a real token once join is held.
+    let state = AppState::new(livekit_test_config(), Db { pool: None });
+    install_media_service_epoch(&state, good_media_service_epoch());
+    let token = dev_token(state.clone()).await;
+    let bob = "did:web:bob.example";
+    let bob_device = "ck:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
+    // alice (creator) + bob are participants; bob is also a realm member.
+    let session_id = create_session_with_bob(&state, &token, bob).await;
+    let exchange_body = serde_json::json!({
+        "realm_id": DEMO_REALM_ID,
+        "call_id": session_id,
+        "actor_id": bob,
+        "device_id": bob_device,
+        "focus_id": "ck:focus:livekit:green"
+    });
+
+    // No ck.call.join → capability_denied even though bob is a member+participant.
+    let mut denied = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&exchange_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    let denied_body: Value = denied.take_json().await.unwrap();
+    assert_eq!(denied_body["error"]["code"], "capability_denied");
+
+    // After granting ck.call.join, the exchange is admitted (focus matches the
+    // oldest-membership default).
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
+    let granted: Value = TestClient::post("http://server/_cokret/self/rtc/token")
+        .add_header("authorization", format!("Bearer {bob_token}"), true)
+        .json(&exchange_body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(granted["focus_id"], "ck:focus:livekit:green");
+    assert!(
+        granted["participant_identity"]
+            .as_str()
+            .unwrap()
+            .starts_with("ck:rtc_participant:")
+    );
+}
+
 /// LiveKit API Key used in tests. `bindings/livekit.md` §2 maps the focus
 /// `issuer_kid` to the LiveKit API Key, so the configured key MUST equal the
 /// `livekit:green` focus `issuer_kid` in [`good_media_service_epoch`].
@@ -817,6 +973,13 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
+    // §6 — token exchange requires ck.call.join.
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ck.call.join",
+    );
 
     // Steer focus selection to the livekit focus via foci_preferred[].
     let _: Value = TestClient::post(format!(
@@ -1066,6 +1229,8 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .await
         .unwrap();
     let session_id = session["session_id"].as_str().unwrap().to_owned();
+    // §6 — bob needs ck.call.join to exchange a token before the ban.
+    grant_call_capability(&state, DEMO_REALM_ID, bob, "ck.call.join");
 
     // Before the ban, bob can exchange a media token.
     let pre_ban: Value = TestClient::post("http://server/_cokret/self/rtc/token")
@@ -1363,6 +1528,18 @@ fn good_media_service_epoch() -> Value {
             }
         ]
     })
+}
+
+/// Recompute the REST-style TURN credential the server emits:
+/// `base64( HMAC-SHA256(turn_shared_secret, username) )` over the full
+/// `<expiry-unix>:<pseudonym>` username (`webrtc-signaling.md` §4.1).
+fn turn_rest_credential_for(secret: &str, username: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(secret.as_bytes())
+        .expect("hmac key");
+    mac.update(username.as_bytes());
+    STANDARD.encode(mac.finalize().into_bytes())
 }
 
 fn decode_backend_token_payload(token: &str) -> Value {

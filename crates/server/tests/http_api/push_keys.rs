@@ -445,6 +445,92 @@ async fn push_profile_and_moderation_contracts_work() {
 }
 
 #[tokio::test]
+async fn ephemeral_call_signal_enforces_structural_contract() {
+    // `webrtc-signaling.md` §5 — the /ephemeral relay structurally validates
+    // ck.call.signal envelopes (device_id + proof present, payload
+    // {call_id, signal_type, seq} with a canonical signal_type incl.
+    // moderation). It does NOT cryptographically verify the proof (receiver's
+    // job).
+    let state = AppState::new(test_config(), Db { pool: None });
+    let token = dev_token(state.clone()).await;
+    let call_id = "ck:call:01904100-0000-7000-8000-ca110000001a";
+    let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+
+    let post_signal = |state: AppState, bearer: String, body: Value| async move {
+        TestClient::post("http://server/_cokret/self/ephemeral")
+            .add_header("authorization", format!("Bearer {bearer}"), true)
+            .json(&body)
+            .send(&app_from_state(state))
+            .await
+    };
+
+    let envelope = |signal_type: &str, with_device: bool, with_proof: bool| {
+        let sent_at = chrono::Utc::now();
+        let expires_at = sent_at + chrono::Duration::seconds(30);
+        let mut env = serde_json::json!({
+            "kind": "ck.call.signal",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": "did:web:alice.example",
+            "sent_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "payload": {
+                "call_id": call_id,
+                "signal_type": signal_type,
+                "seq": 1
+            }
+        });
+        if with_device {
+            env["device_id"] = serde_json::json!(device_id);
+        }
+        if with_proof {
+            env["proof"] = serde_json::json!({"alg": "EdDSA", "sig": "ZGV2"});
+        }
+        env
+    };
+
+    // Legal moderation signal with device_id + proof → accepted.
+    let accepted: Value = post_signal(
+        state.clone(),
+        token.clone(),
+        envelope("moderation", true, true),
+    )
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(accepted["accepted"], true);
+    assert_eq!(accepted["kind"], "ck.call.signal");
+
+    // Non-canonical signal_type → invalid_param.
+    let mut bad_type = post_signal(
+        state.clone(),
+        token.clone(),
+        envelope("not_a_signal", true, true),
+    )
+    .await;
+    assert_eq!(bad_type.status_code.unwrap().as_u16(), 400);
+    let bad_type_body: Value = bad_type.take_json().await.unwrap();
+    assert_eq!(bad_type_body["error"]["code"], "invalid_param");
+
+    // Missing device_id → invalid_param.
+    let mut no_device = post_signal(
+        state.clone(),
+        token.clone(),
+        envelope("invite", false, true),
+    )
+    .await;
+    assert_eq!(no_device.status_code.unwrap().as_u16(), 400);
+    let no_device_body: Value = no_device.take_json().await.unwrap();
+    assert_eq!(no_device_body["error"]["code"], "invalid_param");
+
+    // Missing proof → invalid_param.
+    let mut no_proof = post_signal(state.clone(), token, envelope("invite", true, false)).await;
+    assert_eq!(no_proof.status_code.unwrap().as_u16(), 400);
+    let no_proof_body: Value = no_proof.take_json().await.unwrap();
+    assert_eq!(no_proof_body["error"]["code"], "invalid_param");
+}
+
+#[tokio::test]
 async fn auth_keys_device_messages_and_blobs_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;

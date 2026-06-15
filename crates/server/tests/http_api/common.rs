@@ -29,6 +29,10 @@ pub(crate) use soland::{
 };
 
 pub(crate) const DEMO_REALM_ID: &str = "ck:realm:0196419b-0000-7000-8000-000000000000";
+/// Fixed REST-style TURN shared secret installed by `test_config()` so the
+/// derived TURN credential is deterministic in assertions. Mirrors
+/// `SOLAND_TURN_SHARED_SECRET`.
+pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
@@ -40,7 +44,12 @@ pub(crate) fn test_config() -> AppConfig {
         tls_key_path: None,
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test-blobs")),
-        ice: IceServersConfig::default(),
+        ice: IceServersConfig {
+            // `webrtc-signaling.md` §4.1 — fix the REST-style TURN shared secret
+            // so the derived credential is deterministic for assertions.
+            turn_shared_secret: Some(SOLAND_TEST_TURN_SHARED_SECRET.to_owned()),
+            ..IceServersConfig::default()
+        },
         livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
