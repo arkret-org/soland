@@ -438,7 +438,7 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         PathItemType::Post,
         "auth",
         "org.cokret.soland.auth.logout",
-        "logout active session (product-private alias of ck.gate.account.command.logout)",
+        "device logout (gateway-reachable product path for ck.gate.account.command.logout; /_cokret/gate/* routes to coauth)",
     ),
     (
         "/_cokret/describe",
