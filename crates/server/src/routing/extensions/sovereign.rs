@@ -1232,7 +1232,7 @@ fn store_forward_json(record: &SovereignStoreForwardRecord) -> StoreForwardOpera
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FederationPolicy, IceServersConfig, ObjectStorageConfig};
+    use crate::config::{FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
 
     fn base_config() -> AppConfig {
         AppConfig {
@@ -1247,6 +1247,7 @@ mod tests {
                 std::env::temp_dir().join("soland-enclave-tests"),
             ),
             ice: IceServersConfig::default(),
+            livekit: LiveKitConfig::default(),
             cors_allow_origin: None,
             auth_server_url: None,
             development_mode: true,

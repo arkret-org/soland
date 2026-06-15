@@ -101,6 +101,8 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_TURN_URLS` | `turn:turn.soland.local:3478?transport=udp` | Comma-separated TURN URLs advertised in signed ICE configs. |
 | `SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS` | `86400` | Rotation window for the TURN shared secret used in credential derivation. |
 | `SOLAND_TURN_SHARED_SECRET` | unset | Optional shared secret folded into derived TURN credentials (`*_FILE` form supported); when unset, credential material is unchanged. |
+| `SOLAND_LIVEKIT_API_KEY` | unset | LiveKit API Key. In the LiveKit binding (`bindings/livekit.md` §2) this is the focus `issuer_kid`; the `livekit` focus token issuer fails closed unless the realm focus `issuer_kid` matches this value. |
+| `SOLAND_LIVEKIT_API_SECRET` | unset | LiveKit API Secret (`*_FILE` form supported). HMAC-SHA256 signing key for the LiveKit JWT; never exposed in any cell, `/health`, or describe payload. Required together with `SOLAND_LIVEKIT_API_KEY` to mint LiveKit backend tokens. |
 | `SOLAND_RESUMABLE_UPLOAD_DIR` | `./soland-resumable-uploads` | Directory for resumable-upload staging files. |
 | `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` | `86400` | Incomplete resumable-upload TTL; minimum 60 seconds. |
 | `SOLAND_SOVEREIGN_ENCLAVE` | `false` | Enables the sovereign-enclave profile and startup invariant checks. |
@@ -580,6 +582,16 @@ Media connectivity is configured in two independent layers:
   `POST /_cokret/self/rtc/token`. This is where a LiveKit pool's
   `connect_url` / `issuer_kid` / `audience` are bound; it is realm-scoped
   config, not a deployment env var.
+  - **LiveKit API Key/Secret** are the one piece of the LiveKit binding that
+    *is* a deployment env var: set `SOLAND_LIVEKIT_API_KEY` +
+    `SOLAND_LIVEKIT_API_SECRET` so the `livekit` focus mints a standard
+    LiveKit JWT (`HS256` over `header.payload`, signed with the API Secret —
+    `bindings/livekit.md` §2). The realm focus `issuer_kid` MUST equal
+    `SOLAND_LIVEKIT_API_KEY`; a mismatch (or unset credentials) fails the
+    token exchange closed instead of issuing a token LiveKit would reject.
+    v1 supports a single API Key/Secret pair; mapping multiple LiveKit
+    deployments (one pair per cluster, keyed by focus `issuer_kid`) is
+    follow-up work.
 
 ### `recovery_policies` + `recovery_receipts`
 

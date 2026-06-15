@@ -24,7 +24,9 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, FederationPolicy, IceServersConfig, ObjectStorageConfig};
+use soland::config::{
+    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
+};
 use soland::db::Db;
 use soland::service;
 use soland::state::AppState;
@@ -40,6 +42,7 @@ fn test_config() -> AppConfig {
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-mls-blobs")),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

@@ -292,7 +292,9 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use crate::config::{AppConfig, FederationPolicy, IceServersConfig, ObjectStorageConfig};
+    use crate::config::{
+        AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
+    };
     use crate::db::Db;
 
     fn test_config() -> AppConfig {
@@ -306,6 +308,7 @@ mod tests {
             database_url: None,
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             ice: IceServersConfig::default(),
+            livekit: LiveKitConfig::default(),
             cors_allow_origin: None,
             auth_server_url: None,
             development_mode: true,

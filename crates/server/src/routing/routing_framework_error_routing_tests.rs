@@ -136,7 +136,7 @@ async fn known_path_wrong_method_returns_method_not_allowed_with_allow_header() 
 }
 
 fn test_state_config() -> crate::config::AppConfig {
-    use crate::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
+    use crate::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
     AppConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         metrics_bind: "127.0.0.1:0".parse().unwrap(),
@@ -149,6 +149,7 @@ fn test_state_config() -> crate::config::AppConfig {
             std::env::temp_dir().join("soland-framework-error-test-blobs"),
         ),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

@@ -5,7 +5,7 @@ use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, IceServersConfig, ObjectStorageConfig};
+use soland::config::{AppConfig, IceServersConfig, LiveKitConfig, ObjectStorageConfig};
 use soland::db::Db;
 use soland::service;
 use soland::state::{AppState, RealmDirectoryEntry, RealmMetaRecord};
@@ -25,6 +25,7 @@ fn test_config() -> AppConfig {
             std::env::temp_dir().join("soland-account-data-sync-blobs"),
         ),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

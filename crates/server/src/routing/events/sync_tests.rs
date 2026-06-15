@@ -127,6 +127,7 @@ fn test_config() -> crate::config::AppConfig {
             std::env::temp_dir().join("soland-sync-cursor-test-blobs"),
         ),
         ice: crate::config::IceServersConfig::default(),
+        livekit: crate::config::LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,
@@ -583,14 +584,23 @@ fn auth_material_present_separates_anonymous_from_bad_credential() {
     // Genuinely anonymous: no Authorization header, no query token → the
     // subscribe handler MAY degrade to an anonymous session.
     assert!(!auth_material_present(None, None));
-    assert!(!auth_material_present(None, Some("catchup=true&set_presence=online")));
+    assert!(!auth_material_present(
+        None,
+        Some("catchup=true&set_presence=online")
+    ));
 
     // A presented bearer (even an expired/garbage one) counts as material, so
     // the handler MUST surface the 401 instead of silently degrading to
     // anonymous and stranding the principal-bound cursor (the
     // `cursor principal does not match request actor` loop).
-    assert!(auth_material_present(Some("Bearer expired.token.value"), None));
-    assert!(auth_material_present(Some("bearer lower.case.scheme"), None));
+    assert!(auth_material_present(
+        Some("Bearer expired.token.value"),
+        None
+    ));
+    assert!(auth_material_present(
+        Some("bearer lower.case.scheme"),
+        None
+    ));
 
     // A token smuggled into the query string is also material (and separately
     // rejected by the auth layer) — never treat it as anonymous.

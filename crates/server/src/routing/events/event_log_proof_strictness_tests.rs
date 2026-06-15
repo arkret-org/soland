@@ -1,5 +1,7 @@
 use super::*;
-use crate::config::{AppConfig, FederationPolicy, IceServersConfig, ObjectStorageConfig};
+use crate::config::{
+    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
+};
 use crate::db::Db;
 
 pub(super) fn make_state(development_mode: bool) -> AppState {
@@ -13,6 +15,7 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test")),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode,

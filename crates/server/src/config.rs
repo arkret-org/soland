@@ -22,6 +22,15 @@ pub struct AppConfig {
     /// `SOLAND_TURN_*` env vars; defaults preserve the historical
     /// hardcoded values.
     pub ice: IceServersConfig,
+    /// LiveKit API Key/Secret for `bindings/livekit.md` §2 backend tokens.
+    /// When set, the `livekit` media focus issues a standard LiveKit JWT
+    /// (`HS256` over `header.payload`, signed with the API Secret) instead
+    /// of failing closed. `SOLAND_LIVEKIT_API_KEY` /
+    /// `SOLAND_LIVEKIT_API_SECRET` (secret also accepts `_FILE`). v1
+    /// supports a single API Key/Secret pair; multi-deployment LiveKit
+    /// (one pair per LiveKit cluster, keyed by focus `issuer_kid`) is a
+    /// follow-up.
+    pub livekit: LiveKitConfig,
     pub cors_allow_origin: Option<String>,
     /// Public Auth / Account Server base URL advertised to browser clients in
     /// `/_cokret/describe.auth_metadata`. Registration, password
@@ -392,6 +401,45 @@ impl Default for IceServersConfig {
     }
 }
 
+/// LiveKit API credentials used to mint `bindings/livekit.md` §2 backend
+/// tokens (standard LiveKit JWT, `HS256` signed with the API Secret).
+///
+/// v1 carries a single `(api_key, api_secret)` pair. Deployments that run
+/// multiple LiveKit clusters MUST map each focus `issuer_kid` to its own
+/// API Key/Secret; that multi-pair mapping is intentionally deferred and a
+/// single configured pair is matched against the focus `issuer_kid` at
+/// sign time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LiveKitConfig {
+    /// LiveKit API Key. In the LiveKit binding the media focus
+    /// `issuer_kid` is the LiveKit API Key; the token issuer fails closed
+    /// when the focus-declared `issuer_kid` does not equal this value.
+    pub api_key: Option<String>,
+    /// LiveKit API Secret. HMAC-SHA256 signing key for the JWT. Never
+    /// surfaced in any public cell, `/health`, or describe payload.
+    pub api_secret: Option<String>,
+}
+
+impl LiveKitConfig {
+    /// Whether both API Key and Secret are configured so a LiveKit JWT can
+    /// be minted.
+    #[inline]
+    pub fn is_configured(&self) -> bool {
+        self.api_key.is_some() && self.api_secret.is_some()
+    }
+}
+
+/// Load LiveKit API credentials. The secret accepts the `_FILE` indirection
+/// so operators can mount it via Kubernetes / Docker / systemd secrets.
+fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {
+    let api_key = env_non_empty("SOLAND_LIVEKIT_API_KEY");
+    let api_secret = env_non_empty_or_file("SOLAND_LIVEKIT_API_SECRET")?;
+    Ok(LiveKitConfig {
+        api_key,
+        api_secret,
+    })
+}
+
 /// Federation routing policy. Selected at config-load
 /// time via `SOLAND_FEDERATION_POLICY` env var (`mesh` | `hub`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,6 +520,7 @@ impl AppConfig {
             .filter(|value| !value.trim().is_empty());
         let object_storage = load_object_storage_config()?;
         let ice = load_ice_servers_config()?;
+        let livekit = load_livekit_config()?;
         let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
@@ -637,6 +686,7 @@ impl AppConfig {
             database_url,
             object_storage,
             ice,
+            livekit,
             cors_allow_origin,
             auth_server_url,
             development_mode,

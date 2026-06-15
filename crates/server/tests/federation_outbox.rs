@@ -25,7 +25,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use sha2::{Digest, Sha256};
-use soland::config::{AppConfig, FederationPolicy, IceServersConfig, ObjectStorageConfig};
+use soland::config::{
+    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
+};
 use soland::db::Db;
 use soland::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
 use soland::state::AppState;
@@ -90,6 +92,7 @@ fn outbox_test_config() -> AppConfig {
         database_url: None,
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-outbox-test")),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,

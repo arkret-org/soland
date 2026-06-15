@@ -322,11 +322,34 @@ async fn webrtc_signaling_contracts_work() {
     assert_eq!(ice["call_id"], session_id);
     assert_eq!(ice["turn_servers"].as_array().unwrap().len(), 1);
     let turn_username = ice["turn_servers"][0]["username"].as_str().unwrap();
-    assert!(turn_username.starts_with("ck-turn-"));
+    // `webrtc-signaling.md` §4.1 — per-call pairwise pseudonym shape; no
+    // principal DID / handle leaks to the TURN operator.
+    assert!(turn_username.starts_with("ck_pseudonym_call_"));
     assert!(!turn_username.contains("alice"));
     assert!(!turn_username.contains("did:web"));
     let turn_credential = ice["turn_servers"][0]["credential"].as_str().unwrap();
     assert!(!turn_credential.is_empty());
+
+    // §4.1 — bucket fields are present, well-formed, and feed the signature.
+    assert_eq!(ice["bucket_seconds"], 300);
+    let issued_at = chrono::DateTime::parse_from_rfc3339(ice["issued_at"].as_str().unwrap())
+        .unwrap()
+        .timestamp();
+    let issued_at_bucket =
+        chrono::DateTime::parse_from_rfc3339(ice["issued_at_bucket"].as_str().unwrap())
+            .unwrap()
+            .timestamp();
+    assert_eq!(
+        issued_at_bucket,
+        (issued_at.div_euclid(300)) * 300,
+        "issued_at_bucket must equal floor(issued_at / bucket_seconds) * bucket_seconds"
+    );
+    assert!(
+        ice["signature"]["sig"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "ICE config must be signed over canonical bytes including the bucket fields"
+    );
 
     let refreshed: Value = TestClient::post(format!(
         "http://server/_cokret/self/calls/{session_id}/ice-config/refresh"
@@ -733,9 +756,56 @@ async fn rtc_media_token_rejects_non_member_actor() {
     assert_eq!(body["error"]["code"], "capability_denied");
 }
 
+/// LiveKit API Key used in tests. `bindings/livekit.md` §2 maps the focus
+/// `issuer_kid` to the LiveKit API Key, so the configured key MUST equal the
+/// `livekit:green` focus `issuer_kid` in [`good_media_service_epoch`].
+const TEST_LIVEKIT_API_KEY: &str = "did:web:media.example#livekit-2026-05";
+const TEST_LIVEKIT_API_SECRET: &str = "test-livekit-api-secret-0123456789";
+
+/// `test_config()` with the LiveKit API Key/Secret populated so the
+/// `livekit` focus can mint a real HS256 JWT instead of failing closed.
+fn livekit_test_config() -> AppConfig {
+    let mut config = test_config();
+    config.livekit.api_key = Some(TEST_LIVEKIT_API_KEY.to_owned());
+    config.livekit.api_secret = Some(TEST_LIVEKIT_API_SECRET.to_owned());
+    config
+}
+
+/// Verify a LiveKit JWT (`header.payload.signature`) HMAC-SHA256 signature
+/// over `header.payload` using the configured API Secret. Returns the decoded
+/// claims on success.
+fn verify_livekit_jwt(token: &str, api_secret: &[u8]) -> Value {
+    let parts = token.split('.').collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3, "LiveKit token must be a three-segment JWT");
+    let header: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .expect("jwt header base64url"),
+    )
+    .expect("jwt header json");
+    assert_eq!(header["alg"], "HS256");
+    assert_eq!(header["typ"], "JWT");
+
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let mut mac =
+        <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(api_secret).expect("hmac key");
+    mac.update(signing_input.as_bytes());
+    let expected = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    assert_eq!(parts[2], expected, "LiveKit JWT HMAC-SHA256 must verify");
+
+    serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("jwt payload base64url"),
+    )
+    .expect("jwt payload json")
+}
+
 #[tokio::test]
 async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
     let session_id = create_webrtc_session_for_alice(state.clone(), &token).await;
@@ -756,6 +826,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     .await
     .unwrap();
 
+    let issued_before = chrono::Utc::now();
     let token_response: Value = TestClient::post("http://server/_cokret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -774,16 +845,27 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     assert_eq!(token_response["type"], "livekit");
     assert_eq!(token_response["connect_url"], "wss://media.example/livekit");
 
+    // `bindings/livekit.md` §2 — the backend_token is a real LiveKit JWT:
+    // `base64url(header).base64url(payload).base64url(HMAC-SHA256)`. It MUST
+    // NOT carry the legacy `livekit.` provider prefix, header MUST be
+    // `{alg:HS256,typ:JWT}`, and the signature MUST verify under the
+    // configured API Secret.
     let backend_token = token_response["backend_token"].as_str().unwrap();
-    assert!(backend_token.starts_with("livekit."));
-    let claims = decode_backend_token_payload(backend_token);
-    // `bindings/livekit.md` §2 — LiveKit standard claims.
-    assert_eq!(claims["iss"], "did:web:media.example#livekit-2026-05");
+    assert!(
+        !backend_token.starts_with("livekit."),
+        "LiveKit backend_token must be a standard JWT, not the legacy envelope"
+    );
+    let claims = verify_livekit_jwt(backend_token, TEST_LIVEKIT_API_SECRET.as_bytes());
+    // §2: `iss` = LiveKit API Key.
+    assert_eq!(claims["iss"], TEST_LIVEKIT_API_KEY);
     assert_eq!(claims["sub"], token_response["participant_identity"]);
+    // §2: `name` MUST NOT leak actor identity — equals participant_identity.
+    assert_eq!(claims["name"], token_response["participant_identity"]);
     assert_eq!(claims["video"]["roomJoin"], true);
     assert_eq!(claims["video"]["canPublish"], true);
     assert_eq!(claims["video"]["canSubscribe"], true);
     assert_eq!(claims["video"]["recorder"], false);
+    assert_eq!(claims["video"]["hidden"], false);
     let room = claims["video"]["room"].as_str().unwrap();
     assert!(room.starts_with("ck_call_"));
     assert!(!room.contains(&session_id));
@@ -791,8 +873,21 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     assert!(sources.iter().any(|s| s == "microphone"));
     assert!(sources.iter().any(|s| s == "camera"));
     assert!(!sources.iter().any(|s| s == "screen_share"));
-    // `exp` must sit within the 600s media-token ceiling.
-    assert!(claims["exp"].as_str().is_some());
+    // §2: `iat`/`nbf`/`exp` are NumericDate (Unix epoch seconds) and `exp`
+    // MUST be ≤ iat + 600s.
+    let iat = claims["iat"].as_i64().expect("iat numeric");
+    let nbf = claims["nbf"].as_i64().expect("nbf numeric");
+    let exp = claims["exp"].as_i64().expect("exp numeric");
+    assert_eq!(nbf, iat);
+    assert!(exp > iat, "exp must be after iat");
+    assert!(
+        exp - iat <= 600,
+        "LiveKit token exp must be within the 600s media-token ceiling"
+    );
+    assert!(
+        exp <= issued_before.timestamp() + 605,
+        "LiveKit token exp must respect the 600s ceiling from issuance"
+    );
 }
 
 #[tokio::test]
@@ -926,7 +1021,7 @@ async fn webrtc_moderation_signal_projects_removed_participants_and_end_for_all(
 
 #[tokio::test]
 async fn webrtc_ban_blocks_removed_participant_token_reissue() {
-    let state = AppState::new(test_config(), Db { pool: None });
+    let state = AppState::new(livekit_test_config(), Db { pool: None });
     install_media_service_epoch(&state, good_media_service_epoch());
     let alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";

@@ -103,6 +103,8 @@ struct UnsignedIceConfigOutcome {
     pub ttl_seconds: u32,
     pub refresh_lead_seconds: u32,
     pub issued_at: DateTime<Utc>,
+    pub issued_at_bucket: DateTime<Utc>,
+    pub bucket_seconds: u32,
     pub expires_at: DateTime<Utc>,
     pub force_turn: bool,
     pub pairwise_pseudonym: String,
@@ -129,6 +131,8 @@ struct SolandIceConfigOutcome {
     pub ttl_seconds: u32,
     pub refresh_lead_seconds: u32,
     pub issued_at: DateTime<Utc>,
+    pub issued_at_bucket: DateTime<Utc>,
+    pub bucket_seconds: u32,
     pub expires_at: DateTime<Utc>,
     pub force_turn: bool,
     pub pairwise_pseudonym: String,
@@ -153,6 +157,8 @@ impl SolandIceConfigOutcome {
             ttl_seconds: unsigned.ttl_seconds,
             refresh_lead_seconds: unsigned.refresh_lead_seconds,
             issued_at: unsigned.issued_at,
+            issued_at_bucket: unsigned.issued_at_bucket,
+            bucket_seconds: unsigned.bucket_seconds,
             expires_at: unsigned.expires_at,
             force_turn: unsigned.force_turn,
             pairwise_pseudonym: unsigned.pairwise_pseudonym,
@@ -252,8 +258,22 @@ async fn issue_ice_config(
     let ttl_seconds: u32 = state.config.ice.ttl_seconds;
     let refresh_lead_seconds: u32 = state.config.ice.refresh_lead_seconds;
     let expires_at = issued_at + Duration::seconds(i64::from(ttl_seconds));
+    // `webrtc-signaling.md` §4.1 — coarse-grained bucket the TURN pseudonym
+    // is derived against. v1 fixes `bucket_seconds = 300`; `issued_at_bucket
+    // = floor(issued_at / bucket_seconds) * bucket_seconds`. Refreshes inside
+    // the same bucket land on the same pseudonym (§4.2 active-leg reuse),
+    // while crossing into the next bucket rotates it.
+    let bucket_seconds: u32 = ICE_PSEUDONYM_BUCKET_SECONDS;
+    let issued_at_bucket = floor_to_bucket(issued_at, bucket_seconds);
     let force_turn = body.force_turn;
-    let turn_username = pairwise_turn_username(state, realm_id, call_id, actor_id, device_id);
+    let turn_username = pairwise_turn_username(
+        state,
+        realm_id,
+        call_id,
+        actor_id,
+        device_id,
+        issued_at_bucket,
+    );
     let turn_credential = turn_credential(
         state, realm_id, call_id, actor_id, device_id, &issued_at, refresh,
     );
@@ -285,6 +305,8 @@ async fn issue_ice_config(
         ttl_seconds,
         refresh_lead_seconds,
         issued_at,
+        issued_at_bucket,
+        bucket_seconds,
         expires_at,
         force_turn,
         pairwise_pseudonym: turn_username,
@@ -293,18 +315,56 @@ async fn issue_ice_config(
     json_ok(SolandIceConfigOutcome::signed(state, response)?)
 }
 
+/// `webrtc-signaling.md` §4.1 — v1 fixes the TURN pseudonym bucket at 300s.
+const ICE_PSEUDONYM_BUCKET_SECONDS: u32 = 300;
+
+/// `floor(timestamp / bucket_seconds) * bucket_seconds` as a UTC timestamp.
+fn floor_to_bucket(timestamp: DateTime<Utc>, bucket_seconds: u32) -> DateTime<Utc> {
+    let bucket = i64::from(bucket_seconds).max(1);
+    let floored = timestamp.timestamp().div_euclid(bucket) * bucket;
+    DateTime::<Utc>::from_timestamp(floored, 0).unwrap_or(timestamp)
+}
+
+/// Per-call pairwise TURN pseudonym (`webrtc-signaling.md` §4.1). The
+/// identity segment is `ck_pseudonym_call_<16-hex>` and MUST NOT leak the
+/// principal DID / handle / a stable cross-call id to the TURN operator.
+///
+/// Freshness (§4.1 第204/213 行): the pseudonym is HMAC-derived under the
+/// media-service private key (the notary signing seed) — *not* a plain hash
+/// of stable ids — bound to `(realm_id, call_id, actor_id, device_id,
+/// issued_at_bucket)` plus a fresh per-bucket `nonce` derived from the same
+/// secret. Because the secret is private to this media service, the result is
+/// unlinkable to the TURN operator yet stable across refreshes within one
+/// bucket (§4.2 active-leg reuse) and rotates when the bucket advances.
 fn pairwise_turn_username(
     state: &AppState,
     realm_id: &str,
     call_id: &str,
     actor_id: &str,
     device_id: &str,
+    issued_at_bucket: DateTime<Utc>,
 ) -> String {
-    let material = format!(
-        "soland-turn-user-v1\0{}\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}",
-        state.config.service_did
+    let secret = state.notary_signing_key().to_bytes();
+    let bucket = issued_at_bucket.timestamp();
+    // Fresh per-(call,actor,device,bucket) nonce, derived from the private
+    // media-service secret so it is not recomputable off stable ids alone and
+    // not a deterministic function of the public identifiers.
+    let nonce_material = format!(
+        "soland-turn-pseudonym-nonce-v1\0{realm_id}\0{call_id}\0{actor_id}\0{device_id}\0{bucket}"
     );
-    format!("ck-turn-{}", &sha256_hex(material.as_bytes())[..24])
+    let nonce = hmac_sha256(&secret, nonce_material.as_bytes());
+    let pseudonym_input = json!({
+        "realm_id": realm_id,
+        "call_id": call_id,
+        "actor_id": actor_id,
+        "device_id": device_id,
+        "issued_at_bucket": bucket,
+        "nonce": URL_SAFE_NO_PAD.encode(nonce),
+    });
+    let pseudonym_bytes = cokret_sdk::canonical::canonical_json_bytes(&pseudonym_input)
+        .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
+    let tag = hmac_sha256(&secret, &pseudonym_bytes);
+    format!("ck_pseudonym_call_{}", hex::encode(&tag[..8]))
 }
 
 fn turn_credential(
@@ -462,12 +522,21 @@ struct IssuedMediaToken {
     connect_url: Option<String>,
 }
 
+/// Per-provider signing material handed to a [`MediaTokenIssuer`]. The
+/// ed25519 notary key signs the `cokret-native` / `mediasoup` envelopes;
+/// LiveKit needs the deployment's API Key/Secret to emit a real LiveKit
+/// JWT (`bindings/livekit.md` §2).
+struct MediaTokenSigningContext<'a> {
+    notary_signing_key: &'a ed25519_dalek::SigningKey,
+    livekit: &'a crate::config::LiveKitConfig,
+}
+
 trait MediaTokenIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequestBody<'_>,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> IssuedMediaToken;
+        ctx: &MediaTokenSigningContext<'_>,
+    ) -> Result<IssuedMediaToken, AppError>;
 }
 
 struct CokretNativeMediaIssuer;
@@ -478,9 +547,13 @@ impl MediaTokenIssuer for CokretNativeMediaIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequestBody<'_>,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> IssuedMediaToken {
-        issue_signed_backend_token(MediaProviderKind::CokretNative, request, signing_key)
+        ctx: &MediaTokenSigningContext<'_>,
+    ) -> Result<IssuedMediaToken, AppError> {
+        Ok(issue_signed_backend_token(
+            MediaProviderKind::CokretNative,
+            request,
+            ctx.notary_signing_key,
+        ))
     }
 }
 
@@ -488,9 +561,9 @@ impl MediaTokenIssuer for LiveKitMediaIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequestBody<'_>,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> IssuedMediaToken {
-        issue_livekit_backend_token(request, signing_key)
+        ctx: &MediaTokenSigningContext<'_>,
+    ) -> Result<IssuedMediaToken, AppError> {
+        issue_livekit_backend_token(request, ctx.livekit)
     }
 }
 
@@ -498,9 +571,13 @@ impl MediaTokenIssuer for MediasoupMediaIssuer {
     fn issue(
         &self,
         request: &MediaTokenIssueRequestBody<'_>,
-        signing_key: &ed25519_dalek::SigningKey,
-    ) -> IssuedMediaToken {
-        issue_signed_backend_token(MediaProviderKind::Mediasoup, request, signing_key)
+        ctx: &MediaTokenSigningContext<'_>,
+    ) -> Result<IssuedMediaToken, AppError> {
+        Ok(issue_signed_backend_token(
+            MediaProviderKind::Mediasoup,
+            request,
+            ctx.notary_signing_key,
+        ))
     }
 }
 
@@ -658,7 +735,12 @@ async fn handle_rtc_token(
         issued_at,
         expires_at,
     };
-    let issued_token = media_token_issuer_for(focus.provider).issue(&issue_request, &signing_key);
+    let signing_ctx = MediaTokenSigningContext {
+        notary_signing_key: &signing_key,
+        livekit: &state.config.livekit,
+    };
+    let issued_token =
+        media_token_issuer_for(focus.provider).issue(&issue_request, &signing_ctx)?;
 
     let issuer_kid = focus.issuer_kid.clone();
     let binding_payload = json!({
@@ -1017,17 +1099,41 @@ fn issue_signed_backend_token(
     }
 }
 
-/// LiveKit backend token (`bindings/livekit.md` §2). Emits a LiveKit JWT
-/// (`HS256`-shaped header + LiveKit `video` grant claims) signed with the
-/// service notary key. We keep the `livekit.<payload>.<sig>` wire envelope so
-/// the soland test harness can decode the claims, while populating the
-/// LiveKit-standard claim names (`video.room` / `canPublish` /
-/// `canPublishSources` / `canSubscribe` / `exp` / `sub` / `iss`).
+/// LiveKit backend token (`bindings/livekit.md` §2). Emits a **standard
+/// LiveKit JWT** — `base64url(header).base64url(payload).base64url(sig)`
+/// with header `{"alg":"HS256","typ":"JWT"}` and signature
+/// `HMAC-SHA256(API Secret, header.payload)` — so a real LiveKit
+/// deployment validates it.
+///
+/// The deployment LiveKit API Key/Secret come from
+/// [`crate::config::LiveKitConfig`]; the focus-declared `issuer_kid` is the
+/// LiveKit API Key (§2 `iss` mapping) and MUST equal the configured key, or
+/// issuance fails closed. v1 carries a single API Key/Secret pair; mapping
+/// multiple LiveKit deployments by `issuer_kid` is follow-up work.
 fn issue_livekit_backend_token(
     request: &MediaTokenIssueRequestBody<'_>,
-    signing_key: &ed25519_dalek::SigningKey,
-) -> IssuedMediaToken {
-    let nonce = ids::generate("media_token");
+    livekit: &crate::config::LiveKitConfig,
+) -> Result<IssuedMediaToken, AppError> {
+    let api_key = livekit.api_key.as_deref().filter(|key| !key.is_empty());
+    let api_secret = livekit
+        .api_secret
+        .as_deref()
+        .filter(|secret| !secret.is_empty());
+    let (Some(api_key), Some(api_secret)) = (api_key, api_secret) else {
+        return Err(focus_unavailable_error(
+            "livekit focus selected but SOLAND_LIVEKIT_API_KEY / SOLAND_LIVEKIT_API_SECRET are not configured",
+        ));
+    };
+    // §2 `iss` = LiveKit API Key; the focus issuer_kid MUST name the same
+    // deployment. Mismatch fails closed rather than signing with a key the
+    // LiveKit cluster will reject.
+    if request.focus.issuer_kid != api_key {
+        return Err(token_issuer_unauthorised(format!(
+            "livekit focus issuer_kid `{}` does not match configured LiveKit API Key",
+            request.focus.issuer_kid
+        )));
+    }
+
     let (audio, video, screen) = request.desired_media;
     let mut can_publish_sources = Vec::new();
     if audio {
@@ -1043,22 +1149,20 @@ fn issue_livekit_backend_token(
     // LiveKit room name MUST NOT leak the raw Realm/call id into LiveKit logs
     // (§2): derive a stable opaque `ck_call_<short-hash>` from the call_id.
     let room = format!("ck_call_{}", &sha256_hex(request.call_id.as_bytes())[..16]);
+    // LiveKit JWT registered claims (`iat`/`nbf`/`exp`) are NumericDate —
+    // seconds since the Unix epoch — not RFC3339 strings.
+    let iat = request.issued_at.timestamp();
+    let nbf = iat;
+    let exp = request.expires_at.timestamp();
     let token_payload = json!({
-        "iss": request.focus.issuer_kid,
+        "iss": api_key,
         "sub": request.participant_identity,
-        "aud": request.focus.audience,
-        "provider": MediaProviderKind::LiveKit.as_wire(),
-        "realm_id": request.realm_id,
-        "call_id": request.call_id,
-        "focus_id": request.focus.focus_id,
-        "actor_id": request.actor_id,
-        "device_id": request.device_id,
-        "participant_identity": request.participant_identity,
-        "e2ee_key_source": request.focus.e2ee_key_source,
-        "nbf": request.issued_at,
-        "iat": request.issued_at,
-        "exp": request.expires_at,
-        "nonce": nonce,
+        // §2: `name` MUST NOT carry actor identity; participant_identity is
+        // already a pairwise pseudonym, so reuse it as the display label.
+        "name": request.participant_identity,
+        "nbf": nbf,
+        "iat": iat,
+        "exp": exp,
         "video": {
             "room": room,
             "roomJoin": true,
@@ -1069,24 +1173,32 @@ fn issue_livekit_backend_token(
             "recorder": false,
         },
     });
-    let token_bytes = cokret_sdk::canonical::canonical_json_bytes(&token_payload)
-        .unwrap_or_else(|_| token_payload.to_string().into_bytes());
-    let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
-    let signing_input = format!(
-        "soland-media-backend-token-v1\0{}\0{}",
-        MediaProviderKind::LiveKit.as_wire(),
-        payload_b64
+
+    let header = json!({"alg": "HS256", "typ": "JWT"});
+    let header_b64 = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&header).unwrap_or_else(|_| header.to_string().into_bytes()));
+    let payload_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&token_payload)
+            .unwrap_or_else(|_| token_payload.to_string().into_bytes()),
     );
-    let sig = signing_key.sign(signing_input.as_bytes());
-    IssuedMediaToken {
-        backend_token: format!(
-            "{}.{}.{}",
-            MediaProviderKind::LiveKit.token_prefix(),
-            payload_b64,
-            URL_SAFE_NO_PAD.encode(sig.to_bytes())
-        ),
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature_b64 =
+        URL_SAFE_NO_PAD.encode(hmac_sha256(api_secret.as_bytes(), signing_input.as_bytes()));
+    Ok(IssuedMediaToken {
+        backend_token: format!("{signing_input}.{signature_b64}"),
         connect_url: request.focus.connect_url.clone(),
-    }
+    })
+}
+
+/// HMAC-SHA256 over `data` keyed by `key`. Used to sign the LiveKit JWT
+/// (`bindings/livekit.md` §2) with the deployment API Secret.
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(key)
+        .expect("HMAC accepts keys of any length");
+    mac.update(data);
+    mac.finalize().into_bytes().into()
 }
 
 fn required_json_string(value: &Value, field: &str) -> Result<String, AppError> {

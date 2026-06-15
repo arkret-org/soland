@@ -95,7 +95,10 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["principal_id"], did, "register response: {registered}");
+    assert_eq!(
+        registered["principal_id"], did,
+        "register response: {registered}"
+    );
     let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
 
     let viewer: Value = TestClient::get("http://server/_cokret/self/account/viewer")

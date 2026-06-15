@@ -501,7 +501,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AppConfig, FederationPolicy, IceServersConfig, LogFormat, ObjectStorageConfig,
+        AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, LogFormat,
+        ObjectStorageConfig,
     };
     use crate::db::Db;
 
@@ -516,6 +517,7 @@ mod tests {
             database_url: None,
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             ice: IceServersConfig::default(),
+            livekit: LiveKitConfig::default(),
             cors_allow_origin: None,
             auth_server_url: None,
             development_mode: true,

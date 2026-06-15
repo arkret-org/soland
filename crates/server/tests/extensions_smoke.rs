@@ -14,7 +14,9 @@ use cokret_sdk::{
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland::config::{AppConfig, FederationPolicy, IceServersConfig, ObjectStorageConfig};
+use soland::config::{
+    AppConfig, FederationPolicy, IceServersConfig, LiveKitConfig, ObjectStorageConfig,
+};
 use soland::db::Db;
 use soland::service;
 use soland::state::AppState;
@@ -32,6 +34,7 @@ fn test_config() -> AppConfig {
             std::env::temp_dir().join("soland-extensions-smoke"),
         ),
         ice: IceServersConfig::default(),
+        livekit: LiveKitConfig::default(),
         cors_allow_origin: None,
         auth_server_url: None,
         development_mode: true,
