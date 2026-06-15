@@ -518,6 +518,12 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
         },
+        kinds::CK_CAPABILITY_GRANT
+        | kinds::CK_CAPABILITY_REVOKE
+        | kinds::CK_CAPABILITY_DELEGATE => OperationPayloadSchema {
+            requirements: CAPABILITY_GRANT_REQUIREMENTS,
+            validate: None,
+        },
         kinds::CK_MLS_COMMIT => OperationPayloadSchema {
             requirements: MLS_COMMIT_REQUIREMENTS,
             validate: None,
