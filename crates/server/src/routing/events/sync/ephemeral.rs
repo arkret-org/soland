@@ -277,9 +277,58 @@ async fn admit_ephemeral_read_receipt(
 fn admit_ephemeral_call_signal(
     envelope: &cokret_sdk::EphemeralEnvelope,
 ) -> Result<cokret_sdk::CallSignalPayload, crate::error::AppError> {
-    cokret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
+    let payload = cokret_sdk::validate_call_signal_envelope(envelope).map_err(|error| {
         crate::error::AppError::invalid_param(format!(
             "ck.call.signal envelope failed structural validation: {error}"
         ))
-    })
+    })?;
+    validate_ephemeral_call_signal_proof_shape(envelope)?;
+    Ok(payload)
+}
+
+fn validate_ephemeral_call_signal_proof_shape(
+    envelope: &cokret_sdk::EphemeralEnvelope,
+) -> Result<(), crate::error::AppError> {
+    let proof_value = envelope
+        .proof
+        .as_ref()
+        .ok_or_else(|| crate::error::AppError::invalid_param("ck.call.signal proof is required"))?;
+    let proof: cokret_sdk::Proof =
+        serde_json::from_value(proof_value.clone()).map_err(|error| {
+            crate::error::AppError::invalid_param(format!(
+                "ck.call.signal proof is malformed: {error}"
+            ))
+        })?;
+    proof.validate_production().map_err(|error| {
+        crate::error::AppError::invalid_param(format!(
+            "ck.call.signal proof is not production-grade: {error}"
+        ))
+    })?;
+    let parts = proof.jws.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 || !parts[1].is_empty() {
+        return Err(crate::error::AppError::invalid_param(
+            "ck.call.signal proof.jws must be detached header..signature",
+        ));
+    }
+    let mut without_proof = serde_json::to_value(envelope).map_err(|error| {
+        crate::error::AppError::invalid_param(format!(
+            "ck.call.signal envelope is not serialisable: {error}"
+        ))
+    })?;
+    if let Some(object) = without_proof.as_object_mut() {
+        object.remove("proof");
+    }
+    let canonical =
+        cokret_sdk::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
+            crate::error::AppError::invalid_param(format!(
+                "ck.call.signal envelope canonicalization failed: {error}"
+            ))
+        })?;
+    let expected = cokret_sdk::canonical::sha256_digest(&canonical);
+    if proof.event_digest.as_str() != expected {
+        return Err(crate::error::AppError::invalid_param(
+            "ck.call.signal proof.event_digest does not match the envelope without proof",
+        ));
+    }
+    Ok(())
 }

@@ -166,17 +166,16 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .filter(|state| !state.is_empty())
         {
-            let from_state = cokret_sdk::CellRef::new(format!(
-                "ck:cell:ck.component.call.state.v1:{call_id}"
-            ))
-            .ok()
-            .and_then(|cell_id| self.cell_value(&cell_id).cloned())
-            .and_then(|state| {
-                state
-                    .get("state")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            });
+            let from_state =
+                cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
+                    .ok()
+                    .and_then(|cell_id| self.cell_value(&cell_id).cloned())
+                    .and_then(|state| {
+                        state
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    });
             if let Some(reason) = validate_call_state_transition(from_state.as_deref(), to_state) {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),
@@ -766,9 +765,13 @@ const CALL_STATE_TERMINAL: &str = "call_state_terminal";
 fn is_legal_call_state_transition(from: &str, to: &str) -> bool {
     matches!(
         (from, to),
-        ("scheduled", "ringing" | "connecting" | "cancelled" | "missed" | "failed")
-            | ("ringing", "connecting" | "active" | "missed" | "cancelled" | "failed")
-            | ("connecting", "active" | "failed" | "ended")
+        (
+            "scheduled",
+            "ringing" | "connecting" | "cancelled" | "missed" | "failed"
+        ) | (
+            "ringing",
+            "connecting" | "active" | "missed" | "cancelled" | "failed"
+        ) | ("connecting", "active" | "failed" | "ended")
             | ("active", "ended" | "failed")
     )
 }

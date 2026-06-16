@@ -1234,9 +1234,13 @@ fn issue_livekit_backend_token(
         can_publish_sources.push("screen_share");
     }
     let can_publish = !can_publish_sources.is_empty();
-    // LiveKit room name MUST NOT leak the raw Realm/call id into LiveKit logs
-    // (§2): derive a stable opaque `ck_call_<short-hash>` from the call_id.
-    let room = format!("ck_call_{}", &sha256_hex(request.call_id.as_bytes())[..16]);
+    // LiveKit room name MUST NOT leak the raw Realm/call id into LiveKit logs.
+    // Derive a stable opaque backend room handle from the full media tuple.
+    let room_material = format!(
+        "{}\0{}\0{}",
+        request.realm_id, request.call_id, request.focus.focus_id
+    );
+    let room = format!("ck_call_{}", &sha256_hex(room_material.as_bytes())[..16]);
     // LiveKit JWT registered claims (`iat`/`nbf`/`exp`) are NumericDate —
     // seconds since the Unix epoch — not RFC3339 strings.
     let iat = request.issued_at.timestamp();

@@ -31,6 +31,43 @@ fn device_message_target(kind: &str, content: Value) -> Value {
     })
 }
 
+fn keys_upload_signing_input(
+    device_id: &str,
+    one_time_keys: &Value,
+    fallback_keys: &Value,
+) -> Vec<u8> {
+    let body = serde_json::json!({
+        "device_id": device_id,
+        "one_time_keys": one_time_keys,
+        "fallback_keys": fallback_keys,
+    });
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&body).unwrap();
+    let mut input = b"ck-keys-upload-v1\n".to_vec();
+    input.extend_from_slice(&canonical);
+    input
+}
+
+fn signed_keys_upload_body(
+    actor: &str,
+    device_id: &str,
+    signing_key: &SigningKey,
+    one_time_keys: Value,
+    fallback_keys: Value,
+) -> Value {
+    let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
+    let jws = cokret_sdk::jws::sign_jws_ed25519(&signing_input, signing_key).unwrap();
+    serde_json::json!({
+        "device_id": device_id,
+        "one_time_keys": one_time_keys,
+        "fallback_keys": fallback_keys,
+        "device_signature": {
+            "alg": "EdDSA",
+            "kid": format!("{actor}#device"),
+            "jws": jws,
+        }
+    })
+}
+
 #[tokio::test]
 async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() {
     let state = AppState::new(test_config(), Db { pool: None });
@@ -453,6 +490,14 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     // job).
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    state.authz.create_grant(
+        DEMO_REALM_ID.to_owned(),
+        "did:web:alice.example".to_owned(),
+        "did:web:alice.example".to_owned(),
+        DEMO_REALM_ID.to_owned(),
+        vec![cokret_sdk::CAP_CALL_SIGNAL_SEND.to_owned()],
+        vec![],
+    );
     let call_id = "ck:call:01904100-0000-7000-8000-ca110000001a";
     let device_id = "ck:device:01904100-0000-7000-8000-a11ce0000001";
 
@@ -483,7 +528,16 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             env["device_id"] = serde_json::json!(device_id);
         }
         if with_proof {
-            env["proof"] = serde_json::json!({"alg": "EdDSA", "sig": "ZGV2"});
+            let canonical = cokret_sdk::canonical::canonical_json_bytes(&env).unwrap();
+            let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+            env["proof"] = serde_json::json!({
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": "did:web:alice.example#device",
+                "event_digest": event_digest,
+                "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+            });
         }
         env
     };
@@ -498,7 +552,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(accepted["accepted"], true);
+    assert_eq!(accepted["accepted"], true, "accepted body: {accepted}");
     assert_eq!(accepted["kind"], "ck.call.signal");
 
     // Non-canonical signal_type → invalid_param.
@@ -534,15 +588,22 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
 async fn auth_keys_device_messages_and_blobs_work() {
     let state = AppState::new(test_config(), Db { pool: None });
     let token = dev_token(state.clone()).await;
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let alice_device_key = SigningKey::from_bytes(&[61u8; 32]);
+    let alice_device_public = test_ed25519_multibase_public(&alice_device_key);
+    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_public).await;
+    let upload_body = signed_keys_upload_body(
+        alice,
+        alice_device,
+        &alice_device_key,
+        serde_json::json!({"signed_curve25519:otk1": {"key": "one-time"}}),
+        serde_json::json!({"signed_curve25519:fallback": {"key": "fallback-key"}}),
+    );
 
     let upload: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "one_time_keys": {"signed_curve25519:otk1": {"key": "one-time"}},
-            "fallback_keys": {"signed_curve25519:fallback": {"key": "fallback-key"}},
-            "device_signature": {"alg": "none"}
-        }))
+        .json(&upload_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -553,7 +614,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["ck:device:01904100-0000-7000-8000-a11ce0000001"]}
+            "device_keys": {"did:web:alice.example": [alice_device]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -561,8 +622,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert!(query["device_keys"].is_object());
-    let alice_desktop = &query["device_keys"]["did:web:alice.example"]
-        ["ck:device:01904100-0000-7000-8000-a11ce0000001"];
+    let alice_desktop = &query["device_keys"][alice][alice_device];
     assert_eq!(
         alice_desktop["algorithms"]["one_time_keys"]["signed_curve25519:otk1"]["key"],
         "one-time"
@@ -571,14 +631,11 @@ async fn auth_keys_device_messages_and_blobs_work() {
         alice_desktop["algorithms"]["fallback_keys"]["signed_curve25519:fallback"]["key"],
         "fallback-key"
     );
-    assert_eq!(
-        alice_desktop["algorithms"]["device_signature"]["alg"],
-        "none"
-    );
-    // dev-login devices carry no authoritative device_public_key, so the
-    // signing-key directory facet reports status without a verify key.
     assert_eq!(alice_desktop["device_status"], "active");
-    assert!(alice_desktop["device_signing_key"].is_null());
+    assert_eq!(
+        alice_desktop["device_signing_key"],
+        format!("did:key:{alice_device_public}")
+    );
 
     let claimed_once: Value = TestClient::post("http://server/_cokret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -770,7 +827,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header(
             "x-cokret-attachment-envelope",
             serde_json::json!({
-                "algorithm": "mls-rfc9420",
+                "alg": "mls-rfc9420",
                 "nonce": "nonce",
                 "key_ref": {"kid": "did:web:alice.example#device"},
                 "ciphertext_digest": ciphertext_digest
@@ -784,7 +841,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(blob["size_bytes"], 15);
+    assert_eq!(blob["size_bytes"], 15, "blob body: {blob}");
     assert_eq!(blob["media_type"], "application/octet-stream");
     assert!(blob["upload_receipt"].get("filename").is_none());
     let upload_receipt = blob["upload_receipt"].to_string();
@@ -797,7 +854,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             .starts_with("ck:blob:sha256:")
     );
     assert_eq!(
-        blob["upload_receipt"]["encrypted_attachment"]["algorithm"],
+        blob["upload_receipt"]["encrypted_attachment"]["alg"],
         "mls-rfc9420"
     );
     let ObjectStorageConfig::Local { root, .. } = test_config().object_storage else {
@@ -1059,7 +1116,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(notify["rejected"].as_array().unwrap().len(), 1);
+    let rejected = notify["rejected"]
+        .as_array()
+        .unwrap_or_else(|| panic!("notify body: {notify}"));
+    assert_eq!(rejected.len(), 1, "notify body: {notify}");
 }
 
 #[tokio::test]
@@ -1251,7 +1311,8 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
     let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
     let expected_did_key = format!("did:key:{alice_device_multibase}");
-    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_multibase).await;
+    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_multibase)
+        .await;
 
     // Member B queries member A's (actor, device) directory entry.
     let bob = dev_token_for_device(
@@ -1261,6 +1322,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
         "Bob Desktop",
     )
     .await;
+    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
 
     let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
@@ -1279,8 +1341,8 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     );
     assert_eq!(entry["device_status"], "active");
 
-    // Revoke member A's device, then re-query: the entry MUST be omitted so no
-    // signing key leaks for a revoked device.
+    // Revoke member A's device, then re-query: the entry remains as revoked
+    // status telemetry, but carries no signing key.
     let mut revoked = state
         .persistence
         .devices()
@@ -1301,9 +1363,12 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
         .take_json()
         .await
         .unwrap();
+    let revoked_entry = &post_revoke["device_keys"][alice][alice_device];
+    assert_eq!(revoked_entry["device_status"], "revoked");
+    assert!(revoked_entry["device_signing_key"].is_null());
     assert!(
-        post_revoke["device_keys"][alice][alice_device].is_null(),
-        "revoked device must not surface a directory entry: {post_revoke}"
+        revoked_entry["algorithms"].as_object().unwrap().is_empty(),
+        "revoked device must not surface usable key material: {post_revoke}"
     );
 }
 
@@ -1436,7 +1501,12 @@ fn tier2_publish_and_authorize(
             "signature": binding_signature,
         },
     });
-    (publish_payload, authorize_payload, psk_multibase, device_public_key)
+    (
+        publish_payload,
+        authorize_payload,
+        psk_multibase,
+        device_public_key,
+    )
 }
 
 /// Tier-2 (device-lifecycle.md §8.2 / §8.3) — `keys/query` echoes the per-device
@@ -1477,12 +1547,8 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         "ck.device.authorize",
         authorize_payload,
     );
-    soland::test_support::project_accepted_operations(
-        &state,
-        alice,
-        &[publish_op, authorize_op],
-    )
-    .await;
+    soland::test_support::project_accepted_operations(&state, alice, &[publish_op, authorize_op])
+        .await;
 
     // Member B queries A's directory.
     let bob = dev_token_for_device(
@@ -1492,6 +1558,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         "Bob Desktop",
     )
     .await;
+    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
     let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({ "device_keys": { alice: [alice_device] } }))
@@ -1579,22 +1646,36 @@ async fn keys_query_hides_revoked_device() {
         "Alice Phone",
     )
     .await;
+    let desktop_device = "ck:device:01904100-0000-7000-8000-a11ce0000001";
+    let mobile_device = "ck:device:01904100-0000-7000-8000-9b04e0000007";
+    let desktop_key = SigningKey::from_bytes(&[62u8; 32]);
+    let mobile_key = SigningKey::from_bytes(&[63u8; 32]);
+    let desktop_public = test_ed25519_multibase_public(&desktop_key);
+    let mobile_public = test_ed25519_multibase_public(&mobile_key);
+    seed_verified_device_with_public_key(
+        &state,
+        "did:web:alice.example",
+        desktop_device,
+        &desktop_public,
+    )
+    .await;
+    seed_verified_device_with_public_key(
+        &state,
+        "did:web:alice.example",
+        mobile_device,
+        &mobile_public,
+    )
+    .await;
 
     let _desktop_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {desktop}"), true)
-        .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-a11ce0000001",
-            "device_keys": {"alg": "mls-rfc9420", "key": "desktop-device-key"},
-            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
-            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
-            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
-            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
-            "one_time_keys": [{"key_id": "desktop-otk", "key": "one-time"}],
-            "fallback_keys": {"signed_curve25519:desktop": {"key": "fallback-desktop"}},
-            "mls_key_packages": [{"package_id": "desktop-package", "key": "opaque-package"}],
-            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
-            "device_signature": {"alg": "none"}
-        }))
+        .json(&signed_keys_upload_body(
+            "did:web:alice.example",
+            desktop_device,
+            &desktop_key,
+            serde_json::json!({"signed_curve25519:desktop": {"key": "desktop-device-key"}}),
+            serde_json::json!({"signed_curve25519:desktop": {"key": "fallback-desktop"}}),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1603,19 +1684,13 @@ async fn keys_query_hides_revoked_device() {
 
     let _phone_keys: Value = TestClient::post("http://server/_cokret/self/keys/upload")
         .add_header("authorization", format!("Bearer {mobile}"), true)
-        .json(&serde_json::json!({
-            "device_id": "ck:device:01904100-0000-7000-8000-9b04e0000007",
-            "device_keys": {"alg": "mls-rfc9420", "key": "phone-device-key"},
-            "principal_signing_keys": [{"kid": "did:web:alice.example#principal", "key": "principal-key"}],
-            "recovery_keys": [{"kid": "did:web:alice.example#recovery", "key": "recovery-key"}],
-            "session_keys": [{"kid": "did:web:alice.example#session", "key": "session-key"}],
-            "agent_keys": [{"kid": "did:web:alice.example#agent", "key": "agent-key"}],
-            "one_time_keys": [{"key_id": "phone-otk", "key": "one-time"}],
-            "fallback_keys": {"signed_curve25519:phone": {"key": "fallback-phone"}},
-            "mls_key_packages": [{"package_id": "phone-package", "key": "opaque-package"}],
-            "backup_restore_keys": [{"kid": "did:web:alice.example#backup", "key": "backup-key"}],
-            "device_signature": {"alg": "none"}
-        }))
+        .json(&signed_keys_upload_body(
+            "did:web:alice.example",
+            mobile_device,
+            &mobile_key,
+            serde_json::json!({"signed_curve25519:phone": {"key": "phone-device-key"}}),
+            serde_json::json!({"signed_curve25519:phone": {"key": "fallback-phone"}}),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1634,12 +1709,12 @@ async fn keys_query_hides_revoked_device() {
         .unwrap();
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["algorithms"]["device_keys"]["key"],
+            ["algorithms"]["one_time_keys"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
         pre_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"]
-            ["algorithms"]["device_keys"]["key"],
+            ["algorithms"]["one_time_keys"]["signed_curve25519:phone"]["key"],
         "phone-device-key"
     );
 
@@ -1662,10 +1737,13 @@ async fn keys_query_hides_revoked_device() {
         .take_json()
         .await
         .unwrap();
-    assert!(post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"].is_null());
+    let revoked_phone = &post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-9b04e0000007"];
+    assert_eq!(revoked_phone["device_status"], "revoked");
+    assert!(revoked_phone["device_signing_key"].is_null());
+    assert!(revoked_phone["algorithms"].as_object().unwrap().is_empty());
     assert_eq!(
         post_revoke_query["device_keys"]["did:web:alice.example"]["ck:device:01904100-0000-7000-8000-a11ce0000001"]
-            ["algorithms"]["device_keys"]["key"],
+            ["algorithms"]["one_time_keys"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
 }
@@ -1713,15 +1791,8 @@ async fn revoked_device_blocks_encrypted_writes() {
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&serde_json::json!({
             "device_id": "ck:device:01904100-0000-7000-8000-30b11e000005",
-            "device_keys": {"alg": "mls-rfc9420", "key": "new-key"},
-            "principal_signing_keys": [],
-            "recovery_keys": [],
-            "session_keys": [],
-            "agent_keys": [],
-            "one_time_keys": [],
+            "one_time_keys": {},
             "fallback_keys": {},
-            "mls_key_packages": [],
-            "backup_restore_keys": [],
             "device_signature": {"alg": "none"}
         }))
         .send(&app_from_state(state.clone()))

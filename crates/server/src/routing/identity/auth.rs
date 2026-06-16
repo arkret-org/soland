@@ -7,8 +7,8 @@
 //! - `POST /_cokret/gate/account/session-grants` — coauth session-grant bridge
 //! - `POST /_cokret/gate/account/session-grants/revoke` — spec
 //!   `ck.gate.account.command.revoke_session`
-//! - `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`:
-//!   revoke the bearer + the bound device session record + queued to-device
+//! - `POST /_cokret/gate/account/logout` — spec `ck.gate.account.command.logout`: revoke the bearer
+//!   + the bound device session record + queued to-device
 //!
 //! Internal helpers exported for the rest of `crate::routing`:
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
@@ -59,10 +59,7 @@ const SHORT_BEARER_TTL_MINUTES: i64 = 15;
 /// SHORT_BEARER_TTL`, but never beyond the grant's own expiry. Keeps bearers
 /// short regardless of grant length, and never mints a bearer that outlives the
 /// refresh credential backing it.
-fn capped_bearer_expiry(
-    grant_expires_at: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
+fn capped_bearer_expiry(grant_expires_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
     grant_expires_at.min(now + Duration::minutes(SHORT_BEARER_TTL_MINUTES))
 }
 

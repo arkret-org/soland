@@ -6,8 +6,8 @@
 //! the issue and verify sides byte-for-byte symmetric this module is the single
 //! definition of:
 //!
-//! - the binding's signed canonical-JSON field set (`binding_canonical_value`,
-//!   exactly the seven authoritative fields), and
+//! - the binding's signed canonical-JSON field set (`binding_canonical_value`, exactly the seven
+//!   authoritative fields), and
 //! - the label-prefixed Ed25519 signing input (`binding_signing_input`).
 //!
 //! The CKP-0010 token issuer ([`super::webrtc`]) builds the signing input here

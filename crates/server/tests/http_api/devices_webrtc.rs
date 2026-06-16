@@ -1040,6 +1040,12 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let room = claims["video"]["room"].as_str().unwrap();
     assert!(room.starts_with("ck_call_"));
     assert!(!room.contains(&session_id));
+    let room_material = format!("{DEMO_REALM_ID}\0{session_id}\0ck:focus:livekit:green");
+    let expected_room = format!(
+        "ck_call_{}",
+        &hex::encode(Sha256::digest(room_material.as_bytes()))[..16]
+    );
+    assert_eq!(room, expected_room);
     let sources = claims["video"]["canPublishSources"].as_array().unwrap();
     assert!(sources.iter().any(|s| s == "microphone"));
     assert!(sources.iter().any(|s| s == "camera"));
@@ -1555,7 +1561,7 @@ fn call_signal_envelope(
 ) -> Value {
     let sent_at = chrono::Utc::now();
     let expires_at = sent_at + chrono::Duration::minutes(2);
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "kind": "ck.call.signal",
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
@@ -1567,9 +1573,19 @@ fn call_signal_envelope(
             "signal_type": signal_type,
             "seq": seq,
             "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-        },
-        "proof": {"kid": format!("{actor}#device"), "sig": "dev"}
-    })
+        }
+    });
+    let canonical = cokret_sdk::canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = cokret_sdk::canonical::sha256_digest(&canonical);
+    envelope["proof"] = serde_json::json!({
+        "kind": "detached_jws",
+        "alg": "EdDSA",
+        "verification_method": format!("{actor}#device"),
+        "event_digest": event_digest,
+        "created_at": sent_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+    });
+    envelope
 }
 
 async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo::http::Response {
@@ -1635,8 +1651,12 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
     assert_eq!(bob_signals[0]["payload"]["call_id"], call_id);
     assert_eq!(bob_signals[0]["payload"]["signal_type"], "invite");
     assert_eq!(bob_signals[0]["payload"]["seq"], 1);
+    assert_eq!(bob_signals[0]["proof"]["kind"], "detached_jws");
+    assert_eq!(bob_signals[0]["proof"]["alg"], "EdDSA");
+    assert!(bob_signals[0]["proof"]["event_digest"].is_string());
+    assert!(bob_signals[0]["proof"]["jws"].is_string());
     assert_eq!(
-        bob_signals[0]["proof"]["sig"], "dev",
+        bob_signals[0]["proof"]["verification_method"], "did:web:alice.example#device",
         "the relay delivers the envelope verbatim so the receiver can verify proof"
     );
 

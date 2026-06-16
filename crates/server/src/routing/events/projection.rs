@@ -1642,7 +1642,9 @@ async fn project_device_authorize(state: &crate::state::AppState, payload: &Valu
         .as_ref()
         .map(|device| device.created_at)
         .unwrap_or(updated_at);
-    let display_name = existing.as_ref().and_then(|device| device.display_name.clone());
+    let display_name = existing
+        .as_ref()
+        .and_then(|device| device.display_name.clone());
     // An accepted device.authorize confirms the device; never downgrade an
     // already-verified row, and treat a fresh authorize as verified.
     let verification_state = "verified".to_owned();

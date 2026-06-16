@@ -739,10 +739,9 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
-    let registered: Value = TestClient::post("http://server/_soland/self/account/register")
+    let registered: Value = TestClient::post("http://server/_cokret/gate/account/register")
         .json(&serde_json::json!({
-            "did": did,
-            "handle": handle,
+            "principal_id": did,
             "display_name": handle.trim_start_matches('@'),
             "device_id": device_id
         }))
@@ -751,7 +750,10 @@ pub(crate) async fn register_account(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["did"], did, "register response: {registered}");
+    assert_eq!(
+        registered["principal_id"], did,
+        "register response: {registered}"
+    );
 
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({

@@ -300,7 +300,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     };
                     // REDU-4 — participant_binding wire-shape pre-filter.
                     // Verifies (a) scheme constant, (b) issuer_kid present,
-                    // (c) expires_at strictly after created_at when both
+                    // (c) expires_at strictly after issued_at when both
                     // are present, (d) signature ("sig") present.
                     //
                     // Full cryptographic verification (issuer anchoring
@@ -335,17 +335,17 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                             "participant_binding_invalid: participant_binding.sig is required",
                         );
                     }
-                    if let (Some(created_at), Some(expires_at)) = (
-                        binding.get("created_at").and_then(|v| v.as_str()),
+                    if let (Some(issued_at), Some(expires_at)) = (
+                        binding.get("issued_at").and_then(|v| v.as_str()),
                         binding.get("expires_at").and_then(|v| v.as_str()),
-                    ) && let (Ok(created), Ok(expires)) = (
-                        chrono::DateTime::parse_from_rfc3339(created_at),
+                    ) && let (Ok(issued), Ok(expires)) = (
+                        chrono::DateTime::parse_from_rfc3339(issued_at),
                         chrono::DateTime::parse_from_rfc3339(expires_at),
-                    ) && expires <= created
+                    ) && expires <= issued
                     {
                         return Err(
                             "participant_binding_invalid: participant_binding.expires_at must be \
-                             strictly after created_at",
+                             strictly after issued_at",
                         );
                     }
                 }

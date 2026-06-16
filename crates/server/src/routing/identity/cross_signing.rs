@@ -354,7 +354,12 @@ pub(crate) async fn resolve_device_signing_directory_facet(
     principal_id: &str,
     device_id: &str,
 ) -> DeviceSigningDirectoryFacet {
-    let record = match state.persistence.devices().get(principal_id, device_id).await {
+    let record = match state
+        .persistence
+        .devices()
+        .get(principal_id, device_id)
+        .await
+    {
         Ok(Some(record)) => record,
         _ => {
             return DeviceSigningDirectoryFacet {
