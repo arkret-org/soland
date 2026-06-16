@@ -977,6 +977,7 @@ pub fn describe(
     development_mode: bool,
     oauth_introspection_enabled: bool,
     auth_server_url: Option<&str>,
+    oidc_client_id: Option<&str>,
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
 ) -> ServerDescription {
@@ -1013,7 +1014,12 @@ pub fn describe(
             issuer: Some(issuer.clone()),
             provider: None,
             openid_configuration: Some(openid_configuration.clone()),
-            client_id: None,
+            // Registered OAuth `client_id` (coauth keys clients by ULID). The
+            // web client uses this verbatim; absent it, it has no valid id to
+            // fall back to and coauth answers `could not find client`.
+            client_id: oidc_client_id
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned),
             scopes: vec!["openid".to_owned(), "profile".to_owned()],
             grant_exchange: AuthGrantExchange {
                 proof_kind: SessionGrantProofKind::OidcCodeExchange,
@@ -1348,6 +1354,7 @@ mod tests {
             "memory",
             true,
             false,
+            None,
             None,
             "ck:trust_domain:soland.example",
             86_400,

@@ -38,6 +38,15 @@ pub struct AppConfig {
     /// consumes the resulting OAuth/session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub auth_server_url: Option<String>,
+    /// OAuth/OIDC `client_id` this soland deployment is registered as at the
+    /// Auth Server, advertised to browser clients in
+    /// `/_cokret/describe.auth_metadata.methods[].oidc.client_id`. The web
+    /// client uses it verbatim as the `client_id` in its OIDC authorize
+    /// request; coauth keys clients by ULID, so this MUST be the registered
+    /// client ULID (e.g. the dev `config.dev.yaml` client). When unset the
+    /// OIDC method advertises no `client_id` and the client has nothing valid
+    /// to fall back to.
+    pub oidc_client_id: Option<String>,
     pub development_mode: bool,
     /// Matrix/Palpo-style OAuth 2.0 introspection endpoint. When configured,
     /// soland accepts the caller's `Authorization: Bearer <coauth access token>`
@@ -524,6 +533,7 @@ impl AppConfig {
         let ice = load_ice_servers_config()?;
         let livekit = load_livekit_config()?;
         let auth_server_url = env_non_empty("SOLAND_AUTH_SERVER_URL");
+        let oidc_client_id = env_non_empty("SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
         // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
@@ -691,6 +701,7 @@ impl AppConfig {
             livekit,
             cors_allow_origin,
             auth_server_url,
+            oidc_client_id,
             development_mode,
             oauth_introspection_url,
             oauth_introspection_bearer,

@@ -86,6 +86,7 @@ async fn events_describe(depot: &mut Depot) -> JsonResult<cokret_sdk::ServerDesc
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
+        state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,
     );

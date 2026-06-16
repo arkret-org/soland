@@ -251,6 +251,7 @@ fn build_server_description(state: &AppState) -> ServerDescription {
         state.config.development_mode,
         state.config.oauth_introspection_url.is_some(),
         state.config.auth_server_url.as_deref(),
+        state.config.oidc_client_id.as_deref(),
         &state.config.trust_domain,
         state.config.resumable_upload_incomplete_ttl_seconds,
     );
