@@ -122,7 +122,7 @@ fn self_realm_create_payload(controller_did: &str, service_did: &str, realm_id: 
             "created_by": controller_did,
             "trust_domain": "ck:trust_domain:soland.local",
             "schema_refs": ["ck.schema.realm.v1"],
-            "default_discoverability": "private",
+            "default_discoverability": "listed",
             "default_join_rule": "invite",
             "history_visibility": "shared",
             "encryption_profile": "none",
