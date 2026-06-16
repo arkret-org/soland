@@ -1703,22 +1703,32 @@ fn refresh_authz_index_from_capability_effect(
     effect: &crate::reducer::ProjectionEffect,
 ) {
     use crate::reducer::ProjectionEffect;
-    let grant_id = match effect {
+    // CKP-0008 §4.5 / D3 — pairing completion clears
+    // `effective_after_first_authorized_key` on the agent's pending grants;
+    // re-fold each cleared grant so it enters the engine read index now that
+    // it is active.
+    let grant_ids: Vec<String> = match effect {
         ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
         | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
-        | ProjectionEffect::CapabilityDelegateProjected { grant_id, .. } => grant_id.clone(),
+        | ProjectionEffect::CapabilityDelegateProjected { grant_id, .. } => vec![grant_id.clone()],
+        ProjectionEffect::AgentKeyAuthorizeProjected {
+            cleared_grant_ids, ..
+        } => cleared_grant_ids.clone(),
         _ => return,
     };
-    let derived = state
-        .projection
-        .lock()
-        .ok()
-        .and_then(|proj| proj.effective_engine_grant(&grant_id));
-    match derived {
-        Some(grant) => state.authz.upsert_projected_grant(grant),
-        // Cell present only as a revoke-before-grant tombstone (no resolvable
-        // body / no actions): mark the index entry revoked if we hold one.
-        None => state.authz.mark_projected_grant_revoked(&grant_id),
+    for grant_id in grant_ids {
+        let derived = state
+            .projection
+            .lock()
+            .ok()
+            .and_then(|proj| proj.effective_engine_grant(&grant_id));
+        match derived {
+            Some(grant) => state.authz.upsert_projected_grant(grant),
+            // Cell present only as a revoke-before-grant tombstone (no
+            // resolvable body / no actions): mark the index entry revoked if
+            // we hold one.
+            None => state.authz.mark_projected_grant_revoked(&grant_id),
+        }
     }
 }
 

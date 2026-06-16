@@ -50,7 +50,14 @@ use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::error::AppError;
 use crate::ids;
 use crate::result::{JsonResult, json_ok};
-use crate::state::AppState;
+use crate::state::{AppState, SessionRecord};
+
+mod dev_fanout;
+use dev_fanout::{
+    attach_agent_grant_event, ensure_self_realm, fanout_provision_subevents,
+    materialize_capability_grant, revoke_capability_grant, submit_durable_agent_lifecycle,
+    submit_durable_key_authorize, submit_revoke_agent_grants, submit_revoke_agent_keys,
+};
 
 /// Mounted under `/_cokret/self`.
 pub(super) fn protocol_router() -> Router {
@@ -84,6 +91,23 @@ pub(super) fn protocol_router() -> Router {
 /// `/_cokret/self/agents`. Registered separately in `routing::identity::auth`.
 pub(crate) fn agent_key_pair_router() -> Router {
     Router::with_path("agent-key-pair").post(agent_key_pair)
+}
+
+/// CKP-0008 (dev option B) — synthesize a controller-authored
+/// `SessionRecord` so the server-side fan-out can author durable sub-events
+/// as the controller (`actor_id == session.actor`). Only used under
+/// `development_mode`; the resulting session is never persisted or returned.
+fn controller_dev_session(controller_did: &str, state: &AppState) -> SessionRecord {
+    SessionRecord {
+        token_hash: format!("agent-dev-fanout:{controller_did}"),
+        actor: controller_did.to_owned(),
+        device_id: "agent-dev-fanout".to_owned(),
+        audience: state.config.service_did.clone(),
+        session_public_key: None,
+        expires_at: now() + chrono::Duration::minutes(5),
+        created_at: now(),
+        revoked_at: None,
+    }
 }
 
 fn validate_agent_principal_id(value: &str) -> Result<(), AppError> {
@@ -300,6 +324,23 @@ async fn set_agent_participation(
         "accepted",
     )
     .await;
+    // CKP-0016 §5.2 / CKP-0008 §4.9 (dev option B) — materialise the effective
+    // participation decision into a durable capability grant. effective reply
+    // ⇒ `ck.capability.grant` (ck.message.create + ck.reaction.add over the
+    // scope resource); otherwise `ck.capability.revoke` (idempotent). The
+    // grant id is deterministic per (agent, scope_key) so set/unset/set
+    // converge on a single cell. Production submits these from yougen.
+    if state.config.development_mode {
+        let realm = ensure_self_realm(state, &session).await?;
+        let grant_id = participation_grant_id(&agent_id, &body.scope.scope_key());
+        if effective.reply {
+            let resource = participation_scope_resource(&body.scope);
+            materialize_capability_grant(state, &session, &realm, &agent_id, resource, &grant_id)
+                .await?;
+        } else {
+            revoke_capability_grant(state, &session, &realm, &grant_id).await?;
+        }
+    }
     json_ok(AgentParticipationResBody {
         ok: true,
         agent_principal_id: agent_id,
@@ -310,6 +351,57 @@ async fn set_agent_participation(
             effective,
         }],
     })
+}
+
+/// Deterministic capability grant id for a materialised participation
+/// selection, keyed by (agent_principal_id, scope_key) so toggling the
+/// selection converges on one grant cell (CKP-0016 §5.2).
+fn participation_grant_id(agent_principal_id: &str, scope_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"ck:grant:agent_participation:v1:");
+    hasher.update(agent_principal_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(scope_key.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // Force UUIDv7 version + RFC-9562 variant so the id matches the
+    // ck:grant:<uuidv7> wire pattern.
+    bytes[6] = (bytes[6] & 0x0F) | 0x70;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    let g = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    format!(
+        "ck:grant:{}-{}-{}-{}-{}",
+        g(&bytes[0..4]),
+        g(&bytes[4..6]),
+        g(&bytes[6..8]),
+        g(&bytes[8..10]),
+        g(&bytes[10..16]),
+    )
+}
+
+/// Map a participation scope to a capability `resource-selector` object. The
+/// grant authorizes the agent over the scope's realm (Realm scope) or the
+/// specific strand (Strand scope); a Circle scope narrows to the circle id.
+fn participation_scope_resource(scope: &AgentParticipationScope) -> Value {
+    match scope {
+        AgentParticipationScope::Realm { realm_id } => {
+            json!({ "kind": "realm", "realm_id": realm_id.as_str() })
+        }
+        AgentParticipationScope::Circle {
+            realm_id,
+            circle_id,
+        } => {
+            json!({ "kind": "circle", "realm_id": realm_id.as_str(), "circle_id": circle_id.as_str() })
+        }
+        AgentParticipationScope::Strand {
+            realm_id,
+            strand_id,
+        } => {
+            json!({ "kind": "strand", "realm_id": realm_id.as_str(), "strand_id": strand_id.as_str() })
+        }
+    }
 }
 
 #[endpoint(
@@ -400,32 +492,66 @@ async fn agent_key_pair(
         )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // CKP-0008 §4.5 / D3 (dev option B): submit the durable
+    // `ck.agent.key.authorize` event authored by the controller so the
+    // reducer projects the agent-key state and clears the agent's pending
+    // `effective_after_first_authorized_key` grants. Production submits this
+    // from coauth/yougen and never enters this branch.
+    let authorized_event_ref = if state.config.development_mode {
+        let controller_did = state
+            .persistence
+            .agents()
+            .get(agent_principal_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|record| {
+                record
+                    .get("controller_did")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| session.actor.clone());
+        let controller_session = controller_dev_session(&controller_did, state);
+        let realm = ensure_self_realm(state, &controller_session).await?;
+        let key_id = dev_fanout::default_agent_key_id(agent_principal_id);
+        let event_id = submit_durable_key_authorize(
+            state,
+            &controller_session,
+            &realm,
+            agent_principal_id,
+            &body.verification_method,
+            &key_id,
+        )
+        .await?;
+        EventId::new(event_id)
+            .map_err(|err| AppError::internal(format!("authorize event id invalid: {err}")))?
+    } else {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.agent.key.authorize",
+            json!({
+                "agent_principal_id": agent_principal_id,
+                "verification_method": body.verification_method,
+            }),
+            "accepted",
+        )
+        .await;
+        // Production option A: the durable event is submitted by coauth /
+        // yougen; soland mints the pin id the outcome MUST carry.
+        EventId::new(ids::generate_event_id())
+            .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?
+    };
     // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
-    // authorizing the first runtime key flips it to `active`.
+    // flip to `active` ONLY after the durable key authorization has been
+    // accepted (a failed submit above propagates via `?` and MUST NOT leave
+    // the agent flipped to active).
     let _ = state
         .persistence
         .agents()
         .set_state(agent_principal_id, "active", &authorized_at)
         .await;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "ck.agent.key.authorize",
-        json!({
-            "agent_principal_id": agent_principal_id,
-            "verification_method": body.verification_method,
-        }),
-        "accepted",
-    )
-    .await;
-    // Spec `agent_key_pair_outcome` = `{ok, authorized_event_ref}`. The audit
-    // row above is the deployment-local stand-in for the durable
-    // `ck.agent.key.authorize` event; we mint the event id the outcome MUST
-    // carry so clients can pin the authorization (P2-impl: persist the real
-    // signed event under this id + controller approval consumption +
-    // runtime_attestation verifier).
-    let authorized_event_ref = EventId::new(ids::generate_event_id())
-        .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?;
     json_ok(AgentKeyPairOutcome {
         ok: true,
         authorized_event_ref,
@@ -516,6 +642,31 @@ async fn provision_agent(
     // agent lifecycle the agent starts `pending_runtime_key`; the gate
     // `ck.gate.account.command.pair_agent_key` flips it to `active` once the
     // runtime key is authorized.
+    // CKP-0008 D1 (dev option B): provision the agent's identity sub-events
+    // into the controller's self realm. `ensure_self_realm` is idempotent and
+    // the three sub-events (profile / accountability / initial capability
+    // grant) are authored by the controller. Production (option A) submits
+    // these from yougen and never enters this branch.
+    let mut self_realm_id: Option<String> = None;
+    let mut provision_event_refs = json!({});
+    if state.config.development_mode {
+        let realm = ensure_self_realm(state, &session).await?;
+        let (profile_event, accountability_event, grant_id) = fanout_provision_subevents(
+            state,
+            &session,
+            &realm,
+            &agent_principal_id,
+            display_name.as_deref(),
+            &requested_scope,
+        )
+        .await?;
+        provision_event_refs = json!({
+            "agent_profile_event_id": profile_event,
+            "accountability_grant_event_id": accountability_event,
+            "initial_capability_grant_ids": [grant_id],
+        });
+        self_realm_id = Some(realm);
+    }
     state
         .persistence
         .agents()
@@ -528,6 +679,8 @@ async fn provision_agent(
             "requested_scope": requested_scope,
             "accountability": body.accountability,
             "state": "pending_runtime_key",
+            "self_realm_id": self_realm_id,
+            "provision_event_refs": provision_event_refs,
             "pairing_request_id": pairing_request_id,
             "pairing_code": pairing_code,
             "pairing_expires_at": expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -579,9 +732,17 @@ async fn list_agents(aa: AuthArgs, depot: &mut Depot, req: &mut Request) -> Json
         .list_for_controller(&session.actor)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
+    // CKP-0008 §4.3.2 — lazily expire any agent past its pairing window
+    // before projecting, so list reflects `pairing_expired` and the pending
+    // grants are revoked on first observation.
+    let mut agents = Vec::with_capacity(records.len());
+    for record in records {
+        let record = lazily_expire_pairing(state, &session, record).await;
+        agents.push(agent_projection_from_record(&record));
+    }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
     json_ok(AgentList {
-        agents: records.iter().map(agent_projection_from_record).collect(),
+        agents,
         next_cursor: None,
         has_more: false,
     })
@@ -615,7 +776,64 @@ async fn get_agent(
     if record.get("controller_did").and_then(Value::as_str) != Some(session.actor.as_str()) {
         return Err(AppError::not_found("agent not found"));
     }
+    let record = lazily_expire_pairing(state, &session, record).await;
     json_ok(agent_view_from_record(&record))
+}
+
+/// CKP-0008 §4.3.2 — lazily expire a `pending_runtime_key` agent whose
+/// pairing window has elapsed. On first observation past `pairing_expires_at`
+/// the agent flips to `pairing_expired` and (dev option B) the pending
+/// `effective_after_first_authorized_key` grants are auto-revoked. Returns
+/// the record with the (possibly) updated `state`. No-op for any other
+/// state. The controller `session` authors the revoke fan-out.
+async fn lazily_expire_pairing(
+    state: &AppState,
+    session: &SessionRecord,
+    mut record: Value,
+) -> Value {
+    if record.get("state").and_then(Value::as_str) != Some("pending_runtime_key") {
+        return record;
+    }
+    let expired = record
+        .get("pairing_expires_at")
+        .and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|expires| chrono::Utc::now() > expires.with_timezone(&chrono::Utc))
+        .unwrap_or(false);
+    if !expired {
+        return record;
+    }
+    let Some(agent_principal_id) = record
+        .get("agent_principal_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return record;
+    };
+    let changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let _ = state
+        .persistence
+        .agents()
+        .set_state(&agent_principal_id, "pairing_expired", &changed_at)
+        .await;
+    if state.config.development_mode {
+        if let Ok(realm) = ensure_self_realm(state, session).await {
+            let grant_ids = state
+                .projection
+                .lock()
+                .ok()
+                .map(|proj| proj.grant_ids_for_subject(&agent_principal_id))
+                .unwrap_or_default();
+            let _ = submit_revoke_agent_grants(state, session, &realm, &grant_ids).await;
+        }
+    }
+    if let Some(obj) = record.as_object_mut() {
+        obj.insert(
+            "state".to_owned(),
+            Value::String("pairing_expired".to_owned()),
+        );
+    }
+    record
 }
 
 async fn lifecycle_transition(
@@ -630,47 +848,91 @@ async fn lifecycle_transition(
     let session = aa.authenticated_session(state, req).await?;
     validate_agent_principal_id(&agent_id)?;
     let status_changed_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let mut payload = json!({
-        "agent_principal_id": agent_id,
-        "controller_principal_id": session.actor.clone(),
-        "transition": match event_kind {
-            "ck.self.agent.pause" => "pause",
-            "ck.self.agent.resume" => "resume",
-            "ck.self.agent.deactivate" => "deactivate",
-            _ => new_state.as_wire_str(),
-        },
-        "previous_status": match event_kind {
-            "ck.self.agent.resume" => "paused",
-            "ck.self.agent.deactivate" => "active",
-            _ => "active",
-        },
-        "status_changed_at": status_changed_at.clone(),
-    });
-    // pause / resume carry the spec-required `freshness_frontier`.
-    // deactivate carries no frontier field since the SPEC-SOL-003 resolution:
-    // a revocation's basis is the Control Move envelope seal_basis and its
-    // cutoff is the accepted Seal covering the Move.
-    if event_kind != "ck.self.agent.deactivate" {
-        payload.as_object_mut().expect("payload object").insert(
-            "freshness_frontier".to_owned(),
-            json!({ "captured_at": status_changed_at.clone() }),
-        );
+    // Read the current persisted state so the durable transition carries the
+    // accurate `previous_status` (resume comes from `paused`, etc.).
+    let previous_status = state
+        .persistence
+        .agents()
+        .get(&agent_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|record| {
+            record
+                .get("state")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "active".to_owned());
+    // CKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
+    // `ck.self.agent.{pause,resume,deactivate}` event authored by the
+    // controller, and on deactivate fan-out the revocation chain
+    // (`ck.agent.key.revoke` + `ck.capability.revoke` for every grant the
+    // agent holds). Production submits the lifecycle event from yougen.
+    if state.config.development_mode {
+        let realm = ensure_self_realm(state, &session).await?;
+        submit_durable_agent_lifecycle(
+            state,
+            &session,
+            &realm,
+            &agent_id,
+            event_kind,
+            &previous_status,
+            reason.as_deref(),
+        )
+        .await?;
+        if event_kind == "ck.self.agent.deactivate" {
+            let (key_ids, grant_ids) = state
+                .projection
+                .lock()
+                .ok()
+                .map(|proj| {
+                    (
+                        proj.authorized_key_ids_for(&agent_id),
+                        proj.grant_ids_for_subject(&agent_id),
+                    )
+                })
+                .unwrap_or_default();
+            submit_revoke_agent_keys(state, &session, &realm, &agent_id, &key_ids).await?;
+            submit_revoke_agent_grants(state, &session, &realm, &grant_ids).await?;
+        }
+    } else {
+        let mut payload = json!({
+            "agent_principal_id": agent_id,
+            "controller_principal_id": session.actor.clone(),
+            "transition": match event_kind {
+                "ck.self.agent.pause" => "pause",
+                "ck.self.agent.resume" => "resume",
+                "ck.self.agent.deactivate" => "deactivate",
+                _ => new_state.as_wire_str(),
+            },
+            "previous_status": previous_status,
+            "status_changed_at": status_changed_at.clone(),
+        });
+        // pause / resume carry the spec-required `freshness_frontier`;
+        // deactivate carries none (SPEC-SOL-003 resolution).
+        if event_kind != "ck.self.agent.deactivate" {
+            payload.as_object_mut().expect("payload object").insert(
+                "freshness_frontier".to_owned(),
+                json!({ "captured_at": status_changed_at.clone() }),
+            );
+        }
+        if let Some(reason) = reason.as_ref() {
+            payload
+                .as_object_mut()
+                .expect("payload object")
+                .insert("reason".to_owned(), Value::String(reason.clone()));
+        }
+        append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     }
-    if let Some(reason) = reason.as_ref() {
-        payload
-            .as_object_mut()
-            .expect("payload object")
-            .insert("reason".to_owned(), Value::String(reason.clone()));
-    }
-    // Persist the lifecycle state transition on the agent_principal row. The
-    // persisted `state` column carries the `agent_status` enum value; the
-    // lifecycle transitions land at `active` / `paused` / `deactivated`.
+    // Persist the lifecycle state transition on the agent_principal row so
+    // list/get reflect the new status (the durable event drives the reducer
+    // FSM; this row is the read-side projection consumed by the HTTP API).
     let _ = state
         .persistence
         .agents()
         .set_state(&agent_id, new_state.as_wire_str(), &status_changed_at)
         .await;
-    append_audit_log(state, Some(&session.actor), event_kind, payload, "accepted").await;
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{ok: true, status}` (status is the post-transition `agent_status`).
     Ok(AgentLifecycleOutcome {
@@ -847,23 +1109,38 @@ async fn attach_agent_grant(
         return Err(AppError::invalid_param("grant must be an object"));
     }
     // spec `agent_grant_attach_outcome.grant_id` MUST be a `ck:grant:<uuidv7>`.
-    let grant_id = GrantId::new(ids::generate_grant_id())
+    let grant_id_str = ids::generate_grant_id();
+    let grant_id = GrantId::new(grant_id_str.clone())
         .map_err(|err| AppError::internal(format!("generated grant id invalid: {err}")))?;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "ck.self.agent.grant.command.attach",
-        json!({
-            "agent_principal_id": agent_id,
-            "grant_id": grant_id,
-            "grant": body.grant,
-        }),
-        "accepted",
-    )
-    .await;
+    // CKP-0008 §4.11 (dev option B): write the real `ck.capability.grant`
+    // authored by the controller. Production submits this from yougen.
+    if state.config.development_mode {
+        let realm = ensure_self_realm(state, &session).await?;
+        attach_agent_grant_event(
+            state,
+            &session,
+            &realm,
+            &agent_id,
+            &grant_id_str,
+            &body.grant,
+        )
+        .await?;
+    } else {
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "ck.self.agent.grant.command.attach",
+            json!({
+                "agent_principal_id": agent_id,
+                "grant_id": grant_id,
+                "grant": body.grant,
+            }),
+            "accepted",
+        )
+        .await;
+    }
     res.status_code(StatusCode::CREATED);
-    // spec `agent_grant_attach_outcome` = `{ok, grant_id}`. P2-impl: emit the
-    // real ck.capability.grant event with the accountability_grant binding.
+    // spec `agent_grant_attach_outcome` = `{ok, grant_id}`.
     json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
 }
 

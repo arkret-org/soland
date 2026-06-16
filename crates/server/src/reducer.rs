@@ -199,6 +199,13 @@ pub struct ProjectionState {
     /// for any agent_principal_id we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
+    /// CKP-0008 §4.5 / D3 — accepted, non-revoked agent key authorizations
+    /// keyed by `agent_principal_id`. An entry is the set of authorized
+    /// `key_id`s the agent currently holds (cleared on
+    /// `ck.agent.key.revoke`). The capability evaluator reads this to decide
+    /// whether `effective_after_first_authorized_key` grants have activated:
+    /// an agent with at least one entry has completed runtime pairing.
+    pub agent_authorized_keys: BTreeMap<String, BTreeSet<String>>,
     /// R3 spec-sync — `ck.call.state.session_focus` write-once projection
     /// keyed by `call_id`. Once a focus is committed for a call, the
     /// reducer rejects any subsequent write with
@@ -1410,6 +1417,22 @@ pub enum ProjectionEffect {
         agent_principal_id: String,
         new_state: AgentLifecycleState,
     },
+    /// CKP-0008 §4.5 / D3 — `ck.agent.key.authorize` projected: the key is
+    /// recorded in `agent_authorized_keys` and every
+    /// `effective_after_first_authorized_key` grant for this agent has had
+    /// the flag cleared (the grants are now in their normal effective
+    /// window). `cleared_grant_ids` enumerates the grants that flipped.
+    AgentKeyAuthorizeProjected {
+        agent_principal_id: String,
+        key_id: String,
+        cleared_grant_ids: Vec<String>,
+    },
+    /// CKP-0008 §4.11 — `ck.agent.key.revoke` projected: the key was removed
+    /// from `agent_authorized_keys`.
+    AgentKeyRevokeProjected {
+        agent_principal_id: String,
+        key_id: String,
+    },
     /// REDU-2 — `actor_private_event` accepted (reducer_input=false).
     /// Wire-accepted and surfaced to audit-log consumers, but does NOT
     /// advance the seal frontier / actor_seq.
@@ -1956,6 +1979,26 @@ fn apply_agent_deactivate_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_agent_lifecycle(op, AgentLifecycleState::Deactivated)
+}
+
+/// CKP-0008 §4.5 / D3 — dispatch for `ck.agent.key.authorize`. Records the
+/// authorized key and clears `effective_after_first_authorized_key` on the
+/// agent's pending capability grants.
+fn apply_agent_key_authorize_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_key_authorize(op)
+}
+
+/// CKP-0008 §4.11 — dispatch for `ck.agent.key.revoke`.
+fn apply_agent_key_revoke_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_agent_key_revoke(op)
 }
 
 // REDU-2 — actor_private_event dispatchers. `reducer_input=false`: do
@@ -3211,6 +3254,11 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(CK_CAPABILITY_GRANT, apply_capability_grant_dispatch);
     m.insert(CK_CAPABILITY_REVOKE, apply_capability_revoke_dispatch);
     m.insert(CK_CAPABILITY_DELEGATE, apply_capability_delegate_dispatch);
+    // CKP-0008 §4.5 / §4.11 / D3 — agent runtime key authorization +
+    // revocation. authorize records the key and clears the agent's pending
+    // `effective_after_first_authorized_key` grants; revoke removes the key.
+    m.insert(CK_AGENT_KEY_AUTHORIZE, apply_agent_key_authorize_dispatch);
+    m.insert(CK_AGENT_KEY_REVOKE, apply_agent_key_revoke_dispatch);
     // P2 — moderation control-plane projection (decision / lift / appeal.*).
     // decision + lift share the `ck.component.moderation_state.v1` or_set
     // cell; the four appeal kinds drive the `ck.component.moderation.appeal.v1`

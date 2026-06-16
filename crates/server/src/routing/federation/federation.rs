@@ -1665,9 +1665,18 @@ pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) 
 }
 
 pub(in crate::routing) fn signature_authority(req: &Request, state: &AppState) -> String {
-    req.uri()
-        .authority()
-        .map(|authority| authority.as_str().to_owned())
+    // Behind a deployment gateway the upstream `Host` may be rewritten to the
+    // internal origin, so prefer the client-visible `X-Forwarded-Host` (first
+    // hop) the gateway records — matching how the peer / client signed the
+    // `@authority` (and the DPoP `htu`, see `auth_grant_dpop::request_authority`).
+    // Falls back to the request authority / `Host` / configured public origin for
+    // a same-origin deployment with no proxy in front.
+    forwarded_host_authority(req)
+        .or_else(|| {
+            req.uri()
+                .authority()
+                .map(|authority| authority.as_str().to_owned())
+        })
         .or_else(|| {
             req.headers()
                 .get("host")
@@ -1676,6 +1685,17 @@ pub(in crate::routing) fn signature_authority(req: &Request, state: &AppState) -
         })
         .or_else(|| public_base_url_authority(state))
         .unwrap_or_else(|| "server".to_owned())
+}
+
+/// Client-visible authority from `X-Forwarded-Host` (first hop), set by the
+/// deployment gateway when it rewrites the upstream `Host`. Absent / empty →
+/// `None` so the caller falls back to the request authority / `Host`.
+fn forwarded_host_authority(req: &Request) -> Option<String> {
+    req.headers()
+        .get("x-forwarded-host")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(',').next().unwrap_or(value).trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn public_base_url_scheme(state: &AppState) -> Option<String> {

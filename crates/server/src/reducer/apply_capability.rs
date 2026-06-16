@@ -231,6 +231,19 @@ impl ProjectionState {
         // describe the same grant; the last one wins on attributes.
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
+        // CKP-0008 §4.3.2 / §4.9 — fail closed: a grant still carrying
+        // `effective_after_first_authorized_key == true` is durable but
+        // inactive (the agent has not completed runtime pairing). The reducer
+        // clears this flag in `apply_agent_key_authorize` once an accepted
+        // `ck.agent.key.authorize` lands, after which the grant enters the
+        // engine read index. Until then it MUST NOT authorize anything.
+        if body
+            .get("effective_after_first_authorized_key")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return None;
+        }
         engine_grant_from_cell_body(grant_id, body, revoked)
     }
 
@@ -412,5 +425,286 @@ impl ProjectionState {
             realm_id,
             parent_grant_id,
         }
+    }
+
+    /// CKP-0008 §4.5 / D3 — project `ck.agent.key.authorize`: record the
+    /// authorized key for the agent and clear
+    /// `effective_after_first_authorized_key` on every pending capability
+    /// grant the agent holds (§4.3.2 — pairing completion activates the
+    /// inactive provisioning grants). Idempotent: a re-authorization of the
+    /// same key id converges, and grants already cleared stay cleared.
+    pub(crate) fn apply_agent_key_authorize(&mut self, operation: &Operation) -> ProjectionEffect {
+        let Some(agent_principal_id) = operation
+            .payload
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_authorize_missing_agent_principal_id".to_owned(),
+            };
+        };
+        let Some(key_id) = operation
+            .payload
+            .get("key_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_authorize_missing_key_id".to_owned(),
+            };
+        };
+        self.agent_authorized_keys
+            .entry(agent_principal_id.clone())
+            .or_default()
+            .insert(key_id.clone());
+        let cleared_grant_ids = self.clear_pending_grant_flags_for(&agent_principal_id);
+        ProjectionEffect::AgentKeyAuthorizeProjected {
+            agent_principal_id,
+            key_id,
+            cleared_grant_ids,
+        }
+    }
+
+    /// CKP-0008 §4.11 — project `ck.agent.key.revoke`: remove the key from
+    /// the agent's authorized-key set (idempotent).
+    pub(crate) fn apply_agent_key_revoke(&mut self, operation: &Operation) -> ProjectionEffect {
+        let Some(agent_principal_id) = operation
+            .payload
+            .get("agent_principal_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_revoke_missing_agent_principal_id".to_owned(),
+            };
+        };
+        let Some(key_id) = operation
+            .payload
+            .get("key_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_key_revoke_missing_key_id".to_owned(),
+            };
+        };
+        if let Some(keys) = self.agent_authorized_keys.get_mut(&agent_principal_id) {
+            keys.remove(&key_id);
+            if keys.is_empty() {
+                self.agent_authorized_keys.remove(&agent_principal_id);
+            }
+        }
+        ProjectionEffect::AgentKeyRevokeProjected {
+            agent_principal_id,
+            key_id,
+        }
+    }
+
+    /// CKP-0008 §4.11 — every grant id whose subject is `subject_did`
+    /// (across all capability grant cells, including revoked ones so the
+    /// deactivate fan-out can idempotently re-revoke). Used by the lifecycle
+    /// deactivate path to fan-out `ck.capability.revoke`.
+    pub fn grant_ids_for_subject(&self, subject_did: &str) -> Vec<String> {
+        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let mut ids = Vec::new();
+        for (cell_ref, cell_state) in &self.cells {
+            if !cell_ref.as_str().starts_with(cell_prefix) {
+                continue;
+            }
+            let CellState::Value(Value::Array(items)) = cell_state else {
+                continue;
+            };
+            for item in items {
+                let body = item.get("value").unwrap_or(item);
+                let subject_matches = body
+                    .get("subject")
+                    .and_then(Value::as_str)
+                    .map(|subject| subject == subject_did)
+                    .unwrap_or(false);
+                if subject_matches {
+                    if let Some(grant_id) = body
+                        .get("grant_id")
+                        .or_else(|| body.get("id"))
+                        .and_then(Value::as_str)
+                    {
+                        if !ids.iter().any(|existing| existing == grant_id) {
+                            ids.push(grant_id.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// CKP-0008 §4.11 — the authorized key ids the agent currently holds
+    /// (for the deactivate `ck.agent.key.revoke` fan-out).
+    pub fn authorized_key_ids_for(&self, agent_principal_id: &str) -> Vec<String> {
+        self.agent_authorized_keys
+            .get(agent_principal_id)
+            .map(|keys| keys.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// True when the agent principal has at least one accepted, non-revoked
+    /// agent key authorization. The capability evaluator fail-closes
+    /// `effective_after_first_authorized_key` grants until this is true.
+    pub fn agent_has_authorized_key(&self, agent_principal_id: &str) -> bool {
+        self.agent_authorized_keys
+            .get(agent_principal_id)
+            .map(|keys| !keys.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Clear `effective_after_first_authorized_key` on every capability grant
+    /// cell whose subject is `agent_principal_id`. Returns the grant ids that
+    /// were flipped from inactive to active.
+    fn clear_pending_grant_flags_for(&mut self, agent_principal_id: &str) -> Vec<String> {
+        let mut cleared = Vec::new();
+        let cell_prefix = "ck:cell:ck.component.capability.grant.v1:";
+        let target_refs: Vec<CellRef> = self
+            .cells
+            .keys()
+            .filter(|cell_ref| cell_ref.as_str().starts_with(cell_prefix))
+            .cloned()
+            .collect();
+        for cell_ref in target_refs {
+            let CellState::Value(Value::Array(items)) = self.cells.get(&cell_ref).cloned().unwrap()
+            else {
+                continue;
+            };
+            let mut mutated = false;
+            let mut grant_id_for_cell = None;
+            let new_items: Vec<Value> = items
+                .into_iter()
+                .map(|mut item| {
+                    let body = if item.get("value").is_some() {
+                        item.get_mut("value")
+                    } else {
+                        Some(&mut item)
+                    };
+                    if let Some(Value::Object(map)) = body {
+                        let subject_matches = map
+                            .get("subject")
+                            .and_then(Value::as_str)
+                            .map(|subject| subject == agent_principal_id)
+                            .unwrap_or(false);
+                        if subject_matches {
+                            grant_id_for_cell = map
+                                .get("grant_id")
+                                .or_else(|| map.get("id"))
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned);
+                            if map
+                                .get("effective_after_first_authorized_key")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                            {
+                                map.insert(
+                                    "effective_after_first_authorized_key".to_owned(),
+                                    Value::Bool(false),
+                                );
+                                mutated = true;
+                            }
+                        }
+                    }
+                    item
+                })
+                .collect();
+            if mutated {
+                self.cells
+                    .insert(cell_ref, CellState::Value(Value::Array(new_items)));
+                if let Some(grant_id) = grant_id_for_cell {
+                    cleared.push(grant_id);
+                }
+            }
+        }
+        cleared
+    }
+}
+
+#[cfg(test)]
+mod agent_key_flag_tests {
+    use cokret_sdk::models::{Operation, OperationType};
+    use cokret_sdk::{OperationId, RealmId};
+    use serde_json::json;
+
+    use crate::reducer::ProjectionState;
+
+    const AGENT: &str = "did:web:agent.example";
+    const REALM: &str = "ck:realm:01970000-0000-7000-8000-000000000000";
+    const GRANT: &str = "ck:grant:01970000-0000-7000-8000-0000000000a1";
+
+    fn op(kind_object_type: &str, payload: serde_json::Value) -> Operation {
+        Operation {
+            schema: "ck.schema.operation.v1".to_owned(),
+            operation_id: OperationId::new("ck:operation:01970000-0000-7000-8000-0000000000ff")
+                .unwrap(),
+            record_type: "operation".to_owned(),
+            operation_type: OperationType::Create,
+            realm_id: RealmId::new(REALM.to_owned()).unwrap(),
+            object_id: None,
+            object_type: kind_object_type.to_owned(),
+            payload,
+            idempotency_key: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn pending_grant_payload() -> serde_json::Value {
+        json!({
+            "grant_id": GRANT,
+            "grant": {
+                "id": GRANT,
+                "schema": "ck.schema.capability_grant.v1",
+                "realm_id": REALM,
+                "issuer": "did:web:alice.example",
+                "subject": AGENT,
+                "actions": ["ck.message.create"],
+                "resources": [{ "kind": "realm", "realm_id": REALM }],
+                "effective_after_first_authorized_key": true,
+            }
+        })
+    }
+
+    #[test]
+    fn pending_grant_is_fail_closed_until_key_authorize() {
+        let mut state = ProjectionState::default();
+        let now = chrono::Utc::now();
+        // Pending grant: flagged inactive ⇒ NOT in the engine index.
+        state.apply_capability_grant(&op("capability_grant", pending_grant_payload()), now);
+        assert!(
+            state.effective_engine_grant(GRANT).is_none(),
+            "effective_after_first_authorized_key grant MUST fail closed before pairing"
+        );
+        assert!(!state.agent_has_authorized_key(AGENT));
+        assert_eq!(state.grant_ids_for_subject(AGENT), vec![GRANT.to_owned()]);
+
+        // Pairing: ck.agent.key.authorize clears the flag for the agent.
+        let effect = state.apply_agent_key_authorize(&op(
+            "agent_key_authorize",
+            json!({ "agent_principal_id": AGENT, "key_id": "ck:agent_key:dev1" }),
+        ));
+        match effect {
+            crate::reducer::ProjectionEffect::AgentKeyAuthorizeProjected {
+                cleared_grant_ids,
+                ..
+            } => assert_eq!(cleared_grant_ids, vec![GRANT.to_owned()]),
+            other => panic!("expected AgentKeyAuthorizeProjected, got {other:?}"),
+        }
+        assert!(state.agent_has_authorized_key(AGENT));
+        let grant = state
+            .effective_engine_grant(GRANT)
+            .expect("grant active after pairing");
+        assert_eq!(grant.subject, AGENT);
+        assert!(grant.actions.iter().any(|a| a == "ck.message.create"));
+
+        // Revoking the key removes the authorized-key marker.
+        state.apply_agent_key_revoke(&op(
+            "agent_key_revoke",
+            json!({ "agent_principal_id": AGENT, "key_id": "ck:agent_key:dev1" }),
+        ));
+        assert!(!state.agent_has_authorized_key(AGENT));
     }
 }

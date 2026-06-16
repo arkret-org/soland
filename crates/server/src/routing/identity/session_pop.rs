@@ -12,6 +12,11 @@
 //! - On a high-security deployment (`sovereign_enclave_enabled`), writes and sensitive reads MUST
 //!   be PoP-presented; bare bearer is rejected. On the default profile, bare bearer remains an
 //!   accepted downgrade for low-sensitivity clients.
+//! - The session key the signature verifies against is sourced per inbound credential: for the
+//!   ② grant+DPoP path it is the grant's `session_public_key` (read via introspection, since that
+//!   session is request-scoped and never persisted); for a dev-login bearer it is the persisted
+//!   `SessionRecord`'s key. Under ② the same Ed25519 device key backs both the DPoP `cnf.jkt`
+//!   sender-constraint and this 9421 body-integrity layer.
 //!
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
@@ -80,21 +85,11 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         return Ok(());
     }
 
-    // A signature is present: it MUST verify against the session key.
+    // A signature is present: it MUST verify against the session signing key.
     let token = bearer_token(req).ok_or_else(|| {
         AppError::unauthenticated("PoP presentation requires a bearer session token")
     })?;
-    let token_hash = session_token_hash(token, &state.config.service_did);
-    let session = state
-        .persistence
-        .sessions()
-        .get(&token_hash)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::unauthenticated("session not found for PoP presentation"))?;
-    let jwk = session.session_public_key.ok_or_else(|| {
-        AppError::unauthenticated("session is not bound to a signing key for PoP presentation")
-    })?;
+    let jwk = session_signing_key_jwk(state, req, token).await?;
     let (public_key, explicit_kid, thumbprint) = parse_session_jwk(&jwk)?;
 
     let body = req
@@ -179,6 +174,41 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
     }
 
     Ok(())
+}
+
+/// Resolve the session signing-key JWK that an RFC 9421 PoP signature MUST
+/// verify against, for whichever inbound credential is being presented
+/// (account-lifecycle.md §4.1 D6):
+///
+/// - **② grant + DPoP** (`DPoP` header present): the session is request-scoped
+///   and is NEVER persisted as a local bearer, so the bound signing key is read
+///   from the grant's `session_public_key` via session-grant introspection
+///   (cached ≤120s). The grant binds the same Ed25519 device key as both the
+///   DPoP `cnf.jkt` and the 9421 `session_public_key`, so DPoP supplies the
+///   per-request sender-constraint while this 9421 layer adds body integrity.
+/// - **dev-login bearer**: the key comes from the persisted `SessionRecord`.
+async fn session_signing_key_jwk(
+    state: &AppState,
+    req: &Request,
+    token: &str,
+) -> Result<String, AppError> {
+    if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
+        let grant = super::auth_grant_dpop::introspect_session_grant_cached(state, token, false)
+            .await
+            .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
+        return Ok(grant.session_public_key);
+    }
+    let token_hash = session_token_hash(token, &state.config.service_did);
+    let session = state
+        .persistence
+        .sessions()
+        .get(&token_hash)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::unauthenticated("session not found for PoP presentation"))?;
+    session.session_public_key.ok_or_else(|| {
+        AppError::unauthenticated("session is not bound to a signing key for PoP presentation")
+    })
 }
 
 /// Whether a bare-bearer (unsigned) request must be rejected: only on

@@ -1080,11 +1080,19 @@ pub(in crate::routing) async fn submit_event_value(
             ));
         }
         // CKP-0016 §5.2 — a native personal agent may only author messages
-        // where its effective participation `reply` bit is true.
+        // where its effective participation `reply` bit is true. Per
+        // 0016-agent-participation-policy.md §6: an agent with no effective
+        // reply grant for the scope is rejected `failed_precondition` (the
+        // missing materialised `ck.message.create` grant is a precondition,
+        // not an authorization-context denial).
         if let Err(reason) =
             validate_agent_reply_participation(state, std::slice::from_ref(operation)).await
         {
-            return Err(SubmitOneError::new(StatusCode::FORBIDDEN, reason, reason));
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
+                reason,
+            ));
         }
         if let Err(message) =
             validate_operation_policy(state, std::slice::from_ref(operation)).await
@@ -1580,6 +1588,13 @@ fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
         .lock()
         .map(|realms| realms.get(&realm_id_typed).is_some())
         .unwrap_or(false)
+}
+
+/// CKP-0008 — public read of the realm index used by the dev provisioning
+/// fan-out (`ensure_self_realm`) to decide whether the controller self realm
+/// genesis event still needs to be submitted.
+pub(in crate::routing) fn realm_is_indexed(state: &AppState, realm_id: &str) -> bool {
+    realm_exists_in_index(state, realm_id)
 }
 
 /// Spec realm-and-space.md §2.6 step 2 — when a `ck.realm.create` event
