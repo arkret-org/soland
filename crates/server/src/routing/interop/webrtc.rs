@@ -38,9 +38,12 @@ use crate::wire::{
 /// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
 /// `interop::router()` so the only spec-registered media paths resolve at
 /// `/_cokret/self/rtc/ice-config` and `/_cokret/self/rtc/token` (see
-/// `contract-catalog.json` / the OpenAPI binding). The ephemeral signaling /
-/// call-scoped surfaces are NOT spec-registered and live on the soland-internal
-/// `/_soland/self/*` face instead (see [`local_router`]).
+/// `contract-catalog.json` / the OpenAPI binding). Ephemeral call signaling is
+/// the spec-registered `/_cokret/self/ephemeral` `ck.call.signal` relay (see
+/// `routing::events::sync::ephemeral`); the durable call model is the
+/// `ck.call.state` reducer. The legacy soland-internal `/_soland/self/webrtc/*`
+/// session stack has been removed — token/ICE authz and focus/ban now read the
+/// durable `ck.call.state` cell directly.
 pub(super) fn protocol_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_cokret/self/rtc/ice-config`).

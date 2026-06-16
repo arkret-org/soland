@@ -266,6 +266,48 @@ impl ProjectionState {
         if let Ok(cell_id) =
             cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}"))
         {
+            // Monotonic ban/removal set (`webrtc-signaling.md` §3a). The cell is
+            // overwritten wholesale on every `ck.call.state` event and
+            // `removed_participants[]` gates media-token re-issue for banned
+            // actors (see the `/rtc/token` issuer). A later event that omits or
+            // shrinks the field MUST NOT silently clear bans, so union the new
+            // event's rows with the committed set — removals only accumulate.
+            let mut value = value;
+            let existing_removed: Vec<Value> = self
+                .cells
+                .get(&cell_id)
+                .and_then(|cell| match cell {
+                    CellState::Value(v) => v.get("removed_participants").and_then(Value::as_array),
+                    _ => None,
+                })
+                .cloned()
+                .unwrap_or_default();
+            if !existing_removed.is_empty() {
+                let key = |row: &Value| -> (String, String, String) {
+                    let field = |name: &str| {
+                        row.get(name)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    (field("actor_id"), field("device_id"), field("action"))
+                };
+                let mut merged = existing_removed;
+                let new_rows = value
+                    .get("removed_participants")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for row in new_rows {
+                    let row_key = key(&row);
+                    if !merged.iter().any(|existing| key(existing) == row_key) {
+                        merged.push(row);
+                    }
+                }
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("removed_participants".to_owned(), Value::Array(merged));
+                }
+            }
             self.cells.insert(cell_id, CellState::Value(value));
         }
         ProjectionEffect::CallStateProjected { call_id }

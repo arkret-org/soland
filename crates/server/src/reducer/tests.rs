@@ -399,6 +399,73 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
     ));
 }
 
+/// `webrtc-signaling.md` §3a — `removed_participants[]` (the ban set that gates
+/// media-token re-issue) is monotonic: a later `ck.call.state` event that omits
+/// the field MUST NOT clear committed bans, since the cell is overwritten
+/// wholesale on every event.
+#[test]
+fn call_state_removed_participants_ban_set_is_monotonic() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ck:realm:01904100-0000-7000-8000-cfc039892063";
+    let call_id = "ck:call:01904100-0000-7000-8000-c0000000000b";
+    let cell_id =
+        cokret_sdk::CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "ringing" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+
+    // A moderation event records an actor-wide ban.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({
+                    "call_id": call_id,
+                    "state": "active",
+                    "removed_participants": [
+                        { "actor_id": "did:web:bob.example", "action": "ban", "removed_at": "2026-06-16T00:00:00Z" }
+                    ]
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    let banned = state.cell_value(&cell_id).unwrap()["removed_participants"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(banned, 1, "ban recorded");
+
+    // A later event that OMITS removed_participants MUST NOT clear the ban.
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                crate::kinds::CK_CALL_STATE,
+                realm,
+                serde_json::json!({ "call_id": call_id, "state": "ended" }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::CallStateProjected { .. }
+    ));
+    let after = state.cell_value(&cell_id).unwrap();
+    let rows = after["removed_participants"].as_array().expect("ban set preserved");
+    assert_eq!(rows.len(), 1, "ban set must survive an event that omits it");
+    assert_eq!(rows[0]["actor_id"], "did:web:bob.example");
+}
+
 /// `call-state.md` §4.2 — the `state` lifecycle FSM: first-state range, the
 /// legal-successor table, terminal absorption, and idempotent replay.
 #[test]
