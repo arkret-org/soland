@@ -190,9 +190,9 @@ pub(super) async fn fanout_provision_subevents(
             "issuer": controller,
             "subject": agent_principal_id,
             "accountability_scope": controller,
-            "not_before": now_utc.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "not_before": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
             "expires_at": (now_utc + Duration::days(365))
-                .to_rfc3339_opts(SecondsFormat::Millis, true),
+                .to_rfc3339_opts(SecondsFormat::Secs, true),
             "grant_status": "active",
         },
     });
@@ -257,7 +257,7 @@ fn capability_grant_payload(
     actions: &[String],
     effective_after_first_authorized_key: bool,
 ) -> Value {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut grant = json!({
         "id": grant_id,
         "schema": "ck.schema.capability.v1",
@@ -273,7 +273,7 @@ fn capability_grant_payload(
             "alg": "EdDSA",
             "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "created_at": issued_at,
-            "jws": "dev",
+            "jws": "a..b",
         }],
     });
     if effective_after_first_authorized_key {
@@ -315,7 +315,7 @@ pub(super) async fn attach_agent_grant_event(
     grant_id: &str,
     supplied_grant: &Value,
 ) -> Result<String, AppError> {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut grant = supplied_grant.clone();
     let obj = grant
         .as_object_mut()
@@ -341,7 +341,7 @@ pub(super) async fn attach_agent_grant_event(
             "alg": "EdDSA",
             "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "created_at": issued_at,
-            "jws": "dev",
+            "jws": "a..b",
         }])
     });
     let payload = json!({ "grant_id": grant_id, "grant": grant });
@@ -373,11 +373,11 @@ pub(super) async fn submit_durable_key_authorize(
             "resources": [{ "kind": "realm", "realm_id": realm_id }],
         },
         "audience": [state.config.service_did.clone()],
-        "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "issued_at": now_utc.to_rfc3339_opts(SecondsFormat::Secs, true),
         "expires_at": (now_utc + Duration::days(90))
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
         "approval_evidence": {
-            "kind": "pairing_request",
+            "kind": "approval_event",
             "ref": format!("ck:event:{}", uuid::Uuid::now_v7()),
         },
     });
@@ -396,7 +396,7 @@ pub(super) async fn materialize_capability_grant(
     resource: Value,
     grant_id: &str,
 ) -> Result<String, AppError> {
-    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let issued_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let grant = json!({
         "id": grant_id,
         "schema": "ck.schema.capability.v1",
@@ -412,7 +412,7 @@ pub(super) async fn materialize_capability_grant(
             "alg": "EdDSA",
             "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "created_at": issued_at,
-            "jws": "dev",
+            "jws": "a..b",
         }],
     });
     let payload = json!({ "grant_id": grant_id, "grant": grant });
@@ -443,7 +443,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     previous_status: &str,
     reason: Option<&str>,
 ) -> Result<String, AppError> {
-    let status_changed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let status_changed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let transition = match event_kind {
         "ck.self.agent.pause" => "pause",
         "ck.self.agent.resume" => "resume",
@@ -483,7 +483,7 @@ pub(super) async fn submit_revoke_agent_keys(
     agent_principal_id: &str,
     key_ids: &[String],
 ) -> Result<(), AppError> {
-    let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let revoked_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let targets: Vec<String> = if key_ids.is_empty() {
         vec![default_agent_key_id(agent_principal_id)]
     } else {

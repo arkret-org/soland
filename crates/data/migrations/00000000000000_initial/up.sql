@@ -82,7 +82,7 @@ CREATE TABLE public.agent_principals (
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT agent_principals_id_check CHECK (((id ~~ 'did:%'::text) AND (id !~ '[[:space:]#?]'::text))),
     CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR (agent_slug ~ '^[a-z0-9]([a-z0-9_-]{0,62}[a-z0-9])?$'::text)),
-    CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
+    CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['pending_runtime_key'::text, 'active'::text, 'paused'::text, 'deactivated'::text, 'pairing_expired'::text])))
 );
 
 CREATE TABLE public.agent_sessions (

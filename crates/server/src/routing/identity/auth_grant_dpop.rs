@@ -545,19 +545,43 @@ fn htu_matches(htu: &str, req: &Request) -> bool {
     // server-side behind a TLS-terminating front, so bind on authority + path:
     // match when the htu ends with `<authority><path>` and its path component
     // equals the request path.
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|value| value.to_str().ok());
-    match host {
-        Some(host) => {
-            let want = format!("{host}{path}");
+    match request_authority(req) {
+        Some(authority) => {
+            let want = format!("{authority}{path}");
             htu_normalized.ends_with(&want) && htu_path(&htu_normalized) == path
         }
-        // No Host header: fall back to a path-only binding so a same-origin
+        // No authority header: fall back to a path-only binding so a same-origin
         // deployment still validates.
         None => htu_path(&htu_normalized) == path,
     }
+}
+
+/// The client-visible authority (`host[:port]`) of the request. Behind the
+/// deployment gateway the upstream `Host` header is frequently rewritten to the
+/// internal origin (`soland:8080`), which would never equal the gate origin the
+/// client signed into the DPoP `htu`. So prefer `X-Forwarded-Host` (the first /
+/// client-facing hop the gateway records) and fall back to `Host` for a
+/// same-origin deployment with no proxy in front.
+fn request_authority(req: &Request) -> Option<&str> {
+    let forwarded = req
+        .headers()
+        .get("x-forwarded-host")
+        .and_then(|value| value.to_str().ok());
+    let host = req.headers().get("host").and_then(|value| value.to_str().ok());
+    select_authority(forwarded, host)
+}
+
+/// Choose the client-visible authority from the (`X-Forwarded-Host`, `Host`)
+/// pair: prefer the first `X-Forwarded-Host` hop, fall back to `Host`. Whitespace
+/// is trimmed and empty values are ignored.
+fn select_authority<'a>(forwarded: Option<&'a str>, host: Option<&'a str>) -> Option<&'a str> {
+    let forwarded = forwarded
+        .map(|value| value.split(',').next().unwrap_or(value).trim())
+        .filter(|value| !value.is_empty());
+    if forwarded.is_some() {
+        return forwarded;
+    }
+    host.map(str::trim).filter(|value| !value.is_empty())
 }
 
 /// Strip the query and fragment from an htu (RFC 9449 §4.3 normalization).
@@ -620,6 +644,26 @@ mod tests {
         let jti = "test-jti-unique-001";
         assert!(register_dpop_jti(jti, expiry));
         assert!(!register_dpop_jti(jti, expiry));
+    }
+
+    #[test]
+    fn select_authority_prefers_forwarded_host() {
+        // Gateway records the client-facing host in X-Forwarded-Host while the
+        // upstream Host is the internal origin: the forwarded value wins.
+        assert_eq!(
+            select_authority(Some("account.example"), Some("soland:8080")),
+            Some("account.example")
+        );
+        // Multi-hop X-Forwarded-Host: only the first (client-facing) hop is used.
+        assert_eq!(
+            select_authority(Some("account.example, gw.internal"), Some("soland:8080")),
+            Some("account.example")
+        );
+        // No forwarded header: fall back to Host.
+        assert_eq!(select_authority(None, Some("account.example")), Some("account.example"));
+        // Empty/whitespace forwarded value is ignored, not treated as authority.
+        assert_eq!(select_authority(Some("  "), Some("account.example")), Some("account.example"));
+        assert_eq!(select_authority(None, None), None);
     }
 
     #[test]

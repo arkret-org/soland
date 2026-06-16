@@ -492,13 +492,6 @@ async fn agent_key_pair(
         )));
     }
     let authorized_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
-    // authorizing the first runtime key flips it to `active`.
-    let _ = state
-        .persistence
-        .agents()
-        .set_state(agent_principal_id, "active", &authorized_at)
-        .await;
     // CKP-0008 §4.5 / D3 (dev option B): submit the durable
     // `ck.agent.key.authorize` event authored by the controller so the
     // reducer projects the agent-key state and clears the agent's pending
@@ -550,6 +543,15 @@ async fn agent_key_pair(
         EventId::new(ids::generate_event_id())
             .map_err(|err| AppError::internal(format!("generated event id invalid: {err}")))?
     };
+    // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
+    // flip to `active` ONLY after the durable key authorization has been
+    // accepted (a failed submit above propagates via `?` and MUST NOT leave
+    // the agent flipped to active).
+    let _ = state
+        .persistence
+        .agents()
+        .set_state(agent_principal_id, "active", &authorized_at)
+        .await;
     json_ok(AgentKeyPairOutcome {
         ok: true,
         authorized_event_ref,
