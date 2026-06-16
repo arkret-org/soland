@@ -41,7 +41,7 @@ use super::auth::PRINCIPAL_SESSION_BIND_SCOPE;
 use crate::state::{AppState, SessionRecord};
 use crate::wire::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionGrantIntrospectStatus,
+    SessionGrantIntrospectStatus, SessionGrantIntrospectionProof,
 };
 
 /// Device-scope prefix carried in a `ck.session.grant`'s scope set
@@ -139,6 +139,7 @@ pub(crate) fn invalidate_cached_grant(state: &AppState, grant_jwt: &str) {
 pub(crate) async fn introspect_session_grant_cached(
     state: &AppState,
     grant_jwt: &str,
+    proof: Option<&SessionGrantIntrospectionProof>,
     force_fresh: bool,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
     let key = introspection_cache_key(grant_jwt, &state.config.service_did);
@@ -154,7 +155,7 @@ pub(crate) async fn introspect_session_grant_cached(
         return Ok(grant);
     }
 
-    let grant = introspect_session_grant_remote(state, grant_jwt).await?;
+    let grant = introspect_session_grant_remote(state, grant_jwt, proof).await?;
     cache_store(key, grant.clone());
     Ok(grant)
 }
@@ -164,6 +165,7 @@ pub(crate) async fn introspect_session_grant_cached(
 async fn introspect_session_grant_remote(
     state: &AppState,
     grant_jwt: &str,
+    proof: Option<&SessionGrantIntrospectionProof>,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
     let Some(introspection_url) = state.config.session_grant_introspection_url.as_deref() else {
         return Err((
@@ -183,7 +185,9 @@ async fn introspect_session_grant_remote(
         id: None,
         grant_jwt: Some(grant_jwt.to_owned()),
         audience: Some(state.config.service_did.clone()),
-        proof: None,
+        // Forward the client's session-grant holder proof; coauth requires it to
+        // confirm possession of the grant's session key (otherwise `proof_required`).
+        proof: proof.cloned(),
     };
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
@@ -270,6 +274,33 @@ pub(crate) fn dpop_header(req: &Request) -> Option<String> {
         .get("dpop")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+/// The session-grant holder proof the client presents alongside the grant +
+/// DPoP, carried as `X-Cokret-Session-Grant-Challenge` + `-Proof` headers (the
+/// same pair `interop/push` reads). coauth's introspection requires this proof
+/// to confirm the caller holds the grant's session key; without it the grant
+/// introspects as `proof_required` / inactive. Both headers MUST be present
+/// together; a lone one is treated as absent (coauth then answers
+/// `proof_required`, which surfaces as a clean auth failure).
+pub(crate) fn session_grant_introspection_proof(
+    req: &Request,
+) -> Option<SessionGrantIntrospectionProof> {
+    let header = |name: &str| {
+        req.headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    match (
+        header("x-cokret-session-grant-challenge"),
+        header("x-cokret-session-grant-proof"),
+    ) {
+        (Some(challenge), Some(proof_jwt)) => {
+            Some(SessionGrantIntrospectionProof { challenge, proof_jwt })
+        }
+        _ => None,
+    }
 }
 
 struct DpopClaims {
@@ -410,10 +441,19 @@ pub(crate) async fn grant_dpop_session(
     force_fresh: bool,
 ) -> Result<SessionRecord, AuthError> {
     let dpop = dpop_header(req).ok_or_else(|| unauthenticated("missing DPoP proof"))?;
+    // The session-grant holder proof (challenge + proof_jwt) the client presents
+    // alongside the grant; forwarded to coauth's introspection, which requires it.
+    let introspection_proof = session_grant_introspection_proof(req);
 
     // 1. grant active (cached ≤120s; sensitive ops force fresh). Reads cnf_jkt, session_public_key,
     //    scopes, subject, device_id, expiry.
-    let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
+    let grant = introspect_session_grant_cached(
+        state,
+        grant_jwt,
+        introspection_proof.as_ref(),
+        force_fresh,
+    )
+    .await?;
 
     // 5. audience == this service's service_did.
     if grant.audience != state.config.service_did {

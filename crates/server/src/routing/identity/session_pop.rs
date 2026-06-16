@@ -193,9 +193,15 @@ async fn session_signing_key_jwk(
     token: &str,
 ) -> Result<String, AppError> {
     if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
-        let grant = super::auth_grant_dpop::introspect_session_grant_cached(state, token, false)
-            .await
-            .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
+        let proof = super::auth_grant_dpop::session_grant_introspection_proof(req);
+        let grant = super::auth_grant_dpop::introspect_session_grant_cached(
+            state,
+            token,
+            proof.as_ref(),
+            false,
+        )
+        .await
+        .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
         return Ok(grant.session_public_key);
     }
     let token_hash = session_token_hash(token, &state.config.service_did);
