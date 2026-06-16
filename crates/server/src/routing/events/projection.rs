@@ -1662,6 +1662,18 @@ async fn project_device_authorize(state: &crate::state::AppState, payload: &Valu
         map.entry("device_id".to_owned())
             .or_insert_with(|| Value::String(device_id.to_owned()));
         map.insert("device_authorize_projected".to_owned(), Value::Bool(true));
+        // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
+        // `cross_signing_binding` verbatim so keys/query can echo it for
+        // client-side chain verification. Inception bootstrap devices carry a
+        // `bootstrap_binding` instead and no `cross_signing_binding`.
+        match payload.get("cross_signing_binding") {
+            Some(binding @ Value::Object(_)) => {
+                map.insert("cross_signing_binding".to_owned(), binding.clone());
+            }
+            _ => {
+                map.remove("cross_signing_binding");
+            }
+        }
     }
     let device = DeviceInventoryRecord {
         actor: principal_id.to_owned(),

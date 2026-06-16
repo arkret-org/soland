@@ -1350,6 +1350,218 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     assert!(device.revoked_at.is_none());
 }
 
+/// Build a real, fully-signed `(ck.cross_signing.publish payload,
+/// ck.device.authorize cross_signing_binding)` pair for `principal` / `device`
+/// using the supplied PSK / SSK keypairs and the SDK canonical-input
+/// constructors (the same ones the server's `check_device_cross_signing_binding`
+/// uses). Returns `(publish_payload_json, device_authorize_payload_json,
+/// psk_public_multibase, device_public_key_multibase)`.
+fn tier2_publish_and_authorize(
+    principal: &str,
+    device: &str,
+    psk: &SigningKey,
+    ssk: &SigningKey,
+    device_signing: &SigningKey,
+) -> (Value, Value, String, String) {
+    use cokret_sdk::{
+        CrossSigningBinding, CrossSigningKeyRecord, CrossSigningPublishContent, DeviceId,
+        DeviceTrustBinding, SignedCrossSigningKey,
+    };
+
+    let principal_did = Did::new(principal.to_owned()).unwrap();
+    let device_id = DeviceId::new(device.to_owned()).unwrap();
+    let psk_multibase = test_ed25519_multibase_public(psk);
+    let ssk_multibase = test_ed25519_multibase_public(ssk);
+    let device_public_key = test_ed25519_multibase_public(device_signing);
+
+    let mut publish = CrossSigningPublishContent {
+        principal_id: principal_did.clone(),
+        trust_domain: cokret_sdk::TypedTrustDomainId::new("ck:trust_domain:example.net").unwrap(),
+        principal_signing_key: CrossSigningKeyRecord {
+            kid: format!("{principal}#ck_principal_signing_v1"),
+            alg: "EdDSA".to_owned(),
+            public_key: psk_multibase.clone(),
+            key_format: "multibase".to_owned(),
+        },
+        self_signing_key: SignedCrossSigningKey {
+            key: CrossSigningKeyRecord {
+                kid: format!("{principal}#ck_self_signing_v1"),
+                alg: "EdDSA".to_owned(),
+                public_key: ssk_multibase.clone(),
+                key_format: "multibase".to_owned(),
+            },
+            binding: CrossSigningBinding {
+                verification_method: format!("{principal}#ck_principal_signing_v1"),
+                alg: "EdDSA".to_owned(),
+                signature: String::new(),
+            },
+        },
+        user_signing_key: SignedCrossSigningKey {
+            key: CrossSigningKeyRecord {
+                kid: format!("{principal}#ck_user_signing_v1"),
+                alg: "EdDSA".to_owned(),
+                public_key: "z6MkUserDistinctKey".to_owned(),
+                key_format: "multibase".to_owned(),
+            },
+            binding: CrossSigningBinding {
+                verification_method: format!("{principal}#ck_principal_signing_v1"),
+                alg: "EdDSA".to_owned(),
+                signature: "dW51c2Vk".to_owned(),
+            },
+        },
+        expected_previous_generation: 0,
+        generation: 1,
+        issued_at: chrono::Utc::now(),
+    };
+    // PSK signs the SSK record over the §5.1 canonical input.
+    let ssk_input = publish.self_signing_binding_input().unwrap();
+    publish.self_signing_key.binding.signature =
+        cokret_sdk::base64url_encode(psk.sign(&ssk_input).to_bytes());
+
+    // SSK signs the device binding over the §5.2 canonical input.
+    let device_input =
+        DeviceTrustBinding::canonical_input(&principal_did, &device_id, &device_public_key, 1)
+            .unwrap();
+    let binding_signature = cokret_sdk::base64url_encode(ssk.sign(&device_input).to_bytes());
+
+    let publish_payload = serde_json::to_value(&publish).unwrap();
+    let authorize_payload = serde_json::json!({
+        "principal_id": principal,
+        "device_id": device,
+        "device_public_key": device_public_key,
+        "cross_signing_binding": {
+            "verification_method": format!("{principal}#ck_self_signing_v1"),
+            "alg": "EdDSA",
+            "ssk_generation": 1,
+            "signature": binding_signature,
+        },
+    });
+    (publish_payload, authorize_payload, psk_multibase, device_public_key)
+}
+
+/// Tier-2 (device-lifecycle.md §8.2 / §8.3) — `keys/query` echoes the per-device
+/// `cross_signing_binding` and the per-principal `cross_signing` publish payload,
+/// and the SDK chain verifier accepts the returned material (simulating a yougen
+/// client that DID-anchored the PSK), while a tampered device binding fails.
+#[tokio::test]
+async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
+    use cokret_sdk::signatures::PublicKeyMaterial;
+    use cokret_sdk::{
+        CrossSigningPublishContent, DeviceId, DeviceTrustBinding, DeviceTrustState,
+        QueryDeviceCrossSigningBinding, verify_device_cross_signing_chain,
+    };
+
+    let state = AppState::new(test_config(), Db { pool: None });
+    let alice = "did:web:alice.example";
+    let alice_device = "ck:device:01904100-0000-7000-8000-a11ce0000003";
+    let psk = SigningKey::from_bytes(&[210u8; 32]);
+    let ssk = SigningKey::from_bytes(&[211u8; 32]);
+    let device_signing = SigningKey::from_bytes(&[212u8; 32]);
+
+    let (publish_payload, authorize_payload, psk_multibase, device_public_key) =
+        tier2_publish_and_authorize(alice, alice_device, &psk, &ssk, &device_signing);
+
+    // Project the cross_signing.publish (records PSK→{SSK,USK} into the
+    // DeviceManager) and the device.authorize (persists device_public_key +
+    // cross_signing_binding into the devices table) through the real pipeline.
+    let control_realm = soland::test_support::principal_control_realm_for_did(alice);
+    let publish_op = Operation::create(
+        OperationId::new(new_prefixed_uuid7("ck:operation:")).unwrap(),
+        RealmId::new(control_realm.clone()).unwrap(),
+        "ck.cross_signing.publish",
+        publish_payload,
+    );
+    let authorize_op = Operation::create(
+        OperationId::new(new_prefixed_uuid7("ck:operation:")).unwrap(),
+        RealmId::new(control_realm).unwrap(),
+        "ck.device.authorize",
+        authorize_payload,
+    );
+    soland::test_support::project_accepted_operations(
+        &state,
+        alice,
+        &[publish_op, authorize_op],
+    )
+    .await;
+
+    // Member B queries A's directory.
+    let bob = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ck:device:01904100-0000-7000-8000-b0b000000003",
+        "Bob Desktop",
+    )
+    .await;
+    let query: Value = TestClient::post("http://server/_cokret/self/keys/query")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&serde_json::json!({ "device_keys": { alice: [alice_device] } }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let entry = &query["device_keys"][alice][alice_device];
+    assert_eq!(entry["device_status"], "active", "entry: {query}");
+    assert_eq!(
+        entry["device_signing_key"],
+        format!("did:key:{device_public_key}")
+    );
+    // Per-device cross_signing_binding echoed.
+    assert!(
+        entry["cross_signing_binding"].is_object(),
+        "expected cross_signing_binding echo: {query}"
+    );
+    // Per-principal cross_signing publish payload echoed.
+    assert!(
+        query["cross_signing"][alice].is_object(),
+        "expected per-principal cross_signing publish: {query}"
+    );
+
+    // Reconstruct the SDK inputs from the response and run the chain verifier,
+    // anchoring the PSK to the published key (a yougen client would instead
+    // resolve A's DID and confirm this PSK is in A's control set).
+    let publish: CrossSigningPublishContent =
+        serde_json::from_value(query["cross_signing"][alice].clone()).unwrap();
+    let binding: QueryDeviceCrossSigningBinding =
+        serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();
+    let trust_binding = DeviceTrustBinding {
+        verification_method: binding.verification_method.clone(),
+        alg: binding.alg.clone().unwrap_or_else(|| "EdDSA".to_owned()),
+        ssk_generation: binding.ssk_generation,
+        signature: binding.signature.clone(),
+    };
+    let device_id_typed = DeviceId::new(alice_device.to_owned()).unwrap();
+    let principal_did = Did::new(alice.to_owned()).unwrap();
+    let anchored_psk = PublicKeyMaterial::Ed25519Multibase {
+        value: psk_multibase,
+    };
+    let state_ok = verify_device_cross_signing_chain(
+        &publish,
+        &trust_binding,
+        &principal_did,
+        &device_id_typed,
+        &device_public_key,
+        &anchored_psk,
+    );
+    assert_eq!(state_ok, DeviceTrustState::CrossSigned);
+
+    // Tampering the device binding signature → not CrossSigned (fail-closed).
+    let mut tampered = trust_binding.clone();
+    let mut raw = cokret_sdk::base64url_decode(&tampered.signature).unwrap();
+    raw[0] ^= 0xff;
+    tampered.signature = cokret_sdk::base64url_encode(&raw);
+    let state_bad = verify_device_cross_signing_chain(
+        &publish,
+        &tampered,
+        &principal_did,
+        &device_id_typed,
+        &device_public_key,
+        &anchored_psk,
+    );
+    assert_ne!(state_bad, DeviceTrustState::CrossSigned);
+}
+
 #[tokio::test]
 async fn keys_query_hides_revoked_device() {
     let state = AppState::new(test_config(), Db { pool: None });

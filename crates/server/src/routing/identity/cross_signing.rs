@@ -329,6 +329,11 @@ fn resolve_psk_in_control_set(
 pub(crate) struct DeviceSigningDirectoryFacet {
     pub signing_key_did: Option<String>,
     pub status: DeviceStatus,
+    /// Tier-2 (device-lifecycle.md §8.2): the device's authoritative
+    /// `cross_signing_binding` echoed verbatim for client-side chain
+    /// verification. Present only for a verified, non-revoked device that
+    /// carries one (inception bootstrap devices have none).
+    pub cross_signing_binding: Option<cokret_sdk::QueryDeviceCrossSigningBinding>,
 }
 
 /// Resolve the `keys/query` signing-key directory facet for `(principal_id,
@@ -355,6 +360,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
             return DeviceSigningDirectoryFacet {
                 signing_key_did: None,
                 status: DeviceStatus::Revoked,
+                cross_signing_binding: None,
             };
         }
     };
@@ -362,6 +368,7 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         return DeviceSigningDirectoryFacet {
             signing_key_did: None,
             status: DeviceStatus::Revoked,
+            cross_signing_binding: None,
         };
     }
     let signing_key_did = record
@@ -372,10 +379,42 @@ pub(crate) async fn resolve_device_signing_directory_facet(
         .filter(|value| !value.is_empty())
         .filter(|value| decode_ed25519_key(value, "multibase").is_ok())
         .map(|value| format!("did:key:{value}"));
+    // Tier-2: echo the persisted `cross_signing_binding` verbatim (device.authorize
+    // projection stored it). Deserialize defensively; a malformed stored value is
+    // dropped rather than failing the whole query.
+    let cross_signing_binding = record
+        .payload
+        .get("cross_signing_binding")
+        .filter(|value| value.is_object())
+        .and_then(|value| {
+            serde_json::from_value::<cokret_sdk::QueryDeviceCrossSigningBinding>(value.clone()).ok()
+        });
     DeviceSigningDirectoryFacet {
         signing_key_did,
         status: DeviceStatus::Active,
+        cross_signing_binding,
     }
+}
+
+/// Resolve the per-principal Tier-2 `cross_signing` outcome material
+/// (device-lifecycle.md §8.2 / §8.3): the principal's current accepted
+/// `ck.cross_signing.publish` payload, rendered as the
+/// `cross-signing-publish.schema.json` counterpart. Returns `None` when no
+/// publish is accepted (e.g. inception-only principals). Reuses the
+/// authoritative `DeviceManager::current_cross_signing` accepted state — the
+/// same source the publish CAS bookkeeping writes.
+pub(crate) fn resolve_current_cross_signing_publish(
+    state: &AppState,
+    principal_id: &str,
+) -> Option<cokret_sdk::CrossSigningPublish> {
+    let principal = Did::new(principal_id.to_owned()).ok()?;
+    let mgr = state.cross_signing.lock().expect("cross_signing lock");
+    let publish = mgr.current_cross_signing(&principal)?;
+    // Re-serialize the SDK content type into the schema-counterpart publish
+    // payload so both crates agree on the wire shape (fields are 1:1).
+    serde_json::to_value(publish)
+        .ok()
+        .and_then(|value| serde_json::from_value::<cokret_sdk::CrossSigningPublish>(value).ok())
 }
 
 /// Decode an Ed25519 public key in the declared `key_format`

@@ -170,7 +170,20 @@ async fn keys_query(
     let body = body.into_inner();
     let store = state.persistence.device_keys();
     let mut result = BTreeMap::new();
+    let mut cross_signing = BTreeMap::new();
     for (actor, devices) in body.device_keys {
+        // Tier-2 (device-lifecycle.md §8.2): attach this principal's current
+        // accepted cross_signing.publish payload so the client can DID-anchor
+        // the SSK before trusting any per-device binding. Inserted once per
+        // principal, only when a publish is accepted.
+        if let Some(publish) =
+            crate::routing::identity::cross_signing::resolve_current_cross_signing_publish(
+                state,
+                actor.as_str(),
+            )
+        {
+            cross_signing.insert(actor.clone(), publish);
+        }
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
             // Revocation filter (device-lifecycle.md §8.2): a revoked device is
@@ -204,6 +217,7 @@ async fn keys_query(
                     algorithms,
                     device_signing_key: facet.signing_key_did,
                     device_status: Some(facet.status),
+                    cross_signing_binding: facet.cross_signing_binding,
                 },
             );
         }
@@ -212,6 +226,7 @@ async fn keys_query(
     json_ok(KeysQueryOutcome {
         device_keys: result,
         failures: Vec::new(),
+        cross_signing,
     })
 }
 
