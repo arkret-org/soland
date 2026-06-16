@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 pub use cokret_sdk::ops_api::HardeningStatus;
-use cokret_sdk::{ClaimedProfileEntry, ServerDescription};
+use cokret_sdk::{
+    AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
+    ClaimedProfileEntry, ServerDescription, SessionGrantProofKind,
+};
 pub use cokret_sdk::{
     ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
     DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
@@ -978,20 +981,69 @@ pub fn describe(
     trust_domain: &str,
     resumable_upload_incomplete_ttl_seconds: u64,
 ) -> ServerDescription {
+    // Legacy alias list (`supported_auth_methods`) for pre-`methods[]` clients.
     let mut supported_auth_methods = Vec::new();
     if development_mode {
-        supported_auth_methods.push("dev_bearer_token");
+        supported_auth_methods.push("dev_bearer_token".to_owned());
     }
     if oauth_introspection_enabled {
-        supported_auth_methods.push("oauth2_bearer_introspection");
+        supported_auth_methods.push("oauth2_bearer_introspection".to_owned());
     }
-    let mut auth_metadata = json!({
-        "mode": if development_mode { "development" } else { "production" },
-        "supported_auth_methods": supported_auth_methods,
-    });
+    // Account Authority discovery (service-surface §2.5.1): the client-visible
+    // single owner of all `/_cokret/gate/account/*`. For this deployment the
+    // Account Authority is fronted at the principal server's public origin; a
+    // gateway in front routes the Auth-side vs Principal-side operations
+    // internally (that split is not a client routing rule).
+    let account_origin = public_base_url.trim_end_matches('/').to_owned();
+    let gate_account_base = format!("{account_origin}/_cokret/gate/account");
+
+    // Authentication methods are pure provider discovery; they do not decide
+    // gate/account routing. Advertise OIDC when an Auth Server is configured;
+    // the client uses standard OIDC discovery and submits an
+    // `oidc_code_exchange` proof to the Account Authority's `session-grants`.
+    let mut methods = Vec::new();
+    // Compatibility aliases for legacy clients (new clients read methods[]).
+    let mut legacy_auth_server_url = None;
+    let mut legacy_oauth_issuer = None;
+    let mut legacy_openid_configuration = None;
     if let Some(auth_server_url) = auth_server_url.filter(|value| !value.trim().is_empty()) {
-        auth_metadata["auth_server_url"] = json!(auth_server_url);
+        let issuer = auth_server_url.trim_end_matches('/').to_owned();
+        let openid_configuration = format!("{issuer}/.well-known/openid-configuration");
+        methods.push(AuthMethod {
+            method: AuthMethodKind::Oidc,
+            issuer: Some(issuer.clone()),
+            provider: None,
+            openid_configuration: Some(openid_configuration.clone()),
+            client_id: None,
+            scopes: vec!["openid".to_owned(), "profile".to_owned()],
+            grant_exchange: AuthGrantExchange {
+                proof_kind: SessionGrantProofKind::OidcCodeExchange,
+            },
+        });
+        legacy_auth_server_url = Some(auth_server_url.to_owned());
+        legacy_oauth_issuer = Some(issuer);
+        legacy_openid_configuration = Some(openid_configuration);
     }
+
+    let auth_metadata = AuthMetadata {
+        mode: if development_mode {
+            "development".to_owned()
+        } else {
+            "production".to_owned()
+        },
+        account_authority: Some(AccountAuthority {
+            origin: account_origin,
+            gate_account_base,
+        }),
+        methods,
+        auth_server_url: legacy_auth_server_url,
+        oauth_issuer: legacy_oauth_issuer,
+        openid_configuration: legacy_openid_configuration,
+        supported_auth_methods,
+        did_binding_methods: Vec::new(),
+        read: None,
+        extra: std::collections::BTreeMap::new(),
+    };
     let supported_operations = canonical_supported_operations();
     let local_extension_operations = local_extension_operations();
 
