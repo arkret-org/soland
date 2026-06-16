@@ -39,29 +39,15 @@ use super::{
 use crate::error::{AppError, ErrorCode};
 use crate::state::{AccountRecord, AppState, DeviceInventoryRecord, SessionRecord};
 use crate::wire::{
-    DevLoginRequestBody, LogoutOutcome, SessionGrantExchangeRequestBody,
-    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
+    DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,
+    SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
     SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
 use crate::{JsonResult, ids, json_ok};
 
-const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
+pub(crate) const PRINCIPAL_SESSION_BIND_SCOPE: &str =
+    "urn:cokret:principal-server:session.bind";
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
-
-/// Lifetime (minutes) of an access bearer minted from a session-grant exchange.
-/// The bearer is a SHORT access token; the (longer, minutes-to-hours) session
-/// grant is the refresh credential the client re-exchanges for fresh bearers.
-/// Capped so a long grant never yields a long-lived bearer; never extended past
-/// the grant's own expiry.
-const SHORT_BEARER_TTL_MINUTES: i64 = 15;
-
-/// Expiry for an access bearer minted from a session-grant exchange: `now +
-/// SHORT_BEARER_TTL`, but never beyond the grant's own expiry. Keeps bearers
-/// short regardless of grant length, and never mints a bearer that outlives the
-/// refresh credential backing it.
-fn capped_bearer_expiry(grant_expires_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
-    grant_expires_at.min(now + Duration::minutes(SHORT_BEARER_TTL_MINUTES))
-}
 
 pub(super) fn router() -> Router {
     local_router()
@@ -70,10 +56,14 @@ pub(super) fn router() -> Router {
 pub(super) fn protocol_account_router() -> Router {
     Router::with_path("account")
         .push(
-            Router::with_path("session-grants")
-            .post(exchange_session_grant)
+            // ② (api-conventions.md §3.3): the Principal Server no longer offers
+            // a grant→bearer exchange. The client presents the ck.session.grant
+            // directly to `/_cokret/self/*` with a DPoP proof, so there is no
+            // `session-grants .post(...)` mount here — only `revoke`.
+            //
             // Spec `account_auth` surface group: `ck.gate.account.command.revoke_session`
             // binds to `POST /_cokret/gate/account/session-grants/revoke`.
+            Router::with_path("session-grants")
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
         // Spec `ck.gate.account.command.logout` — Principal Server device
@@ -92,10 +82,14 @@ pub(super) fn local_router() -> Router {
     // Deployment gateways route that longer prefix to soland (the Principal
     // Server) even though `/_cokret/gate/` otherwise goes to the Auth Server, so
     // no `/_soland/gate/auth/logout` product alias is needed.
+    // ② (api-conventions.md §3.3): no grant→bearer exchange — the
+    // `/_soland/gate/auth/session-grant/exchange` product alias is removed along
+    // with the canonical `session-grants` POST mount. dev-login remains the only
+    // local "get a usable session"; production clients present the grant + DPoP
+    // directly to `/_cokret/self/*`.
     Router::with_path("auth")
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
-        .push(Router::with_path("session-grant/exchange").post(exchange_session_grant))
 }
 
 #[endpoint(
@@ -236,20 +230,6 @@ fn initial_session_device_verification_state<'a>(
     }
 }
 
-fn validated_session_device_public_key(value: Option<&str>) -> Result<Option<String>, AppError> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    crate::routing::identity::cross_signing::decode_ed25519_key(value, "multibase").map_err(
-        |error| {
-            AppError::invalid_param(format!(
-                "device_public_key must be an Ed25519 multibase key: {error}"
-            ))
-        },
-    )?;
-    Ok(Some(value.to_owned()))
-}
-
 async fn ensure_authorizing_device_verified(
     state: &AppState,
     session: &SessionRecord,
@@ -382,37 +362,6 @@ fn account_lockout_error(state: &AppState, actor: &str) -> Option<AppError> {
         .with_wire_code("policy_denied")
         .with_reason_detail("account_status=locked (failed-login lockout)"),
     )
-}
-
-/// Record a failed auth attempt against the actor and emit a single audit
-/// row + warn-level tracing breadcrumb. Called from every auth-failure
-/// branch in the dev-login / session-grant exchange paths.
-pub(super) async fn record_failed_login_attempt(state: &AppState, actor: &str, surface: &str) {
-    let record = state.record_failed_login(actor);
-    let locked_until = record
-        .locked_until
-        .map(|until| until.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    append_audit_log(
-        state,
-        Some(actor),
-        "auth.failed_attempt",
-        json!({
-            "surface": surface,
-            "attempts": record.attempts,
-            "locked_until": locked_until,
-        }),
-        "denied",
-    )
-    .await;
-    if record.locked_until.is_some() {
-        tracing::warn!(
-            actor,
-            attempts = record.attempts,
-            locked_until = ?record.locked_until,
-            surface,
-            "account locked after repeated failed auth attempts"
-        );
-    }
 }
 
 fn account_existing_session_error(
@@ -596,161 +545,6 @@ async fn dev_login(
     })
 }
 
-#[endpoint(
-    operation_id = "ck.gate.account.command.issue_session_grant",
-    tags("auth"),
-    summary = "Issue a principal bearer session from a coauth session-grant proof"
-)]
-#[tracing::instrument(skip_all, fields(op = "ck.gate.account.command.issue_session_grant"))]
-async fn exchange_session_grant(
-    depot: &mut Depot,
-    body: JsonBody<SessionGrantExchangeRequestBody>,
-) -> JsonResult<SessionLoginOutcome> {
-    let state = depot.obtain::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    let principal_id = body.principal_id;
-    let device_id = body.device_id;
-    let principal_id_str = principal_id.as_str();
-    let device_id_str = device_id.as_str();
-    if body.grant_jwt.trim().is_empty() {
-        return Err(AppError::invalid_param(
-            "grant_jwt, principal_id, and device_id are required",
-        ));
-    }
-    if let Some(error) = account_lockout_error(state, principal_id_str) {
-        return Err(error);
-    }
-    let account = state
-        .persistence
-        .accounts()
-        .get(principal_id_str)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if account.is_none() {
-        return Err(AppError::not_found("account is not registered"));
-    }
-    if let Some(error) = account_new_session_error(state, principal_id_str) {
-        return Err(error);
-    }
-
-    let grant = match validate_session_grant_binding(
-        state,
-        SessionGrantValidationInput {
-            grant_jwt: body.grant_jwt.as_str(),
-            principal_id: principal_id_str,
-            device_id: device_id_str,
-            proof: body.introspection_proof.as_ref(),
-        },
-    )
-    .await
-    {
-        Ok(grant) => grant,
-        Err(error) => {
-            // Spec: A.3 — session-grant validation failures count toward
-            // the rolling lockout window. Account is locked after 5
-            // failures in 15 min; clearing happens on the success
-            // path below.
-            record_failed_login_attempt(state, principal_id_str, "session_grant_exchange").await;
-            return Err(error);
-        }
-    };
-    // The principal session grant is the (minutes-to-hours, audience-bound)
-    // refresh credential; the access bearer minted from it is a SHORT-lived
-    // access token. Decouple the two: cap the bearer at SHORT_BEARER_TTL but
-    // never let it outlive the grant. The client silently re-exchanges the
-    // still-valid grant for a fresh short bearer (every <TTL), so the session
-    // lives for the grant's full lifetime without ever holding a long-lived
-    // bearer. (Previously the bearer inherited the grant's expiry verbatim,
-    // which both produced long-lived bearers when grants are long and — with a
-    // 5-minute grant — bounced the user to login every 5 minutes.)
-    let grant_expires_at = grant
-        .as_ref()
-        .map(|grant| grant.expires_at)
-        .unwrap_or_else(|| now() + Duration::hours(12));
-    let expires_at = capped_bearer_expiry(grant_expires_at, now());
-    let token = token_for(
-        principal_id_str,
-        device_id_str,
-        expires_at.timestamp_millis(),
-    );
-    let token_hash = session_token_hash(&token, &state.config.service_did);
-    let session = SessionRecord {
-        token_hash,
-        actor: principal_id_str.to_owned(),
-        device_id: device_id_str.to_owned(),
-        audience: state.config.service_did.clone(),
-        session_public_key: grant
-            .as_ref()
-            .and_then(|grant| grant.session_public_key.clone()),
-        expires_at,
-        created_at: now(),
-        revoked_at: None,
-    };
-    state
-        .persistence
-        .sessions()
-        .put(&session)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let seen_at = now();
-    let existing_devices = state
-        .persistence
-        .devices()
-        .list_for_actor(principal_id_str)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let verification_state =
-        initial_session_device_verification_state(&existing_devices, device_id_str);
-    let device_public_key = validated_session_device_public_key(body.device_public_key.as_deref())?;
-    let mut device_payload = json!({
-        "device_id": device_id_str,
-        "display_name": body.display_name.clone(),
-        "verification": verification_state,
-        "last_seen_at": seen_at,
-        "session_grant_bridge": true,
-    });
-    if let Some(device_public_key) = device_public_key {
-        device_payload["device_public_key"] = Value::String(device_public_key);
-    }
-    let device = DeviceInventoryRecord {
-        actor: principal_id_str.to_owned(),
-        device_id: device_id_str.to_owned(),
-        display_name: body.display_name.clone(),
-        verification_state: verification_state.to_owned(),
-        payload: device_payload,
-        created_at: seen_at,
-        updated_at: seen_at,
-        revoked_at: None,
-    };
-    state
-        .persistence
-        .devices()
-        .put(&device)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    append_audit_log(
-        state,
-        Some(principal_id_str),
-        "auth.session_grant_exchange",
-        json!({
-            "device_id": device_id_str,
-            "grant_bridge": true,
-            "coauth_introspection": grant.is_some(),
-            "one_time_use_consumed": grant.as_ref().map(|grant| grant.one_time_use_consumed).unwrap_or(false),
-        }),
-        "accepted",
-    )
-    .await;
-    state.clear_failed_login(principal_id_str);
-
-    json_ok(SessionLoginOutcome {
-        access_token: token,
-        token_type: "Bearer".to_owned(),
-        actor: principal_id.clone(),
-        device_id: device_id.clone(),
-        expires_at,
-    })
-}
 
 // Session-grant introspection wire types come from the SDK
 // (`SessionGrantIntrospectRequestBody` / `SessionGrantIntrospectOutcome` /
@@ -960,6 +754,14 @@ async fn logout(
     }
 
     let introspected = introspect_session_grant_for_logout(state, &grant_jwt).await?;
+
+    // §4.1 step 3 (Principal-side, local): invalidate this grant's cached
+    // introspection so the next `/_cokret/self/*` request re-introspects against
+    // coauth and observes `active=false` once the Auth-side chain is terminated
+    // below. There is NO local bearer to revoke (② removed the exchange); the
+    // device session-record revoke + to-device drop + this cache invalidation
+    // together fail-close the device's subsequent requests.
+    super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
 
     // Principal-side termination, keyed on the grant's (principal, device).
     // `subject` is always present on an active grant; `device_id` is optional
@@ -1437,6 +1239,22 @@ pub async fn authenticated_session(
         "unauthenticated",
         "missing bearer token",
     ))?;
+    // §3.3 inbound credential discriminator. Three inbound credential types
+    // coexist on `/_cokret/self/*` (account-lifecycle.md §4.1 D6):
+    //   (a) ck.session.grant + DPoP — the default ② path: the Authorization
+    //       Bearer is a ck.session.grant and a `DPoP` holder proof accompanies
+    //       it. A grant presentation MUST carry DPoP, while neither the dev
+    //       bearer nor a coauth OAuth access token ever does, so the presence of
+    //       the `DPoP` header is the branch key.
+    //   (b) dev-login bearer — a local SessionRecord lookup hit.
+    //   (c) coauth OAuth access token — introspected when no local record hits.
+    // Branch (a) here so (b)/(c) below are byte-for-byte unchanged.
+    if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
+        // The presented credential is request-scoped: it is validated and used
+        // for this request, never persisted as a local bearer. Sensitive-op
+        // cache bypass is exposed via `authenticated_session_fresh`.
+        return super::auth_grant_dpop::grant_dpop_session(state, req, token, false).await;
+    }
     let token_hash = session_token_hash(token, &state.config.service_did);
     let session = state
         .persistence
@@ -1481,6 +1299,45 @@ pub async fn authenticated_session(
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
     Ok(session)
+}
+
+/// Force-fresh variant of [`authenticated_session`] for sensitive operations.
+///
+/// Identical to [`authenticated_session`] except that the grant + DPoP inbound
+/// path (§3.3) bypasses the ≤120s introspection cache and re-introspects the
+/// grant against coauth, so a just-revoked grant fails closed immediately
+/// rather than after the cache TTL (api-conventions.md §3.3 D2: "sensitive
+/// operations MUST bypass the cache and force a fresh introspection"). The dev
+/// bearer and OAuth-introspection paths are unaffected (they carry no cache of
+/// their own here). Handlers serving sensitive operations (key backup, device
+/// management, moderation, etc.) SHOULD call this instead.
+// Wave 1 exposes the force-fresh API; wiring individual sensitive handlers to
+// call it is a follow-up, so it has no in-crate caller yet.
+#[allow(dead_code)]
+pub async fn authenticated_session_fresh(
+    state: &AppState,
+    req: &Request,
+) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
+    if super::auth_grant_dpop::is_grant_dpop_presentation(req) {
+        if let Some(query) = req.uri().query()
+            && (query.contains("access_token=")
+                || query.contains("auth=")
+                || query.contains("token="))
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "auth material in query strings is not allowed",
+            ));
+        }
+        let token = bearer_token(req).ok_or((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "missing bearer token",
+        ))?;
+        return super::auth_grant_dpop::grant_dpop_session(state, req, token, true).await;
+    }
+    authenticated_session(state, req).await
 }
 
 /// Extract a short, redaction-safe preview of any auth-material parameter
@@ -2106,26 +1963,3 @@ pub fn session_token_hash(token: &str, audience: &str) -> String {
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bearer_expiry_is_capped_short_and_never_outlives_grant() {
-        let now = DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-
-        // Long (8h) grant → bearer capped at the short 15-minute TTL, so a long
-        // refresh credential never yields a long-lived access bearer.
-        let long_grant = now + Duration::hours(8);
-        assert_eq!(
-            capped_bearer_expiry(long_grant, now),
-            now + Duration::minutes(SHORT_BEARER_TTL_MINUTES),
-        );
-
-        // Grant nearer than the short TTL → bearer never outlives the grant.
-        let near_grant = now + Duration::minutes(3);
-        assert_eq!(capped_bearer_expiry(near_grant, now), near_grant);
-    }
-}

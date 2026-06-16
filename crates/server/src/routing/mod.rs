@@ -419,19 +419,16 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
         "org.cokret.soland.system.health",
         "health and liveness",
     ),
-    (
-        "/_cokret/gate/account/session-grants",
-        PathItemType::Post,
-        "auth",
-        "ck.gate.account.command.issue_session_grant",
-        "issue principal bearer session from a coauth session grant",
-    ),
+    // ② (api-conventions.md §3.3): the grant→bearer exchange / issue endpoint
+    // is removed. Clients present the ck.session.grant + DPoP directly to
+    // `/_cokret/self/*`, so there is no `POST /_cokret/gate/account/session-grants`
+    // issue operation to advertise here.
     (
         "/_cokret/gate/account/logout",
         PathItemType::Post,
         "auth",
         "ck.gate.account.command.logout",
-        "device logout: revoke bearer + device session record + to-device",
+        "device logout: invalidate grant introspection cache + device session record + to-device, trigger Auth-side grant-chain termination",
     ),
     (
         "/_cokret/describe",
