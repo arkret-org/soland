@@ -45,8 +45,7 @@ use crate::wire::{
 };
 use crate::{JsonResult, ids, json_ok};
 
-pub(crate) const PRINCIPAL_SESSION_BIND_SCOPE: &str =
-    "urn:cokret:principal-server:session.bind";
+pub(crate) const PRINCIPAL_SESSION_BIND_SCOPE: &str = "urn:cokret:principal-server:session.bind";
 const OAUTH_INTROSPECTION_TOKEN_TYPE_HINT: &str = "access_token";
 
 pub(super) fn router() -> Router {
@@ -545,7 +544,6 @@ async fn dev_login(
     })
 }
 
-
 // Session-grant introspection wire types come from the SDK
 // (`SessionGrantIntrospectRequestBody` / `SessionGrantIntrospectOutcome` /
 // `SessionGrantIntrospectStatus`), so this caller binds to the same strong
@@ -710,16 +708,14 @@ pub(crate) async fn validate_session_grant_binding(
 /// introspection.
 ///
 /// Termination is two-sided:
-///  - **Principal-side (here, fully):** revoke the principal's local bearer
-///    sessions for the grant's device, mark the device session record revoked
-///    (so device-scoped writes fail closed on this Principal Server), and drop
-///    the device's queued to-device messages. It does NOT write
-///    `ck.account.status`, does NOT emit `ck.device.revoke`, and does NOT erase
-///    durable device authorization — re-login restores this device locally.
-///  - **Auth-side (trigger):** forward the grant bearer + the verbatim client
-///    DPoP proof to coauth's `session-grants/logout` so the grant rotation
-///    chain + browser session are terminated (§4.1 step 2, the
-///    durability-critical step).
+///  - **Principal-side (here, fully):** revoke the principal's local bearer sessions for the
+///    grant's device, mark the device session record revoked (so device-scoped writes fail closed
+///    on this Principal Server), and drop the device's queued to-device messages. It does NOT write
+///    `ck.account.status`, does NOT emit `ck.device.revoke`, and does NOT erase durable device
+///    authorization — re-login restores this device locally.
+///  - **Auth-side (trigger):** forward the grant bearer + the verbatim client DPoP proof to
+///    coauth's `session-grants/logout` so the grant rotation chain + browser session are terminated
+///    (§4.1 step 2, the durability-critical step).
 #[endpoint(
     operation_id = "ck.gate.account.command.logout",
     tags("auth"),
@@ -747,9 +743,7 @@ async fn logout(
     // Authorization bearer as a local session bearer and perform the
     // principal-side termination directly. Production keeps the strict
     // grant+DPoP+introspection contract below.
-    if state.config.development_mode
-        && state.config.session_grant_introspection_url.is_none()
-    {
+    if state.config.development_mode && state.config.session_grant_introspection_url.is_none() {
         return json_ok(dev_mode_local_logout(state, &grant_jwt).await?);
     }
 
@@ -817,10 +811,7 @@ async fn logout(
 /// principal-side termination directly (revoke the bearer session + mark the
 /// device session record revoked + drop to-device), mirroring the production
 /// principal-side effects without an Auth Server round-trip.
-async fn dev_mode_local_logout(
-    state: &AppState,
-    token: &str,
-) -> Result<LogoutOutcome, AppError> {
+async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
     let token_hash = session_token_hash(token, &state.config.service_did);
     let revoked_session = match state
         .persistence
@@ -960,7 +951,9 @@ async fn trigger_auth_side_grant_logout(
         // Dev mode without an Auth Server: no rotation chain to terminate.
         return Ok(false);
     };
-    let Some(logout_url) = introspection_url.strip_suffix("/introspect").map(|base| format!("{base}/logout"))
+    let Some(logout_url) = introspection_url
+        .strip_suffix("/introspect")
+        .map(|base| format!("{base}/logout"))
     else {
         return Err(AppError::unsupported_feature(
             "SOLAND_SESSION_GRANT_INTROSPECTION_URL must end in /session-grants/introspect so the \
@@ -1962,4 +1955,3 @@ pub fn session_token_hash(token: &str, audience: &str) -> String {
     hasher.update(token.as_bytes());
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
-

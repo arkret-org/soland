@@ -8,17 +8,16 @@
 //! request-scoped and is NEVER persisted as a local bearer.
 //!
 //! Validation pipeline (any failure → `unauthenticated`, fail closed):
-//!   1. grant active via session-grant introspection at coauth, with a small
-//!      TTL (≤120s) cache keyed by the presented grant; sensitive operations
-//!      bypass the cache and force a fresh introspection.
-//!   2. DPoP signature valid against the grant's `cnf.jkt`
-//!      (JWK SHA-256 thumbprint, RFC 7638) read from the introspection result.
-//!   3. DPoP `htm` == request method, `htu` == request URL,
-//!      `ath` == base64url(sha256(grant)).
+//!   1. grant active via session-grant introspection at coauth, with a small TTL (≤120s) cache
+//!      keyed by the presented grant; sensitive operations bypass the cache and force a fresh
+//!      introspection.
+//!   2. DPoP signature valid against the grant's `cnf.jkt` (JWK SHA-256 thumbprint, RFC 7638) read
+//!      from the introspection result.
+//!   3. DPoP `htm` == request method, `htu` == request URL, `ath` == base64url(sha256(grant)).
 //!   4. DPoP `jti` + `iat` freshness window for replay defense.
 //!   5. grant audience == this service's `service_did`.
-//!   6. grant scope contains the principal-server `session.bind` scope AND a
-//!      device scope; principal / device binding consistent; grant not expired.
+//!   6. grant scope contains the principal-server `session.bind` scope AND a device scope;
+//!      principal / device binding consistent; grant not expired.
 //!
 //! DPoP does NOT bind the request body — body integrity rides on TLS, same as
 //! Matrix (api-conventions.md §3.3). Body-bound integrity is layered separately
@@ -88,7 +87,10 @@ fn introspection_cache_key(grant_jwt: &str, audience: &str) -> String {
     hasher.update(audience.as_bytes());
     hasher.update(b":");
     hasher.update(grant_jwt.as_bytes());
-    format!("grant-introspect:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
+    format!(
+        "grant-introspect:{}",
+        URL_SAFE_NO_PAD.encode(hasher.finalize())
+    )
 }
 
 fn cache_lookup(key: &str) -> Option<SessionGrantIntrospectGrant> {
@@ -140,12 +142,14 @@ pub(crate) async fn introspect_session_grant_cached(
     force_fresh: bool,
 ) -> Result<SessionGrantIntrospectGrant, AuthError> {
     let key = introspection_cache_key(grant_jwt, &state.config.service_did);
-    if !force_fresh
-        && let Some(grant) = cache_lookup(&key)
-    {
+    if !force_fresh && let Some(grant) = cache_lookup(&key) {
         // Cached grants can still expire between introspection and use.
         if grant.expires_at <= crate::wire::now() {
-            return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session grant has expired"));
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "auth_expired",
+                "session grant has expired",
+            ));
         }
         return Ok(grant);
     }
@@ -407,8 +411,8 @@ pub(crate) async fn grant_dpop_session(
 ) -> Result<SessionRecord, AuthError> {
     let dpop = dpop_header(req).ok_or_else(|| unauthenticated("missing DPoP proof"))?;
 
-    // 1. grant active (cached ≤120s; sensitive ops force fresh). Reads cnf_jkt,
-    //    session_public_key, scopes, subject, device_id, expiry.
+    // 1. grant active (cached ≤120s; sensitive ops force fresh). Reads cnf_jkt, session_public_key,
+    //    scopes, subject, device_id, expiry.
     let grant = introspect_session_grant_cached(state, grant_jwt, force_fresh).await?;
 
     // 5. audience == this service's service_did.
@@ -452,7 +456,11 @@ pub(crate) async fn grant_dpop_session(
 
     // 6c. grant not expired.
     if grant.expires_at <= crate::wire::now() {
-        return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session grant has expired"));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "session grant has expired",
+        ));
     }
 
     // 2. DPoP signature valid against the grant's cnf.jkt.
@@ -473,7 +481,9 @@ pub(crate) async fn grant_dpop_session(
     // 3. htm / htu / ath binding.
     let method = req.method().as_str();
     if !claims.htm.eq_ignore_ascii_case(method) {
-        return Err(unauthenticated("DPoP htm does not match the request method"));
+        return Err(unauthenticated(
+            "DPoP htm does not match the request method",
+        ));
     }
     if !htu_matches(&claims.htu, req) {
         return Err(unauthenticated("DPoP htu does not match the request URL"));
@@ -493,21 +503,23 @@ pub(crate) async fn grant_dpop_session(
         return Err(unauthenticated("DPoP proof iat is in the future"));
     }
     if now - iat > Duration::seconds(DPOP_MAX_AGE_SECONDS) {
-        return Err(unauthenticated("DPoP proof iat is outside the freshness window"));
+        return Err(unauthenticated(
+            "DPoP proof iat is outside the freshness window",
+        ));
     }
     let jti_expiry = iat + Duration::seconds(DPOP_MAX_AGE_SECONDS + DPOP_MAX_FUTURE_SKEW_SECONDS);
     if !register_dpop_jti(&claims.jti, jti_expiry) {
-        return Err(unauthenticated("DPoP proof jti has already been used (replay)"));
+        return Err(unauthenticated(
+            "DPoP proof jti has already been used (replay)",
+        ));
     }
 
     // Synthesize the request-scoped session. `token_hash` carries a stable,
     // grant-derived value so downstream code that keys on it (e.g. self-path
     // session-revoke of the calling session) resolves to this grant; it is NOT
     // a persisted local bearer.
-    let token_hash = crate::routing::identity::auth::session_token_hash(
-        grant_jwt,
-        &state.config.service_did,
-    );
+    let token_hash =
+        crate::routing::identity::auth::session_token_hash(grant_jwt, &state.config.service_did);
     Ok(SessionRecord {
         token_hash,
         actor: grant.subject,
@@ -555,7 +567,10 @@ fn normalize_htu(htu: &str) -> Option<String> {
         return None;
     }
     let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
-    let without_query = without_fragment.split('?').next().unwrap_or(without_fragment);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
     Some(without_query.to_owned())
 }
 
@@ -583,7 +598,10 @@ mod tests {
 
     #[test]
     fn htu_path_strips_scheme_authority() {
-        assert_eq!(htu_path("https://account.example/_cokret/self/events"), "/_cokret/self/events");
+        assert_eq!(
+            htu_path("https://account.example/_cokret/self/events"),
+            "/_cokret/self/events"
+        );
         assert_eq!(htu_path("/_cokret/self/events"), "/_cokret/self/events");
         assert_eq!(htu_path("https://account.example"), "/");
     }

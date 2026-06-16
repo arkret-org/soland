@@ -917,7 +917,6 @@ fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     new_prefixed_uuid7("ck:call:")
 }
 
-
 /// Seed the durable `ck.call.state` cell (`ck.component.call.state.v1:{call_id}`)
 /// the media token issuer reads, mirroring what the `apply_call_state` reducer
 /// writes from a committed `ck.call.state` event. `session_focus` pins the
@@ -937,8 +936,7 @@ fn seed_call_state(
     if let Some(focus) = session_focus {
         value["session_focus"] = Value::String(focus.to_owned());
     }
-    let cell_id =
-        CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
+    let cell_id = CellRef::new(format!("ck:cell:ck.component.call.state.v1:{call_id}")).unwrap();
     state
         .projection
         .lock()
@@ -984,7 +982,6 @@ fn good_media_service_epoch() -> Value {
         ]
     })
 }
-
 
 /// Build a signed `ck.call.signal` ephemeral envelope (verbatim wire shape
 /// per `ck.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`

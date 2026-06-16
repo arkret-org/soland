@@ -424,7 +424,6 @@ impl PersistenceStore for SolandMemoryPersistenceStore {
         &self.push_bridge_cache
     }
 
-
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents
     }
@@ -707,7 +706,6 @@ impl PersistenceStore for PgPersistenceStore {
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
         &self.push_bridge_cache
     }
-
 
     fn policy_documents(&self) -> &dyn PolicyDocumentStore {
         &self.policy_documents

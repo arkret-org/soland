@@ -417,8 +417,7 @@ const ICE_CONFIG_SIGNING_LABEL: &str = "ck.media.ice_config.v1";
 fn ice_config_signing_input<T: Serialize>(payload: &T) -> Vec<u8> {
     let payload = cokret_sdk::canonical::canonical_json_bytes(payload)
         .unwrap_or_else(|_| serde_json::to_vec(payload).unwrap_or_default());
-    let mut signing_input =
-        Vec::with_capacity(ICE_CONFIG_SIGNING_LABEL.len() + payload.len() + 1);
+    let mut signing_input = Vec::with_capacity(ICE_CONFIG_SIGNING_LABEL.len() + payload.len() + 1);
     signing_input.extend_from_slice(ICE_CONFIG_SIGNING_LABEL.as_bytes());
     signing_input.push(0);
     signing_input.extend_from_slice(&payload);
@@ -689,8 +688,7 @@ async fn handle_rtc_token(
     // realm media_service epoch (oldest-membership-wins reduces to "any epoch
     // focus" once the ephemeral foci_preferred[] session is gone; the durable
     // committed focus remains the binding decision).
-    let session_focus =
-        session_focus_for_call(&call_state, &media_epoch, body.focus_id.as_str())?;
+    let session_focus = session_focus_for_call(&call_state, &media_epoch, body.focus_id.as_str())?;
     if body.focus_id != session_focus {
         return Err(AppError::new(
             ErrorCode::FocusMismatch,
@@ -856,19 +854,17 @@ async fn handle_rtc_token(
 
 /// MEDIA-2 focus selection against the durable `ck.call.state` cell.
 ///
-/// - A committed `ck.call.state.session_focus` (read from the cell) is the
-///   binding decision: it is returned verbatim provided it is still a legal
-///   focus within the current realm media_service epoch (the caller compares it
-///   against the request `focus_id` and surfaces `focus_mismatch` on a
-///   disagreement).
-/// - Absent a committed focus (a brand-new call, or a `ck.call.state` head that
-///   has not yet committed `session_focus`), the issuer admits the
-///   `requested_focus_id` as long as it names a legal focus in the epoch. This
-///   replaces the old ephemeral oldest-membership-wins derivation that read
-///   `foci_preferred[]` off a signaling session: the durable committed focus is
-///   the source of truth, and until it is committed any epoch-legal focus the
-///   caller asks for is acceptable (the first committer's focus then pins it for
-///   everyone via the cell's write-once `session_focus`).
+/// - A committed `ck.call.state.session_focus` (read from the cell) is the binding decision: it is
+///   returned verbatim provided it is still a legal focus within the current realm media_service
+///   epoch (the caller compares it against the request `focus_id` and surfaces `focus_mismatch` on
+///   a disagreement).
+/// - Absent a committed focus (a brand-new call, or a `ck.call.state` head that has not yet
+///   committed `session_focus`), the issuer admits the `requested_focus_id` as long as it names a
+///   legal focus in the epoch. This replaces the old ephemeral oldest-membership-wins derivation
+///   that read `foci_preferred[]` off a signaling session: the durable committed focus is the
+///   source of truth, and until it is committed any epoch-legal focus the caller asks for is
+///   acceptable (the first committer's focus then pins it for everyone via the cell's write-once
+///   `session_focus`).
 fn session_focus_for_call(
     call_state: &CallStateCell,
     media_epoch: &MediaServiceEpoch,
